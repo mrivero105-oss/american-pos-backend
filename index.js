@@ -55,7 +55,7 @@ const verifyToken = async (req, res, next) => {
 };
 
 // Función para generar HTML del recibo
-const generateReceiptHtml = (sale, customer, exchangeRate) => {
+const generateReceiptHtml = (sale, customer, exchangeRate, businessInfo = {}) => {
     const date = sale.timestamp ? new Date(sale.timestamp.toDate()).toLocaleString('es-VE') : new Date().toLocaleString('es-VE');
     const totalBs = sale.total * exchangeRate;
 
@@ -70,9 +70,13 @@ const generateReceiptHtml = (sale, customer, exchangeRate) => {
     return `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 400px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
             <div style="text-align: center; margin-bottom: 20px;">
-                <h2 style="margin: 0; color: #1e293b;">American POS</h2>
-                <p style="margin: 5px 0 0; color: #64748b; font-size: 14px;">Recibo de Venta</p>
-                <p style="margin: 5px 0 0; font-size: 12px; color: #94a3b8;">${date}</p>
+                ${businessInfo.logoUrl ? `<img src="${businessInfo.logoUrl}" style="max-width: 80px; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto;">` : ''}
+                <h2 style="margin: 0; color: #1e293b;">${businessInfo.name || 'American POS'}</h2>
+                ${businessInfo.address ? `<p style="margin: 5px 0 0; color: #64748b; font-size: 12px;">${businessInfo.address}</p>` : ''}
+                ${businessInfo.phone ? `<p style="margin: 2px 0 0; color: #64748b; font-size: 12px;">Tel: ${businessInfo.phone}</p>` : ''}
+                ${businessInfo.taxId ? `<p style="margin: 2px 0 0; color: #64748b; font-size: 12px;">RIF/NIT: ${businessInfo.taxId}</p>` : ''}
+                <p style="margin: 10px 0 0; color: #64748b; font-size: 14px; font-weight: bold;">Recibo de Venta</p>
+                <p style="margin: 2px 0 0; font-size: 12px; color: #94a3b8;">${date}</p>
             </div>
             
             ${customer ? `
@@ -270,11 +274,12 @@ app.post('/sales/:id/email', verifyToken, async (req, res) => {
             }
         }
 
-        // Obtener tasa
+        // Obtener tasa e info del negocio
         const settingsDoc = await db.collection('settings').doc('config').get();
         const exchangeRate = settingsDoc.exists ? settingsDoc.data().exchangeRate : 1.0;
+        const businessInfo = settingsDoc.exists ? (settingsDoc.data().businessInfo || {}) : {};
 
-        const htmlContent = generateReceiptHtml(sale, customer, exchangeRate);
+        const htmlContent = generateReceiptHtml(sale, customer, exchangeRate, businessInfo);
 
         const mailOptions = {
             from: '"American POS" <noreply@americanpos.com>',
@@ -384,6 +389,21 @@ app.post('/settings/rate', verifyToken, async (req, res) => {
         await db.collection('settings').doc('config').set({ exchangeRate: parseFloat(rate) }, { merge: true });
         res.status(200).json({ message: 'Tasa actualizada.' });
     } catch (error) { res.status(500).json({ message: 'Error al actualizar la tasa.' }); }
+});
+
+app.get('/settings/business', verifyToken, async (req, res) => {
+    try {
+        const doc = await db.collection('settings').doc('config').get();
+        res.status(200).json(doc.exists ? (doc.data().businessInfo || {}) : {});
+    } catch (error) { res.status(500).json({ message: 'Error al obtener info del negocio' }); }
+});
+
+app.post('/settings/business', verifyToken, async (req, res) => {
+    try {
+        const businessInfo = req.body;
+        await db.collection('settings').doc('config').set({ businessInfo }, { merge: true });
+        res.status(200).json({ message: 'Info del negocio actualizada' });
+    } catch (error) { res.status(500).json({ message: 'Error al actualizar info del negocio' }); }
 });
 
 // ========== CLIENTES ==========
