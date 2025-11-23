@@ -401,23 +401,31 @@ app.get('/settings/business', verifyToken, async (req, res) => {
 });
 
 app.post('/settings/business', verifyToken, async (req, res) => {
-    try {
-        const businessInfo = req.body;
-        await db.collection('settings').doc('config').set({ businessInfo }, { merge: true });
-        res.status(200).json({ message: 'Info del negocio actualizada' });
-    } catch (error) { res.status(500).json({ message: 'Error al actualizar info del negocio' }); }
+    res.status(200).json(customers.sort((a, b) => a.name.localeCompare(b.name)));
+} catch (error) {
+    console.error('Error al obtener clientes:', error);
+    res.status(500).json({ message: "Error al obtener clientes" });
+}
 });
 
-// ========== CLIENTES ==========
-app.get('/customers', verifyToken, async (req, res) => {
+// ========== PAYMENT METHODS ==========
+app.get('/settings/payment-methods', verifyToken, async (req, res) => {
     try {
-        const snapshot = await db.collection('customers').get();
-        const customers = [];
-        snapshot.forEach(doc => { customers.push(doc.data()); });
-        res.status(200).json(customers.sort((a, b) => a.name.localeCompare(b.name)));
+        const doc = await db.collection('settings').doc('config').get();
+        const paymentMethods = doc.exists ? (doc.data().paymentMethods || []) : [];
+        res.status(200).json(paymentMethods);
     } catch (error) {
-        console.error('Error al obtener clientes:', error);
-        res.status(500).json({ message: "Error al obtener clientes" });
+        res.status(500).json({ message: 'Error al obtener métodos de pago' });
+    }
+});
+
+app.post('/settings/payment-methods', verifyToken, async (req, res) => {
+    try {
+        const { paymentMethods } = req.body;
+        await db.collection('settings').doc('config').set({ paymentMethods }, { merge: true });
+        res.status(200).json({ message: 'Métodos de pago actualizados' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error al actualizar métodos de pago' });
     }
 });
 
