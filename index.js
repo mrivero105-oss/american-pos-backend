@@ -2,12 +2,24 @@ const express = require('express');
 const admin = require('firebase-admin');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-const serviceAccount = require('./serviceAccountKey.json');
 
+// Initialize Firebase Admin
 if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
+    // In production (Render), use environment variables
+    // In development, use serviceAccountKey.json
+    let credential;
+
+    if (process.env.FIREBASE_CREDENTIALS) {
+        // Production: Parse credentials from environment variable
+        const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+        credential = admin.credential.cert(serviceAccount);
+    } else {
+        // Development: Use local file
+        const serviceAccount = require('./serviceAccountKey.json');
+        credential = admin.credential.cert(serviceAccount);
+    }
+
+    admin.initializeApp({ credential });
 }
 
 const db = admin.firestore();
