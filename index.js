@@ -397,15 +397,22 @@ app.get('/settings/business', verifyToken, async (req, res) => {
     try {
         const doc = await db.collection('settings').doc('config').get();
         res.status(200).json(doc.exists ? (doc.data().businessInfo || {}) : {});
-    } catch (error) { res.status(500).json({ message: 'Error al obtener info del negocio' }); }
+    } catch (error) {
+        res.status(500).json({ message: 'Error al obtener info del negocio' });
+    }
 });
 
 app.post('/settings/business', verifyToken, async (req, res) => {
-    res.status(200).json(customers.sort((a, b) => a.name.localeCompare(b.name)));
-} catch (error) {
-    console.error('Error al obtener clientes:', error);
-    res.status(500).json({ message: "Error al obtener clientes" });
-}
+    try {
+        const { name, address, phone, taxId, logoUrl } = req.body;
+        await db.collection('settings').doc('config').set({
+            businessInfo: { name, address, phone, taxId, logoUrl }
+        }, { merge: true });
+        res.status(200).json({ message: 'Información del negocio actualizada' });
+    } catch (error) {
+        console.error('Error al actualizar información del negocio:', error);
+        res.status(500).json({ message: 'Error al actualizar información del negocio' });
+    }
 });
 
 // ========== PAYMENT METHODS ==========
