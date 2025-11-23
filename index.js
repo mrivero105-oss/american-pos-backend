@@ -225,7 +225,10 @@ app.get('/sales', verifyToken, async (req, res) => {
 
         const salesSnapshot = await query.get();
         const salesHistory = [];
-        salesSnapshot.forEach(doc => { salesHistory.push(doc.data()); });
+        salesSnapshot.forEach(doc => {
+            const data = doc.data();
+            salesHistory.push({ id: doc.id, ...data });
+        });
         res.status(200).json(salesHistory);
     } catch (error) {
         console.error("Error al obtener historial de ventas:", error);
