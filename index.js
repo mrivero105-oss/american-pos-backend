@@ -32,6 +32,28 @@ const transporter = nodemailer.createTransport({
     }
 });
 
+// ==========================================
+// AUTHENTICATION MIDDLEWARE
+// ==========================================
+const verifyToken = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: 'No token provided' });
+    }
+
+    const token = authHeader.split('Bearer ')[1];
+
+    try {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        req.user = decodedToken;
+        next();
+    } catch (error) {
+        console.error('Error verifying token:', error);
+        return res.status(401).json({ message: 'Invalid or expired token' });
+    }
+};
+
 // Función para generar HTML del recibo
 const generateReceiptHtml = (sale, customer, exchangeRate) => {
     const date = sale.timestamp ? new Date(sale.timestamp.toDate()).toLocaleString('es-VE') : new Date().toLocaleString('es-VE');
@@ -112,7 +134,7 @@ const getCleanSearchTerms = (product) => {
 };
 
 // --- RUTAS DE PRODUCTOS ---
-app.get('/products', async (req, res) => {
+app.get('/products', verifyToken, async (req, res) => {
     try {
         const snapshot = await db.collection('products').get();
         const products = [];
@@ -121,7 +143,7 @@ app.get('/products', async (req, res) => {
     } catch (error) { res.status(500).json({ message: "Error al obtener productos" }); }
 });
 
-app.post('/products', async (req, res) => {
+app.post('/products', verifyToken, async (req, res) => {
     try {
         const { name, price, category, stockQuantity, description, imageUri, barcode } = req.body;
         const newProduct = { name, price, category, stockQuantity, description, imageUri, barcode: barcode || '' };
@@ -132,7 +154,7 @@ app.post('/products', async (req, res) => {
     } catch (error) { res.status(500).json({ message: "Error al crear producto" }); }
 });
 
-app.put('/products/:productId', async (req, res) => {
+app.put('/products/:productId', verifyToken, async (req, res) => {
     try {
         const { productId } = req.params;
         const { name, price, category, stockQuantity, description, imageUri, barcode } = req.body;
@@ -142,7 +164,7 @@ app.put('/products/:productId', async (req, res) => {
     } catch (error) { res.status(500).json({ message: "Error al actualizar producto" }); }
 });
 
-app.delete('/products/:productId', async (req, res) => {
+app.delete('/products/:productId', verifyToken, async (req, res) => {
     try {
         const { productId } = req.params;
         await db.collection('products').doc(productId).delete();
@@ -151,7 +173,7 @@ app.delete('/products/:productId', async (req, res) => {
 });
 
 // ========== VENTAS ==========
-app.post('/sales', async (req, res) => {
+app.post('/sales', verifyToken, async (req, res) => {
     try {
         const { items, total, customerId } = req.body;
         const saleRef = db.collection('sales').doc();
@@ -184,7 +206,7 @@ app.post('/sales', async (req, res) => {
     }
 });
 
-app.get('/sales', async (req, res) => {
+app.get('/sales', verifyToken, async (req, res) => {
     try {
         const { date } = req.query;
         let query = db.collection('sales').orderBy('timestamp', 'desc');
@@ -211,7 +233,7 @@ app.get('/sales', async (req, res) => {
     }
 });
 
-app.get('/sales/:id', async (req, res) => {
+app.get('/sales/:id', verifyToken, async (req, res) => {
     try {
         const saleId = req.params.id;
         const doc = await db.collection('sales').doc(saleId).get();
@@ -226,7 +248,7 @@ app.get('/sales/:id', async (req, res) => {
     }
 });
 
-app.post('/sales/:id/email', async (req, res) => {
+app.post('/sales/:id/email', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const { email } = req.body;
@@ -269,7 +291,7 @@ app.post('/sales/:id/email', async (req, res) => {
 });
 
 // ========== DASHBOARD ==========  
-app.get('/dashboard-summary', async (req, res) => {
+app.get('/dashboard-summary', verifyToken, async (req, res) => {
     try {
         const { date } = req.query;
         let salesQuery = db.collection('sales');
@@ -342,7 +364,7 @@ app.get('/dashboard-summary', async (req, res) => {
 });
 
 // ========== SETTINGS ==========
-app.get('/settings/rate', async (req, res) => {
+app.get('/settings/rate', verifyToken, async (req, res) => {
     try {
         const doc = await db.collection('settings').doc('config').get();
         if (!doc.exists) {
@@ -353,7 +375,7 @@ app.get('/settings/rate', async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error al obtener la tasa.' }); }
 });
 
-app.post('/settings/rate', async (req, res) => {
+app.post('/settings/rate', verifyToken, async (req, res) => {
     try {
         const { rate } = req.body;
         await db.collection('settings').doc('config').set({ exchangeRate: parseFloat(rate) }, { merge: true });
@@ -362,7 +384,7 @@ app.post('/settings/rate', async (req, res) => {
 });
 
 // ========== CLIENTES ==========
-app.get('/customers', async (req, res) => {
+app.get('/customers', verifyToken, async (req, res) => {
     try {
         const snapshot = await db.collection('customers').get();
         const customers = [];
@@ -374,7 +396,7 @@ app.get('/customers', async (req, res) => {
     }
 });
 
-app.get('/customers/:customerId', async (req, res) => {
+app.get('/customers/:customerId', verifyToken, async (req, res) => {
     try {
         const { customerId } = req.params;
         const doc = await db.collection('customers').doc(customerId).get();
@@ -385,7 +407,7 @@ app.get('/customers/:customerId', async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error al obtener cliente' }); }
 });
 
-app.post('/customers', async (req, res) => {
+app.post('/customers', verifyToken, async (req, res) => {
     try {
         const { name, phone, email, address, idDocument } = req.body;
         const docRef = db.collection('customers').doc();
@@ -405,7 +427,7 @@ app.post('/customers', async (req, res) => {
     }
 });
 
-app.put('/customers/:customerId', async (req, res) => {
+app.put('/customers/:customerId', verifyToken, async (req, res) => {
     try {
         const { customerId } = req.params;
         const { name, phone, email, address, idDocument } = req.body;
@@ -416,14 +438,14 @@ app.put('/customers/:customerId', async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error al actualizar cliente' }); }
 });
 
-app.delete('/customers/:customerId', async (req, res) => {
+app.delete('/customers/:customerId', verifyToken, async (req, res) => {
     try {
         await db.collection('customers').doc(req.params.customerId).delete();
         res.status(200).json({ message: 'Cliente borrado' });
     } catch (error) { res.status(500).json({ message: 'Error al borrar cliente' }); }
 });
 
-app.get('/customers/:customerId/sales', async (req, res) => {
+app.get('/customers/:customerId/sales', verifyToken, async (req, res) => {
     try {
         const { customerId } = req.params;
         const salesSnapshot = await db.collection('sales')
