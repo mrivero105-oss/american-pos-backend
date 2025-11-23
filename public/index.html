@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="es" class="">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestión - American POS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    if (localStorage.getItem('color-theme') === 'dark' || (!('color-theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+    } else {
+        document.documentElement.classList.remove('dark');
+    }
+  </script>
+  <link rel="stylesheet" href="fonts.css">
+  <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+  <style>
+    .modal { display: none; position: fixed; z-index: 50; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); }
+    .dark .modal { background-color: rgba(0,0,0,0.7); }
+    .dark body { background-color: #111827; }
+    .dark .bg-white { background-color: #1f2937; }
+    .dark .bg-gray-100 { background-color: #374151; }
+    .dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) { border-color: #4b5563; }
+    .dark .bg-gray-50 { background-color: rgba(55, 65, 81, 0.5); }
+  </style>
+</head>
+<body class="bg-gray-100">
+
+  <header class="bg-gray-800 shadow-md sticky top-0 z-40">
+    <div class="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div class="flex h-16 items-center justify-between">
+        <div class="flex-shrink-0">
+          <h1 class="text-2xl font-bold text-white">American POS</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+          <nav class="flex space-x-4">
+            <a href="index.html" class="bg-gray-900 text-white rounded-md px-3 py-2 text-sm font-medium" aria-current="page">Gestión</a>
+            <a href="pos.html" class="text-gray-300 hover:bg-gray-700 hover:text-white rounded-md px-3 py-2 text-sm font-medium">TPV</a>
+            <a href="dashboard.html" class="text-gray-300 hover:bg-gray-700 hover:text-white rounded-md px-3 py-2 text-sm font-medium">Dashboard</a>
+            <a href="history.html" class="text-gray-300 hover:bg-gray-700 hover:text-white rounded-md px-3 py-2 text-sm font-medium">Historial</a>
+          </nav>
+          <button id="theme-toggle" type="button" class="text-gray-400 hover:text-white focus:outline-none">
+              <svg id="theme-toggle-dark-icon" class="hidden w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path></svg>
+              <svg id="theme-toggle-light-icon" class="hidden w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 5.05A1 1 0 003.636 6.465l.707.707a1 1 0 001.414-1.414l-.707-.707zM3 11a1 1 0 100-2H2a1 1 0 100 2h1zM6.465 16.364a1 1 0 00-1.414 1.414l.707.707a1 1 0 001.414-1.414l-.707-.707z" fill-rule="evenodd" clip-rule="evenodd"></path></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container mx-auto max-w-7xl p-4 md:p-8">
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
+      <h2 class="text-2xl font-semibold mb-4">Configuración</h2>
+      <div class="flex items-center gap-4">
+        <label for="exchange-rate-input" class="block text-sm font-medium">Tasa de Cambio (VES por USD):</label>
+        <input type="number" id="exchange-rate-input" step="0.01" class="w-40 p-2 border border-gray-300 rounded-md dark:bg-gray-700">
+        <button id="save-rate-btn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">Guardar Tasa</button>
+      </div>
+    </div>
+    
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
+      <h2 class="text-2xl font-semibold mb-4">Herramientas de Inventario</h2>
+      <button id="update-images-btn" class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50">
+        <span id="update-images-btn-text">Actualizar Imágenes Faltantes</span>
+        <span id="update-images-btn-spinner" class="hidden">Cargando...</span>
+      </button>
+      <p class="text-sm mt-2">Busca y asigna una imagen a todos los productos que no tengan una.</p>
+    </div>
+
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
+      <h2 class="text-2xl font-semibold mb-4">Añadir Nuevo Producto</h2>
+      <form id="add-product-form">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="md:col-span-2"><label for="name" class="block text-sm font-medium mb-1">Nombre:</label><input type="text" id="name" name="name" required class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
+          <div><label for="price" class="block text-sm font-medium mb-1">Precio:</label><input type="number" id="price" name="price" step="0.01" required class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
+          <div><label for="category" class="block text-sm font-medium mb-1">Categoría:</label><input type="text" id="category" name="category" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
+          <div><label for="stockQuantity" class="block text-sm font-medium mb-1">Stock:</label><input type="number" id="stockQuantity" name="stockQuantity" value="0" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
+          <div class="md:col-span-2 lg:col-span-4"><label for="description" class="block text-sm font-medium mb-1">Descripción:</label><textarea id="description" name="description" rows="3" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></textarea></div>
+          <div class="md:col-span-2 lg:col-span-4"><label for="imageUri" class="block text-sm font-medium mb-1">URL de la Imagen:</label><input type="url" id="imageUri" name="imageUri" placeholder="https://ejemplo.com/imagen.jpg" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
+        </div>
+        <div class="mt-6 text-right">
+          <button type="submit" class="inline-flex justify-center py-2 px-6 border rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors">Guardar Producto</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
+      <h1 class="text-2xl font-semibold mb-4">Lista de Productos</h1>
+      <p id="loading" class="mb-4">Cargando...</p>
+      <div id="search-container" class="mb-4"><input type="text" id="search-input" placeholder="Buscar productos por nombre..." class="w-full p-3 border border-gray-300 rounded-lg dark:bg-gray-700"></div>
+      <div class="overflow-x-auto">
+        <table id="product-table" class="w-full min-w-max" style="display:none;">
+          <thead class="bg-gray-100 dark:bg-gray-700">
+            <tr>
+              <th class="p-3 text-left text-sm font-semibold uppercase">Imagen</th>
+              <th class="p-3 text-left text-sm font-semibold uppercase">Nombre</th>
+              <th class="p-3 text-left text-sm font-semibold uppercase">Descripción</th>
+              <th class="p-3 text-left text-sm font-semibold uppercase">Categoría</th>
+              <th class="p-3 text-left text-sm font-semibold uppercase">Precio</th>
+              <th class="p-3 text-left text-sm font-semibold uppercase">Stock</th>
+              <th class="p-3 text-left text-sm font-semibold uppercase">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="product-table-body" class="divide-y divide-gray-200 dark:divide-gray-600"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <div id="edit-modal" class="modal">
+    <div class="modal-content bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl max-w-2xl w-full m-auto relative">
+      <div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-semibold">Editar Producto</h2><span class="close-btn text-3xl text-gray-400 hover:text-gray-600 cursor-pointer">&times;</span></div>
+      <form id="edit-product-form">
+        <input type="hidden" id="edit-id" name="id">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><label for="edit-name" class="block text-sm font-medium mb-1">Nombre:</label><input type="text" id="edit-name" name="name" required class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
+          <div><label for="edit-price" class="block text-sm font-medium mb-1">Precio:</label><input type="number" id="edit-price" name="price" step="0.01" required class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
+          <div><label for="edit-category" class="block text-sm font-medium mb-1">Categoría:</label><input type="text" id="edit-category" name="category" class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
+          <div><label for="edit-stockQuantity" class="block text-sm font-medium mb-1">Stock:</label><input type="number" id="edit-stockQuantity" name="stockQuantity" class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
+          <div class="sm:col-span-2">
+            <label for="edit-barcode" class="block text-sm font-medium mb-1">Código de Barras:</label>
+            <div class="flex gap-2">
+              <input type="text" id="edit-barcode" name="barcode" class="w-full p-2 border rounded-md dark:bg-gray-700">
+              <button type="button" id="scan-barcode-btn" class="px-4 py-2 bg-teal-500 text-white rounded-md hover:bg-teal-600">Escanear</button>
+            </div>
+          </div>
+          <div class="sm:col-span-2">
+            <label for="edit-imageUri" class="block text-sm font-medium mb-1">URL de la Imagen:</label>
+            <div class="flex gap-2">
+              <input type="url" id="edit-imageUri" name="imageUri" class="w-full p-2 border rounded-md dark:bg-gray-700">
+              <button type="button" id="search-image-btn" class="px-4 py-2 bg-indigo-500 text-white rounded-md hover:bg-indigo-600">Buscar en Google</button>
+            </div>
+          </div>
+          <div class="sm:col-span-2"><label for="edit-description" class="block text-sm font-medium mb-1">Descripción:</label><textarea id="edit-description" name="description" rows="3" class="w-full p-2 border rounded-md dark:bg-gray-700"></textarea></div>
+        </div>
+        <div class="mt-6 text-right"><button type="submit" class="inline-flex justify-center py-2 px-6 border rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors">Guardar Cambios</button></div>
+      </form>
+    </div>
+  </div>
+
+  <script src="theme.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

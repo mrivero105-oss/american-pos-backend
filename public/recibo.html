@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recibo de Venta</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="fonts.css">
+    <style>
+        @media print {
+            #print-btn {
+                display: none;
+            }
+            body {
+                margin: 0;
+                padding: 0;
+                background-color: #fff;
+            }
+            .receipt-container {
+                box-shadow: none;
+                border: none;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex justify-center pt-8">
+
+    <div class="w-full max-w-sm bg-white p-6 shadow-lg receipt-container">
+        <div class="text-center">
+            <h1 class="text-2xl font-bold">American POS</h1>
+            <p class="text-sm">Recibo de Venta</p>
+            <p id="receipt-date" class="text-xs mt-2"></p>
+        </div>
+
+        <div class="border-t border-b border-dashed my-4 py-4">
+            <div id="receipt-items">
+                <p>Cargando detalles...</p>
+            </div>
+        </div>
+
+        <div class="space-y-1">
+            <div class="flex justify-between font-bold text-lg">
+                <span>TOTAL:</span>
+                <span id="receipt-total">$0.00</span>
+            </div>
+            <div class="flex justify-between text-sm">
+                <span>Total en Bs:</span>
+                <span id="receipt-total-local">Bs. 0.00</span>
+            </div>
+        </div>
+
+        <div class="text-center mt-6">
+            <p class="text-xs">¡Gracias por su compra!</p>
+        </div>
+
+        <div class="text-center mt-8">
+            <button id="print-btn" class="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700">Imprimir</button>
+        </div>
+    </div>
+
+    <script src="recibo.js"></script>
+</body>
+</html>
