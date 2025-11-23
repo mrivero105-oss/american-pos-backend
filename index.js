@@ -179,12 +179,14 @@ app.delete('/products/:productId', verifyToken, async (req, res) => {
 // ========== VENTAS ==========
 app.post('/sales', verifyToken, async (req, res) => {
     try {
-        const { items, total, customerId } = req.body;
+        const { items, total, customerId, paymentMethod, paymentDetails } = req.body;
         const saleRef = db.collection('sales').doc();
         const saleData = {
             id: saleRef.id,
             items,
             total,
+            paymentMethod: paymentMethod || 'cash',
+            paymentDetails: paymentDetails || {},
             timestamp: admin.firestore.FieldValue.serverTimestamp()
         };
 
