@@ -1,3 +1,24 @@
+
+require('dotenv').config();
+const express = require('express');
+const admin = require('firebase-admin');
+const cors = require('cors');
+const nodemailer = require('nodemailer');
+let serviceAccount;
+try {
+    serviceAccount = require('/etc/secrets/serviceAccountKey.json');
+} catch (e) {
+    serviceAccount = require('./serviceAccountKey.json');
+}
+
+if (!admin.apps.length) {
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+    });
+}
+
+const db = admin.firestore();
+const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
