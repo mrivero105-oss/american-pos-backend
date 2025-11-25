@@ -280,16 +280,27 @@ export class POS {
         this.renderCart();
     }
 
-    handleGridClick(e) {
-        const card = e.target.closest('.product-card');
-        if (!card) return;
+    addToCart(product) {
+        const existingItem = this.cart.find(item => item.id === product.id);
+        if (existingItem) {
+            if (existingItem.quantity < product.stockQuantity) {
+                existingItem.quantity++;
+            } else {
+                ui.showNotification(`Stock máximo alcanzado (${product.stockQuantity})`, 'warning');
+            }
+        } else {
+            this.cart.push({
+                ...product,
+                quantity: 1
+            });
+        }
+        this.renderCart();
+    }
 
-        const id = card.dataset.id;
-        const product = this.products.find(p => String(p.id) === String(id));
+    renderCart() {
+        if (!this.dom.cartItems) return;
 
-        if (product && product.stockQuantity > 0) {
-            this.addToCart(product);
-            this.dom.cartItems.innerHTML = this.cart.map(item => `
+        this.dom.cartItems.innerHTML = this.cart.map(item => `
             <div class="cart-item bg-white p-3 rounded-lg border border-gray-100 flex justify-between items-center group" data-id="${item.id}">
                 <div class="flex-1 min-w-0 mr-3">
                     <h4 class="font-medium text-gray-800 truncate">${item.name}</h4>
@@ -318,23 +329,34 @@ export class POS {
             </div>
         `).join('') || '<p class="text-gray-400 text-center py-8">Carrito vacío</p>';
 
-            const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-            const totalBs = total * this.exchangeRate;
+        const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        const totalBs = total * this.exchangeRate;
 
-            this.dom.cartTotal.textContent = formatCurrency(total);
-            this.dom.cartTotalBs.textContent = `Bs ${totalBs.toFixed(2)}`;
+        if (this.dom.cartTotal) this.dom.cartTotal.textContent = formatCurrency(total);
+        if (this.dom.cartTotalBs) this.dom.cartTotalBs.textContent = `Bs ${totalBs.toFixed(2)}`;
 
-            const hasItems = this.cart.length > 0;
-            this.dom.checkoutBtn.disabled = !hasItems;
-            this.dom.clearCartBtn.disabled = !hasItems;
+        const hasItems = this.cart.length > 0;
+        if (this.dom.checkoutBtn) this.dom.checkoutBtn.disabled = !hasItems;
+        if (this.dom.clearCartBtn) this.dom.clearCartBtn.disabled = !hasItems;
 
-            if (this.dom.mobileCartCount) {
-                const count = this.cart.reduce((sum, item) => sum + item.quantity, 0);
-                this.dom.mobileCartCount.textContent = count;
-                this.dom.mobileCartCount.classList.toggle('hidden', count === 0);
-            }
+        if (this.dom.mobileCartCount) {
+            const count = this.cart.reduce((sum, item) => sum + item.quantity, 0);
+            this.dom.mobileCartCount.textContent = count;
+            this.dom.mobileCartCount.classList.toggle('hidden', count === 0);
+        }
 
-            this.checkHeldSale();
+        this.checkHeldSale();
+    }
+
+    handleGridClick(e) {
+        const card = e.target.closest('.product-card');
+        if (!card) return;
+
+        const id = card.dataset.id;
+        const product = this.products.find(p => String(p.id) === String(id));
+
+        if (product && product.stockQuantity > 0) {
+            this.addToCart(product);
         }
     }
 
