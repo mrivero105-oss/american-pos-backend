@@ -8,3 +8,7 @@ export const firebaseConfig = {
     messagingSenderId: "248248095933",
     appId: "1:248248095933:web:b0f75f9e5dfbc4594e93d4"
 };
+
+// API Configuration
+const isBackendHost = window.location.hostname.includes('onrender.com') || window.location.port === '3000';
+export const API_BASE_URL = isBackendHost ? '' : 'https://american-pos-backend.onrender.com';

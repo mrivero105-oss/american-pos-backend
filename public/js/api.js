@@ -1,4 +1,10 @@
-'Content-Type': 'application/json',
+import { authService } from './auth.js';
+import { API_BASE_URL } from './config.js';
+
+async function getAuthHeaders() {
+    const token = await authService.getToken();
+    return {
+        'Content-Type': 'application/json',
         ...(token && { 'Authorization': `Bearer ${token}` })
     };
 }
