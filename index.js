@@ -200,6 +200,62 @@ app.delete('/products/:productId', verifyToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: "Error al eliminar producto" }); }
 });
 
+// --- RUTAS DE CLIENTES ---
+app.get('/customers', verifyToken, async (req, res) => {
+    try {
+        const snapshot = await db.collection('customers').get();
+        const customers = [];
+        snapshot.forEach(doc => { customers.push({ id: doc.id, ...doc.data() }); });
+        res.status(200).json(customers.sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (error) { res.status(500).json({ message: "Error al obtener clientes" }); }
+});
+
+app.post('/customers', verifyToken, async (req, res) => {
+    try {
+        const { name, email, phone, address, taxId } = req.body;
+        const newCustomer = { name, email: email || '', phone: phone || '', address: address || '', taxId: taxId || '' };
+        const docRef = await db.collection('customers').add(newCustomer);
+        res.status(201).json({ id: docRef.id, ...newCustomer });
+    } catch (error) { res.status(500).json({ message: "Error al crear cliente" }); }
+});
+
+app.put('/customers/:id', verifyToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, email, phone, address, taxId } = req.body;
+        const updatedCustomer = { name, email, phone, address, taxId };
+        await db.collection('customers').doc(id).update(updatedCustomer);
+        res.status(200).json({ message: 'Cliente actualizado' });
+    } catch (error) { res.status(500).json({ message: "Error al actualizar cliente" }); }
+});
+
+app.delete('/customers/:id', verifyToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await db.collection('customers').doc(id).delete();
+        res.status(200).json({ message: 'Cliente eliminado' });
+    } catch (error) { res.status(500).json({ message: "Error al eliminar cliente" }); }
+});
+
+// --- RUTAS DE CONFIGURACIÓN ---
+app.get('/settings', verifyToken, async (req, res) => {
+    try {
+        const doc = await db.collection('settings').doc('config').get();
+        if (!doc.exists) {
+            return res.status(200).json({ exchangeRate: 1.0, businessName: '', address: '', phone: '', taxId: '' });
+        }
+        res.status(200).json(doc.data());
+    } catch (error) { res.status(500).json({ message: "Error al obtener configuración" }); }
+});
+
+app.post('/settings', verifyToken, async (req, res) => {
+    try {
+        const settings = req.body;
+        await db.collection('settings').doc('config').set(settings, { merge: true });
+        res.status(200).json({ message: 'Configuración guardada' });
+    } catch (error) { res.status(500).json({ message: "Error al guardar configuración" }); }
+});
+
 // ========== VENTAS ==========
 app.post('/sales', verifyToken, async (req, res) => {
     try {
