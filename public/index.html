@@ -1,145 +1,779 @@
 <!DOCTYPE html>
-<html lang="es" class="">
+<html lang="es">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gestión - American POS</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    if (localStorage.getItem('color-theme') === 'dark' || (!('color-theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        document.documentElement.classList.add('dark');
-    } else {
-        document.documentElement.classList.remove('dark');
-    }
-  </script>
-  <link rel="stylesheet" href="fonts.css">
-  <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
-  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
-  <style>
-    .modal { display: none; position: fixed; z-index: 50; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); }
-    .dark .modal { background-color: rgba(0,0,0,0.7); }
-    .dark body { background-color: #111827; }
-    .dark .bg-white { background-color: #1f2937; }
-    .dark .bg-gray-100 { background-color: #374151; }
-    .dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) { border-color: #4b5563; }
-    .dark .bg-gray-50 { background-color: rgba(55, 65, 81, 0.5); }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American POS - Premium</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Html5-QRCode -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+
+    <style>
+        body {
+            font-family: 'Outfit', sans-serif;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.2s ease-out forwards;
+        }
+    </style>
+
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(registration => console.log('SW registered'))
+                    .catch(err => console.log('SW registration failed', err));
+            });
+        }
+    </script>
 </head>
-<body class="bg-gray-100">
 
-  <header class="bg-gray-800 shadow-md sticky top-0 z-40">
-    <div class="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-      <div class="flex h-16 items-center justify-between">
-        <div class="flex-shrink-0">
-          <h1 class="text-2xl font-bold text-white">American POS</h1>
-        </div>
-        <div class="flex items-center space-x-4">
-          <nav class="flex space-x-4">
-            <a href="index.html" class="bg-gray-900 text-white rounded-md px-3 py-2 text-sm font-medium" aria-current="page">Gestión</a>
-            <a href="pos.html" class="text-gray-300 hover:bg-gray-700 hover:text-white rounded-md px-3 py-2 text-sm font-medium">TPV</a>
-            <a href="dashboard.html" class="text-gray-300 hover:bg-gray-700 hover:text-white rounded-md px-3 py-2 text-sm font-medium">Dashboard</a>
-            <a href="history.html" class="text-gray-300 hover:bg-gray-700 hover:text-white rounded-md px-3 py-2 text-sm font-medium">Historial</a>
-          </nav>
-          <button id="theme-toggle" type="button" class="text-gray-400 hover:text-white focus:outline-none">
-              <svg id="theme-toggle-dark-icon" class="hidden w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path></svg>
-              <svg id="theme-toggle-light-icon" class="hidden w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 5.05A1 1 0 003.636 6.465l.707.707a1 1 0 001.414-1.414l-.707-.707zM3 11a1 1 0 100-2H2a1 1 0 100 2h1zM6.465 16.364a1 1 0 00-1.414 1.414l.707.707a1 1 0 001.414-1.414l-.707-.707z" fill-rule="evenodd" clip-rule="evenodd"></path></svg>
-          </button>
-        </div>
-      </div>
-    </div>
-  </header>
+<body class="bg-slate-50 text-slate-800 h-screen flex flex-col md:flex-row overflow-hidden">
 
-  <main class="container mx-auto max-w-7xl p-4 md:p-8">
-    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
-      <h2 class="text-2xl font-semibold mb-4">Configuración</h2>
-      <div class="flex items-center gap-4">
-        <label for="exchange-rate-input" class="block text-sm font-medium">Tasa de Cambio (VES por USD):</label>
-        <input type="number" id="exchange-rate-input" step="0.01" class="w-40 p-2 border border-gray-300 rounded-md dark:bg-gray-700">
-        <button id="save-rate-btn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">Guardar Tasa</button>
-      </div>
-    </div>
-    
-    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
-      <h2 class="text-2xl font-semibold mb-4">Herramientas de Inventario</h2>
-      <button id="update-images-btn" class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50">
-        <span id="update-images-btn-text">Actualizar Imágenes Faltantes</span>
-        <span id="update-images-btn-spinner" class="hidden">Cargando...</span>
-      </button>
-      <p class="text-sm mt-2">Busca y asigna una imagen a todos los productos que no tengan una.</p>
+    <!-- MOBILE HEADER -->
+    <header class="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center shadow-md z-30">
+        <button id="mobile-menu-btn" class="p-2 rounded-lg hover:bg-slate-800 focus:outline-none">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16">
+                </path>
+            </svg>
+        </button>
+        <a href="#" data-view="pos" class="flex items-center gap-2">
+            <img src="assets/logo.jpg" alt="American POS" class="h-10 w-10 object-cover rounded-md">
+            <h1 class="text-xl font-bold tracking-tight text-white">American POS</h1>
+        </a>
+        <button id="mobile-cart-btn" class="p-2 rounded-lg hover:bg-slate-800 focus:outline-none relative">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z">
+                </path>
+            </svg>
+            <span id="mobile-cart-count"
+                class="absolute top-0 right-0 bg-sky-600 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center hidden">0</span>
+        </button>
+    </header>
+
+    <!-- OVERLAY (Mobile) -->
+    <div id="mobile-overlay"
+        class="fixed inset-0 bg-black bg-opacity-50 z-20 hidden md:hidden backdrop-blur-sm transition-opacity">
     </div>
 
-    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
-      <h2 class="text-2xl font-semibold mb-4">Añadir Nuevo Producto</h2>
-      <form id="add-product-form">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div class="md:col-span-2"><label for="name" class="block text-sm font-medium mb-1">Nombre:</label><input type="text" id="name" name="name" required class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
-          <div><label for="price" class="block text-sm font-medium mb-1">Precio:</label><input type="number" id="price" name="price" step="0.01" required class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
-          <div><label for="category" class="block text-sm font-medium mb-1">Categoría:</label><input type="text" id="category" name="category" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
-          <div><label for="stockQuantity" class="block text-sm font-medium mb-1">Stock:</label><input type="number" id="stockQuantity" name="stockQuantity" value="0" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
-          <div class="md:col-span-2 lg:col-span-4"><label for="description" class="block text-sm font-medium mb-1">Descripción:</label><textarea id="description" name="description" rows="3" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></textarea></div>
-          <div class="md:col-span-2 lg:col-span-4"><label for="imageUri" class="block text-sm font-medium mb-1">URL de la Imagen:</label><input type="url" id="imageUri" name="imageUri" placeholder="https://ejemplo.com/imagen.jpg" class="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700"></div>
-        </div>
-        <div class="mt-6 text-right">
-          <button type="submit" class="inline-flex justify-center py-2 px-6 border rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors">Guardar Producto</button>
-        </div>
-      </form>
-    </div>
-
-    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
-      <h1 class="text-2xl font-semibold mb-4">Lista de Productos</h1>
-      <p id="loading" class="mb-4">Cargando...</p>
-      <div id="search-container" class="mb-4"><input type="text" id="search-input" placeholder="Buscar productos por nombre..." class="w-full p-3 border border-gray-300 rounded-lg dark:bg-gray-700"></div>
-      <div class="overflow-x-auto">
-        <table id="product-table" class="w-full min-w-max" style="display:none;">
-          <thead class="bg-gray-100 dark:bg-gray-700">
-            <tr>
-              <th class="p-3 text-left text-sm font-semibold uppercase">Imagen</th>
-              <th class="p-3 text-left text-sm font-semibold uppercase">Nombre</th>
-              <th class="p-3 text-left text-sm font-semibold uppercase">Descripción</th>
-              <th class="p-3 text-left text-sm font-semibold uppercase">Categoría</th>
-              <th class="p-3 text-left text-sm font-semibold uppercase">Precio</th>
-              <th class="p-3 text-left text-sm font-semibold uppercase">Stock</th>
-              <th class="p-3 text-left text-sm font-semibold uppercase">Acciones</th>
-            </tr>
-          </thead>
-          <tbody id="product-table-body" class="divide-y divide-gray-200 dark:divide-gray-600"></tbody>
-        </table>
-      </div>
-    </div>
-  </main>
-
-  <div id="edit-modal" class="modal">
-    <div class="modal-content bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl max-w-2xl w-full m-auto relative">
-      <div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-semibold">Editar Producto</h2><span class="close-btn text-3xl text-gray-400 hover:text-gray-600 cursor-pointer">&times;</span></div>
-      <form id="edit-product-form">
-        <input type="hidden" id="edit-id" name="id">
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div><label for="edit-name" class="block text-sm font-medium mb-1">Nombre:</label><input type="text" id="edit-name" name="name" required class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
-          <div><label for="edit-price" class="block text-sm font-medium mb-1">Precio:</label><input type="number" id="edit-price" name="price" step="0.01" required class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
-          <div><label for="edit-category" class="block text-sm font-medium mb-1">Categoría:</label><input type="text" id="edit-category" name="category" class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
-          <div><label for="edit-stockQuantity" class="block text-sm font-medium mb-1">Stock:</label><input type="number" id="edit-stockQuantity" name="stockQuantity" class="w-full p-2 border rounded-md dark:bg-gray-700"></div>
-          <div class="sm:col-span-2">
-            <label for="edit-barcode" class="block text-sm font-medium mb-1">Código de Barras:</label>
-            <div class="flex gap-2">
-              <input type="text" id="edit-barcode" name="barcode" class="w-full p-2 border rounded-md dark:bg-gray-700">
-              <button type="button" id="scan-barcode-btn" class="px-4 py-2 bg-teal-500 text-white rounded-md hover:bg-teal-600">Escanear</button>
+    <!-- SIDEBAR -->
+    <aside id="sidebar"
+        class="fixed inset-y-0 left-0 w-64 bg-slate-900 text-white flex flex-col shadow-2xl z-40 transform -translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out">
+        <a href="#" data-view="pos"
+            class="p-6 flex items-center gap-3 border-b border-slate-800 hover:bg-slate-800 transition-colors">
+            <div class="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden">
+                <img src="assets/logo.jpg" alt="Logo" class="w-full h-full object-cover">
             </div>
-          </div>
-          <div class="sm:col-span-2">
-            <label for="edit-imageUri" class="block text-sm font-medium mb-1">URL de la Imagen:</label>
-            <div class="flex gap-2">
-              <input type="url" id="edit-imageUri" name="imageUri" class="w-full p-2 border rounded-md dark:bg-gray-700">
-              <button type="button" id="search-image-btn" class="px-4 py-2 bg-indigo-500 text-white rounded-md hover:bg-indigo-600">Buscar en Google</button>
-            </div>
-          </div>
-          <div class="sm:col-span-2"><label for="edit-description" class="block text-sm font-medium mb-1">Descripción:</label><textarea id="edit-description" name="description" rows="3" class="w-full p-2 border rounded-md dark:bg-gray-700"></textarea></div>
-        </div>
-        <div class="mt-6 text-right"><button type="submit" class="inline-flex justify-center py-2 px-6 border rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors">Guardar Cambios</button></div>
-      </form>
-    </div>
-  </div>
+            <h1 class="text-2xl font-bold tracking-tight text-white">American POS</h1>
+        </a>
 
-  <script src="theme.js"></script>
-  <script src="app.js"></script>
+        <nav class="flex-1 p-4 space-y-2">
+            <a href="#" data-view="pos"
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z">
+                    </path>
+                </svg>
+                <span class="font-medium">Punto de Venta</span>
+            </a>
+            <a href="#" data-view="dashboard"
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z">
+                    </path>
+                </svg>
+                <span class="font-medium">Dashboard</span>
+            </a>
+            <a href="#" data-view="sales"
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span class="font-medium">Historial Ventas</span>
+            </a>
+            <a href="#" data-view="customers"
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z">
+                    </path>
+                </svg>
+                <span class="font-medium">Clientes</span>
+            </a>
+            <a href="#" data-view="products"
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4">
+                    </path>
+                </svg>
+                <span class="font-medium">Productos</span>
+            </a>
+            <a href="#" data-view="settings"
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z">
+                    </path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <span class="font-medium">Ajustes</span>
+            </a>
+        </nav>
+
+        <div class="p-4 border-t border-slate-800">
+            <button id="logout-btn"
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-red-900 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1">
+                    </path>
+                </svg>
+                <span class="font-medium">Cerrar Sesión</span>
+            </button>
+        </div>
+
+        <div class="p-4 border-t border-slate-800 text-center text-xs text-slate-500">
+            v2.1.0 - Premium Edition
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 flex flex-col h-full overflow-hidden relative">
+
+        <!-- VIEW: POS -->
+        <section id="view-pos" class="view-section h-full flex flex-col md:flex-row">
+            <!-- Product List Area -->
+            <div class="flex-1 flex flex-col h-full overflow-hidden">
+                <!-- Header / Search -->
+                <div class="bg-white p-3 md:p-4 shadow-sm z-10 flex justify-between items-center gap-3">
+                    <h2 class="text-xl font-bold text-slate-800 hidden md:block">Productos</h2>
+                    <div class="relative w-full md:max-w-md flex gap-2">
+                        <div class="relative flex-1">
+                            <input type="text" id="search-input" placeholder="Buscar producto..."
+                                class="w-full pl-10 pr-4 py-3 md:py-2 border border-slate-200 rounded-full focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 transition-all bg-slate-50 text-base">
+                            <svg class="w-5 h-5 text-slate-400 absolute left-3 top-3.5 md:top-2.5" fill="none"
+                                stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                            </svg>
+                        </div>
+                        <button id="pos-scan-btn"
+                            class="px-3 py-2 bg-slate-900 text-white rounded-full hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center"
+                            title="Escanear Código">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z">
+                                </path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Grid -->
+                <div class="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50">
+                    <div id="product-grid"
+                        class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-6 pb-20 md:pb-0">
+                        <!-- JS Injected -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cart Sidebar -->
+            <div id="cart-sidebar"
+                class="fixed inset-y-0 right-0 w-full md:w-96 bg-white shadow-xl flex flex-col border-l border-slate-200 z-40 transform translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out">
+                <div class="p-4 md:p-5 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                    <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z">
+                            </path>
+                        </svg>
+                        Carrito Actual
+                    </h2>
+                    <button id="close-cart-btn"
+                        class="md:hidden p-2 text-slate-500 hover:text-slate-700 bg-slate-200 rounded-full">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12">
+                            </path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div id="cart-items" class="flex-1 overflow-y-auto p-3 md:p-4 space-y-2">
+                    <!-- JS Injected -->
+                </div>
+
+                <div class="p-4 md:p-6 bg-slate-50 border-t border-slate-200 safe-area-bottom">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-slate-500">Total USD</span>
+                        <span id="cart-total" class="text-2xl font-bold text-slate-900">$0.00</span>
+                    </div>
+                    <div class="flex justify-between items-center mb-4">
+                        <span class="text-slate-500 text-sm">Total BS</span>
+                        <span id="cart-total-bs" class="text-lg font-semibold text-slate-700">Bs
+                            0.00</span>
+                    </div>
+                    <div class="grid grid-cols-4 gap-2">
+                        <button id="clear-cart-btn"
+                            class="col-span-1 p-3 md:p-3 bg-red-100 text-red-600 hover:bg-red-200 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+                            title="Vaciar Carrito">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16">
+                                </path>
+                            </svg>
+                        </button>
+                        <button id="hold-sale-btn"
+                            class="col-span-1 p-3 md:p-3 bg-yellow-100 text-yellow-600 hover:bg-yellow-200 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+                            title="Poner en Espera">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </button>
+                        <button id="checkout-btn"
+                            class="col-span-2 py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-lg shadow-slate-300 transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+                            disabled>
+                            Finalizar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW: DASHBOARD -->
+        <section id="view-dashboard" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
+            <h2 class="text-2xl md:text-3xl font-bold text-slate-900 mb-6 md:mb-8">Resumen del
+                Negocio</h2>
+
+            <!-- Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                    <p class="text-sm text-slate-500 font-medium mb-1">Ingresos Totales</p>
+                    <h3 id="total-revenue" class="text-3xl font-bold text-slate-900">$0.00</h3>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                    <p class="text-sm text-slate-500 font-medium mb-1">Ventas Totales</p>
+                    <h3 id="total-sales" class="text-3xl font-bold text-slate-900">0</h3>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                    <p class="text-sm text-slate-500 font-medium mb-1">Estado del Sistema</p>
+                    <h3 class="text-3xl font-bold text-green-500">Online</h3>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
+                <!-- Chart -->
+                <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                    <h3 class="text-lg font-bold text-slate-800 mb-4">Ventas Últimos 7 Días</h3>
+                    <div class="h-64 w-full">
+                        <canvas id="sales-chart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Low Stock -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                    <h3 class="text-lg font-bold text-slate-800 mb-4">Alerta de Stock Bajo</h3>
+                    <ul id="low-stock-list" class="space-y-3">
+                        <!-- JS Injected -->
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW: SALES HISTORY -->
+        <section id="view-sales" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 gap-4">
+                <h2 class="text-2xl md:text-3xl font-bold text-slate-900">Historial de Ventas
+                </h2>
+                <input type="date" id="sales-date-filter"
+                    class="w-full md:w-auto p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+            </div>
+
+            <div class="bg-white shadow-sm rounded-xl overflow-hidden border border-slate-200 overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200">
+                    <thead class="bg-slate-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Fecha</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                ID Venta</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Items</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sales-table-body" class="bg-white divide-y divide-slate-200">
+                        <!-- JS Injected -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- VIEW: CUSTOMERS -->
+        <section id="view-customers" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 gap-4">
+                <h2 class="text-2xl md:text-3xl font-bold text-slate-900">Gestión de Clientes
+                </h2>
+                <div class="flex gap-3 w-full md:w-auto">
+                    <input type="text" id="search-customer" placeholder="Buscar cliente..."
+                        class="flex-1 md:w-64 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                    <button id="add-customer-btn"
+                        class="px-6 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap">
+                        + Agregar Cliente
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white shadow-sm rounded-xl overflow-hidden border border-slate-200 overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200">
+                    <thead class="bg-slate-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Nombre</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Teléfono</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Email</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Documento</th>
+                            <th
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="customers-list" class="bg-white divide-y divide-slate-200">
+                        <!-- JS Injected -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- VIEW: PRODUCTS (NEW) -->
+        <section id="view-products" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 gap-4">
+                <h2 class="text-2xl md:text-3xl font-bold text-slate-900">Gestión de Productos
+                </h2>
+                <div class="flex gap-3 w-full md:w-auto">
+                    <input type="text" id="search-product-manage" placeholder="Buscar producto..."
+                        class="flex-1 md:w-64 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                    <button id="add-product-btn"
+                        class="px-6 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap">
+                        + Nuevo Producto
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white shadow-sm rounded-xl overflow-hidden border border-slate-200 overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200">
+                    <thead class="bg-slate-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Imagen</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Producto</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Categoría</th>
+                            <th
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Precio</th>
+                            <th
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Stock</th>
+                            <th
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="products-list" class="bg-white divide-y divide-slate-200">
+                        <!-- JS Injected -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- VIEW: SETTINGS -->
+        <section id="view-settings" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
+            <h2 class="text-2xl md:text-3xl font-bold text-slate-900 mb-6 md:mb-8">Ajustes</h2>
+
+
+            <!-- PAYMENT METHODS SECTION -->
+            <div class="bg-white rounded-xl shadow-sm p-6 mb-6">
+                <h3 class="text-lg font-bold text-slate-800 mb-4">Métodos de Pago</h3>
+
+                <div id="payment-methods-list" class="space-y-2 mb-4">
+                    <!-- JS Injected -->
+                </div>
+
+                <div class="flex gap-2">
+                    <input type="text" id="new-payment-method-name" placeholder="Ej: Zelle, Pago Móvil, Efectivo"
+                        class="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                    <label class="flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg bg-slate-50">
+                        <input type="checkbox" id="new-payment-method-requires-ref" class="rounded">
+                        <span class="text-sm text-slate-700">Requiere referencia</span>
+                    </label>
+                    <button id="add-payment-method-btn"
+                        class="px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
+                        Agregar
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 max-w-2xl mb-6">
+                <h3 class="text-lg font-bold text-slate-800 mb-4">Información del Negocio</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Nombre del Negocio</label>
+                        <input type="text" id="business-name"
+                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">RIF / NIT / Tax ID</label>
+                        <input type="text" id="business-tax-id"
+                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Dirección</label>
+                        <input type="text" id="business-address"
+                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                    </div>
+                </div>
+
+                <!-- CUSTOMER FORM MODAL -->
+                <div id="customer-form-modal"
+                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+                    <div
+                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                        <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                            <h3 id="customer-modal-title" class="font-bold text-lg text-slate-800">Agregar
+                                Cliente</h3>
+                            <button id="close-customer-modal"
+                                class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                        </div>
+                        <form id="customer-form" class="p-6 space-y-4">
+                            <div>
+                                <label for="customer-name" class="block text-sm font-medium text-slate-700 mb-1">Nombre
+                                    *</label>
+                                <input type="text" id="customer-name" required
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                            </div>
+                            <div>
+                                <label for="customer-phone"
+                                    class="block text-sm font-medium text-slate-700 mb-1">Teléfono
+                                    *</label>
+                                <input type="tel" id="customer-phone" required
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                <!-- POS SCANNER MODAL -->
+                                <div id="pos-scanner-modal"
+                                    class="fixed inset-0 bg-black bg-opacity-90 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+                                    <div
+                                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all relative">
+                                        <button id="close-pos-scanner"
+                                            class="absolute top-4 right-4 z-10 bg-white rounded-full p-2 text-slate-900 hover:bg-slate-100 shadow-lg">
+                                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                    d="M6 18L18 6M6 6l12 12">
+                                                </path>
+                                            </svg>
+                                        </button>
+                                        <div class="p-6 text-center">
+                                            <h3 class="text-xl font-bold text-slate-900 mb-2">Escanear Producto</h3>
+                                            <p class="text-slate-500 mb-4">Apunta la cámara al código de barras</p>
+                                            <div id="pos-reader"
+                                                class="w-full rounded-lg overflow-hidden border border-slate-300 bg-black"
+                                                style="min-height: 300px;"></div>
+                                            <div id="scan-feedback"
+                                                class="mt-4 h-6 text-green-600 font-bold opacity-0 transition-opacity">
+                                                ¡Producto agregado!
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- PRODUCT FORM MODAL (NEW) -->
+                                <div id="product-form-modal"
+                                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+                                    <div
+                                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                                        <div
+                                            class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                                            <h3 id="product-modal-title" class="font-bold text-lg text-slate-800">
+                                                Nuevo
+                                                Producto</h3>
+                                            <button id="close-product-modal"
+                                                class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                                        </div>
+                                        <form id="product-form" class="p-6 space-y-4">
+                                            <input type="hidden" id="product-id">
+                                            <div>
+                                                <label for="product-name"
+                                                    class="block text-sm font-medium text-slate-700 mb-1">Nombre
+                                                    *</label>
+                                                <input type="text" id="product-name" required
+                                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                            </div>
+                                            <div class="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label for="product-price"
+                                                        class="block text-sm font-medium text-slate-700 mb-1">Precio
+                                                        *</label>
+                                                    <input type="number" id="product-price" step="0.01" required
+                                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                                </div>
+                                                <div>
+                                                    <label for="product-stock"
+                                                        class="block text-sm font-medium text-slate-700 mb-1">Stock
+                                                        *</label>
+                                                    <input type="number" id="product-stock" required
+                                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label for="product-category"
+                                                    class="block text-sm font-medium text-slate-700 mb-1">Categoría</label>
+                                                <input type="text" id="product-category"
+                                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                            </div>
+                                            <div>
+                                                <label for="product-image"
+                                                    class="block text-sm font-medium text-slate-700 mb-1">URL
+                                                    Imagen</label>
+                                                <input type="url" id="product-image" placeholder="https://..."
+                                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                            </div>
+                                            <div>
+                                                <label for="product-barcode"
+                                                    class="block text-sm font-medium text-slate-700 mb-1">Código de
+                                                    Barras</label>
+                                                <div class="flex gap-2">
+                                                    <input type="text" id="product-barcode"
+                                                        class="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                                    <button type="button" id="scan-barcode-btn"
+                                                        class="px-3 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
+                                                        title="Escanear Código">
+                                                        <svg class="w-6 h-6" fill="none" stroke="currentColor"
+                                                            viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                                stroke-width="2"
+                                                                d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z">
+                                                            </path>
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                                <div id="reader"
+                                                    class="mt-2 w-full hidden rounded-lg overflow-hidden border border-slate-300">
+                                                </div>
+                                            </div>
+                                            <div class="flex gap-3 pt-4">
+                                                <button type="button" id="cancel-product-form"
+                                                    class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                                                    Cancelar
+                                                </button>
+                                                <button type="submit"
+                                                    class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
+                                                    Guardar
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+
+                                <!-- CUSTOMER SELECTION MODAL FOR CHECKOUT -->
+                                <div id="customer-selection-modal"
+                                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+                                    <div
+                                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                                        <div
+                                            class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                                            <h3 class="font-bold text-lg text-slate-800">Seleccionar Cliente</h3>
+                                            <button id="close-customer-selection"
+                                                class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                                        </div>
+                                        <div class="p-6">
+                                            <input type="text" id="search-customer-checkout"
+                                                placeholder="Buscar por nombre o teléfono..."
+                                                class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 mb-4">
+                                            <div id="customer-list-checkout"
+                                                class="max-h-64 overflow-y-auto space-y-2 mb-4">
+                                                <!-- JS Injected -->
+                                            </div>
+                                            <button id="skip-customer-btn"
+                                                class="w-full px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                                                Continuar sin cliente
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- PAYMENT MODAL -->
+                                <div id="payment-modal"
+                                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+                                    <div
+                                        class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all">
+                                        <div class="p-4 border-b border-slate-100 bg-slate-50">
+                                            <h3 class="font-bold text-lg text-slate-800">Procesar Pago</h3>
+                                        </div>
+                                        <div class="p-6">
+                                            <!-- Total a pagar -->
+                                            <div class="mb-6 text-center">
+                                                <p class="text-sm text-slate-500 mb-1">Total a pagar</p>
+                                                <p id="payment-total-usd" class="text-3xl font-bold text-slate-900">
+                                                    $0.00</p>
+                                                <p id="payment-total-ves" class="text-lg font-medium text-slate-600">Bs
+                                                    0.00
+                                                </p>
+                                            </div>
+
+                                            <!-- Payment Method Selection -->
+                                            <div class="mb-4">
+                                                <label class="block text-sm font-medium text-slate-700 mb-1">Método
+                                                    de Pago</label>
+                                                <select id="payment-method-select"
+                                                    class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                                    <!-- JS Injected -->
+                                                </select>
+                                            </div>
+
+                                            <!-- Dynamic Payment Fields -->
+                                            <div id="payment-fields">
+                                                <!-- JS Injected -->
+                                            </div>
+
+                                            <!-- Change/Vuelto Display -->
+                                            <div class="mt-4 mb-6 p-3 bg-green-50 rounded-lg border border-green-100">
+                                                <p class="text-sm text-green-700 font-medium">Vuelto:</p>
+                                                <p id="payment-change" class="text-xl font-bold text-green-800">Bs
+                                                    0.00</p>
+                                            </div>
+
+                                            <div class="flex gap-3">
+                                                <button id="cancel-payment-btn"
+                                                    class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                                                    Cancelar
+                                                </button>
+                                                <button id="confirm-payment-btn" <h3
+                                                    class="font-bold text-lg text-slate-800">Recibo
+                                                    de Venta</h3>
+                                                    <button id="close-receipt"
+                                                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                                            </div>
+                                            <div id="receipt-content" class="p-6">
+                                                <!-- JS Injected -->
+                                            </div>
+                                            <div class="p-4 border-t border-slate-100 space-y-2">
+                                                <button id="email-receipt-btn"
+                                                    class="w-full px-4 py-3 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors font-medium flex items-center justify-center gap-2">
+                                                    <svg class="w-5 h-5" fill="none" stroke="currentColor"
+                                                        viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                                            stroke-width="2"
+                                                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
+                                                        </path>
+                                                    </svg>
+                                                    Enviar al correo del cliente
+                                                </button>
+                                                <button id="print-receipt-btn"
+                                                    class="w-full px-4 py-3 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors font-medium">
+                                                    Imprimir recibo
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Auth Check Script -->
+                                    <script type="module">
+                                        import { authService } from './js/auth.js';
+
+                                        let authInitialized = false;
+
+                                        // Check authentication on page load
+                                        authService.onAuthChange((user) => {
+                                            if (!authInitialized) {
+                                                authInitialized = true;
+                                                if (!user) {
+                                                    window.location.href = 'login.html';
+                                                }
+                                            } else if (!user) {
+                                                window.location.href = 'login.html';
+                                            }
+                                        });
+
+                                        // Logout button
+                                        document.getElementById('logout-btn')?.addEventListener('click', async () => {
+                                            if (confirm('¿Estás seguro de que quieres cerrar sesión?')) {
+                                                await authService.logout();
+                                            }
+                                        });
+                                    </script>
+                                    <!-- Unregister Service Worker (Fix for auto-refresh) -->
+                                    <script>
+                                        if ('serviceWorker' in navigator) {
+                                            navigator.serviceWorker.getRegistrations().then(function (registrations) {
+                                                for (let registration of registrations) {
+                                                    registration.unregister();
+                                                    console.log('Service Worker unregistered');
+                                                }
+                                            });
+                                        }
+                                    </script>
+                                    <!-- Main Script -->
+                                    <script type="module" src="js/app.js"></script>
 </body>
+
 </html>
