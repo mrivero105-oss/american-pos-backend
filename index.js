@@ -4,17 +4,34 @@ const express = require('express');
 const admin = require('firebase-admin');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-let serviceAccount;
-try {
-    serviceAccount = require('/etc/secrets/serviceAccountKey.json');
-} catch (e) {
-    serviceAccount = require('./serviceAccountKey.json');
-}
+const fs = require('fs');
 
+// Initialize Firebase Admin
 if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
+    let credential;
+    const secretFilePath = '/etc/secrets/serviceAccountKey.json';
+
+    try {
+        if (fs.existsSync(secretFilePath)) {
+            console.log('Using Firebase credentials from Render secret file');
+            const serviceAccount = JSON.parse(fs.readFileSync(secretFilePath, 'utf8'));
+            credential = admin.credential.cert(serviceAccount);
+        } else if (process.env.FIREBASE_CREDENTIALS) {
+            console.log('Using Firebase credentials from environment variable');
+            const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+            credential = admin.credential.cert(serviceAccount);
+        } else {
+            console.log('Using Firebase credentials from local file');
+            const serviceAccount = require('./serviceAccountKey.json');
+            credential = admin.credential.cert(serviceAccount);
+        }
+
+        admin.initializeApp({ credential });
+        console.log('Firebase initialized successfully');
+    } catch (error) {
+        console.error('Error initializing Firebase:', error);
+        // Don't crash immediately, let the app start but log the error
+    }
 }
 
 const db = admin.firestore();
