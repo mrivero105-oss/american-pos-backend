@@ -1,0 +1,45 @@
+[
+  {
+    "id": "cash_usd",
+    "name": "Efectivo (USD)",
+    "type": "cash",
+    "currency": "USD",
+    "requiresReference": false
+  },
+  {
+    "id": "cash_bs",
+    "name": "Efectivo (Bs)",
+    "type": "cash",
+    "currency": "VES",
+    "requiresReference": false
+  },
+  {
+    "id": "zelle",
+    "name": "Zelle",
+    "type": "transfer",
+    "currency": "USD",
+    "requiresReference": true
+  },
+  {
+    "id": "pago_movil",
+    "name": "Pago Móvil",
+    "type": "transfer",
+    "currency": "VES",
+    "requiresReference": true
+  },
+  {
+    "id": "biopago",
+    "name": "BioPago",
+    "requiresReference": false
+  },
+  {
+    "id": "tarjeta-de-debito",
+    "name": "Tarjeta de Debito",
+    "requiresReference": false
+  },
+  {
+    "id": "transferencia",
+    "name": "Transferencia",
+    "requiresReference": true
+  }
+]

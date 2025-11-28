@@ -8,10 +8,11 @@ export class Customers {
         this.init();
     }
 
-    async init() {
+    init() {
+        console.log('Customers module initializing...');
         this.cacheDOM();
         this.bindEvents();
-        await this.loadCustomers();
+        this.loadCustomers();
     }
 
     cacheDOM() {
@@ -25,11 +26,22 @@ export class Customers {
             modalTitle: document.getElementById('customer-modal-title'),
             cancelFormBtn: document.getElementById('cancel-customer-form')
         };
+        console.log('Customers DOM cached:', this.dom);
+        console.log('Add Customer Btn found:', !!this.dom.addCustomerBtn);
     }
 
     bindEvents() {
+        console.log('Binding Customers events...');
+        if (this.dom.addCustomerBtn) {
+            this.dom.addCustomerBtn.addEventListener('click', () => {
+                console.log('Add Customer button clicked');
+                this.showAddForm();
+            });
+        } else {
+            console.error('Add Customer button NOT found during binding');
+        }
+
         this.dom.searchCustomer?.addEventListener('input', (e) => this.filterCustomers(e.target.value));
-        this.dom.addCustomerBtn?.addEventListener('click', () => this.showAddForm());
         this.dom.closeModalBtn?.addEventListener('click', () => this.closeModal());
         this.dom.cancelFormBtn?.addEventListener('click', () => this.closeModal());
         this.dom.customerForm?.addEventListener('submit', (e) => this.handleFormSubmit(e));
@@ -51,7 +63,7 @@ export class Customers {
         if (customers.length === 0) {
             this.dom.customersList.innerHTML = `
                 <tr>
-                    <td colspan="5" class="px-6 py-8 text-center text-slate-500">
+                    <td colspan="5" class="px-6 py-8 text-center text-slate-500 dark:text-slate-300">
                         No hay clientes registrados
                     </td>
                 </tr>
@@ -60,18 +72,18 @@ export class Customers {
         }
 
         this.dom.customersList.innerHTML = customers.map(customer => `
-            <tr class="hover:bg-slate-50 transition-colors">
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                 <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm font-medium text-slate-900">${customer.name}</div>
+                    <div class="text-sm font-medium text-slate-900 dark:text-white">${customer.name}</div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm text-slate-600">${customer.phone}</div>
+                    <div class="text-sm text-slate-600 dark:text-slate-300">${customer.phone}</div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm text-slate-600">${customer.email || '-'}</div>
+                    <div class="text-sm text-slate-600 dark:text-slate-300">${customer.email || '-'}</div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm text-slate-600">${customer.idDocument || '-'}</div>
+                    <div class="text-sm text-slate-600 dark:text-slate-300">${customer.idDocument || '-'}</div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button class="edit-customer text-blue-600 hover:text-blue-900 mr-4" data-id="${customer.id}">
@@ -95,10 +107,31 @@ export class Customers {
     }
 
     showAddForm() {
+        console.log('showAddForm called');
         this.editingCustomerId = null;
-        this.dom.modalTitle.textContent = 'Agregar Cliente';
-        this.dom.customerForm.reset();
-        this.dom.customerFormModal.classList.remove('hidden');
+
+        if (this.dom.modalTitle) {
+            console.log('Setting modal title...');
+            this.dom.modalTitle.textContent = 'Agregar Cliente';
+        } else {
+            console.error('modalTitle element is missing!');
+        }
+
+        if (this.dom.customerForm) {
+            console.log('Resetting form...');
+            this.dom.customerForm.reset();
+        } else {
+            console.error('customerForm element is missing!');
+        }
+
+        if (this.dom.customerFormModal) {
+            console.log('Removing hidden class from modal...', this.dom.customerFormModal);
+            console.log('Modal Parent Element:', this.dom.customerFormModal.parentElement);
+            this.dom.customerFormModal.classList.remove('hidden');
+            console.log('Class list after removal:', this.dom.customerFormModal.classList.toString());
+        } else {
+            console.error('customerFormModal element is missing!');
+        }
     }
 
     showEditForm(customerId) {

@@ -1,8 +1,8 @@
-import { authService } from './auth.js';
-import { API_BASE_URL } from './config.js';
+const API_BASE_URL = ''; // Use relative path for local deployment
 
+// Helper function to get auth headers
 async function getAuthHeaders() {
-    const token = await authService.getToken();
+    const token = localStorage.getItem('authToken');
     return {
         'Content-Type': 'application/json',
         ...(token && { 'Authorization': `Bearer ${token}` })
@@ -211,6 +211,26 @@ export const api = {
             });
             handleAuthError(res);
             if (!res.ok) throw new Error('Error al obtener ventas del cliente');
+            return res.json();
+        }
+    },
+    backup: {
+        create: async () => {
+            const res = await fetch(`${API_BASE_URL}/backup`, {
+                headers: await getAuthHeaders()
+            });
+            handleAuthError(res);
+            if (!res.ok) throw new Error('Error al crear copia de seguridad');
+            return res.json();
+        },
+        restore: async (backupData) => {
+            const res = await fetch(`${API_BASE_URL}/restore`, {
+                method: 'POST',
+                headers: await getAuthHeaders(),
+                body: JSON.stringify(backupData)
+            });
+            handleAuthError(res);
+            if (!res.ok) throw new Error('Error al restaurar copia de seguridad');
             return res.json();
         }
     }

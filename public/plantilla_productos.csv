@@ -1,0 +1,4 @@
+nombre,precio,stock,categoria,codigo_barras,imagen_url
+Producto Ejemplo 1,10.50,100,Víveres,1234567890,
+Producto Ejemplo 2,25.00,50,Alimentos,9876543210,
+Producto Ejemplo 3,5.75,200,Bebidas,5555555555,

@@ -23,10 +23,15 @@ export class Settings {
             businessLogo: document.getElementById('business-logo'),
             saveBusinessBtn: document.getElementById('save-business-btn'),
             // Payment Methods
-            paymentMethodsList: document.getElementById('payment-methods-list'),
+            paymentMethodsSelect: document.getElementById('payment-methods-settings-select'),
+            deleteMethodBtn: document.getElementById('delete-payment-method-btn'),
             newPaymentMethodName: document.getElementById('new-payment-method-name'),
             newPaymentMethodRequiresRef: document.getElementById('new-payment-method-requires-ref'),
-            addPaymentMethodBtn: document.getElementById('add-payment-method-btn')
+            addPaymentMethodBtn: document.getElementById('add-payment-method-btn'),
+            // Backup
+            downloadBackupBtn: document.getElementById('download-backup-btn'),
+            restoreBackupBtn: document.getElementById('restore-backup-btn'),
+            restoreFileInput: document.getElementById('restore-file-input')
         };
     }
 
@@ -34,6 +39,19 @@ export class Settings {
         this.dom.saveRateBtn?.addEventListener('click', () => this.saveRate());
         this.dom.saveBusinessBtn?.addEventListener('click', () => this.saveBusinessInfo());
         this.dom.addPaymentMethodBtn?.addEventListener('click', () => this.addPaymentMethod());
+        this.dom.deleteMethodBtn?.addEventListener('click', () => {
+            const id = this.dom.paymentMethodsSelect?.value;
+            if (id) this.deletePaymentMethod(id);
+        });
+
+        // Backup events
+        this.dom.downloadBackupBtn?.addEventListener('click', () => this.createBackup());
+        this.dom.restoreBackupBtn?.addEventListener('click', () => this.dom.restoreFileInput?.click());
+        this.dom.restoreFileInput?.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.restoreBackup(e.target.files[0]);
+            }
+        });
 
         // Initialize payment methods array
         this.paymentMethods = [];
@@ -133,31 +151,13 @@ export class Settings {
     }
 
     renderPaymentMethods() {
-        if (!this.dom.paymentMethodsList) return;
+        if (!this.dom.paymentMethodsSelect) return;
 
-        this.dom.paymentMethodsList.innerHTML = this.paymentMethods.map(method => `
-            <tr>
-                <td class="px-4 py-2 whitespace-nowrap text-sm text-slate-900">${method.name}</td>
-                <td class="px-4 py-2 whitespace-nowrap text-sm text-slate-500">
-                    ${method.requiresReference ?
-                '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Sí</span>' :
-                '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-slate-100 text-slate-800">No</span>'}
-                </td>
-                <td class="px-4 py-2 whitespace-nowrap text-right text-sm font-medium">
-                    <button class="text-red-600 hover:text-red-900 delete-method-btn" data-id="${method.id}">
-                        Eliminar
-                    </button>
-                </td>
-            </tr>
+        this.dom.paymentMethodsSelect.innerHTML = this.paymentMethods.map(method => `
+            <option value="${method.id}">
+                ${method.name} ${method.requiresReference ? '(Requiere Ref.)' : ''}
+            </option>
         `).join('');
-
-        // Re-bind delete events
-        this.dom.paymentMethodsList.querySelectorAll('.delete-method-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const id = e.target.dataset.id;
-                this.deletePaymentMethod(id);
-            });
-        });
     }
 
     async addPaymentMethod() {
@@ -217,5 +217,70 @@ export class Settings {
             this.paymentMethods = originalMethods;
             this.renderPaymentMethods();
         }
+    }
+
+    // --- BACKUP & RESTORE ---
+    async createBackup() {
+        try {
+            this.dom.downloadBackupBtn.disabled = true;
+            this.dom.downloadBackupBtn.textContent = 'Generando...';
+
+            const data = await api.backup.create();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `backup_pos_${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            ui.showNotification('Copia de seguridad descargada');
+        } catch (error) {
+            console.error('Error creating backup:', error);
+            ui.showNotification('Error al crear copia de seguridad', 'error');
+        } finally {
+            this.dom.downloadBackupBtn.disabled = false;
+            this.dom.downloadBackupBtn.innerHTML = `
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                </svg>
+                Descargar Copia
+            `;
+        }
+    }
+
+    async restoreBackup(file) {
+        if (!confirm('ADVERTENCIA: Esto sobrescribirá todos los datos actuales. Se creará una copia de seguridad automática antes de proceder. ¿Estás seguro?')) {
+            this.dom.restoreFileInput.value = '';
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const backupData = JSON.parse(e.target.result);
+
+                this.dom.restoreBackupBtn.disabled = true;
+                this.dom.restoreBackupBtn.textContent = 'Restaurando...';
+
+                await api.backup.restore(backupData);
+
+                alert('Restauración completada con éxito. La página se recargará.');
+                window.location.reload();
+            } catch (error) {
+                console.error('Error restoring backup:', error);
+                ui.showNotification('Error al restaurar: Archivo inválido o corrupto', 'error');
+                this.dom.restoreBackupBtn.disabled = false;
+                this.dom.restoreBackupBtn.innerHTML = `
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                    </svg>
+                    Restaurar Copia
+                `;
+            }
+        };
+        reader.readAsText(file);
     }
 }

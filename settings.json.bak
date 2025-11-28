@@ -1,0 +1,11 @@
+{
+  "businessName": "American POS",
+  "businessAddress": "Dirección del Negocio",
+  "businessTaxId": "J-12345678-9",
+  "exchangeRate": 250,
+  "businessInfo": {
+    "name": "Bodega Sigfrido",
+    "address": "Boca de Uchire, Estado Anzoategui",
+    "taxId": ""
+  }
+}

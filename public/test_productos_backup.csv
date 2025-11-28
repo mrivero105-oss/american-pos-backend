@@ -1,0 +1,11 @@
+nombre,precio,stock,categoria,codigo_barras,imagen_url
+Coca Cola 2L,3.50,50,Bebidas,7501055300013,
+Pepsi 2L,3.25,45,Bebidas,7501055301010,
+Arroz Diana 1kg,2.80,100,Víveres,7702001028016,
+Aceite Primor 1L,4.50,30,Víveres,7702001055012,
+Pan Tajado Bimbo,2.20,60,Alimentos,7501055334018,
+Leche Completa 1L,2.90,40,Alimentos,7501055301027,
+Papel Higiénico Scott 4und,5.50,25,Higiene Personal,7501055301034,
+Jabón Protex,1.80,80,Higiene Personal,7501055301041,
+Shampoo Pantene 400ml,6.75,20,Higiene Personal,7501055301058,
+Detergente Ariel 1kg,8.90,15,Víveres,7501055301065,

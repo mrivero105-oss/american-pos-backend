@@ -1,13 +1,12 @@
-import { POS } from './pos.js';
-import { Dashboard } from './dashboard.js';
-import { SalesHistory } from './sales.js';
+import { POS } from './pos.v3.js?v=36';
+import { Dashboard } from './dashboard.js?v=2';
+import { SalesHistory } from './sales.js?v=6';
 import { Settings } from './settings.js';
 import { Customers } from './customers.js';
 import { Products } from './products.js';
 
 class App {
     constructor() {
-        console.log('App initializing...');
         this.views = {
             pos: new POS(),
             dashboard: new Dashboard(),
@@ -22,8 +21,13 @@ class App {
 
     init() {
         // Navigation
-        document.querySelectorAll('[data-view]').forEach(link => {
+        // Navigation
+        const navLinks = document.querySelectorAll('[data-view]');
+        console.log('Found nav links:', navLinks.length);
+
+        navLinks.forEach(link => {
             link.addEventListener('click', (e) => {
+                console.log('Nav link clicked:', e.currentTarget.dataset.view);
                 e.preventDefault();
                 const viewName = e.currentTarget.dataset.view;
                 this.switchView(viewName);
@@ -37,19 +41,6 @@ class App {
 
         // Mobile Menu Button
         const mobileMenuBtn = document.getElementById('mobile-menu-btn');
-        if (mobileMenuBtn) {
-            mobileMenuBtn.addEventListener('click', () => {
-                this.toggleSidebar(true);
-            });
-        }
-
-        // Mobile Cart Button
-        const mobileCartBtn = document.getElementById('mobile-cart-btn');
-        if (mobileCartBtn) {
-            mobileCartBtn.addEventListener('click', () => {
-                this.toggleCart(true);
-            });
-        }
 
         // Close Cart Button (Mobile)
         const closeCartBtn = document.getElementById('close-cart-btn');
@@ -67,6 +58,29 @@ class App {
                 this.toggleCart(false);
             });
         }
+
+        // Theme Toggle (Delegation)
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('#theme-toggle');
+            if (btn) {
+                console.log('Theme toggle clicked');
+                try {
+                    console.log('Tailwind Config:', typeof tailwind !== 'undefined' ? JSON.stringify(tailwind.config) : 'undefined');
+                } catch (e) {
+                    console.error('Error reading tailwind config:', e);
+                }
+                console.log('Classes before:', document.documentElement.className);
+
+                if (document.documentElement.classList.contains('dark')) {
+                    document.documentElement.classList.remove('dark');
+                    localStorage.theme = 'light';
+                } else {
+                    document.documentElement.classList.add('dark');
+                    localStorage.theme = 'dark';
+                }
+                console.log('Classes after:', document.documentElement.className);
+            }
+        });
 
         // Initial view
         this.views.products.init();
@@ -109,13 +123,16 @@ class App {
 
     switchView(viewName) {
         // Update Nav
+        // Update Nav
         document.querySelectorAll('nav a').forEach(link => {
             if (link.dataset.view === viewName) {
+                // Active State
                 link.classList.add('bg-slate-800', 'text-white');
-                link.classList.remove('text-slate-300', 'hover:bg-slate-800', 'hover:text-white');
+                link.classList.remove('text-slate-800', 'dark:text-slate-200', 'hover:bg-slate-100', 'dark:hover:bg-slate-800');
             } else {
+                // Inactive State
                 link.classList.remove('bg-slate-800', 'text-white');
-                link.classList.add('text-slate-300', 'hover:bg-slate-800', 'hover:text-white');
+                link.classList.add('text-slate-800', 'dark:text-slate-200', 'hover:bg-slate-100', 'dark:hover:bg-slate-800');
             }
         });
 
@@ -139,7 +156,16 @@ class App {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    if (window.app) return;
+console.log('App.js module loaded');
+
+const initApp = () => {
+    console.log('initApp called');
+    // if (window.app) return; // Force init for debugging
     window.app = new App();
-});
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApp);
+} else {
+    initApp();
+}

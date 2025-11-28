@@ -32,7 +32,11 @@ export const ui = {
     toggleModal: (modalId, show = true) => {
         const modal = document.getElementById(modalId);
         if (modal) {
-            modal.style.display = show ? 'block' : 'none';
+            if (show) {
+                modal.classList.remove('hidden');
+            } else {
+                modal.classList.add('hidden');
+            }
         }
     }
 };

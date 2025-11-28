@@ -10,7 +10,9 @@
     "dotenv": "^17.2.3",
     "express": "^4.19.2",
     "firebase-admin": "^12.1.0",
-    "nodemailer": "^7.0.10"
+    "nodemailer": "^7.0.10",
+    "puppeteer": "^24.31.0",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": ">=18.0.0"

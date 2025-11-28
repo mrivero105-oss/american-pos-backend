@@ -7,7 +7,31 @@
     <title>American POS - Premium</title>
 
     <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS -->
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com?v=1"></script>
+    <script>
+        console.log('Configuring Tailwind...');
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                    }
+                }
+            }
+        };
+        console.log('Tailwind Configured:', tailwind.config);
+    </script>
+    <script>
+        // Theme Initialization
+        if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark')
+        } else {
+            document.documentElement.classList.remove('dark')
+        }
+    </script>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -17,8 +41,46 @@
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-    <!-- Html5-QRCode -->
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <!-- SheetJS for Excel parsing -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <style>
+        /* Fix autocomplete styling - more aggressive approach */
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus,
+        input:-webkit-autofill:active,
+        select:-webkit-autofill,
+        select:-webkit-autofill:hover,
+        select:-webkit-autofill:focus,
+        textarea:-webkit-autofill,
+        textarea:-webkit-autofill:hover,
+        textarea:-webkit-autofill:focus {
+            -webkit-text-fill-color: #0f172a !important;
+            -webkit-box-shadow: 0 0 0px 1000px white inset !important;
+            box-shadow: 0 0 0px 1000px white inset !important;
+            background-color: white !important;
+            color: #0f172a !important;
+            transition: background-color 5000s ease-in-out 0s;
+        }
+
+        /* Force text color on all inputs */
+        input[type="text"],
+        input[type="number"],
+        input[type="url"],
+        select {
+            color: #0f172a;
+        }
+
+        /* Allow dark mode text color override */
+        .dark input[type="text"],
+        .dark input[type="number"],
+        .dark input[type="url"],
+        .dark select {
+            color: #f1f5f9;
+        }
+    </style>
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
@@ -45,6 +107,15 @@
 
         ::-webkit-scrollbar-thumb:hover {
             background: #64748b;
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
         }
 
         @keyframes fadeIn {
@@ -74,9 +145,23 @@
             });
         }
     </script>
+    <!-- Error Handling Debugger -->
+    <script>
+        console.log('✅ Inline script executing...');
+        window.onerror = function (msg, url, line, col, error) {
+            console.error('Global Error:', msg, '\nURL:', url, '\nLine:', line, '\nCol:', col, '\nError:', error);
+            // Also alert for visibility if console is hidden
+            // alert('Error: ' + msg); 
+            return false;
+        };
+        window.addEventListener('unhandledrejection', function (event) {
+            console.error('Unhandled Rejection:', event.reason);
+        });
+    </script>
 </head>
 
-<body class="bg-slate-50 text-slate-800 h-screen flex flex-col md:flex-row overflow-hidden">
+<body
+    class="bg-slate-200 dark:bg-slate-900 text-slate-800 dark:text-slate-100 h-screen flex flex-col md:flex-row overflow-hidden">
 
     <!-- MOBILE HEADER -->
     <header class="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center shadow-md z-30">
@@ -108,18 +193,22 @@
 
     <!-- SIDEBAR -->
     <aside id="sidebar"
-        class="fixed inset-y-0 left-0 w-64 bg-slate-900 text-white flex flex-col shadow-2xl z-40 transform -translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out">
+        class="fixed inset-y-0 left-0 z-40 w-64 md:w-20 lg:w-72 bg-white dark:bg-slate-900 text-slate-800 dark:text-white flex flex-col shadow-2xl transform -translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out border-r border-slate-200 dark:border-slate-800">
         <a href="#" data-view="pos"
-            class="p-6 flex items-center gap-3 border-b border-slate-800 hover:bg-slate-800 transition-colors">
-            <div class="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden">
-                <img src="assets/logo.jpg" alt="Logo" class="w-full h-full object-cover">
+            class="p-6 flex flex-col items-center gap-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors group">
+            <div
+                class="w-24 h-24 rounded-2xl flex items-center justify-center overflow-hidden shadow-lg ring-1 ring-slate-200 dark:ring-slate-700 group-hover:scale-105 transition-transform duration-300 bg-slate-50 dark:bg-slate-950">
+                <img src="assets/logo.jpg" alt="Logo"
+                    class="w-full h-full object-cover opacity-100 dark:opacity-90 transition-opacity">
             </div>
-            <h1 class="text-2xl font-bold tracking-tight text-white">American POS</h1>
+            <h1
+                class="text-2xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-200 text-center hidden lg:block">
+                American POS</h1>
         </a>
 
         <nav class="flex-1 p-4 space-y-2">
             <a href="#" data-view="pos"
-                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z">
@@ -128,7 +217,7 @@
                 <span class="font-medium">Punto de Venta</span>
             </a>
             <a href="#" data-view="dashboard"
-                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z">
@@ -137,7 +226,7 @@
                 <span class="font-medium">Dashboard</span>
             </a>
             <a href="#" data-view="sales"
-                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
@@ -145,7 +234,7 @@
                 <span class="font-medium">Historial Ventas</span>
             </a>
             <a href="#" data-view="customers"
-                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z">
@@ -154,7 +243,7 @@
                 <span class="font-medium">Clientes</span>
             </a>
             <a href="#" data-view="products"
-                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4">
@@ -163,7 +252,7 @@
                 <span class="font-medium">Productos</span>
             </a>
             <a href="#" data-view="settings"
-                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-slate-800 hover:text-white">
+                class="flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z">
@@ -175,9 +264,9 @@
             </a>
         </nav>
 
-        <div class="p-4 border-t border-slate-800">
+        <div class="p-4 border-t border-slate-200 dark:border-slate-800">
             <button id="logout-btn"
-                class="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-300 hover:bg-red-900 hover:text-white">
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-slate-800 dark:text-slate-200 hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1">
@@ -187,10 +276,107 @@
             </button>
         </div>
 
-        <div class="p-4 border-t border-slate-800 text-center text-xs text-slate-500">
+        <div
+            class="p-4 border-t border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-500">
             v2.1.0 - Premium Edition
         </div>
     </aside>
+
+    <!-- BULK UPLOAD MODAL -->
+    <div id="bulk-upload-modal"
+        class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+        <div
+            class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden transform transition-all flex flex-col">
+            <div
+                class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-900">
+                <h3 class="font-bold text-lg text-slate-800 dark:text-white">Carga Masiva de Productos</h3>
+                <button id="close-bulk-modal"
+                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
+            </div>
+            <div class="p-6 overflow-y-auto flex-1">
+                <!-- File Input -->
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">Seleccionar
+                        archivo</label>
+                    <input type="file" id="bulk-file-input" accept=".xlsx,.xls,.csv"
+                        class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                    <p class="mt-2 text-xs text-slate-500">
+                        Formato: Excel (.xlsx, .xls) o CSV (.csv).
+                        <a href="plantilla_productos.csv" download class="text-blue-600 hover:underline">Descargar
+                            plantilla CSV</a>
+                    </p>
+                </div>
+
+                <!-- Summary -->
+                <div id="bulk-summary"></div>
+
+                <!-- Errors -->
+                <div id="bulk-errors"></div>
+
+                <!-- Preview Table -->
+                <div id="bulk-preview-table" class="overflow-x-auto"></div>
+            </div>
+            <div class="p-4 border-t border-slate-100 dark:border-slate-700 flex gap-3">
+                <button id="cancel-bulk-upload"
+                    class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors font-medium">
+                    Cancelar
+                </button>
+                <button id="confirm-bulk-upload"
+                    class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                    Procesar Carga
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CUSTOM ITEM MODAL -->
+    <div id="custom-item-modal"
+        class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+        <div
+            class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+            <div
+                class="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex justify-between items-center">
+                <h3 class="font-bold text-lg text-slate-800 dark:text-white">Artículo Personalizado</h3>
+                <button id="close-custom-item-modal"
+                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
+            </div>
+            <div class="p-6">
+                <form id="custom-item-form">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Descripción del
+                            Artículo</label>
+                        <input type="text" id="custom-item-name" required placeholder="Ej: Servicio de Delivery"
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-white">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio USD
+                                *</label>
+                            <input type="number" id="custom-item-price-usd" step="0.01" min="0" required
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio
+                                Bs</label>
+                            <input type="number" id="custom-item-price-bs" step="0.01" min="0"
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button type="button" id="cancel-custom-item"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors font-medium">
+                            Cancelar
+                        </button>
+                        <button type="submit"
+                            class="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium shadow-md">
+                            Agregar al Carrito
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 
     <!-- MAIN CONTENT -->
     <main class="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -200,12 +386,15 @@
             <!-- Product List Area -->
             <div class="flex-1 flex flex-col h-full overflow-hidden">
                 <!-- Header / Search -->
-                <div class="bg-white p-3 md:p-4 shadow-sm z-10 flex justify-between items-center gap-3">
-                    <h2 class="text-xl font-bold text-slate-800 hidden md:block">Productos</h2>
+                <div
+                    class="bg-white dark:bg-slate-900 p-3 md:p-4 shadow-sm z-10 flex justify-between items-center gap-3 border-b dark:border-slate-800">
+                    <h2
+                        class="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 hidden md:block">
+                        Productos</h2>
                     <div class="relative w-full md:max-w-md flex gap-2">
                         <div class="relative flex-1">
                             <input type="text" id="search-input" placeholder="Buscar producto..."
-                                class="w-full pl-10 pr-4 py-3 md:py-2 border border-slate-200 rounded-full focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 transition-all bg-slate-50 text-base">
+                                class="w-full pl-10 pr-4 py-3 md:py-2 border border-slate-200 dark:border-slate-700 rounded-full focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 transition-all bg-slate-50 dark:bg-slate-800 dark:text-white text-base">
                             <svg class="w-5 h-5 text-slate-400 absolute left-3 top-3.5 md:top-2.5" fill="none"
                                 stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -221,13 +410,45 @@
                                 </path>
                             </svg>
                         </button>
+                        <button id="custom-item-btn"
+                            class="px-3 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition-colors shadow-sm flex items-center justify-center ml-1"
+                            title="Artículo Personalizado">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                            </svg>
+                        </button>
+                        <button id="theme-toggle"
+                            class="px-3 py-2 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors shadow-sm flex items-center justify-center ml-2"
+                            title="Cambiar Tema">
+                            <!-- Sun Icon -->
+                            <svg class="w-6 h-6 hidden dark:block" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z">
+                                </path>
+                            </svg>
+                            <!-- Moon Icon -->
+                            <svg class="w-6 h-6 block dark:hidden" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z">
+                                </path>
+                            </svg>
+                        </button>
                     </div>
                 </div>
 
+                <!-- Category Filter Bar -->
+                <div class="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-2 py-3 flex items-center gap-3 z-10 min-h-[60px] whitespace-nowrap overflow-x-auto scrollbar-hide"
+                    id="category-filters">
+                    <!-- Categories injected via JS -->
+                </div>
+
                 <!-- Grid -->
-                <div class="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50">
+                <div class="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-200 dark:bg-slate-900">
                     <div id="product-grid"
-                        class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-6 pb-20 md:pb-0">
+                        class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 md:gap-5 pb-20 md:pb-0">
                         <!-- JS Injected -->
                     </div>
                 </div>
@@ -235,10 +456,12 @@
 
             <!-- Cart Sidebar -->
             <div id="cart-sidebar"
-                class="fixed inset-y-0 right-0 w-full md:w-96 bg-white shadow-xl flex flex-col border-l border-slate-200 z-40 transform translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out">
-                <div class="p-4 md:p-5 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-                    <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
-                        <svg class="w-5 h-5 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                class="fixed inset-y-0 right-0 w-full md:w-80 lg:w-96 bg-white dark:bg-slate-900 shadow-xl flex flex-col border-l border-slate-200 dark:border-slate-800 z-40 transform translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out">
+                <div
+                    class="p-4 md:p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex justify-between items-center">
+                    <h2 class="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                        <svg class="w-5 h-5 text-slate-700 dark:text-slate-300" fill="none" stroke="currentColor"
+                            viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z">
                             </path>
@@ -259,19 +482,20 @@
                     <!-- JS Injected -->
                 </div>
 
-                <div class="p-4 md:p-6 bg-slate-50 border-t border-slate-200 safe-area-bottom">
+                <div
+                    class="p-4 md:p-6 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 safe-area-bottom">
                     <div class="flex justify-between items-center mb-2">
-                        <span class="text-slate-500">Total USD</span>
-                        <span id="cart-total" class="text-2xl font-bold text-slate-900">$0.00</span>
+                        <span class="text-slate-500 dark:text-slate-300">Total USD</span>
+                        <span id="cart-total" class="text-2xl font-bold text-slate-900 dark:text-white">$0.00</span>
                     </div>
                     <div class="flex justify-between items-center mb-4">
-                        <span class="text-slate-500 text-sm">Total BS</span>
-                        <span id="cart-total-bs" class="text-lg font-semibold text-slate-700">Bs
+                        <span class="text-slate-500 dark:text-slate-300 text-sm">Total BS</span>
+                        <span id="cart-total-bs" class="text-lg font-semibold text-slate-700 dark:text-slate-300">Bs
                             0.00</span>
                     </div>
                     <div class="grid grid-cols-4 gap-2">
                         <button id="clear-cart-btn"
-                            class="col-span-1 p-3 md:p-3 bg-red-100 text-red-600 hover:bg-red-200 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+                            class="col-span-1 p-2 bg-red-100 text-red-600 hover:bg-red-200 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
                             title="Vaciar Carrito">
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -280,7 +504,7 @@
                             </svg>
                         </button>
                         <button id="hold-sale-btn"
-                            class="col-span-1 p-3 md:p-3 bg-yellow-100 text-yellow-600 hover:bg-yellow-200 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+                            class="col-span-1 p-3 md:p-3 bg-yellow-100 text-yellow-600 hover:bg-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:hover:bg-yellow-900/40 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
                             title="Poner en Espera">
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -288,7 +512,7 @@
                             </svg>
                         </button>
                         <button id="checkout-btn"
-                            class="col-span-2 py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-lg shadow-slate-300 transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+                            class="col-span-2 py-2 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-bold rounded-xl shadow-md transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
                             disabled>
                             Finalizar
                         </button>
@@ -298,69 +522,134 @@
         </section>
 
         <!-- VIEW: DASHBOARD -->
-        <section id="view-dashboard" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
-            <h2 class="text-2xl md:text-3xl font-bold text-slate-900 mb-6 md:mb-8">Resumen del
-                Negocio</h2>
+        <!-- VIEW: DASHBOARD -->
+        <section id="view-dashboard"
+            class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50 dark:bg-slate-900">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 gap-4">
+                <h2 class="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white">Resumen del Negocio</h2>
 
-            <!-- Stats Cards -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
-                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                    <p class="text-sm text-slate-500 font-medium mb-1">Ingresos Totales</p>
-                    <h3 id="total-revenue" class="text-3xl font-bold text-slate-900">$0.00</h3>
-                </div>
-                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                    <p class="text-sm text-slate-500 font-medium mb-1">Ventas Totales</p>
-                    <h3 id="total-sales" class="text-3xl font-bold text-slate-900">0</h3>
-                </div>
-                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                    <p class="text-sm text-slate-500 font-medium mb-1">Estado del Sistema</p>
-                    <h3 class="text-3xl font-bold text-green-500">Online</h3>
+                <!-- Time Range Selector -->
+                <div
+                    class="bg-white dark:bg-slate-800 p-1 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 flex gap-1">
+                    <button
+                        class="dashboard-filter-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        data-range="hour">Hora</button>
+                    <button
+                        class="dashboard-filter-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors bg-slate-900 text-white dark:bg-blue-600"
+                        data-range="day">Día</button>
+                    <button
+                        class="dashboard-filter-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        data-range="week">Semana</button>
+                    <button
+                        class="dashboard-filter-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        data-range="month">Mes</button>
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-                <!-- Chart -->
-                <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                    <h3 class="text-lg font-bold text-slate-800 mb-4">Ventas Últimos 7 Días</h3>
+            <!-- Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
+                <div
+                    class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
+                    <p class="text-sm text-slate-500 dark:text-slate-300 font-medium mb-1">Ingresos Totales</p>
+                    <h3 id="total-revenue" class="text-3xl font-bold text-slate-900 dark:text-white">$0.00</h3>
+                </div>
+                <div
+                    class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
+                    <p class="text-sm text-slate-500 dark:text-slate-300 font-medium mb-1">Ventas Totales</p>
+                    <h3 id="total-sales" class="text-3xl font-bold text-slate-900 dark:text-white">0</h3>
+                </div>
+                <div
+                    class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
+                    <p class="text-sm text-slate-500 dark:text-slate-300 font-medium mb-1">Ticket Promedio</p>
+                    <h3 id="avg-ticket" class="text-3xl font-bold text-slate-900 dark:text-white">$0.00</h3>
+                </div>
+            </div>
+
+            <!-- Charts Row 1: Sales Trend -->
+            <div
+                class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 mb-6 md:mb-8 hover:shadow-lg hover:-translate-y-1 transition-all duration-300">
+                <h3 class="text-lg font-bold text-slate-800 dark:text-white mb-4">Tendencia de Ventas</h3>
+                <div class="h-72 w-full">
+                    <canvas id="sales-trend-chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Charts Row 2: Top Products & Payment Methods -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8 mb-6 md:mb-8">
+                <!-- Top Products -->
+                <div
+                    class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 hover:shadow-lg hover:-translate-y-1 transition-all duration-300">
+                    <h3 class="text-lg font-bold text-slate-800 dark:text-white mb-4">Productos Más Vendidos</h3>
                     <div class="h-64 w-full">
-                        <canvas id="sales-chart"></canvas>
+                        <canvas id="top-products-chart"></canvas>
                     </div>
                 </div>
 
-                <!-- Low Stock -->
-                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                    <h3 class="text-lg font-bold text-slate-800 mb-4">Alerta de Stock Bajo</h3>
-                    <ul id="low-stock-list" class="space-y-3">
-                        <!-- JS Injected -->
-                    </ul>
+                <!-- Payment Methods -->
+                <div
+                    class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 hover:shadow-lg hover:-translate-y-1 transition-all duration-300">
+                    <h3 class="text-lg font-bold text-slate-800 dark:text-white mb-4">Métodos de Pago</h3>
+                    <div class="h-64 w-full flex justify-center">
+                        <canvas id="payment-methods-chart"></canvas>
+                    </div>
                 </div>
+            </div>
+
+            <!-- Low Stock Alert -->
+            <div
+                class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
+                <h3 class="text-lg font-bold text-slate-800 dark:text-white mb-4">Alerta de Stock Bajo</h3>
+                <ul id="low-stock-list" class="space-y-3">
+                    <!-- JS Injected -->
+                </ul>
             </div>
         </section>
 
         <!-- VIEW: SALES HISTORY -->
-        <section id="view-sales" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
-            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 gap-4">
-                <h2 class="text-2xl md:text-3xl font-bold text-slate-900">Historial de Ventas
-                </h2>
-                <input type="date" id="sales-date-filter"
-                    class="w-full md:w-auto p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+        <section id="view-sales"
+            class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50 dark:bg-slate-900">
+            <div class="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-slate-800 dark:text-white">Historial de Ventas</h2>
+                <div class="flex gap-4">
+                    <div class="relative">
+                        <input type="text" id="sales-search-input" placeholder="Buscar por Doc, Cliente o Producto..."
+                            class="pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 w-64 md:w-80">
+                        <svg class="w-5 h-5 text-slate-400 absolute left-3 top-2.5" fill="none" stroke="currentColor"
+                            viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                    </div>
+                    <input type="date" id="sales-date-filter"
+                        class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500">
+                </div>
             </div>
-
-            <div class="bg-white shadow-sm rounded-xl overflow-hidden border border-slate-200 overflow-x-auto">
-                <table class="min-w-full divide-y divide-slate-200">
-                    <thead class="bg-slate-50">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-800">
                         <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                                 Fecha</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                                 ID Venta</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Cliente / Doc</th>
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                                 Items</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                                 Total</th>
+                            <th
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Acciones</th>
                         </tr>
                     </thead>
-                    <tbody id="sales-table-body" class="bg-white divide-y divide-slate-200">
+                    <tbody id="sales-table-body"
+                        class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
                         <!-- JS Injected -->
                     </tbody>
                 </table>
@@ -368,38 +657,45 @@
         </section>
 
         <!-- VIEW: CUSTOMERS -->
-        <section id="view-customers" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
+        <section id="view-customers"
+            class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50 dark:bg-slate-900">
             <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 gap-4">
-                <h2 class="text-2xl md:text-3xl font-bold text-slate-900">Gestión de Clientes
+                <h2 class="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white">Gestión de Clientes
                 </h2>
                 <div class="flex gap-3 w-full md:w-auto">
                     <input type="text" id="search-customer" placeholder="Buscar cliente..."
-                        class="flex-1 md:w-64 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                        class="flex-1 md:w-64 px-4 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-slate-500">
                     <button id="add-customer-btn"
-                        class="px-6 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap">
+                        class="px-6 py-2 bg-slate-900 dark:bg-blue-600 text-white font-medium rounded-lg hover:bg-slate-800 dark:hover:bg-blue-700 transition-colors whitespace-nowrap">
                         + Agregar Cliente
                     </button>
                 </div>
             </div>
 
-            <div class="bg-white shadow-sm rounded-xl overflow-hidden border border-slate-200 overflow-x-auto">
-                <table class="min-w-full divide-y divide-slate-200">
-                    <thead class="bg-slate-50">
+            <div
+                class="bg-white dark:bg-slate-800 shadow-sm rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900">
                         <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Nombre</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Teléfono</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Email</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Documento</th>
                             <th
-                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Acciones</th>
                         </tr>
                     </thead>
-                    <tbody id="customers-list" class="bg-white divide-y divide-slate-200">
+                    <tbody id="customers-list"
+                        class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
                         <!-- JS Injected -->
                     </tbody>
                 </table>
@@ -407,42 +703,66 @@
         </section>
 
         <!-- VIEW: PRODUCTS (NEW) -->
-        <section id="view-products" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
+        <section id="view-products"
+            class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50 dark:bg-slate-900">
             <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 gap-4">
-                <h2 class="text-2xl md:text-3xl font-bold text-slate-900">Gestión de Productos
+                <h2 class="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white">Gestión de Productos
                 </h2>
                 <div class="flex gap-3 w-full md:w-auto">
                     <input type="text" id="search-product-manage" placeholder="Buscar producto..."
-                        class="flex-1 md:w-64 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                        class="flex-1 md:w-64 px-4 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-slate-500">
+                    <button id="export-products-btn"
+                        class="px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors whitespace-nowrap flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                            </path>
+                        </svg>
+                        Exportar
+                    </button>
+                    <button id="bulk-upload-btn"
+                        class="px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
+                            </path>
+                        </svg>
+                        Carga Masiva
+                    </button>
                     <button id="add-product-btn"
-                        class="px-6 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap">
+                        class="px-6 py-2 bg-slate-900 dark:bg-blue-600 text-white font-medium rounded-lg hover:bg-slate-800 dark:hover:bg-blue-700 transition-colors whitespace-nowrap">
                         + Nuevo Producto
                     </button>
                 </div>
             </div>
 
-            <div class="bg-white shadow-sm rounded-xl overflow-hidden border border-slate-200 overflow-x-auto">
-                <table class="min-w-full divide-y divide-slate-200">
-                    <thead class="bg-slate-50">
+            <div
+                class="bg-white dark:bg-slate-800 shadow-sm rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900">
                         <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Imagen</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Producto</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                            <th
+                                class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Categoría</th>
                             <th
-                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Precio</th>
                             <th
-                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Stock</th>
                             <th
-                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">
                                 Acciones</th>
                         </tr>
                     </thead>
-                    <tbody id="products-list" class="bg-white divide-y divide-slate-200">
+                    <tbody id="products-list"
+                        class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
                         <!-- JS Injected -->
                     </tbody>
                 </table>
@@ -450,40 +770,54 @@
         </section>
 
         <!-- VIEW: SETTINGS -->
-        <section id="view-settings" class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50">
-            <h2 class="text-2xl md:text-3xl font-bold text-slate-900 mb-6 md:mb-8">Ajustes</h2>
+        <section id="view-settings"
+            class="view-section hidden h-full overflow-y-auto p-4 md:p-8 bg-slate-50 dark:bg-slate-900">
+            <h2 class="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white mb-6 md:mb-8">Ajustes</h2>
+
 
             <!-- EXCHANGE RATE SECTION -->
-            <div class="bg-white rounded-xl shadow-sm p-6 mb-6">
-                <h3 class="text-lg font-bold text-slate-800 mb-4">Tasa de Cambio</h3>
-                <div class="flex items-end gap-4">
-                    <div class="flex-1 max-w-xs">
-                        <label class="block text-sm font-medium text-slate-700 mb-1">Tasa (Bs/USD)</label>
-                        <input type="number" id="exchange-rate-input" step="0.01" min="0" placeholder="0.00"
-                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 font-mono text-lg">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6 mb-6 border border-slate-100 dark:border-slate-700">
+                <h3 class="text-lg font-bold text-slate-800 dark:text-white mb-4">Tasa de Cambio</h3>
+                <div class="flex gap-4 items-end">
+                    <div class="flex-1">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Tasa del Día
+                            (Bs/$)</label>
+                        <input type="number" id="exchange-rate-input" step="0.01"
+                            class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-lg font-bold text-slate-900 dark:text-white">
                     </div>
                     <button id="save-rate-btn"
-                        class="px-6 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors mb-[1px]">
+                        class="px-6 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors h-[46px]">
                         Guardar Tasa
                     </button>
                 </div>
             </div>
 
-
             <!-- PAYMENT METHODS SECTION -->
-            <div class="bg-white rounded-xl shadow-sm p-6 mb-6">
-                <h3 class="text-lg font-bold text-slate-800 mb-4">Métodos de Pago</h3>
+            <!-- PAYMENT METHODS SECTION -->
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6 mb-6 border border-slate-100 dark:border-slate-700">
+                <h3 class="text-lg font-bold text-slate-800 dark:text-white mb-4">Métodos de Pago</h3>
 
-                <div id="payment-methods-list" class="space-y-2 mb-4">
-                    <!-- JS Injected -->
+                <div class="flex gap-2 mb-6">
+                    <select id="payment-methods-settings-select"
+                        class="flex-1 rounded-lg border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:border-blue-500 focus:ring-blue-500 p-2 border text-slate-900 dark:text-white">
+                        <!-- JS Injected -->
+                    </select>
+                    <button id="delete-payment-method-btn"
+                        class="px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors font-medium">
+                        Eliminar
+                    </button>
                 </div>
 
                 <div class="flex gap-2">
                     <input type="text" id="new-payment-method-name" placeholder="Ej: Zelle, Pago Móvil, Efectivo"
-                        class="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                    <label class="flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg bg-slate-50">
-                        <input type="checkbox" id="new-payment-method-requires-ref" class="rounded">
-                        <span class="text-sm text-slate-700">Requiere referencia</span>
+                        class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                    <label
+                        class="flex items-center gap-2 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700">
+                        <input type="checkbox" id="new-payment-method-requires-ref"
+                            class="rounded border-slate-300 dark:border-slate-500 text-blue-600 focus:ring-blue-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-200">Requiere referencia</span>
                     </label>
                     <button id="add-payment-method-btn"
                         class="px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
@@ -492,304 +826,545 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 max-w-2xl mb-6">
-                <h3 class="text-lg font-bold text-slate-800 mb-4">Información del Negocio</h3>
+            <div
+                class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 max-w-2xl mb-6">
+                <h3 class="text-lg font-bold text-slate-800 dark:text-white mb-4">Información del Negocio</h3>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-1">Nombre del Negocio</label>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Nombre del
+                            Negocio</label>
                         <input type="text" id="business-name"
-                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-1">RIF / NIT / Tax ID</label>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">RIF / NIT / Tax
+                            ID</label>
                         <input type="text" id="business-tax-id"
-                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
                     </div>
                     <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-slate-700 mb-1">Dirección</label>
+                        <label
+                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Dirección</label>
                         <input type="text" id="business-address"
-                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
                     </div>
                 </div>
+                <div class="flex justify-end">
+                    <button id="save-business-btn"
+                        class="px-6 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors">
+                        Guardar Información
+                    </button>
+                </div>
+            </div>
 
-                <!-- CUSTOMER FORM MODAL -->
-                <div id="customer-form-modal"
-                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <!-- BACKUP & RESTORE SECTION -->
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 max-w-2xl mb-6">
+                <h3 class="text-lg font-bold text-slate-800 mb-4">Copia de Seguridad y Restauración</h3>
+                <p class="text-sm text-slate-600 mb-4">Descarga una copia de seguridad de todos tus datos o restaura una
+                    copia previa.</p>
+
+                <div class="flex gap-4">
+                    <button id="download-backup-btn"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Descargar Copia
+                    </button>
+
+                    <button id="restore-backup-btn"
+                        class="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors font-medium flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                        </svg>
+                        Restaurar Copia
+                    </button>
+                    <input type="file" id="restore-file-input" accept=".json" class="hidden">
+                </div>
+            </div>
+        </section>
+
+
+
+
+
+        <!-- CUSTOMER SELECTION MODAL FOR CHECKOUT -->
+        <div id="customer-selection-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                    <h3 class="font-bold text-lg text-slate-800">Seleccionar Cliente</h3>
+                    <button id="close-customer-selection"
+                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                </div>
+                <div class="p-6">
+                    <input type="text" id="search-customer-checkout" placeholder="Buscar por nombre o teléfono..."
+                        class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 mb-4">
+                    <div id="customer-list-checkout" class="max-h-64 overflow-y-auto space-y-2 mb-4">
+                        <!-- JS Injected -->
+                    </div>
+                    <button id="skip-customer-btn"
+                        class="w-full px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                        Continuar sin cliente
+                    </button>
+                </div>
+            </div>
+        </div>
+        <!-- PAYMENT MODAL -->
+        <div id="payment-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all">
+                <div class="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/50">
+                    <h3 class="font-bold text-lg text-slate-800 dark:text-white">Procesar Pago</h3>
+                </div>
+                <div class="p-6">
+                    <!-- Total a pagar -->
+                    <div class="mb-6 text-center">
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mb-1">Total a pagar</p>
+                        <p id="payment-total-usd" class="text-3xl font-bold text-slate-900 dark:text-white">
+                            $0.00</p>
+                        <p id="payment-total-ves" class="text-lg font-medium text-slate-600 dark:text-slate-300">Bs
+                            0.00
+                        </p>
+                    </div>
+
+                    <!-- Payment Method Selection -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Método
+                            de Pago</label>
+                        <select id="payment-method-select"
+                            class="w-full rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white p-2 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            <!-- JS Injected -->
+                        </select>
+                    </div>
+
+                    <!-- Dynamic Payment Fields -->
+                    <div id="payment-fields">
+                        <!-- JS Injected -->
+                    </div>
+
+                    <!-- Change/Vuelto Display -->
                     <div
-                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
-                        <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                            <h3 id="customer-modal-title" class="font-bold text-lg text-slate-800">Agregar
-                                Cliente</h3>
-                            <button id="close-customer-modal"
+                        class="mt-4 mb-6 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-100 dark:border-green-900/30">
+                        <p class="text-sm text-green-700 dark:text-green-400 font-medium">Vuelto:</p>
+                        <p id="payment-change" class="text-xl font-bold text-green-800 dark:text-green-300">Bs
+                            0.00</p>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button id="cancel-payment-btn"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                            Cancelar
+                        </button>
+                        <button id="confirm-payment-btn"
+                            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-bold shadow-lg shadow-green-200 dark:shadow-none">
+                            Confirmar Pago
+                        </button>
+                    </div>
+
+                    <!-- RECEIPT MODAL CONTENT (Hidden initially) -->
+                    <div id="receipt-modal-content" class="hidden">
+                        <div class="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
+                            <h3 class="font-bold text-lg text-slate-800">Recibo de Venta</h3>
+                            <button id="close-receipt"
                                 class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
                         </div>
-                        <form id="customer-form" class="p-6 space-y-4">
-                            <div>
-                                <label for="customer-name" class="block text-sm font-medium text-slate-700 mb-1">Nombre
-                                    *</label>
-                                <input type="text" id="customer-name" required
-                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                        <div id="receipt-content" class="p-6">
+                            <!-- JS Injected -->
+                        </div>
+                        <div class="p-4 border-t border-slate-100 space-y-2">
+                            <button id="email-receipt-btn"
+                                class="w-full px-4 py-3 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors font-medium flex items-center justify-center gap-2">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
+                                    </path>
+                                </svg>
+                                Enviar al correo del cliente
+                            </button>
+                            <button id="print-receipt-btn"
+                                class="w-full px-4 py-3 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors font-medium">
+                                Imprimir recibo
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Auth Check Script -->
+        <script type="module">
+            import { authService } from './js/auth.js';
+
+            let authInitialized = false;
+
+            // Check authentication on page load
+            authService.onAuthChange((user) => {
+                if (!authInitialized) {
+                    authInitialized = true;
+                    if (!user) {
+                        window.location.href = 'login.html';
+                    }
+                } else if (!user) {
+                    window.location.href = 'login.html';
+                }
+            });
+
+            // Logout button
+            document.getElementById('logout-btn')?.addEventListener('click', async () => {
+                if (confirm('¿Estás seguro de que quieres cerrar sesión?')) {
+                    await authService.logout();
+                }
+            });
+        </script>
+        <!-- Unregister Service Worker (Fix for auto-refresh) -->
+        <script>
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(function (registrations) {
+                    for (let registration of registrations) {
+                        registration.unregister();
+                        console.log('Service Worker unregistered');
+                    }
+                });
+            }
+        </script>
+        <!-- Main Script -->
+
+        <script>
+            function toggleTheme() {
+                if (document.documentElement.classList.contains('dark')) {
+                    document.documentElement.classList.remove('dark');
+                    localStorage.theme = 'light';
+                } else {
+                    document.documentElement.classList.add('dark');
+                    localStorage.theme = 'dark';
+                }
+            }
+        </script>
+        <!-- CUSTOMER FORM MODAL -->
+        <div id="customer-form-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                    <h3 id="customer-modal-title" class="font-bold text-lg text-slate-800">Agregar
+                        Cliente</h3>
+                    <button id="close-customer-modal"
+                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                </div>
+                <form id="customer-form" class="p-6 space-y-4">
+                    <div>
+                        <label for="customer-name" class="block text-sm font-medium text-slate-700 mb-1">Nombre
+                            *</label>
+                        <input type="text" id="customer-name" required
+                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                    </div>
+                    <div>
+                        <label for="customer-phone" class="block text-sm font-medium text-slate-700 mb-1">Teléfono
+                            *</label>
+                        <input type="tel" id="customer-phone" required
+                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                    </div>
+                    <div>
+                        <label for="customer-email"
+                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Email</label>
+                        <input type="email" id="customer-email"
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="customer-address"
+                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Dirección</label>
+                        <input type="text" id="customer-address"
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="customer-id-document"
+                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Documento
+                            ID</label>
+                        <input type="text" id="customer-id-document"
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                    </div>
+                    <div class="flex gap-3 pt-4">
+                        <button type="button" id="cancel-customer-form"
+                            class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                            Cancelar
+                        </button>
+                        <button type="submit"
+                            class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
+                            Guardar
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- POS SCANNER MODAL -->
+        <div id="pos-scanner-modal"
+            class="fixed inset-0 bg-black bg-opacity-90 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all relative">
+                <button id="close-pos-scanner"
+                    class="absolute top-4 right-4 z-10 bg-white rounded-full p-2 text-slate-900 hover:bg-slate-100 shadow-lg">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                        </path>
+                    </svg>
+                </button>
+                <div class="p-6 text-center">
+                    <h3 class="text-xl font-bold text-slate-900 mb-2">Escanear Producto</h3>
+                    <p class="text-slate-500 mb-4">Apunta la cámara al código de barras</p>
+                    <div id="pos-reader" class="w-full rounded-lg overflow-hidden border border-slate-300 bg-black"
+                        style="min-height: 300px;"></div>
+                    <div id="scan-feedback" class="mt-4 h-6 text-green-600 font-bold opacity-0 transition-opacity">
+                        ¡Producto agregado!
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- PRODUCT FORM MODAL (NEW) -->
+        <div id="product-form-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg h-[90vh] flex flex-col transform transition-all">
+                <div
+                    class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700 flex-shrink-0">
+                    <h3 id="product-modal-title" class="font-bold text-lg text-slate-800 dark:text-white">
+                        Nuevo
+                        Producto</h3>
+                    <button id="close-product-modal"
+                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
+                </div>
+                <form id="product-form" class="p-6 space-y-4 overflow-y-auto" style="min-height: 0;">
+                    <input type="hidden" id="product-id">
+                    <div>
+                        <label for="product-name" class="block text-sm font-medium text-slate-700 mb-1">Nombre
+                            *</label>
+                        <input type="text" id="product-name" required
+                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                    </div>
+                    <div class="grid grid-cols-3 gap-4 mb-4">
+                        <div>
+                            <label for="product-price"
+                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio USD
+                                *</label>
+                            <input type="number" id="product-price" step="0.01" min="0" required
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="product-price-bs"
+                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio
+                                Bs</label>
+                            <input type="number" id="product-price-bs" step="0.01" min="0"
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="product-stock"
+                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Stock
+                                *</label>
+                            <input type="number" id="product-stock" required
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label for="product-category"
+                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Categoría</label>
+                            <input type="text" id="product-category"
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="product-barcode"
+                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Código de
+                                Barras</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="product-barcode"
+                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                                <button type="button" id="scan-barcode-btn" <svg class="w-6 h-6" fill="none"
+                                    stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z">
+                                    </path>
+                                    </svg>
+                                </button>
                             </div>
-                            <div>
-                                <label for="customer-phone"
-                                    class="block text-sm font-medium text-slate-700 mb-1">Teléfono
-                                    *</label>
-                                <input type="tel" id="customer-phone" required
+                            <div id="reader"
+                                class="mt-2 w-full hidden rounded-lg overflow-hidden border border-slate-300">
+                            </div>
+                        </div>
+
+                        <!-- ADVANCED PRICING SECTION -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Imagen del
+                                Producto</label>
+                            <div class="flex items-center gap-3">
+                                <div id="image-preview"
+                                    class="h-16 w-16 rounded-lg bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 overflow-hidden flex items-center justify-center">
+                                    <svg class="w-8 h-8 text-slate-300 dark:text-slate-500" fill="none"
+                                        stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z">
+                                        </path>
+                                    </svg>
+                                </div>
+                                <div class="flex-1">
+                                    <input type="file" id="product-image-file" accept="image/*"
+                                        class="block w-full text-sm text-slate-500 dark:text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-slate-100 dark:file:bg-slate-700 file:text-slate-700 dark:file:text-slate-200 hover:file:bg-slate-200 dark:hover:file:bg-slate-600">
+                                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Formatos: JPG, PNG, WEBP
+                                        (Max 5MB)</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="border-t border-slate-200 pt-4 mt-4">
+                            <h4 class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z">
+                                    </path>
+                                </svg>
+                                Cálculo de Precios (Opcional)
+                            </h4>
+
+                            <!-- Package Type -->
+                            <div class="mb-3">
+                                <label for="package-type" class="block text-sm font-medium text-slate-700 mb-1">Tipo de
+                                    Empaque</label>
+                                <select id="package-type"
                                     class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                                <!-- POS SCANNER MODAL -->
-                                <div id="pos-scanner-modal"
-                                    class="fixed inset-0 bg-black bg-opacity-90 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
-                                    <div
-                                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all relative">
-                                        <button id="close-pos-scanner"
-                                            class="absolute top-4 right-4 z-10 bg-white rounded-full p-2 text-slate-900 hover:bg-slate-100 shadow-lg">
-                                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                    d="M6 18L18 6M6 6l12 12">
-                                                </path>
-                                            </svg>
-                                        </button>
-                                        <div class="p-6 text-center">
-                                            <h3 class="text-xl font-bold text-slate-900 mb-2">Escanear Producto</h3>
-                                            <p class="text-slate-500 mb-4">Apunta la cámara al código de barras</p>
-                                            <div id="pos-reader"
-                                                class="w-full rounded-lg overflow-hidden border border-slate-300 bg-black"
-                                                style="min-height: 300px;"></div>
-                                            <div id="scan-feedback"
-                                                class="mt-4 h-6 text-green-600 font-bold opacity-0 transition-opacity">
-                                                ¡Producto agregado!
-                                            </div>
-                                        </div>
+                                    <option value="">-- Ninguno --</option>
+                                    <option value="unidad">Unidad</option>
+                                    <option value="caja">Caja</option>
+                                    <option value="bulto">Bulto</option>
+                                </select>
+                            </div>
+
+                            <!-- Quantity Fields (conditional) -->
+                            <div id="quantity-fields" class="hidden">
+                                <div id="units-per-bulk-field" class="mb-3 hidden">
+                                    <label for="units-per-bulk"
+                                        class="block text-sm font-medium text-slate-700 mb-1">Unidades por Bulto</label>
+                                    <input type="number" id="units-per-bulk" min="1" step="1" placeholder="Ej: 288"
+                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                                    <p class="text-xs text-slate-500 mt-1">O calcula automáticamente:</p>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div id="boxes-per-bulk-field" class="hidden">
+                                        <label for="boxes-per-bulk"
+                                            class="block text-sm font-medium text-slate-700 mb-1">Cajas
+                                            por Bulto</label>
+                                        <input type="number" id="boxes-per-bulk" min="1" step="1" placeholder="Ej: 12"
+                                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                                    </div>
+                                    <div id="units-per-box-field" class="hidden">
+                                        <label for="units-per-box"
+                                            class="block text-sm font-medium text-slate-700 mb-1">Unidades por
+                                            Caja</label>
+                                        <input type="number" id="units-per-box" min="1" step="1" placeholder="Ej: 24"
+                                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
                                     </div>
                                 </div>
+                            </div>
 
-                                <!-- PRODUCT FORM MODAL (NEW) -->
-                                <div id="product-form-modal"
-                                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
-                                    <div
-                                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
-                                        <div
-                                            class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                                            <h3 id="product-modal-title" class="font-bold text-lg text-slate-800">
-                                                Nuevo
-                                                Producto</h3>
-                                            <button id="close-product-modal"
-                                                class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
-                                        </div>
-                                        <form id="product-form" class="p-6 space-y-4">
-                                            <input type="hidden" id="product-id">
-                                            <div>
-                                                <label for="product-name"
-                                                    class="block text-sm font-medium text-slate-700 mb-1">Nombre
-                                                    *</label>
-                                                <input type="text" id="product-name" required
-                                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                                            </div>
-                                            <div class="grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <label for="product-price"
-                                                        class="block text-sm font-medium text-slate-700 mb-1">Precio
-                                                        *</label>
-                                                    <input type="number" id="product-price" step="0.01" required
-                                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                                                </div>
-                                                <div>
-                                                    <label for="product-stock"
-                                                        class="block text-sm font-medium text-slate-700 mb-1">Stock
-                                                        *</label>
-                                                    <input type="number" id="product-stock" required
-                                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label for="product-category"
-                                                    class="block text-sm font-medium text-slate-700 mb-1">Categoría</label>
-                                                <input type="text" id="product-category"
-                                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                                            </div>
-                                            <div>
-                                                <label for="product-image"
-                                                    class="block text-sm font-medium text-slate-700 mb-1">URL
-                                                    Imagen</label>
-                                                <input type="url" id="product-image" placeholder="https://..."
-                                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                                            </div>
-                                            <div>
-                                                <label for="product-barcode"
-                                                    class="block text-sm font-medium text-slate-700 mb-1">Código de
-                                                    Barras</label>
-                                                <div class="flex gap-2">
-                                                    <input type="text" id="product-barcode"
-                                                        class="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
-                                                    <button type="button" id="scan-barcode-btn"
-                                                        class="px-3 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
-                                                        title="Escanear Código">
-                                                        <svg class="w-6 h-6" fill="none" stroke="currentColor"
-                                                            viewBox="0 0 24 24">
-                                                            <path stroke-linecap="round" stroke-linejoin="round"
-                                                                stroke-width="2"
-                                                                d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z">
-                                                            </path>
-                                                        </svg>
-                                                    </button>
-                                                </div>
-                                                <div id="reader"
-                                                    class="mt-2 w-full hidden rounded-lg overflow-hidden border border-slate-300">
-                                                </div>
-                                            </div>
-                                            <div class="flex gap-3 pt-4">
-                                                <button type="button" id="cancel-product-form"
-                                                    class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
-                                                    Cancelar
-                                                </button>
-                                                <button type="submit"
-                                                    class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
-                                                    Guardar
-                                                </button>
-                                            </div>
-                                        </form>
-                                    </div>
+                            <!-- Cost and Margin -->
+                            <div id="cost-fields" class="space-y-3 hidden">
+                                <div>
+                                    <label for="cost-per-package" class="block text-sm font-medium text-slate-700 mb-1">
+                                        Costo por <span id="package-label">Empaque</span>
+                                    </label>
+                                    <input type="number" id="cost-per-package" min="0" step="0.01" placeholder="0.00"
+                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
                                 </div>
-
-                                <!-- CUSTOMER SELECTION MODAL FOR CHECKOUT -->
-                                <div id="customer-selection-modal"
-                                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
-                                    <div
-                                        class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
-                                        <div
-                                            class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                                            <h3 class="font-bold text-lg text-slate-800">Seleccionar Cliente</h3>
-                                            <button id="close-customer-selection"
-                                                class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
-                                        </div>
-                                        <div class="p-6">
-                                            <input type="text" id="search-customer-checkout"
-                                                placeholder="Buscar por nombre o teléfono..."
-                                                class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 mb-4">
-                                            <div id="customer-list-checkout"
-                                                class="max-h-64 overflow-y-auto space-y-2 mb-4">
-                                                <!-- JS Injected -->
-                                            </div>
-                                            <button id="skip-customer-btn"
-                                                class="w-full px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
-                                                Continuar sin cliente
-                                            </button>
-                                        </div>
-                                    </div>
+                                <div>
+                                    <label for="profit-margin"
+                                        class="block text-sm font-medium text-slate-700 mb-1">Margen
+                                        de Ganancia (%)</label>
+                                    <input type="number" id="profit-margin" min="0" step="0.1" placeholder="30"
+                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
                                 </div>
-                                <!-- PAYMENT MODAL -->
-                                <div id="payment-modal"
-                                    class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
-                                    <div
-                                        class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all">
-                                        <div class="p-4 border-b border-slate-100 bg-slate-50">
-                                            <h3 class="font-bold text-lg text-slate-800">Procesar Pago</h3>
-                                        </div>
-                                        <div class="p-6">
-                                            <!-- Total a pagar -->
-                                            <div class="mb-6 text-center">
-                                                <p class="text-sm text-slate-500 mb-1">Total a pagar</p>
-                                                <p id="payment-total-usd" class="text-3xl font-bold text-slate-900">
-                                                    $0.00</p>
-                                                <p id="payment-total-ves" class="text-lg font-medium text-slate-600">Bs
-                                                    0.00
-                                                </p>
-                                            </div>
+                            </div>
 
-                                            <!-- Payment Method Selection -->
-                                            <div class="mb-4">
-                                                <label class="block text-sm font-medium text-slate-700 mb-1">Método
-                                                    de Pago</label>
-                                                <select id="payment-method-select"
-                                                    class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                                                    <!-- JS Injected -->
-                                                </select>
-                                            </div>
+                            <!-- Calculated Values -->
+                            <div id="calculated-values" class="mt-3 p-3 bg-blue-50 rounded-lg space-y-2 hidden">
+                                <div class="flex justify-between text-sm">
+                                    <span class="text-slate-600">Costo Unitario:</span>
+                                    <span id="calculated-unit-cost" class="font-bold text-slate-900">$0.00</span>
+                                </div>
+                                <div class="flex justify-between text-sm">
+                                    <span class="text-slate-600">Precio Venta Sugerido:</span>
+                                    <span id="calculated-sale-price" class="font-bold text-green-600">$0.00</span>
+                                </div>
+                                <button type="button" id="apply-calculated-price"
+                                    class="w-full mt-2 px-3 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors">
+                                    ✓ Usar Precio Calculado
+                                </button>
+                            </div>
+                        </div>
+                </form>
+                <div class="p-4 border-t border-slate-100 flex gap-3 flex-shrink-0">
+                    <button type="button" id="cancel-product-form"
+                        class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                        Cancelar
+                    </button>
+                    <button type="submit" form="product-form"
+                        class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
+                        Guardar
+                    </button>
+                </div>
+            </div>
+        </div>
+        <!-- CONFIRMATION MODAL -->
 
-                                            <!-- Dynamic Payment Fields -->
-                                            <div id="payment-fields">
-                                                <!-- JS Injected -->
-                                            </div>
+        <!-- SALE DETAILS MODAL -->
+        <div id="sale-details-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                    <h3 class="font-bold text-lg text-slate-800">Detalles de Venta</h3>
+                    <button id="close-sale-modal"
+                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                </div>
+                <div class="p-6" id="sale-details-content">
+                    <!-- JS Injected -->
+                </div>
+            </div>
+        </div>
+        <!-- Main App Logic -->
+        <script type="module" src="js/app.js"></script>
 
-                                            <!-- Change/Vuelto Display -->
-                                            <div class="mt-4 mb-6 p-3 bg-green-50 rounded-lg border border-green-100">
-                                                <p class="text-sm text-green-700 font-medium">Vuelto:</p>
-                                                <p id="payment-change" class="text-xl font-bold text-green-800">Bs
-                                                    0.00</p>
-                                            </div>
-
-                                            <div class="flex gap-3">
-                                                <button id="cancel-payment-btn"
-                                                    class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
-                                                    Cancelar
-                                                </button>
-                                                <button id="confirm-payment-btn" <h3
-                                                    class="font-bold text-lg text-slate-800">Recibo
-                                                    de Venta</h3>
-                                                    <button id="close-receipt"
-                                                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
-                                            </div>
-                                            <div id="receipt-content" class="p-6">
-                                                <!-- JS Injected -->
-                                            </div>
-                                            <div class="p-4 border-t border-slate-100 space-y-2">
-                                                <button id="email-receipt-btn"
-                                                    class="w-full px-4 py-3 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors font-medium flex items-center justify-center gap-2">
-                                                    <svg class="w-5 h-5" fill="none" stroke="currentColor"
-                                                        viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round"
-                                                            stroke-width="2"
-                                                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
-                                                        </path>
-                                                    </svg>
-                                                    Enviar al correo del cliente
-                                                </button>
-                                                <button id="print-receipt-btn"
-                                                    class="w-full px-4 py-3 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors font-medium">
-                                                    Imprimir recibo
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <!-- Auth Check Script -->
-                                    <script type="module">
-                                        import { authService } from './js/auth.js';
-
-                                        let authInitialized = false;
-
-                                        // Check authentication on page load
-                                        authService.onAuthChange((user) => {
-                                            if (!authInitialized) {
-                                                authInitialized = true;
-                                                if (!user) {
-                                                    window.location.href = 'login.html';
-                                                }
-                                            } else if (!user) {
-                                                window.location.href = 'login.html';
-                                            }
-                                        });
-
-                                        // Logout button
-                                        document.getElementById('logout-btn')?.addEventListener('click', async () => {
-                                            if (confirm('¿Estás seguro de que quieres cerrar sesión?')) {
-                                                await authService.logout();
-                                            }
-                                        });
-                                    </script>
-                                    <!-- Unregister Service Worker (Fix for auto-refresh) -->
-                                    <script>
-                                        if ('serviceWorker' in navigator) {
-                                            navigator.serviceWorker.getRegistrations().then(function (registrations) {
-                                                for (let registration of registrations) {
-                                                    registration.unregister();
-                                                    console.log('Service Worker unregistered');
-                                                }
-                                            });
-                                        }
-                                    </script>
-                                    <!-- Main Script -->
-                                    <script type="module" src="js/app.js"></script>
+        <!-- CONFIRMATION MODAL (Moved to end) -->
+        <div id="confirmation-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-[60] flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all">
+                <div class="p-6 text-center">
+                    <div
+                        class="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 text-red-500 dark:text-red-400 flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                            </path>
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">¿Vaciar Carrito?</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">¿Estás seguro de que deseas eliminar
+                        todos los productos del
+                        carrito? Esta acción no se puede deshacer.</p>
+                    <div class="flex gap-3">
+                        <button id="cancel-confirm-btn"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors font-medium">
+                            Cancelar
+                        </button>
+                        <button id="confirm-action-btn"
+                            class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium shadow-lg shadow-red-200 dark:shadow-none">
+                            Sí, Vaciar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
 </body>
 
 </html>

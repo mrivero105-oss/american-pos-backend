@@ -280,27 +280,16 @@ export class POS {
         this.renderCart();
     }
 
-    addToCart(product) {
-        const existingItem = this.cart.find(item => item.id === product.id);
-        if (existingItem) {
-            if (existingItem.quantity < product.stockQuantity) {
-                existingItem.quantity++;
-            } else {
-                ui.showNotification(`Stock máximo alcanzado (${product.stockQuantity})`, 'warning');
-            }
-        } else {
-            this.cart.push({
-                ...product,
-                quantity: 1
-            });
-        }
-        this.renderCart();
-    }
+    handleGridClick(e) {
+        const card = e.target.closest('.product-card');
+        if (!card) return;
 
-    renderCart() {
-        if (!this.dom.cartItems) return;
+        const id = card.dataset.id;
+        const product = this.products.find(p => String(p.id) === String(id));
 
-        this.dom.cartItems.innerHTML = this.cart.map(item => `
+        if (product && product.stockQuantity > 0) {
+            this.addToCart(product);
+            this.dom.cartItems.innerHTML = this.cart.map(item => `
             <div class="cart-item bg-white p-3 rounded-lg border border-gray-100 flex justify-between items-center group" data-id="${item.id}">
                 <div class="flex-1 min-w-0 mr-3">
                     <h4 class="font-medium text-gray-800 truncate">${item.name}</h4>
@@ -329,170 +318,158 @@ export class POS {
             </div>
         `).join('') || '<p class="text-gray-400 text-center py-8">Carrito vacío</p>';
 
-        const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const totalBs = total * this.exchangeRate;
+            const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const totalBs = total * this.exchangeRate;
 
-        if (this.dom.cartTotal) this.dom.cartTotal.textContent = formatCurrency(total);
-        if (this.dom.cartTotalBs) this.dom.cartTotalBs.textContent = `Bs ${totalBs.toFixed(2)}`;
+            this.dom.cartTotal.textContent = formatCurrency(total);
+            this.dom.cartTotalBs.textContent = `Bs ${totalBs.toFixed(2)}`;
 
-        const hasItems = this.cart.length > 0;
-        if (this.dom.checkoutBtn) this.dom.checkoutBtn.disabled = !hasItems;
-        if (this.dom.clearCartBtn) this.dom.clearCartBtn.disabled = !hasItems;
+            const hasItems = this.cart.length > 0;
+            this.dom.checkoutBtn.disabled = !hasItems;
+            this.dom.clearCartBtn.disabled = !hasItems;
 
-        if (this.dom.mobileCartCount) {
-            const count = this.cart.reduce((sum, item) => sum + item.quantity, 0);
-            this.dom.mobileCartCount.textContent = count;
-            this.dom.mobileCartCount.classList.toggle('hidden', count === 0);
+            if (this.dom.mobileCartCount) {
+                const count = this.cart.reduce((sum, item) => sum + item.quantity, 0);
+                this.dom.mobileCartCount.textContent = count;
+                this.dom.mobileCartCount.classList.toggle('hidden', count === 0);
+            }
+
+            this.checkHeldSale();
         }
 
-        this.checkHeldSale();
-    }
-
-    handleGridClick(e) {
-        const card = e.target.closest('.product-card');
-        if (!card) return;
-
-        const id = card.dataset.id;
-        const product = this.products.find(p => String(p.id) === String(id));
-
-        if (product && product.stockQuantity > 0) {
-            this.addToCart(product);
-        }
-    }
-
-    clearCart() {
-        if (confirm('¿Estás seguro de vaciar el carrito?')) {
-            this.cart = [];
-            this.renderCart();
-        }
-    }
-
-    holdSale() {
-        if (this.cart.length === 0) {
-            ui.showNotification('El carrito está vacío', 'warning');
-            return;
-        }
-
-        localStorage.setItem('held_cart', JSON.stringify(this.cart));
-        this.cart = [];
-        this.renderCart();
-        ui.showNotification('Venta puesta en espera');
-    }
-
-    restoreSale() {
-        const heldCart = localStorage.getItem('held_cart');
-        if (!heldCart) return;
-
-        if (this.cart.length > 0) {
-            if (!confirm('Hay productos en el carrito actual. ¿Deseas reemplazarlos con la venta en espera?')) {
-                return;
+        clearCart() {
+            if (confirm('¿Estás seguro de vaciar el carrito?')) {
+                this.cart = [];
+                this.renderCart();
             }
         }
 
-        this.cart = JSON.parse(heldCart);
-        localStorage.removeItem('held_cart');
-        this.renderCart();
-        ui.showNotification('Venta restaurada');
-    }
+        holdSale() {
+            if (this.cart.length === 0) {
+                ui.showNotification('El carrito está vacío', 'warning');
+                return;
+            }
 
-    checkHeldSale() {
-        const heldCart = localStorage.getItem('held_cart');
-        const btn = this.dom.holdSaleBtn;
+            localStorage.setItem('held_cart', JSON.stringify(this.cart));
+            this.cart = [];
+            this.renderCart();
+            ui.showNotification('Venta puesta en espera');
+        }
 
-        if (!btn) return;
+        restoreSale() {
+            const heldCart = localStorage.getItem('held_cart');
+            if (!heldCart) return;
 
-        if (heldCart) {
-            btn.classList.add('restore-mode', 'bg-blue-100', 'text-blue-600');
-            btn.classList.remove('bg-yellow-100', 'text-yellow-600');
-            btn.title = "Restaurar Venta";
-            btn.innerHTML = `
+            if (this.cart.length > 0) {
+                if (!confirm('Hay productos en el carrito actual. ¿Deseas reemplazarlos con la venta en espera?')) {
+                    return;
+                }
+            }
+
+            this.cart = JSON.parse(heldCart);
+            localStorage.removeItem('held_cart');
+            this.renderCart();
+            ui.showNotification('Venta restaurada');
+        }
+
+        checkHeldSale() {
+            const heldCart = localStorage.getItem('held_cart');
+            const btn = this.dom.holdSaleBtn;
+
+            if (!btn) return;
+
+            if (heldCart) {
+                btn.classList.add('restore-mode', 'bg-blue-100', 'text-blue-600');
+                btn.classList.remove('bg-yellow-100', 'text-yellow-600');
+                btn.title = "Restaurar Venta";
+                btn.innerHTML = `
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                 </svg>
             `;
-        } else {
-            btn.classList.remove('restore-mode', 'bg-blue-100', 'text-blue-600');
-            btn.classList.add('bg-yellow-100', 'text-yellow-600');
-            btn.title = "Poner en Espera";
-            btn.innerHTML = `
+            } else {
+                btn.classList.remove('restore-mode', 'bg-blue-100', 'text-blue-600');
+                btn.classList.add('bg-yellow-100', 'text-yellow-600');
+                btn.title = "Poner en Espera";
+                btn.innerHTML = `
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
             `;
-            btn.disabled = this.cart.length === 0;
+                btn.disabled = this.cart.length === 0;
+            }
         }
-    }
 
     // Customer Selection Methods
     async showCustomerSelection() {
-        await this.loadCustomers(); // Recargar clientes frescos
+            await this.loadCustomers(); // Recargar clientes frescos
 
-        // If no customers available (endpoint failed or empty), skip to payment
-        if (!this.customers || this.customers.length === 0) {
-            this.processCheckout(null); // Process without customer
-            return;
+            // If no customers available (endpoint failed or empty), skip to payment
+            if (!this.customers || this.customers.length === 0) {
+                this.processCheckout(null); // Process without customer
+                return;
+            }
+
+            this.renderCustomerList(this.customers);
+            this.dom.customerSelectionModal?.classList.remove('hidden');
+            // Enfocar el input de búsqueda
+            setTimeout(() => this.dom.searchCustomerCheckout?.focus(), 100);
         }
 
-        this.renderCustomerList(this.customers);
-        this.dom.customerSelectionModal?.classList.remove('hidden');
-        // Enfocar el input de búsqueda
-        setTimeout(() => this.dom.searchCustomerCheckout?.focus(), 100);
-    }
-
-    hideCustomerSelection() {
-        this.dom.customerSelectionModal?.classList.add('hidden');
-        this.dom.searchCustomerCheckout.value = '';
-    }
-
-    renderCustomerList(customers) {
-        if (!this.dom.customerListCheckout) return;
-
-        if (customers.length === 0) {
-            this.dom.customerListCheckout.innerHTML = '<p class="text-gray-400 text-center py-4">No hay clientes</p>';
-            return;
+        hideCustomerSelection() {
+            this.dom.customerSelectionModal?.classList.add('hidden');
+            this.dom.searchCustomerCheckout.value = '';
         }
 
-        this.dom.customerListCheckout.innerHTML = customers.map(customer => `
+        renderCustomerList(customers) {
+            if (!this.dom.customerListCheckout) return;
+
+            if (customers.length === 0) {
+                this.dom.customerListCheckout.innerHTML = '<p class="text-gray-400 text-center py-4">No hay clientes</p>';
+                return;
+            }
+
+            this.dom.customerListCheckout.innerHTML = customers.map(customer => `
             <div class="customer-item p-3 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors" data-id="${customer.id}">
                 <div class="font-medium text-slate-800">${customer.name}</div>
                 <div class="text-sm text-slate-500">${customer.phone}${customer.email ? ' • ' + customer.email : ''}</div>
             </div>
         `).join('');
-    }
+        }
 
-    filterCustomers(query) {
-        const filtered = this.customers.filter(c =>
-            c.name.toLowerCase().includes(query.toLowerCase()) ||
-            c.phone.includes(query)
-        );
-        this.renderCustomerList(filtered);
-    }
+        filterCustomers(query) {
+            const filtered = this.customers.filter(c =>
+                c.name.toLowerCase().includes(query.toLowerCase()) ||
+                c.phone.includes(query)
+            );
+            this.renderCustomerList(filtered);
+        }
 
-    handleCustomerSelect(e) {
-        const item = e.target.closest('.customer-item');
-        if (!item) return;
+        handleCustomerSelect(e) {
+            const item = e.target.closest('.customer-item');
+            if (!item) return;
 
-        const customerId = item.dataset.id;
-        const customer = this.customers.find(c => c.id === customerId);
-        this.processCheckout(customer);
-    }
+            const customerId = item.dataset.id;
+            const customer = this.customers.find(c => c.id === customerId);
+            this.processCheckout(customer);
+        }
 
     async processCheckout(customer) {
-        if (this.cart.length === 0) return;
+            if (this.cart.length === 0) return;
 
-        this.hideCustomerSelection();
-        this.selectedCustomer = customer;
-        this.showPaymentModal();
-    }
+            this.hideCustomerSelection();
+            this.selectedCustomer = customer;
+            this.showPaymentModal();
+        }
 
-    showReceipt() {
-        if (!this.lastSale || !this.dom.receiptContent) return;
+        showReceipt() {
+            if (!this.lastSale || !this.dom.receiptContent) return;
 
-        const totalBs = this.lastSale.total * this.lastSale.exchangeRate;
+            const totalBs = this.lastSale.total * this.lastSale.exchangeRate;
 
-        const { name, address, phone, taxId, logoUrl } = this.businessInfo;
+            const { name, address, phone, taxId, logoUrl } = this.businessInfo;
 
-        this.dom.receiptContent.innerHTML = `
+            this.dom.receiptContent.innerHTML = `
             <div class="text-center mb-6">
                 ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="mx-auto h-16 object-contain mb-2">` : ''}
                 <h2 class="text-xl font-bold text-slate-900 leading-tight">${name || 'American POS'}</h2>
@@ -542,35 +519,35 @@ export class POS {
             </div>
         `;
 
-        // Show/hide email button based on customer email
-        if (this.dom.emailReceiptBtn) {
-            this.dom.emailReceiptBtn.style.display = this.lastSale.customer?.email ? 'flex' : 'none';
+            // Show/hide email button based on customer email
+            if (this.dom.emailReceiptBtn) {
+                this.dom.emailReceiptBtn.style.display = this.lastSale.customer?.email ? 'flex' : 'none';
+            }
+
+            this.dom.receiptModal?.classList.remove('hidden');
         }
 
-        this.dom.receiptModal?.classList.remove('hidden');
-    }
-
-    hideReceipt() {
-        this.dom.receiptModal?.classList.add('hidden');
-    }
+        hideReceipt() {
+            this.dom.receiptModal?.classList.add('hidden');
+        }
 
     async emailReceipt() {
-        if (!this.lastSale || !this.lastSale.customer?.email) {
-            ui.showNotification('El cliente no tiene email', 'warning');
-            return;
-        }
+            if (!this.lastSale || !this.lastSale.customer?.email) {
+                ui.showNotification('El cliente no tiene email', 'warning');
+                return;
+            }
 
-        this.dom.emailReceiptBtn.disabled = true;
-        this.dom.emailReceiptBtn.textContent = 'Enviando...';
+            this.dom.emailReceiptBtn.disabled = true;
+            this.dom.emailReceiptBtn.textContent = 'Enviando...';
 
-        try {
-            await api.sales.emailReceipt(this.lastSale.id, this.lastSale.customer.email);
-            ui.showNotification('Recibo enviado por email');
-        } catch (error) {
-            ui.showNotification('Error al enviar email', 'error');
-        } finally {
-            this.dom.emailReceiptBtn.disabled = false;
-            this.dom.emailReceiptBtn.innerHTML = `
+            try {
+                await api.sales.emailReceipt(this.lastSale.id, this.lastSale.customer.email);
+                ui.showNotification('Recibo enviado por email');
+            } catch (error) {
+                ui.showNotification('Error al enviar email', 'error');
+            } finally {
+                this.dom.emailReceiptBtn.disabled = false;
+                this.dom.emailReceiptBtn.innerHTML = `
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
@@ -578,69 +555,69 @@ export class POS {
                 </svg>
                 Enviar al correo del cliente
             `;
-        }
-    }
-
-    printReceipt() {
-        window.print();
-    }
-
-    showPaymentModal() {
-        const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const totalBs = total * this.exchangeRate;
-
-        this.dom.paymentTotalUsd.textContent = `$${total.toFixed(2)}`;
-        this.dom.paymentTotalVes.textContent = `Bs ${totalBs.toFixed(2)}`;
-        // Populate payment method dropdown
-        this.populatePaymentMethods();
-        // Reset fields
-        this.dom.paymentFields.innerHTML = '';
-        this.dom.paymentChange.textContent = 'Bs 0.00';
-        this.dom.paymentModal?.classList.remove('hidden');
-    }
-
-    hidePaymentModal() {
-        this.dom.paymentModal?.classList.add('hidden');
-        // Clear dynamic fields
-        if (this.dom.paymentFields) this.dom.paymentFields.innerHTML = '';
-    }
-
-    populatePaymentMethods() {
-        console.log('Populating payment methods...', this.paymentMethods);
-        console.log('Select element:', this.dom.paymentMethodSelect);
-
-        if (!this.dom.paymentMethodSelect) {
-            console.error('Payment method select element not found!');
-            return;
+            }
         }
 
-        this.dom.paymentMethodSelect.innerHTML = '';
-
-        // Add default cash method if not present
-        const hasCash = this.paymentMethods.some(m => m.id === 'cash');
-        if (!hasCash) {
-            this.paymentMethods.unshift({ id: 'cash', name: 'Efectivo (USD/VES)', requiresReference: false });
+        printReceipt() {
+            window.print();
         }
 
-        this.paymentMethods.forEach(method => {
-            const option = document.createElement('option');
-            option.value = method.id;
-            option.textContent = method.name;
-            this.dom.paymentMethodSelect.appendChild(option);
-        });
+        showPaymentModal() {
+            const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const totalBs = total * this.exchangeRate;
 
-        // Trigger change event to set initial fields
-        this.onPaymentMethodChange();
-    }
+            this.dom.paymentTotalUsd.textContent = `$${total.toFixed(2)}`;
+            this.dom.paymentTotalVes.textContent = `Bs ${totalBs.toFixed(2)}`;
+            // Populate payment method dropdown
+            this.populatePaymentMethods();
+            // Reset fields
+            this.dom.paymentFields.innerHTML = '';
+            this.dom.paymentChange.textContent = 'Bs 0.00';
+            this.dom.paymentModal?.classList.remove('hidden');
+        }
 
-    onPaymentMethodChange() {
-        const methodId = this.dom.paymentMethodSelect.value;
-        const method = this.paymentMethods.find(m => m.id === methodId);
+        hidePaymentModal() {
+            this.dom.paymentModal?.classList.add('hidden');
+            // Clear dynamic fields
+            if (this.dom.paymentFields) this.dom.paymentFields.innerHTML = '';
+        }
 
-        this.dom.paymentFields.innerHTML = '';
+        populatePaymentMethods() {
+            console.log('Populating payment methods...', this.paymentMethods);
+            console.log('Select element:', this.dom.paymentMethodSelect);
 
-        if (methodId === 'cash') {
-            this.dom.paymentFields.innerHTML = `
+            if (!this.dom.paymentMethodSelect) {
+                console.error('Payment method select element not found!');
+                return;
+            }
+
+            this.dom.paymentMethodSelect.innerHTML = '';
+
+            // Add default cash method if not present
+            const hasCash = this.paymentMethods.some(m => m.id === 'cash');
+            if (!hasCash) {
+                this.paymentMethods.unshift({ id: 'cash', name: 'Efectivo (USD/VES)', requiresReference: false });
+            }
+
+            this.paymentMethods.forEach(method => {
+                const option = document.createElement('option');
+                option.value = method.id;
+                option.textContent = method.name;
+                this.dom.paymentMethodSelect.appendChild(option);
+            });
+
+            // Trigger change event to set initial fields
+            this.onPaymentMethodChange();
+        }
+
+        onPaymentMethodChange() {
+            const methodId = this.dom.paymentMethodSelect.value;
+            const method = this.paymentMethods.find(m => m.id === methodId);
+
+            this.dom.paymentFields.innerHTML = '';
+
+            if (methodId === 'cash') {
+                this.dom.paymentFields.innerHTML = `
                 <div class="grid grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm font-medium text-slate-700 mb-1">Recibido USD</label>
@@ -653,130 +630,130 @@ export class POS {
                 </div>
             `;
 
-            // Re-cache dynamic elements
-            this.dom.paymentReceivedUsd = document.getElementById('payment-received-usd');
-            this.dom.paymentReceivedVes = document.getElementById('payment-received-ves');
+                // Re-cache dynamic elements
+                this.dom.paymentReceivedUsd = document.getElementById('payment-received-usd');
+                this.dom.paymentReceivedVes = document.getElementById('payment-received-ves');
 
-            // Add listeners
-            this.dom.paymentReceivedUsd?.addEventListener('input', () => this.calculateChange());
-            this.dom.paymentReceivedVes?.addEventListener('input', () => this.calculateChange());
+                // Add listeners
+                this.dom.paymentReceivedUsd?.addEventListener('input', () => this.calculateChange());
+                this.dom.paymentReceivedVes?.addEventListener('input', () => this.calculateChange());
 
-        } else {
-            let fieldsHtml = `
+            } else {
+                let fieldsHtml = `
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-slate-700 mb-1">Monto</label>
                     <input type="number" id="payment-amount" class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" step="0.01" min="0">
                 </div>
             `;
 
-            if (method && method.requiresReference) {
-                fieldsHtml += `
+                if (method && method.requiresReference) {
+                    fieldsHtml += `
                     <div class="mb-4">
                         <label class="block text-sm font-medium text-slate-700 mb-1">Referencia</label>
                         <input type="text" id="payment-reference" class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
                     </div>
                 `;
+                }
+
+                this.dom.paymentFields.innerHTML = fieldsHtml;
+
+                // Re-cache dynamic elements
+                this.dom.paymentAmount = document.getElementById('payment-amount');
+                this.dom.paymentReference = document.getElementById('payment-reference');
+
+                // Add listeners
+                this.dom.paymentAmount?.addEventListener('input', () => this.calculateChange());
             }
 
-            this.dom.paymentFields.innerHTML = fieldsHtml;
-
-            // Re-cache dynamic elements
-            this.dom.paymentAmount = document.getElementById('payment-amount');
-            this.dom.paymentReference = document.getElementById('payment-reference');
-
-            // Add listeners
-            this.dom.paymentAmount?.addEventListener('input', () => this.calculateChange());
+            this.calculateChange();
         }
 
-        this.calculateChange();
-    }
+        calculateChange() {
+            const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const totalBs = total * this.exchangeRate;
+            const method = this.dom.paymentMethodSelect?.value;
+            let totalReceived = 0;
 
-    calculateChange() {
-        const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const totalBs = total * this.exchangeRate;
-        const method = this.dom.paymentMethodSelect?.value;
-        let totalReceived = 0;
+            if (method === 'cash') {
+                const ves = parseFloat(this.dom.paymentReceivedVes?.value) || 0;
+                const usd = parseFloat(this.dom.paymentReceivedUsd?.value) || 0;
+                const usdToVes = usd * this.exchangeRate;
+                totalReceived = ves + usdToVes;
+            } else {
+                const amount = parseFloat(this.dom.paymentAmount?.value) || 0;
+                totalReceived = amount;
+            }
 
-        if (method === 'cash') {
-            const ves = parseFloat(this.dom.paymentReceivedVes?.value) || 0;
-            const usd = parseFloat(this.dom.paymentReceivedUsd?.value) || 0;
-            const usdToVes = usd * this.exchangeRate;
-            totalReceived = ves + usdToVes;
-        } else {
-            const amount = parseFloat(this.dom.paymentAmount?.value) || 0;
-            totalReceived = amount;
+            const change = totalReceived - totalBs;
+            this.dom.paymentChange.textContent = `Bs ${change.toFixed(2)}`;
+
+            // Enable/disable confirm button
+            if (this.dom.confirmPaymentBtn) {
+                // Allow small margin of error or exact payment
+                // For non-cash, we might want to allow 0 change if exact amount is entered
+                this.dom.confirmPaymentBtn.disabled = change < -0.01;
+            }
         }
-
-        const change = totalReceived - totalBs;
-        this.dom.paymentChange.textContent = `Bs ${change.toFixed(2)}`;
-
-        // Enable/disable confirm button
-        if (this.dom.confirmPaymentBtn) {
-            // Allow small margin of error or exact payment
-            // For non-cash, we might want to allow 0 change if exact amount is entered
-            this.dom.confirmPaymentBtn.disabled = change < -0.01;
-        }
-    }
 
     async confirmPayment() {
-        if (!this.cart.length) return;
+            if (!this.cart.length) return;
 
-        const methodId = this.dom.paymentMethodSelect.value;
-        const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const totalBs = total * this.exchangeRate;
+            const methodId = this.dom.paymentMethodSelect.value;
+            const total = this.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const totalBs = total * this.exchangeRate;
 
-        let paymentDetails = {};
+            let paymentDetails = {};
 
-        if (methodId === 'cash') {
-            const ves = parseFloat(this.dom.paymentReceivedVes?.value) || 0;
-            const usd = parseFloat(this.dom.paymentReceivedUsd?.value) || 0;
-            const change = (ves + (usd * this.exchangeRate)) - totalBs;
+            if (methodId === 'cash') {
+                const ves = parseFloat(this.dom.paymentReceivedVes?.value) || 0;
+                const usd = parseFloat(this.dom.paymentReceivedUsd?.value) || 0;
+                const change = (ves + (usd * this.exchangeRate)) - totalBs;
 
-            paymentDetails = {
-                cash: { usd, ves },
-                change: change
-            };
-        } else {
-            const amount = parseFloat(this.dom.paymentAmount?.value) || 0;
-            const reference = this.dom.paymentReference?.value || '';
-            const method = this.paymentMethods.find(m => m.id === methodId);
+                paymentDetails = {
+                    cash: { usd, ves },
+                    change: change
+                };
+            } else {
+                const amount = parseFloat(this.dom.paymentAmount?.value) || 0;
+                const reference = this.dom.paymentReference?.value || '';
+                const method = this.paymentMethods.find(m => m.id === methodId);
 
-            if (method?.requiresReference && !reference) {
-                ui.showNotification('La referencia es requerida', 'warning');
-                return;
+                if (method?.requiresReference && !reference) {
+                    ui.showNotification('La referencia es requerida', 'warning');
+                    return;
+                }
+
+                paymentDetails = {
+                    amount: amount,
+                    reference: reference
+                };
             }
 
-            paymentDetails = {
-                amount: amount,
-                reference: reference
-            };
-        }
+            this.dom.confirmPaymentBtn.disabled = true;
+            this.dom.confirmPaymentBtn.textContent = 'Procesando...';
 
-        this.dom.confirmPaymentBtn.disabled = true;
-        this.dom.confirmPaymentBtn.textContent = 'Procesando...';
+            try {
+                const saleData = {
+                    items: this.cart,
+                    total: total,
+                    customerId: this.selectedCustomer?.id || null,
+                    paymentMethod: methodId,
+                    paymentDetails: paymentDetails
+                };
 
-        try {
-            const saleData = {
-                items: this.cart,
-                total: total,
-                customerId: this.selectedCustomer?.id || null,
-                paymentMethod: methodId,
-                paymentDetails: paymentDetails
-            };
+                const response = await api.sales.create(saleData);
 
-            const response = await api.sales.create(saleData);
-
-            this.lastSale = { ...saleData, id: response.saleId, customer: this.selectedCustomer };
-            this.clearCart();
-            this.hidePaymentModal();
-            this.showReceipt();
-            ui.showNotification('Venta registrada exitosamente');
-        } catch (error) {
-            console.error('Error processing payment:', error);
-            ui.showNotification('Error al procesar el pago', 'error');
-        } finally {
-            this.dom.confirmPaymentBtn.disabled = false;
-            this.dom.confirmPaymentBtn.textContent = 'Confirmar Pago';
+                this.lastSale = { ...saleData, id: response.saleId, customer: this.selectedCustomer };
+                this.clearCart();
+                this.hidePaymentModal();
+                this.showReceipt();
+                ui.showNotification('Venta registrada exitosamente');
+            } catch (error) {
+                console.error('Error processing payment:', error);
+                ui.showNotification('Error al procesar el pago', 'error');
+            } finally {
+                this.dom.confirmPaymentBtn.disabled = false;
+                this.dom.confirmPaymentBtn.textContent = 'Confirmar Pago';
+            }
         }
     }
-}

@@ -11,4 +11,4 @@ export const firebaseConfig = {
 
 // API Configuration
 const isBackendHost = window.location.hostname.includes('onrender.com') || window.location.port === '3000';
-export const API_BASE_URL = isBackendHost ? '' : 'https://american-pos-backend.onrender.com';
+export const API_BASE_URL = isBackendHost ? '' : 'http://localhost:3000';
