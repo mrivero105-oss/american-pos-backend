@@ -650,10 +650,121 @@ export default {
                 });
             }
 
+            // ========== BACKUP ENDPOINT ==========
+            if (url.pathname === '/backup') {
+                const user = verifyToken(request);
+                if (!user) return errorResponse('Unauthorized', 401);
+
+                if (request.method === 'GET') {
+                    // Get full database backup
+                    const db = (await readJson('db')) || { products: [], sales: [], users: [], customers: [] };
+                    const settings = (await readJson('settings')) || {};
+
+                    const backup = {
+                        timestamp: new Date().toISOString(),
+                        version: '1.0',
+                        data: { db, settings }
+                    };
+
+                    return new Response(JSON.stringify(backup, null, 2), {
+                        status: 200,
+                        headers: {
+                            ...corsHeaders,
+                            'Content-Type': 'application/json',
+                            'Content-Disposition': `attachment; filename="pos-backup-${new Date().toISOString().slice(0, 10)}.json"`
+                        }
+                    });
+                }
+
+                if (request.method === 'POST') {
+                    // Restore from backup
+                    const body = await request.json();
+                    if (!body.data || !body.data.db) {
+                        return errorResponse('Invalid backup format', 400);
+                    }
+
+                    await writeJson('db', body.data.db);
+                    if (body.data.settings) {
+                        await writeJson('settings', body.data.settings);
+                    }
+
+                    return jsonResponse({ success: true, message: 'Backup restored successfully' });
+                }
+            }
+
+            // ========== BACKUP HISTORY ==========
+            if (url.pathname === '/backup/history') {
+                const user = verifyToken(request);
+                if (!user) return errorResponse('Unauthorized', 401);
+
+                const backups = (await readJson('backups')) || [];
+                return jsonResponse(backups.slice(-10)); // Last 10 backups
+            }
+
             return errorResponse('Not Found', 404);
 
         } catch (e) {
             return errorResponse(`Server Error: ${e.message}`, 500);
+        }
+    },
+
+    // ========== SCHEDULED BACKUP (Cron Trigger) ==========
+    async scheduled(event, env, ctx) {
+        console.log('Scheduled backup triggered at:', new Date().toISOString());
+
+        const readJson = async (key) => {
+            try {
+                const stmt = env.DB.prepare('SELECT value FROM kv_store WHERE key = ?').bind(key);
+                const result = await stmt.first();
+                return result ? JSON.parse(result.value) : null;
+            } catch (e) {
+                console.error(`Error reading ${key}:`, e);
+                return null;
+            }
+        };
+
+        const writeJson = async (key, data) => {
+            try {
+                const value = JSON.stringify(data);
+                const stmt = env.DB.prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)').bind(key, value);
+                await stmt.run();
+                return true;
+            } catch (e) {
+                console.error(`Error writing ${key}:`, e);
+                return false;
+            }
+        };
+
+        try {
+            // Read current data
+            const db = (await readJson('db')) || { products: [], sales: [], users: [], customers: [] };
+            const settings = (await readJson('settings')) || {};
+
+            // Create backup entry
+            const backup = {
+                id: Date.now().toString(),
+                timestamp: new Date().toISOString(),
+                productsCount: db.products?.length || 0,
+                salesCount: db.sales?.length || 0,
+                customersCount: db.customers?.length || 0,
+                data: { db, settings }
+            };
+
+            // Read existing backups
+            let backups = (await readJson('backups')) || [];
+
+            // Keep only last 7 backups (one week of daily backups)
+            backups.push(backup);
+            if (backups.length > 7) {
+                backups = backups.slice(-7);
+            }
+
+            // Save backups
+            await writeJson('backups', backups);
+
+            console.log('Backup completed successfully:', backup.id);
+        } catch (e) {
+            console.error('Scheduled backup failed:', e);
         }
     }
 };
