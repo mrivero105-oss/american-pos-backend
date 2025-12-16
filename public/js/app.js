@@ -1,9 +1,12 @@
-import { POS } from './pos.v3.js?v=36';
-import { Dashboard } from './dashboard.js?v=2';
-import { SalesHistory } from './sales.js?v=6';
-import { Settings } from './settings.js';
-import { Customers } from './customers.js';
-import { Products } from './products.js';
+import { POS } from './pos.v3.js?v=192';
+import { Dashboard } from './dashboard.js?v=192';
+import { SalesHistory } from './sales.js?v=192';
+import { Settings } from './settings.js?v=192';
+import { Customers } from './customers.js?v=192';
+import { Products } from './products.js?v=192';
+import { authService } from './auth.js?v=192';
+
+const APP_VERSION = 'v192';
 
 class App {
     constructor() {
@@ -19,8 +22,13 @@ class App {
         this.init();
     }
 
-    init() {
-        // Navigation
+    async init() {
+        // Check Authentication
+        if (!authService.isAuthenticated()) {
+            window.location.href = 'login.html';
+            return;
+        }
+
         // Navigation
         const navLinks = document.querySelectorAll('[data-view]');
         console.log('Found nav links:', navLinks.length);
@@ -39,8 +47,23 @@ class App {
             });
         });
 
+        // Logout Button
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', async () => {
+                if (confirm('¿Estás seguro de que deseas cerrar sesión?')) {
+                    await authService.logout();
+                }
+            });
+        }
+
         // Mobile Menu Button
         const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+        if (mobileMenuBtn) {
+            mobileMenuBtn.addEventListener('click', () => {
+                this.toggleSidebar(true);
+            });
+        }
 
         // Close Cart Button (Mobile)
         const closeCartBtn = document.getElementById('close-cart-btn');
@@ -123,7 +146,6 @@ class App {
 
     switchView(viewName) {
         // Update Nav
-        // Update Nav
         document.querySelectorAll('nav a').forEach(link => {
             if (link.dataset.view === viewName) {
                 // Active State
@@ -145,11 +167,21 @@ class App {
         const activeSection = document.getElementById(`view-${viewName}`);
         if (activeSection) {
             activeSection.classList.remove('hidden');
+            console.log(`Switching to view: ${viewName}`);
+
             // Trigger data load if needed
-            if (viewName === 'dashboard') this.views.dashboard.loadData();
-            if (viewName === 'sales') this.views.sales.loadSales();
-            if (viewName === 'products') this.views.products.loadProducts();
-            if (viewName === 'settings') this.views.settings.loadSettings();
+            try {
+                if (viewName === 'dashboard') this.views.dashboard.loadData();
+                if (viewName === 'sales') this.views.sales.loadSales();
+                if (viewName === 'products') {
+                    console.log('Loading products view...', this.views.products);
+                    this.views.products.loadProducts();
+                }
+                if (viewName === 'settings') this.views.settings.loadSettings();
+                if (viewName === 'pos') this.views.pos.refreshData();
+            } catch (error) {
+                console.error(`Error loading view ${viewName}:`, error);
+            }
         }
 
         this.currentView = viewName;
@@ -159,6 +191,11 @@ class App {
 console.log('App.js module loaded');
 
 const initApp = () => {
+    if (window.appInitialized) {
+        console.warn('App already initialized, skipping.');
+        return;
+    }
+    window.appInitialized = true;
     console.log('initApp called');
     // if (window.app) return; // Force init for debugging
     window.app = new App();

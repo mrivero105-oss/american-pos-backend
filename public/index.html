@@ -5,6 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>American POS - Premium</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="./assets/logo.jpg">
+    <meta name="theme-color" content="#0f172a">
 
     <!-- Tailwind CSS -->
     <!-- Tailwind CSS -->
@@ -38,13 +41,17 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
+    <!-- Main Script -->
+
+    <script type="module" src="js/app.js?v=v192"></script>
+
     <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
 
 
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
     <!-- SheetJS for Excel parsing -->
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js" defer></script>
     <style>
         /* Fix autocomplete styling - more aggressive approach */
         input:-webkit-autofill,
@@ -139,9 +146,11 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(registration => console.log('SW registered'))
-                    .catch(err => console.log('SW registration failed', err));
+                navigator.serviceWorker.register('./sw.js').then(registration => {
+                    console.log('SW registered: ', registration);
+                }).catch(registrationError => {
+                    console.log('SW registration failed: ', registrationError);
+                });
             });
         }
     </script>
@@ -151,7 +160,7 @@
         window.onerror = function (msg, url, line, col, error) {
             console.error('Global Error:', msg, '\nURL:', url, '\nLine:', line, '\nCol:', col, '\nError:', error);
             // Also alert for visibility if console is hidden
-            // alert('Error: ' + msg); 
+            // alert('Error: ' + msg + ' at line ' + line);
             return false;
         };
         window.addEventListener('unhandledrejection', function (event) {
@@ -164,9 +173,9 @@
     class="bg-slate-200 dark:bg-slate-900 text-slate-800 dark:text-slate-100 h-screen flex flex-col md:flex-row overflow-hidden">
 
     <!-- MOBILE HEADER -->
-    <header class="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center shadow-md z-30">
+    <header class="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center shadow-md z-30 relative">
         <button id="mobile-menu-btn" class="p-2 rounded-lg hover:bg-slate-800 focus:outline-none">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-6 h-6 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16">
                 </path>
             </svg>
@@ -176,7 +185,7 @@
             <h1 class="text-xl font-bold tracking-tight text-white">American POS</h1>
         </a>
         <button id="mobile-cart-btn" class="p-2 rounded-lg hover:bg-slate-800 focus:outline-none relative">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-6 h-6 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                     d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z">
                 </path>
@@ -188,12 +197,12 @@
 
     <!-- OVERLAY (Mobile) -->
     <div id="mobile-overlay"
-        class="fixed inset-0 bg-black bg-opacity-50 z-20 hidden md:hidden backdrop-blur-sm transition-opacity">
+        class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden md:hidden backdrop-blur-sm transition-opacity">
     </div>
 
     <!-- SIDEBAR -->
     <aside id="sidebar"
-        class="fixed inset-y-0 left-0 z-40 w-64 md:w-20 lg:w-72 bg-white dark:bg-slate-900 text-slate-800 dark:text-white flex flex-col shadow-2xl transform -translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out border-r border-slate-200 dark:border-slate-800">
+        class="fixed inset-y-0 left-0 z-50 w-64 md:w-20 lg:w-72 bg-white dark:bg-slate-900 text-slate-800 dark:text-white flex flex-col shadow-2xl transform -translate-x-full md:translate-x-0 md:relative md:flex transition-transform duration-300 ease-in-out border-r border-slate-200 dark:border-slate-800">
         <a href="#" data-view="pos"
             class="p-6 flex flex-col items-center gap-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors group">
             <div
@@ -315,6 +324,14 @@
 
                 <!-- Preview Table -->
                 <div id="bulk-preview-table" class="overflow-x-auto"></div>
+                <div id="pos-loading-overlay"
+                    class="hidden fixed inset-0 bg-white/80 dark:bg-slate-900/80 z-50 flex flex-col items-center justify-center backdrop-blur-sm">
+                    <div class="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mb-4"></div>
+                    <p class="text-xl font-semibold text-slate-700 dark:text-slate-200">Cargando sistema...</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 mt-2">Por favor espere</p>
+                </div>
+
+                <div id="error-message" class="error-message"></div>
             </div>
             <div class="p-4 border-t border-slate-100 dark:border-slate-700 flex gap-3">
                 <button id="cancel-bulk-upload"
@@ -371,6 +388,56 @@
                         <button type="submit"
                             class="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium shadow-md">
                             Agregar al Carrito
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Weight/Price Modal -->
+    <div id="weight-modal"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden z-50 flex items-center justify-center">
+        <div
+            class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden transform transition-all scale-100">
+            <div
+                class="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+                <h3 class="text-xl font-bold text-slate-800 dark:text-white" id="weight-modal-title">Producto por Peso
+                </h3>
+                <button id="cancel-weight-btn-x"
+                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
+            </div>
+            <div class="p-6">
+                <form id="weight-item-form">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Peso
+                            (kg)</label>
+                        <input type="number" id="weight-input" step="0.001" min="0" placeholder="0.000"
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-white text-lg font-bold">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio
+                                Total ($)</label>
+                            <input type="number" id="weight-price-usd" step="0.01" min="0" placeholder="0.00"
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio
+                                Total (Bs)</label>
+                            <input type="number" id="weight-price-bs" step="0.01" min="0" placeholder="0.00"
+                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button type="button" id="cancel-weight-btn"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors font-medium">
+                            Cancelar
+                        </button>
+                        <button type="submit"
+                            class="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium shadow-md">
+                            Agregar
                         </button>
                     </div>
                 </form>
@@ -478,8 +545,52 @@
                     </button>
                 </div>
 
+                <!-- Customer Search Section (Moved outside cart-items) -->
+                <div class="px-3 md:px-4 pt-4">
+                    <div
+                        class="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
+                        <div id="customer-search-container" class="relative">
+                            <label
+                                class="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Cliente</label>
+                            <div class="relative">
+                                <input type="text" id="pos-customer-search"
+                                    class="w-full pl-8 pr-4 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
+                                    placeholder="Buscar cliente (Nombre/CI)...">
+                                <svg class="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" fill="none"
+                                    stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                                </svg>
+                            </div>
+                            <!-- Search Results Dropdown -->
+                            <div id="pos-customer-results"
+                                class="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto hidden">
+                                <!-- JS Injected -->
+                            </div>
+                        </div>
+
+                        <!-- Selected Customer Display -->
+                        <div id="pos-selected-customer" class="hidden">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-sm font-bold text-slate-800 dark:text-white"
+                                        id="selected-customer-name">Nombre Cliente</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400" id="selected-customer-doc">CI:
+                                        123456</p>
+                                </div>
+                                <button id="remove-customer-btn" class="text-red-500 hover:text-red-700 p-1">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div id="cart-items" class="flex-1 overflow-y-auto p-3 md:p-4 space-y-2">
-                    <!-- JS Injected -->
+                    <!-- JS Injected Cart Items -->
                 </div>
 
                 <div
@@ -493,7 +604,7 @@
                         <span id="cart-total-bs" class="text-lg font-semibold text-slate-700 dark:text-slate-300">Bs
                             0.00</span>
                     </div>
-                    <div class="grid grid-cols-4 gap-2">
+                    <div class="grid grid-cols-5 gap-2">
                         <button id="clear-cart-btn"
                             class="col-span-1 p-2 bg-red-100 text-red-600 hover:bg-red-200 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
                             title="Vaciar Carrito">
@@ -503,14 +614,27 @@
                                 </path>
                             </svg>
                         </button>
+
+                        <button id="view-held-sales-btn"
+                            class="col-span-1 relative p-2 bg-blue-100 text-blue-600 hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/40 font-bold rounded-xl transition-colors flex justify-center items-center"
+                            title="Ver Ventas en Espera">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span id="held-count-badge"
+                                class="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full hidden">0</span>
+                        </button>
+
                         <button id="hold-sale-btn"
-                            class="col-span-1 p-3 md:p-3 bg-yellow-100 text-yellow-600 hover:bg-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:hover:bg-yellow-900/40 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+                            class="col-span-1 p-2 bg-yellow-100 text-yellow-600 hover:bg-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:hover:bg-yellow-900/40 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
                             title="Poner en Espera">
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                             </svg>
                         </button>
+
                         <button id="checkout-btn"
                             class="col-span-2 py-2 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-bold rounded-xl shadow-md transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
                             disabled>
@@ -813,6 +937,11 @@
                 <div class="flex gap-2">
                     <input type="text" id="new-payment-method-name" placeholder="Ej: Zelle, Pago Móvil, Efectivo"
                         class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                    <select id="new-payment-method-currency"
+                        class="px-4 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                        <option value="USD">USD ($)</option>
+                        <option value="VES">Bolívares (Bs)</option>
+                    </select>
                     <label
                         class="flex items-center gap-2 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700">
                         <input type="checkbox" id="new-payment-method-requires-ref"
@@ -921,48 +1050,49 @@
                     <h3 class="font-bold text-lg text-slate-800 dark:text-white">Procesar Pago</h3>
                 </div>
                 <div class="p-6">
-                    <!-- Total a pagar -->
-                    <div class="mb-6 text-center">
-                        <p class="text-sm text-slate-500 dark:text-slate-400 mb-1">Total a pagar</p>
-                        <p id="payment-total-usd" class="text-3xl font-bold text-slate-900 dark:text-white">
-                            $0.00</p>
-                        <p id="payment-total-ves" class="text-lg font-medium text-slate-600 dark:text-slate-300">Bs
-                            0.00
-                        </p>
-                    </div>
+                    <div id="payment-form-content">
+                        <!-- Total a pagar -->
+                        <div class="mb-6 text-center">
+                            <p class="text-sm text-slate-500 dark:text-slate-400 mb-1">Total a pagar</p>
+                            <p id="payment-total-usd" class="text-3xl font-bold text-slate-900 dark:text-white">
+                                $0.00</p>
+                            <p id="payment-total-ves" class="text-lg font-medium text-slate-600 dark:text-slate-300">Bs
+                                0.00
+                            </p>
+                        </div>
 
-                    <!-- Payment Method Selection -->
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Método
-                            de Pago</label>
-                        <select id="payment-method-select"
-                            class="w-full rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white p-2 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <!-- Payment Method Selection -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Método
+                                de Pago</label>
+                            <div id="payment-method-options" class="grid grid-cols-2 gap-3">
+                                <!-- JS Injected Buttons -->
+                            </div>
+                        </div>
+
+                        <!-- Dynamic Payment Fields -->
+                        <div id="payment-fields">
                             <!-- JS Injected -->
-                        </select>
-                    </div>
+                        </div>
 
-                    <!-- Dynamic Payment Fields -->
-                    <div id="payment-fields">
-                        <!-- JS Injected -->
-                    </div>
+                        <!-- Change/Vuelto Display -->
+                        <div
+                            class="mt-4 mb-6 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-100 dark:border-green-900/30">
+                            <p class="text-sm text-green-700 dark:text-green-400 font-medium">Vuelto:</p>
+                            <p id="payment-change" class="text-xl font-bold text-green-800 dark:text-green-300">Bs
+                                0.00</p>
+                        </div>
 
-                    <!-- Change/Vuelto Display -->
-                    <div
-                        class="mt-4 mb-6 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-100 dark:border-green-900/30">
-                        <p class="text-sm text-green-700 dark:text-green-400 font-medium">Vuelto:</p>
-                        <p id="payment-change" class="text-xl font-bold text-green-800 dark:text-green-300">Bs
-                            0.00</p>
-                    </div>
-
-                    <div class="flex gap-3">
-                        <button id="cancel-payment-btn"
-                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-                            Cancelar
-                        </button>
-                        <button id="confirm-payment-btn"
-                            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-bold shadow-lg shadow-green-200 dark:shadow-none">
-                            Confirmar Pago
-                        </button>
+                        <div class="flex gap-3">
+                            <button id="cancel-payment-btn"
+                                class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                                Cancelar
+                            </button>
+                            <button id="confirm-payment-btn"
+                                class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-bold shadow-lg shadow-green-200 dark:shadow-none">
+                                Confirmar Pago
+                            </button>
+                        </div>
                     </div>
 
                     <!-- RECEIPT MODAL CONTENT (Hidden initially) -->
@@ -1047,52 +1177,56 @@
         <!-- CUSTOMER FORM MODAL -->
         <div id="customer-form-modal"
             class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
-            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
-                <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                    <h3 id="customer-modal-title" class="font-bold text-lg text-slate-800">Agregar
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                <div
+                    class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700">
+                    <h3 id="customer-modal-title" class="font-bold text-lg text-slate-800 dark:text-white">Agregar
                         Cliente</h3>
                     <button id="close-customer-modal"
-                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
                 </div>
                 <form id="customer-form" class="p-6 space-y-4">
                     <div>
-                        <label for="customer-name" class="block text-sm font-medium text-slate-700 mb-1">Nombre
+                        <label for="customer-name"
+                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Nombre
                             *</label>
                         <input type="text" id="customer-name" required
-                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                     </div>
                     <div>
-                        <label for="customer-phone" class="block text-sm font-medium text-slate-700 mb-1">Teléfono
+                        <label for="customer-phone"
+                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Teléfono
                             *</label>
                         <input type="tel" id="customer-phone" required
-                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                     </div>
                     <div>
                         <label for="customer-email"
                             class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Email</label>
                         <input type="email" id="customer-email"
-                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                     </div>
                     <div>
                         <label for="customer-address"
                             class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Dirección</label>
                         <input type="text" id="customer-address"
-                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                     </div>
                     <div>
                         <label for="customer-id-document"
                             class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Documento
                             ID</label>
                         <input type="text" id="customer-id-document"
-                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                     </div>
                     <div class="flex gap-3 pt-4">
                         <button type="button" id="cancel-customer-form"
-                            class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
                             Cancelar
                         </button>
                         <button type="submit"
-                            class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
+                            class="flex-1 px-4 py-2 bg-slate-900 dark:bg-slate-600 text-white rounded-lg hover:bg-slate-800 dark:hover:bg-slate-500 transition-colors">
                             Guardar
                         </button>
                     </div>
@@ -1136,68 +1270,71 @@
                     <button id="close-product-modal"
                         class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
                 </div>
-                <form id="product-form" class="p-6 space-y-4 overflow-y-auto" style="min-height: 0;">
-                    <input type="hidden" id="product-id">
-                    <div>
-                        <label for="product-name" class="block text-sm font-medium text-slate-700 mb-1">Nombre
-                            *</label>
-                        <input type="text" id="product-name" required
-                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
-                    </div>
-                    <div class="grid grid-cols-3 gap-4 mb-4">
+                <form id="product-form" class="flex flex-col flex-1 overflow-hidden" style="min-height: 0;">
+                    <div class="p-6 space-y-4 overflow-y-auto flex-1">
+                        <input type="hidden" id="product-id">
                         <div>
-                            <label for="product-price"
-                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio USD
+                            <label for="product-name" class="block text-sm font-medium text-slate-700 mb-1">Nombre
                                 *</label>
-                            <input type="number" id="product-price" step="0.01" min="0" required
+                            <input type="text" id="product-name" required
                                 class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
                         </div>
-                        <div>
-                            <label for="product-price-bs"
-                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio
-                                Bs</label>
-                            <input type="number" id="product-price-bs" step="0.01" min="0"
-                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
-                        </div>
-                        <div>
-                            <label for="product-stock"
-                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Stock
-                                *</label>
-                            <input type="number" id="product-stock" required
-                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
-                        </div>
-                    </div>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                        <div>
-                            <label for="product-category"
-                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Categoría</label>
-                            <input type="text" id="product-category"
-                                class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
-                        </div>
-                        <div>
-                            <label for="product-barcode"
-                                class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Código de
-                                Barras</label>
-                            <div class="flex gap-2">
-                                <input type="text" id="product-barcode"
+                        <div class="grid grid-cols-3 gap-4 mb-4">
+                            <div>
+                                <label for="product-price"
+                                    class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio USD
+                                    *</label>
+                                <input type="number" id="product-price" step="0.01" min="0" required
                                     class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
-                                <button type="button" id="scan-barcode-btn" <svg class="w-6 h-6" fill="none"
-                                    stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                        d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z">
-                                    </path>
-                                    </svg>
-                                </button>
                             </div>
-                            <div id="reader"
-                                class="mt-2 w-full hidden rounded-lg overflow-hidden border border-slate-300">
+                            <div>
+                                <label for="product-price-bs"
+                                    class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Precio
+                                    Bs</label>
+                                <input type="number" id="product-price-bs" step="0.01" min="0"
+                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="product-stock"
+                                    class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Stock
+                                    *</label>
+                                <input type="number" id="product-stock" required
+                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label for="product-category"
+                                    class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Categoría</label>
+                                <input type="text" id="product-category"
+                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="product-barcode"
+                                    class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Código de
+                                    Barras</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="product-barcode"
+                                        class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                                    <button type="button" id="scan-barcode-btn" <svg class="w-6 h-6" fill="none"
+                                        stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z">
+                                        </path>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div id="reader"
+                                    class="mt-2 w-full hidden rounded-lg overflow-hidden border border-slate-300">
+                                </div>
                             </div>
                         </div>
 
                         <!-- ADVANCED PRICING SECTION -->
                         <div class="mb-4">
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Imagen del
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Imagen
+                                del
                                 Producto</label>
                             <div class="flex items-center gap-3">
                                 <div id="image-preview"
@@ -1212,7 +1349,8 @@
                                 <div class="flex-1">
                                     <input type="file" id="product-image-file" accept="image/*"
                                         class="block w-full text-sm text-slate-500 dark:text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-slate-100 dark:file:bg-slate-700 file:text-slate-700 dark:file:text-slate-200 hover:file:bg-slate-200 dark:hover:file:bg-slate-600">
-                                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Formatos: JPG, PNG, WEBP
+                                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Formatos: JPG, PNG,
+                                        WEBP
                                         (Max 5MB)</p>
                                 </div>
                             </div>
@@ -1230,10 +1368,11 @@
 
                             <!-- Package Type -->
                             <div class="mb-3">
-                                <label for="package-type" class="block text-sm font-medium text-slate-700 mb-1">Tipo de
+                                <label for="package-type" class="block text-sm font-medium text-slate-700 mb-1">Tipo
+                                    de
                                     Empaque</label>
                                 <select id="package-type"
-                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500">
+                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
                                     <option value="">-- Ninguno --</option>
                                     <option value="unidad">Unidad</option>
                                     <option value="caja">Caja</option>
@@ -1245,25 +1384,28 @@
                             <div id="quantity-fields" class="hidden">
                                 <div id="units-per-bulk-field" class="mb-3 hidden">
                                     <label for="units-per-bulk"
-                                        class="block text-sm font-medium text-slate-700 mb-1">Unidades por Bulto</label>
+                                        class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Unidades
+                                        por
+                                        Bulto</label>
                                     <input type="number" id="units-per-bulk" min="1" step="1" placeholder="Ej: 288"
-                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                                        class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                                     <p class="text-xs text-slate-500 mt-1">O calcula automáticamente:</p>
                                 </div>
                                 <div class="grid grid-cols-2 gap-3">
                                     <div id="boxes-per-bulk-field" class="hidden">
                                         <label for="boxes-per-bulk"
-                                            class="block text-sm font-medium text-slate-700 mb-1">Cajas
+                                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Cajas
                                             por Bulto</label>
                                         <input type="number" id="boxes-per-bulk" min="1" step="1" placeholder="Ej: 12"
-                                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                                     </div>
                                     <div id="units-per-box-field" class="hidden">
                                         <label for="units-per-box"
-                                            class="block text-sm font-medium text-slate-700 mb-1">Unidades por
+                                            class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Unidades
+                                            por
                                             Caja</label>
                                         <input type="number" id="units-per-box" min="1" step="1" placeholder="Ej: 24"
-                                            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                                     </div>
                                 </div>
                             </div>
@@ -1271,30 +1413,34 @@
                             <!-- Cost and Margin -->
                             <div id="cost-fields" class="space-y-3 hidden">
                                 <div>
-                                    <label for="cost-per-package" class="block text-sm font-medium text-slate-700 mb-1">
+                                    <label for="cost-per-package"
+                                        class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">
                                         Costo por <span id="package-label">Empaque</span>
                                     </label>
                                     <input type="number" id="cost-per-package" min="0" step="0.01" placeholder="0.00"
-                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                                        class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                                 </div>
                                 <div>
                                     <label for="profit-margin"
-                                        class="block text-sm font-medium text-slate-700 mb-1">Margen
+                                        class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Margen
                                         de Ganancia (%)</label>
                                     <input type="number" id="profit-margin" min="0" step="0.1" placeholder="30"
-                                        class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900">
+                                        class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white placeholder-slate-400">
                                 </div>
                             </div>
 
                             <!-- Calculated Values -->
-                            <div id="calculated-values" class="mt-3 p-3 bg-blue-50 rounded-lg space-y-2 hidden">
+                            <div id="calculated-values"
+                                class="mt-3 p-3 bg-blue-50 dark:bg-slate-700/50 rounded-lg space-y-2 hidden">
                                 <div class="flex justify-between text-sm">
-                                    <span class="text-slate-600">Costo Unitario:</span>
-                                    <span id="calculated-unit-cost" class="font-bold text-slate-900">$0.00</span>
+                                    <span class="text-slate-600 dark:text-slate-300">Costo Unitario:</span>
+                                    <span id="calculated-unit-cost"
+                                        class="font-bold text-slate-900 dark:text-white">$0.00</span>
                                 </div>
                                 <div class="flex justify-between text-sm">
-                                    <span class="text-slate-600">Precio Venta Sugerido:</span>
-                                    <span id="calculated-sale-price" class="font-bold text-green-600">$0.00</span>
+                                    <span class="text-slate-600 dark:text-slate-300">Precio Venta Sugerido:</span>
+                                    <span id="calculated-sale-price"
+                                        class="font-bold text-green-600 dark:text-green-400">$0.00</span>
                                 </div>
                                 <button type="button" id="apply-calculated-price"
                                     class="w-full mt-2 px-3 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors">
@@ -1302,37 +1448,176 @@
                                 </button>
                             </div>
                         </div>
+                    </div> <!-- End of scrollable content -->
+                    <div
+                        class="p-4 border-t border-slate-100 dark:border-slate-700 flex gap-3 flex-shrink-0 bg-slate-50 dark:bg-slate-700">
+                        <button type="button" id="cancel-product-form"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
+                            Cancelar
+                        </button>
+                        <button type="submit"
+                            class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors shadow-lg">
+                            Guardar
+                        </button>
+                    </div>
                 </form>
-                <div class="p-4 border-t border-slate-100 flex gap-3 flex-shrink-0">
-                    <button type="button" id="cancel-product-form"
-                        class="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors">
-                        Cancelar
-                    </button>
-                    <button type="submit" form="product-form"
-                        class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors">
-                        Guardar
-                    </button>
+            </div>
+        </div>
+        <!-- INPUT MODAL -->
+        <div id="input-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                <div class="p-6">
+                    <h3 id="input-modal-title" class="text-xl font-bold text-slate-900 dark:text-white mb-2">Input</h3>
+                    <p id="input-modal-message" class="text-slate-600 dark:text-slate-300 mb-4">Message</p>
+                    <input type="text" id="input-modal-value"
+                        class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white mb-6"
+                        autocomplete="off">
+                    <div class="flex justify-end gap-3">
+                        <button id="cancel-input-btn"
+                            class="px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
+                            Cancelar
+                        </button>
+                        <button id="confirm-input-btn"
+                            class="px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors shadow-lg">
+                            Aceptar
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
+
         <!-- CONFIRMATION MODAL -->
 
         <!-- SALE DETAILS MODAL -->
         <div id="sale-details-modal"
             class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
-            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
-                <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                    <h3 class="font-bold text-lg text-slate-800">Detalles de Venta</h3>
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
+                <div
+                    class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700">
+                    <h3 class="font-bold text-lg text-slate-800 dark:text-white">Detalles de Venta</h3>
                     <button id="close-sale-modal"
-                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
                 </div>
-                <div class="p-6" id="sale-details-content">
+                <div class="p-6 text-slate-900 dark:text-white" id="sale-details-content">
                     <!-- JS Injected -->
                 </div>
             </div>
         </div>
         <!-- Main App Logic -->
         <script type="module" src="js/app.js"></script>
+
+        <!-- CUSTOMER SELECTION MODAL -->
+        <div id="customer-selection-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all flex flex-col max-h-[80vh]">
+                <div
+                    class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700">
+                    <h3 class="font-bold text-lg text-slate-800 dark:text-white">Seleccionar Cliente</h3>
+                    <button id="close-customer-selection"
+                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
+                </div>
+                <div class="p-4 border-b border-slate-100 dark:border-slate-700">
+                    <input type="text" id="search-customer-checkout" placeholder="Buscar cliente..."
+                        class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-slate-500 text-slate-900 dark:text-white">
+                </div>
+                <div id="customer-list-checkout" class="p-4 overflow-y-auto flex-1 space-y-2">
+                    <!-- JS Injected -->
+                </div>
+                <div
+                    class="p-4 border-t border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700">
+                    <button id="skip-customer-btn"
+                        class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-medium">
+                        Omitir (Cliente Anónimo)
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAYMENT MODAL -->
+        <div id="payment-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all flex flex-col max-h-[90vh]">
+
+                <!-- Payment Form Content -->
+                <div id="payment-form-content" class="flex flex-col h-full">
+                    <div
+                        class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700 flex-shrink-0">
+                        <h3 class="font-bold text-lg text-slate-800 dark:text-white">Procesar Pago</h3>
+                        <button onclick="document.getElementById('payment-modal').classList.add('hidden')"
+                            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
+                    </div>
+
+                    <div class="p-6 overflow-y-auto flex-1">
+                        <div class="text-center mb-6">
+                            <p class="text-sm text-slate-500 dark:text-slate-400 mb-1">Total a pagar</p>
+                            <h2 id="payment-total-usd" class="text-4xl font-bold text-slate-900 dark:text-white">$0.00
+                            </h2>
+                            <p id="payment-total-ves" class="text-lg text-slate-600 dark:text-slate-300">Bs 0.00</p>
+                        </div>
+
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">Método de
+                                Pago</label>
+                            <div id="payment-method-options" class="grid grid-cols-2 gap-3">
+                                <!-- JS Injected -->
+                            </div>
+                        </div>
+
+                        <div id="payment-fields">
+                            <!-- JS Injected -->
+                        </div>
+
+                        <div id="payment-change"
+                            class="mt-4 p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg text-center">
+                            <!-- JS Injected -->
+                        </div>
+                    </div>
+
+                    <div
+                        class="p-4 border-t border-slate-100 dark:border-slate-700 flex gap-3 flex-shrink-0 bg-slate-50 dark:bg-slate-700">
+                        <button id="cancel-payment-btn"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
+                            Cancelar
+                        </button>
+                        <button id="confirm-payment-btn"
+                            class="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors shadow-lg font-bold">
+                            Confirmar Pago
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Receipt Modal Content (Hidden) -->
+                <div id="receipt-modal-content" class="hidden flex flex-col h-full">
+                    <div
+                        class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700 flex-shrink-0">
+                        <h3 class="font-bold text-lg text-slate-800 dark:text-white">Recibo de Venta</h3>
+                        <button id="close-receipt"
+                            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">&times;</button>
+                    </div>
+                    <div id="receipt-content"
+                        class="p-6 overflow-y-auto flex-1 bg-white text-slate-900 font-mono text-sm">
+                        <!-- JS Injected -->
+                    </div>
+                    <div
+                        class="p-4 border-t border-slate-100 dark:border-slate-700 flex gap-3 flex-shrink-0 bg-slate-50 dark:bg-slate-700">
+                        <button id="email-receipt-btn"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
+                            Enviar Correo
+                        </button>
+                        <button id="print-receipt-btn"
+                            class="flex-1 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors shadow-lg">
+                            Imprimir
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
 
         <!-- CONFIRMATION MODAL (Moved to end) -->
         <div id="confirmation-modal"
@@ -1348,23 +1633,122 @@
                             </path>
                         </svg>
                     </div>
-                    <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">¿Vaciar Carrito?</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">¿Estás seguro de que deseas eliminar
+                    <h3 id="confirm-modal-title" class="text-lg font-bold text-slate-900 dark:text-white mb-2">¿Vaciar
+                        Carrito?</h3>
+                    <p id="confirm-modal-message" class="text-sm text-slate-600 dark:text-slate-300 mb-6">¿Estás seguro
+                        de que deseas eliminar
                         todos los productos del
                         carrito? Esta acción no se puede deshacer.</p>
+                    </button>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- EMAIL INPUT MODAL -->
+        <div id="email-input-modal"
+            class="fixed inset-0 bg-black bg-opacity-50 hidden z-[70] flex items-center justify-center backdrop-blur-sm p-4">
+            <div
+                class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all">
+                <div class="p-6">
+                    <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Enviar Recibo</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">Ingrese el correo electrónico del
+                        cliente:</p>
+                    <input type="email" id="email-input-field"
+                        class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white mb-6"
+                        placeholder="cliente@ejemplo.com">
                     <div class="flex gap-3">
-                        <button id="cancel-confirm-btn"
-                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors font-medium">
+                        <button id="cancel-email-btn"
+                            class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
                             Cancelar
                         </button>
-                        <button id="confirm-action-btn"
-                            class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium shadow-lg shadow-red-200 dark:shadow-none">
-                            Sí, Vaciar
+                        <button id="confirm-email-btn"
+                            class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors shadow-lg font-medium">
+                            Enviar
                         </button>
                     </div>
                 </div>
             </div>
         </div>
+        <!-- MOBILE CART SIDEBAR -->
+        <aside id="cart-sidebar"
+            class="fixed inset-y-0 right-0 z-40 w-80 bg-white dark:bg-slate-900 shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out flex flex-col h-full border-l border-slate-200 dark:border-slate-800 md:hidden">
+            <div
+                class="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-950">
+                <h2 class="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z">
+                        </path>
+                    </svg>
+                    Carrito de Compras
+                </h2>
+                <button id="close-cart-btn"
+                    class="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full transition-colors">
+                    <svg class="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                        </path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Cart Items Container (Reused ID for logic, but we need to be careful about duplication. 
+             Actually, the main layout likely has the cart on the right for desktop. 
+             We should check if we are duplicating IDs or if the desktop layout uses a different structure.
+             Let's check the desktop layout first to avoid ID conflicts.) -->
+            <div class="flex-1 overflow-y-auto p-4 space-y-3" id="mobile-cart-items-container">
+                <!-- Items will be cloned or rendered here for mobile -->
+                <div class="text-center text-slate-500 mt-10">
+                    <p>Usa la vista de escritorio para ver el carrito completo por ahora.</p>
+                </div>
+            </div>
+
+            <div class="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                <button id="mobile-checkout-btn"
+                    class="w-full py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-slate-800 dark:hover:bg-blue-500 transition-all">
+                    Ir a Pagar
+                </button>
+            </div>
+        </aside>
+
+        <!-- HELD SALES DRAWER -->
+        <div id="held-sales-drawer"
+            class="fixed inset-y-0 right-0 w-full max-w-md bg-white dark:bg-slate-800 shadow-2xl transform translate-x-full transition-transform duration-300 z-50 flex flex-col">
+            <div
+                class="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
+                <h3 class="font-bold text-lg text-slate-800 dark:text-white flex items-center gap-2">
+                    <svg class="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    Ventas en Espera
+                </h3>
+                <button id="close-held-drawer-btn"
+                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                        </path>
+                    </svg>
+                </button>
+            </div>
+            <div id="held-sales-list" class="flex-1 overflow-y-auto p-4 space-y-3">
+                <!-- JS Injected -->
+            </div>
+            <script type="module">
+                (async () => {
+                    try {
+                        await import('./js/utils.js');
+                        // alert('DEBUG: utils.js loaded');
+                        await import('./js/ui.js');
+                        // alert('DEBUG: ui.js loaded');
+                        await import('./js/api.js');
+                        // alert('DEBUG: api.js loaded');
+                        // POS is loaded via app.js
+                    } catch (e) {
+                        alert('CRITICAL IMPORT ERROR:\n' + e.message + '\n' + e.stack);
+                    }
+                })();
+            </script>
 </body>
 
 </html>

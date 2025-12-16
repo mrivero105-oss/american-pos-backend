@@ -250,14 +250,22 @@
 
         function getErrorMessage(error) {
             console.error('Full error:', error);
-            if (error.includes('user-not-found') || error.includes('wrong-password')) {
-                return 'Correo o contraseña incorrectos';
-            }
-            if (error.includes('too-many-requests')) {
-                return 'Demasiados intentos. Intente más tarde';
+            if (typeof error === 'string') {
+                if (error.includes('auth/invalid-credential') || error.includes('auth/user-not-found') || error.includes('auth/wrong-password')) {
+                    return 'Correo o contraseña incorrectos';
+                }
+                if (error.includes('auth/too-many-requests')) {
+                    return 'Demasiados intentos. Intente más tarde';
+                }
+                if (error.includes('auth/network-request-failed')) {
+                    return 'Error de conexión. Verifique su internet.';
+                }
+                if (error.includes('auth/operation-not-allowed')) {
+                    return 'El inicio de sesión con correo/contraseña no está habilitado en Firebase.';
+                }
             }
             // Return the actual error for debugging
-            return `Error: ${error}`;
+            return `Error: ${error.message || error}`;
         }
     </script>
 </body>

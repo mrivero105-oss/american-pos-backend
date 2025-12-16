@@ -26,6 +26,7 @@ export class Settings {
             paymentMethodsSelect: document.getElementById('payment-methods-settings-select'),
             deleteMethodBtn: document.getElementById('delete-payment-method-btn'),
             newPaymentMethodName: document.getElementById('new-payment-method-name'),
+            newPaymentMethodCurrency: document.getElementById('new-payment-method-currency'),
             newPaymentMethodRequiresRef: document.getElementById('new-payment-method-requires-ref'),
             addPaymentMethodBtn: document.getElementById('add-payment-method-btn'),
             // Backup
@@ -162,6 +163,7 @@ export class Settings {
 
     async addPaymentMethod() {
         const name = this.dom.newPaymentMethodName?.value.trim();
+        const currency = this.dom.newPaymentMethodCurrency?.value || 'USD';
         const requiresReference = this.dom.newPaymentMethodRequiresRef?.checked;
 
         if (!name) {
@@ -172,6 +174,8 @@ export class Settings {
         const newMethod = {
             id: name.toLowerCase().replace(/\s+/g, '-'),
             name: name,
+            currency: currency,
+            type: 'custom',
             requiresReference: requiresReference
         };
 

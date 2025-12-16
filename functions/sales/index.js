@@ -1,16 +1,11 @@
 export async function onRequestGet(context) {
     try {
-        const { results } = await context.env.DB.prepare(
-            "SELECT * FROM sales ORDER BY timestamp DESC"
-        ).all();
+        const user = context.data.user;
+        if (!user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
 
-        // For each sale, we might want to fetch items, but for the main list 
-        // usually just the summary is enough or we do a JOIN.
-        // For simplicity/performance matching existing behavior, we might need to fetch items 
-        // if the frontend expects them embedded.
-        // The existing backend returns the full object.
-        // Let's do a separate query for items if needed, or just return sales for now.
-        // To match existing behavior exactly, we should probably fetch items.
+        const { results } = await context.env.DB.prepare(
+            "SELECT * FROM sales WHERE userId = ? ORDER BY timestamp DESC"
+        ).bind(user.id).all();
 
         const sales = [];
         for (const sale of results) {
@@ -30,23 +25,27 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
     try {
+        const user = context.data.user;
+        if (!user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+
         const sale = await context.request.json();
         const id = sale.id || Date.now().toString();
         const timestamp = new Date().toISOString();
 
         const statements = [];
 
-        // 1. Insert Sale
+        // 1. Insert Sale with userId
         statements.push(context.env.DB.prepare(
-            `INSERT INTO sales (id, timestamp, total, exchangeRate, paymentMethod, customerId) 
-       VALUES (?, ?, ?, ?, ?, ?)`
+            `INSERT INTO sales (id, timestamp, total, exchangeRate, paymentMethod, customerId, userId) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
         ).bind(
             id,
             timestamp,
             sale.total,
             sale.exchangeRate || 1.0,
             sale.paymentMethod || 'Efectivo',
-            sale.customerId || null
+            sale.customerId || null,
+            user.id
         ));
 
         // 2. Insert Items and Update Stock
@@ -56,24 +55,24 @@ export async function onRequestPost(context) {
              VALUES (?, ?, ?, ?, ?)`
             ).bind(
                 id,
-                item.productId || item.id, // Handle both formats
+                item.productId || item.id,
                 item.name,
                 item.price,
                 item.quantity
             ));
 
-            // Update Stock
+            // Update Stock - STRICTLY ensure we only update products belonging to the user
             if (item.productId || item.id) {
                 statements.push(context.env.DB.prepare(
-                    `UPDATE products SET stockQuantity = stockQuantity - ? WHERE id = ?`
-                ).bind(item.quantity, item.productId || item.id));
+                    `UPDATE products SET stockQuantity = stockQuantity - ? WHERE id = ? AND userId = ?`
+                ).bind(item.quantity, item.productId || item.id, user.id));
             }
         }
 
         // Execute all in batch
         await context.env.DB.batch(statements);
 
-        return new Response(JSON.stringify({ ...sale, id, timestamp }), {
+        return new Response(JSON.stringify({ ...sale, id, timestamp, userId: user.id }), {
             status: 201,
             headers: { "Content-Type": "application/json" },
         });

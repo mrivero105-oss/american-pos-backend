@@ -1,6 +1,7 @@
 import { api as API } from './api.js';
 
 export const Products = {
+    version: 'v192',
     products: [],
     html5QrCode: null,
 
@@ -61,8 +62,70 @@ export const Products = {
     },
 
     async init() {
+        console.log('Products module initialized (v192)');
         this.bindEvents();
         await this.loadExchangeRate();
+        this.loadProducts();
+    },
+
+    async loadProducts() {
+        try {
+            this.products = await API.products.getAll();
+            this.renderProductList(this.products);
+        } catch (error) {
+            console.error('Error loading products:', error);
+            if (this.dom.productsList) {
+                this.dom.productsList.innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">Error al cargar productos</td></tr>';
+            }
+        }
+    },
+
+    renderProductList(products) {
+        if (!this.dom.productsList) return;
+
+        if (products.length === 0) {
+            this.dom.productsList.innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-slate-500">No hay productos encontrados</td></tr>';
+            return;
+        }
+
+        this.dom.productsList.innerHTML = products.map(product => `
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <div class="h-10 w-10 rounded-lg overflow-hidden bg-slate-100 border border-slate-200">
+                        <img src="${product.imageUri || 'assets/placeholder.png'}" alt="${product.name}" class="h-full w-full object-cover" onerror="this.src='https://via.placeholder.com/40'">
+                    </div>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <div class="text-sm font-medium text-slate-900 dark:text-white">${product.name}</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">${product.barcode || ''}</div>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-slate-100 text-slate-800">
+                        ${product.category || 'General'}
+                    </span>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap text-right text-sm text-slate-600 dark:text-slate-300">
+                    $${parseFloat(product.price).toFixed(2)}
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap text-right">
+                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${product.stock > 5 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                        ${product.stock}
+                    </span>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button onclick="window.editProduct('${product.id}')" class="text-indigo-600 hover:text-indigo-900 mr-3">Editar</button>
+                    <button onclick="window.deleteProduct('${product.id}')" class="text-red-600 hover:text-red-900">Borrar</button>
+                </td>
+            </tr>
+        `).join('');
+
+        // Expose functions to window for inline onclick handlers
+        window.editProduct = (id) => {
+            const product = this.products.find(p => p.id === id);
+            if (product) this.openModal(product);
+        };
+
+        window.deleteProduct = (id) => this.deleteProduct(id);
     },
 
     async loadExchangeRate() {
@@ -203,62 +266,7 @@ export const Products = {
             }
         }
         const readerElement = document.getElementById('reader');
-        if (readerElement) {
-            readerElement.classList.add('hidden');
-        }
-    },
-
-    async loadProducts() {
-        try {
-            this.products = await API.products.getAll();
-            this.renderProductList(this.products);
-        } catch (error) {
-            console.error('Error loading products:', error);
-            alert('Error al cargar productos');
-        }
-    },
-
-    renderProductList(products) {
-        if (!this.dom.productsList) return;
-
-        this.dom.productsList.innerHTML = products.map(product => `
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="h-10 w-10 rounded-lg overflow-hidden bg-slate-100 border border-slate-200">
-                        <img src="${product.imageUri || 'assets/placeholder.png'}" alt="${product.name}" class="h-full w-full object-cover" onerror="this.src='https://via.placeholder.com/40'">
-                    </div>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm font-medium text-slate-900 dark:text-white">${product.name}</div>
-                    <div class="text-xs text-slate-500 dark:text-slate-400">${product.barcode || ''}</div>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-slate-100 text-slate-800">
-                        ${product.category || 'General'}
-                    </span>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap text-right text-sm text-slate-600 dark:text-slate-300">
-                    $${parseFloat(product.price).toFixed(2)}
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap text-right">
-                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${product.stock > 5 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
-                        ${product.stock}
-                    </span>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button onclick="window.editProduct('${product.id}')" class="text-indigo-600 hover:text-indigo-900 mr-3">Editar</button>
-                    <button onclick="window.deleteProduct('${product.id}')" class="text-red-600 hover:text-red-900">Borrar</button>
-                </td>
-            </tr>
-        `).join('');
-
-        // Expose functions to window for inline onclick handlers
-        window.editProduct = (id) => {
-            const product = this.products.find(p => p.id === id);
-            if (product) this.openModal(product);
-        };
-
-        window.deleteProduct = (id) => this.deleteProduct(id);
+        if (readerElement) readerElement.classList.add('hidden');
     },
 
     openModal(product = null) {
@@ -287,6 +295,7 @@ export const Products = {
             this.dom.inputId.value = product.id;
             this.dom.inputName.value = product.name;
             this.dom.inputPrice.value = product.price;
+            this.dom.inputPriceBs.value = product.priceBs || (product.price * this.exchangeRate).toFixed(2);
             this.dom.inputStock.value = product.stock;
             this.dom.inputCategory.value = product.category || '';
             this.dom.inputBarcode.value = product.barcode || '';
@@ -318,6 +327,7 @@ export const Products = {
         const productData = {
             name: this.dom.inputName.value,
             price: parseFloat(this.dom.inputPrice.value),
+            priceBs: parseFloat(this.dom.inputPriceBs.value),
             stock: parseInt(this.dom.inputStock.value),
             category: this.dom.inputCategory.value,
             imageUri: this.currentImageUri || '',
@@ -583,6 +593,7 @@ export const Products = {
                 }
             }
 
+            localStorage.removeItem('cached_products'); // Invalidate cache after bulk upload
             alert(`Carga completada:\n✓ ${created} productos creados\n✓ ${updated} productos actualizados${errors > 0 ? `\n✗ ${errors} errores` : ''}`);
 
             this.closeBulkUploadModal();
@@ -590,7 +601,7 @@ export const Products = {
 
             // Refresh POS if available
             if (window.app && window.app.views && window.app.views.pos) {
-                window.app.views.pos.loadProducts();
+                window.app.views.pos.refreshData();
             }
         } catch (error) {
             console.error('Bulk upload error:', error);
@@ -720,8 +731,8 @@ export const Products = {
         const salePrice = this.calculateSalePrice(unitCost);
 
         // Update display
-        this.dom.calculatedUnitCost.textContent = `$${unitCost.toFixed(2)}`;
-        this.dom.calculatedSalePrice.textContent = `$${salePrice.toFixed(2)}`;
+        this.dom.calculatedUnitCost.textContent = `$${unitCost.toFixed(2)} `;
+        this.dom.calculatedSalePrice.textContent = `$${salePrice.toFixed(2)} `;
 
         // Show/hide calculated values
         if (unitCost > 0 && salePrice > 0) {

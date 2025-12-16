@@ -4,6 +4,7 @@ DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS customers;
 DROP TABLE IF EXISTS settings;
 DROP TABLE IF EXISTS payment_methods;
+DROP TABLE IF EXISTS users;
 
 CREATE TABLE products (
     id TEXT PRIMARY KEY,
@@ -14,7 +15,8 @@ CREATE TABLE products (
     category TEXT,
     barcode TEXT,
     imageUri TEXT,
-    isCustom INTEGER DEFAULT 0
+    isCustom INTEGER DEFAULT 0,
+    isSoldByWeight INTEGER DEFAULT 0
 );
 
 CREATE TABLE customers (
@@ -55,7 +57,18 @@ CREATE TABLE settings (
 CREATE TABLE payment_methods (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    type TEXT NOT NULL
+    type TEXT NOT NULL,
+    currency TEXT DEFAULT 'USD',
+    requires_reference INTEGER DEFAULT 0
+);
+
+CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    name TEXT,
+    role TEXT DEFAULT 'user',
+    createdAt TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Initialize default settings

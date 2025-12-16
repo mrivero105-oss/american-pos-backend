@@ -42,7 +42,7 @@ export class SalesHistory {
             if (btn) {
                 e.stopPropagation();
                 const saleId = btn.dataset.id;
-                const sale = this.sales.find(s => s.id === saleId);
+                const sale = this.sales.find(s => String(s.id) === String(saleId));
                 if (sale) this.showDetails(sale);
             }
         });
@@ -101,26 +101,26 @@ export class SalesHistory {
         if (!this.dom.modalContent) return;
 
         const itemsHtml = sale.items.map(item => `
-            <div class="flex justify-between py-2 border-b border-gray-100 last:border-0">
+            <div class="flex justify-between py-2 border-b border-gray-100 dark:border-slate-700 last:border-0">
                 <div>
-                    <p class="font-medium text-gray-800">${item.name}</p>
-                    <p class="text-xs text-gray-500">${item.quantity} x ${formatCurrency(item.price)}</p>
+                    <p class="font-medium text-gray-800 dark:text-white">${item.name}</p>
+                    <p class="text-xs text-gray-500 dark:text-slate-400">${item.quantity} x ${formatCurrency(item.price)}</p>
                 </div>
-                <span class="font-medium text-gray-800">${formatCurrency(item.price * item.quantity)}</span>
+                <span class="font-medium text-gray-800 dark:text-white">${formatCurrency(item.price * item.quantity)}</span>
             </div>
         `).join('');
 
         this.dom.modalContent.innerHTML = `
             <div class="mb-4">
-                <p class="text-sm text-gray-500">ID Venta: ${sale.id}</p>
-                <p class="text-sm text-gray-500">Fecha: ${formatDate(sale.timestamp.toDate ? sale.timestamp.toDate() : sale.timestamp)}</p>
+                <p class="text-sm text-gray-500 dark:text-slate-400">ID Venta: ${sale.id}</p>
+                <p class="text-sm text-gray-500 dark:text-slate-400">Fecha: ${formatDate(sale.timestamp.toDate ? sale.timestamp.toDate() : sale.timestamp)}</p>
             </div>
-            <div class="bg-gray-50 rounded-lg p-4 mb-4">
+            <div class="bg-gray-50 dark:bg-slate-700/50 rounded-lg p-4 mb-4">
                 ${itemsHtml}
             </div>
-            <div class="flex justify-between items-center pt-4 border-t border-gray-200">
-                <span class="font-bold text-lg">Total</span>
-                <span class="font-bold text-xl text-indigo-600">${formatCurrency(sale.total)}</span>
+            <div class="flex justify-between items-center pt-4 border-t border-gray-200 dark:border-slate-700">
+                <span class="font-bold text-lg text-slate-900 dark:text-white">Total</span>
+                <span class="font-bold text-xl text-indigo-600 dark:text-indigo-400">${formatCurrency(sale.total)}</span>
             </div>
         `;
 

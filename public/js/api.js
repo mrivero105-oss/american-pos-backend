@@ -17,17 +17,30 @@ function handleAuthError(response) {
         throw new Error('Unauthorized');
     }
 }
-
-
 export const api = {
     products: {
         getAll: async () => {
-            const response = await fetch(`${API_BASE_URL}/products`, {
-                headers: await getAuthHeaders()
-            });
-            handleAuthError(response);
-            if (!response.ok) throw new Error('Error fetching products');
-            return response.json();
+            const url = `${API_BASE_URL}/products`;
+            // console.log(`DEBUG: Fetching products from ${url}`);
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+            try {
+                const response = await fetch(url, {
+                    headers: await getAuthHeaders(),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                handleAuthError(response);
+                if (!response.ok) throw new Error(`Error fetching products: ${response.status} ${response.statusText}`);
+                return response.json();
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    throw new Error('Request timed out after 10s');
+                }
+                throw error;
+            }
         },
         create: async (product) => {
             const response = await fetch(`${API_BASE_URL}/products`, {
@@ -80,11 +93,11 @@ export const api = {
             if (!response.ok) throw new Error('Error fetching sales');
             return response.json();
         },
-        emailReceipt: async (saleId, email) => {
+        emailReceipt: async (saleId, email, receiptHtml) => {
             const response = await fetch(`${API_BASE_URL}/sales/${saleId}/email`, {
                 method: 'POST',
                 headers: await getAuthHeaders(),
-                body: JSON.stringify({ email })
+                body: JSON.stringify({ email, receiptHtml })
             });
             handleAuthError(response);
             if (!response.ok) throw new Error('Error sending email');

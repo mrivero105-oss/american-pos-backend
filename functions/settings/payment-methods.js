@@ -1,8 +1,11 @@
 export async function onRequestGet(context) {
     try {
+        const user = context.data.user;
+        if (!user) return new Response("Unauthorized", { status: 401 });
+
         const { results } = await context.env.DB.prepare(
-            "SELECT * FROM payment_methods"
-        ).all();
+            "SELECT * FROM payment_methods WHERE userId = ?"
+        ).bind(user.id).all();
 
         return new Response(JSON.stringify(results), {
             headers: { "Content-Type": "application/json" },
@@ -14,16 +17,19 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
     try {
+        const user = context.data.user;
+        if (!user) return new Response("Unauthorized", { status: 401 });
+
         const { paymentMethods } = await context.request.json();
 
         const statements = [
-            context.env.DB.prepare("DELETE FROM payment_methods")
+            context.env.DB.prepare("DELETE FROM payment_methods WHERE userId = ?").bind(user.id)
         ];
 
         for (const pm of paymentMethods) {
             statements.push(context.env.DB.prepare(
-                "INSERT INTO payment_methods (id, name, type) VALUES (?, ?, ?)"
-            ).bind(pm.id, pm.name, pm.type));
+                "INSERT INTO payment_methods (id, name, type, currency, requires_reference, userId) VALUES (?, ?, ?, ?, ?, ?)"
+            ).bind(pm.id, pm.name, pm.type || 'custom', pm.currency || 'USD', pm.requiresReference ? 1 : 0, user.id));
         }
 
         await context.env.DB.batch(statements);

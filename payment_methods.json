@@ -4,42 +4,52 @@
     "name": "Efectivo (USD)",
     "type": "cash",
     "currency": "USD",
-    "requiresReference": false
+    "requiresReference": false,
+    "userId": "admin-1"
   },
   {
     "id": "cash_bs",
     "name": "Efectivo (Bs)",
     "type": "cash",
     "currency": "VES",
-    "requiresReference": false
+    "requiresReference": false,
+    "userId": "admin-1"
   },
   {
     "id": "zelle",
     "name": "Zelle",
     "type": "transfer",
     "currency": "USD",
-    "requiresReference": true
+    "requiresReference": true,
+    "userId": "admin-1"
   },
   {
     "id": "pago_movil",
     "name": "Pago Móvil",
     "type": "transfer",
     "currency": "VES",
-    "requiresReference": true
+    "requiresReference": true,
+    "userId": "admin-1"
   },
   {
     "id": "biopago",
     "name": "BioPago",
-    "requiresReference": false
+    "currency": "VES",
+    "requiresReference": false,
+    "userId": "admin-1"
   },
   {
     "id": "tarjeta-de-debito",
     "name": "Tarjeta de Debito",
-    "requiresReference": false
+    "currency": "VES",
+    "requiresReference": false,
+    "userId": "admin-1"
   },
   {
     "id": "transferencia",
     "name": "Transferencia",
-    "requiresReference": true
+    "currency": "VES",
+    "requiresReference": true,
+    "userId": "admin-1"
   }
 ]

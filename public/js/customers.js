@@ -188,6 +188,7 @@ export class Customers {
 
         try {
             await api.customers.delete(customerId);
+            localStorage.removeItem('cached_customers'); // Invalidate cache
             ui.showNotification('Cliente eliminado');
             await this.loadCustomers();
         } catch (error) {
