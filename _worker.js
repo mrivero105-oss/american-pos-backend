@@ -181,17 +181,16 @@ export default {
                     const products = (db.products || []).filter(p => p.tenantId === tenantId || (!p.tenantId && tenantId === 'admin-1'));
 
                     // Extract unique categories with counts
-                    const categoryMap = {};
+                    const counts = {};
                     products.forEach(p => {
                         const cat = p.category || 'General';
-                        if (!categoryMap[cat]) {
-                            categoryMap[cat] = { name: cat, count: 0 };
-                        }
-                        categoryMap[cat].count++;
+                        counts[cat] = (counts[cat] || 0) + 1;
                     });
 
-                    const categories = Object.values(categoryMap).sort((a, b) => b.count - a.count);
-                    return jsonResponse(categories);
+                    return jsonResponse({
+                        counts: counts,
+                        total: products.length
+                    });
                 }
             }
 
