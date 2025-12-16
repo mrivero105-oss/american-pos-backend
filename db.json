@@ -10536,9 +10536,10 @@
       "role": "admin",
       "businessInfo": {
         "currencies": [
+          "USD",
           "BS"
         ],
-        "currency": "BS"
+        "currency": "USD"
       },
       "createdAt": "2025-01-01T00:00:00Z",
       "status": "active",
