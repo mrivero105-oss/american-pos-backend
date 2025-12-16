@@ -100,7 +100,25 @@ export default {
                         const u = db.users.find(u => u.id === user.id);
                         if (u) tenantId = u.tenantId || 'admin-1';
                     }
-                    const products = (db.products || []).filter(p => p.tenantId === tenantId || (!p.tenantId && tenantId === 'admin-1'));
+                    let products = (db.products || []).filter(p => p.tenantId === tenantId || (!p.tenantId && tenantId === 'admin-1'));
+
+                    // Search filter
+                    const search = url.searchParams.get('search');
+                    if (search) {
+                        const searchLower = search.toLowerCase();
+                        products = products.filter(p =>
+                            p.name.toLowerCase().includes(searchLower) ||
+                            (p.barcode && p.barcode.toLowerCase().includes(searchLower)) ||
+                            (p.category && p.category.toLowerCase().includes(searchLower))
+                        );
+                    }
+
+                    // Category filter
+                    const category = url.searchParams.get('category');
+                    if (category) {
+                        products = products.filter(p => p.category === category);
+                    }
+
                     return jsonResponse(products);
                 }
                 // Verify Token for updates
@@ -130,6 +148,33 @@ export default {
                     db.products.push(newProduct);
                     await writeJson('db', db);
                     return jsonResponse(newProduct, 201);
+                }
+            }
+
+            // Products Categories
+            if (url.pathname === '/products/categories') {
+                if (request.method === 'GET') {
+                    const db = (await readJson('db')) || { products: [] };
+                    const user = verifyToken(request);
+                    let tenantId = 'admin-1';
+                    if (user && db.users) {
+                        const u = db.users.find(u => u.id === user.id);
+                        if (u) tenantId = u.tenantId || 'admin-1';
+                    }
+                    const products = (db.products || []).filter(p => p.tenantId === tenantId || (!p.tenantId && tenantId === 'admin-1'));
+
+                    // Extract unique categories with counts
+                    const categoryMap = {};
+                    products.forEach(p => {
+                        const cat = p.category || 'General';
+                        if (!categoryMap[cat]) {
+                            categoryMap[cat] = { name: cat, count: 0 };
+                        }
+                        categoryMap[cat].count++;
+                    });
+
+                    const categories = Object.values(categoryMap).sort((a, b) => b.count - a.count);
+                    return jsonResponse(categories);
                 }
             }
 

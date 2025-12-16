@@ -10536,8 +10536,7 @@
       "role": "admin",
       "businessInfo": {
         "currencies": [
-          "USD",
-          "BS"
+          "USD"
         ],
         "currency": "USD"
       },
