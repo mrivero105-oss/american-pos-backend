@@ -110,7 +110,7 @@
       "name": "Adobo MAGGY",
       "price": 0.8,
       "stock": 15,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/adobo_maggy.jpg",
       "userId": "admin-1"
@@ -320,7 +320,7 @@
       "name": "Aliños",
       "price": 1.12,
       "stock": 157,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/ali_os.jpg",
       "userId": "admin-1",
@@ -333,7 +333,7 @@
       "name": "Alka Seltzer / Disfruta",
       "price": 1.2,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/alka_seltzer___disfruta.jpg",
       "userId": "admin-1"
@@ -433,7 +433,7 @@
       "name": "Arroz Amanecer 900grs",
       "price": 1.7,
       "stock": 191,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/arroz_amanecer_900grs.jpg",
       "userId": "admin-1",
@@ -444,7 +444,7 @@
       "name": "Arroz Favorito",
       "price": 1.78,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/arroz_favorito.jpg",
       "userId": "admin-1"
@@ -454,7 +454,7 @@
       "name": "Arroz MEDIO KL 500g",
       "price": 0.9,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/arroz_medio_kl_500g.jpg",
       "userId": "admin-1"
@@ -464,7 +464,7 @@
       "name": "Arroz primor clasico superior",
       "price": 1.75,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/arroz_primor_clasico_superior.jpg",
       "userId": "admin-1"
@@ -484,7 +484,7 @@
       "name": "Atun California",
       "price": 1.7,
       "stock": 196,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/atun_california.jpg",
       "userId": "admin-1"
@@ -554,7 +554,7 @@
       "name": "Azucar Amanecer 1 KG",
       "price": 2.02,
       "stock": 195,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/azucar_amanecer_1_kg.jpg",
       "userId": "admin-1",
@@ -565,7 +565,7 @@
       "name": "Azucar MEDIO KL 500g",
       "price": 1.02,
       "stock": 190,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/azucar_medio_kl_500g.jpg",
       "userId": "admin-1"
@@ -575,7 +575,7 @@
       "name": "Balsamo para labio Vaseina",
       "price": 0.48,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/balsamo_para_labio_vaseina.jpg",
       "userId": "admin-1"
@@ -725,7 +725,7 @@
       "name": "Bolsa de regalo navideñas GRANDE",
       "price": 1.33,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/bolsa_de_regalo_navide_as_grande.jpg",
       "userId": "admin-1"
@@ -755,7 +755,7 @@
       "name": "Bolsas de Regalo Gato y Oso",
       "price": 1.64,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/bolsas_de_regalo_gato_y_oso.jpg",
       "userId": "admin-1"
@@ -765,7 +765,7 @@
       "name": "Bolsas de regalo pequeñas",
       "price": 0.62,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/bolsas_de_regalo_peque_as.jpg",
       "userId": "admin-1"
@@ -795,7 +795,7 @@
       "name": "Bombas de Colores Detalladas",
       "price": 0.09,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/bombas_de_colores_detalladas.jpg",
       "userId": "admin-1"
@@ -905,7 +905,7 @@
       "name": "Brillo de Alambre",
       "price": 0.55,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/brillo_de_alambre.jpg",
       "userId": "admin-1"
@@ -935,7 +935,7 @@
       "name": "Brillo de Uñas Valmy",
       "price": 0.8,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/brillo_de_u_as_valmy.jpg",
       "userId": "admin-1"
@@ -945,7 +945,7 @@
       "name": "Brillo labial",
       "price": 0.62,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/brillo_labial.jpg",
       "userId": "admin-1"
@@ -965,7 +965,7 @@
       "name": "Bubaloo Sparkies",
       "price": 0.36,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/bubaloo_sparkies.jpg",
       "userId": "admin-1"
@@ -1015,7 +1015,7 @@
       "name": "Buscapina detallado",
       "price": 0.29,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/buscapina_detallado.jpg",
       "userId": "admin-1"
@@ -1246,7 +1246,7 @@
       "name": "Calcomania de niña tipo cartera",
       "price": 1.42,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/calcomania_de_ni_a_tipo_cartera.jpg",
       "userId": "admin-1"
@@ -1256,7 +1256,7 @@
       "name": "Calcomania Infantil",
       "price": 0.72,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/calcomania_infantil.jpg",
       "userId": "admin-1"
@@ -1266,7 +1266,7 @@
       "name": "Caldo de Costilla Sobresitos",
       "price": 0.25,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/caldo_de_costilla_sobresitos.jpg",
       "userId": "admin-1"
@@ -1276,7 +1276,7 @@
       "name": "Caldo de Gallita Sobresito",
       "price": 0.25,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/caldo_de_gallita_sobresito.jpg",
       "userId": "admin-1"
@@ -1286,7 +1286,7 @@
       "name": "Caldo de pollo Maggi",
       "price": 0.8,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/caldo_de_pollo_maggi.jpg",
       "userId": "admin-1"
@@ -1326,7 +1326,7 @@
       "name": "Candy Basquet ball",
       "price": 1.3,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/candy_basquet_ball.jpg",
       "userId": "admin-1"
@@ -1537,7 +1537,7 @@
       "name": "Casabe detallado",
       "price": 0.19,
       "stock": 185,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/casabe_detallado.jpg",
       "userId": "admin-1"
@@ -1567,7 +1567,7 @@
       "name": "Cepillo De Barrer sin palo",
       "price": 3.01,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cepillo_de_barrer_sin_palo.jpg",
       "userId": "admin-1"
@@ -1607,7 +1607,7 @@
       "name": "Cepillo Oral B CHINO",
       "price": 0.75,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cepillo_oral_b_chino.jpg",
       "userId": "admin-1"
@@ -1688,7 +1688,7 @@
       "name": "Charmy Detallada",
       "price": 0.3,
       "stock": 195,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/charmy_detallada.jpg",
       "userId": "admin-1"
@@ -1869,7 +1869,7 @@
       "name": "Chips Ahoy detallada",
       "price": 0.6,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/chips_ahoy_detallada.jpg",
       "userId": "admin-1"
@@ -2043,7 +2043,7 @@
       "name": "Cigarro Lucky Detallado",
       "price": 0.23,
       "stock": 198,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cigarro_lucky_detallado.jpg",
       "userId": "admin-1",
@@ -2064,7 +2064,7 @@
       "name": "Cigarro Universal detallado",
       "price": 0.13,
       "stock": 142,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cigarro_universal_detallado.jpg",
       "userId": "admin-1"
@@ -2074,7 +2074,7 @@
       "name": "Cigarro Universal Media Caja",
       "price": 1.1,
       "stock": 196,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cigarro_universal_media_caja.jpg",
       "userId": "admin-1"
@@ -2084,7 +2084,7 @@
       "name": "Cigarro Universal Por Caja",
       "price": 2.2,
       "stock": 192,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cigarro_universal_por_caja.jpg",
       "userId": "admin-1"
@@ -2214,7 +2214,7 @@
       "name": "Clik Ensalada de Frutas",
       "price": 0.21,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/clik_ensalada_de_frutas.jpg",
       "userId": "admin-1"
@@ -2244,7 +2244,7 @@
       "name": "Club Social Detallada",
       "price": 0.35,
       "stock": 196,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/club_social_detallada.jpg",
       "userId": "admin-1"
@@ -2254,7 +2254,7 @@
       "name": "Club Social Paquete",
       "price": 1.96,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/club_social_paquete.jpg",
       "userId": "admin-1"
@@ -2506,7 +2506,7 @@
       "name": "Cortinas Metalizadas",
       "price": 1.78,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cortinas_metalizadas.jpg",
       "userId": "admin-1"
@@ -2526,7 +2526,7 @@
       "name": "Crakeña Detallada",
       "price": 0.95,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/crake_a_detallada.jpg",
       "userId": "admin-1"
@@ -2707,7 +2707,7 @@
       "name": "Cuadernos Estampados",
       "price": 1.51,
       "stock": 200,
-      "category": "Quicalleria",
+      "category": "Quincallería",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/cuadernos_estampados.jpg",
       "userId": "admin-1"
@@ -3077,7 +3077,7 @@
       "name": "Diclofenac Potasico 100mg Detallado",
       "price": 0.23,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/diclofenac_potasico_100mg_detallado.jpg",
       "userId": "admin-1"
@@ -3097,7 +3097,7 @@
       "name": "Diclofenac Potasico 50mg DETALLADO",
       "price": 0.11,
       "stock": 198,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/diclofenac_potasico_50mg_detallado.jpg",
       "userId": "admin-1"
@@ -3137,7 +3137,7 @@
       "name": "Dol Plus Detallado",
       "price": 0.29,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/dol_plus_detallado.jpg",
       "userId": "admin-1"
@@ -3157,7 +3157,7 @@
       "name": "Doradita paq de 3 unidades",
       "price": 2.9,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/doradita_paq_de_3_unidades.jpg",
       "userId": "admin-1"
@@ -3188,7 +3188,7 @@
       "name": "Dorito Normal, FlaminHot y Dinamita pequeño",
       "price": 1.2,
       "stock": 196,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/dorito_normal__flaminhot_y_dinamita_peque_o.jpg",
       "userId": "admin-1",
@@ -3209,7 +3209,7 @@
       "name": "Envase de Aluminio para comida",
       "price": 0.35,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/envase_de_aluminio_para_comida.jpg",
       "userId": "admin-1"
@@ -3269,7 +3269,7 @@
       "name": "Fin al  grip Detallado",
       "price": 0.22,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/fin_al__grip_detallado.jpg",
       "userId": "admin-1"
@@ -3279,7 +3279,7 @@
       "name": "Fin al Grip por caja",
       "price": 1.76,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/fin_al_grip_por_caja.jpg",
       "userId": "admin-1"
@@ -3420,7 +3420,7 @@
       "name": "Galak0. Tubito",
       "price": 0.5,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/galak0__tubito.jpg",
       "userId": "admin-1"
@@ -3721,7 +3721,7 @@
       "name": "Gancheta y Pinza Brillante detalladas",
       "price": 1.68,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/gancheta_y_pinza_brillante_detalladas.jpg",
       "userId": "admin-1"
@@ -3931,7 +3931,7 @@
       "name": "Gorro de malla para el cabello",
       "price": 0.89,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/gorro_de_malla_para_el_cabello.jpg",
       "userId": "admin-1"
@@ -3991,7 +3991,7 @@
       "name": "Gripalce Detallado",
       "price": 0.27,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/gripalce_detallado.jpg",
       "userId": "admin-1"
@@ -4051,7 +4051,7 @@
       "name": "Guds Ball",
       "price": 0.2,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/guds_ball.jpg",
       "userId": "admin-1"
@@ -4071,7 +4071,7 @@
       "name": "Gut Caldo de pollo",
       "price": 0.77,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/gut_caldo_de_pollo.jpg",
       "userId": "admin-1"
@@ -4081,7 +4081,7 @@
       "name": "Harina de Trigo Doña Mara",
       "price": 1.6,
       "stock": 10,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/harina_de_trigo_do_a_mara.jpg",
       "userId": "admin-1"
@@ -4091,7 +4091,7 @@
       "name": "Harina de Trigo La PAMPA 500g",
       "price": 0.86,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/harina_de_trigo_la_pampa_500g.jpg",
       "userId": "admin-1"
@@ -4101,7 +4101,7 @@
       "name": "Harina de trigo la pampa de 1kilo",
       "price": 1.42,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/harina_de_trigo_la_pampa_de_1kilo.jpg",
       "userId": "admin-1",
@@ -4112,7 +4112,7 @@
       "name": "Harina Kaly",
       "price": 1.5,
       "stock": 197,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/harina_kaly.jpg",
       "userId": "admin-1",
@@ -4123,7 +4123,7 @@
       "name": "Harina PAN",
       "price": 1.7,
       "stock": 193,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/harina_pan.jpg",
       "userId": "admin-1"
@@ -4133,7 +4133,7 @@
       "name": "Harina Pan de Arroz",
       "price": 1.6,
       "stock": 197,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/harina_pan_de_arroz.jpg",
       "userId": "admin-1"
@@ -4143,7 +4143,7 @@
       "name": "Harina para cachapa",
       "price": 2.5,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/harina_para_cachapa.jpg",
       "userId": "admin-1"
@@ -4273,7 +4273,7 @@
       "name": "Hilo de Coser",
       "price": 0.61,
       "stock": 195,
-      "category": "Quicalleria",
+      "category": "Quincallería",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/hilo_de_coser.jpg",
       "userId": "admin-1"
@@ -4293,7 +4293,7 @@
       "name": "Hojas Blanca Tipo Carta Detallada",
       "price": 0.02,
       "stock": 157,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/hojas_blanca_tipo_carta_detallada.jpg",
       "userId": "admin-1"
@@ -4323,7 +4323,7 @@
       "name": "Hojilla detallada DORCO",
       "price": 0.2,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/hojilla_detallada_dorco.jpg",
       "userId": "admin-1"
@@ -4363,7 +4363,7 @@
       "name": "Huevo DETALLADO",
       "price": 0.27,
       "stock": 198,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/huevo_detallado.jpg",
       "userId": "admin-1",
@@ -4889,7 +4889,7 @@
       "name": "Leche Amanecer de 125grs",
       "price": 2.46,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/leche_amanecer_de_125grs.jpg",
       "userId": "admin-1"
@@ -5050,7 +5050,7 @@
       "name": "Lluvia de colores",
       "price": 0.45,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/lluvia_de_colores.jpg",
       "userId": "admin-1"
@@ -5080,7 +5080,7 @@
       "name": "Loperam detallado",
       "price": 0.15,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/loperam_detallado.jpg",
       "userId": "admin-1"
@@ -5100,7 +5100,7 @@
       "name": "Loratadina Detallado",
       "price": 0.12,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/loratadina_detallado.jpg",
       "userId": "admin-1"
@@ -5110,7 +5110,7 @@
       "name": "Maiz de cotufa Amanecer 500g",
       "price": 1.73,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/maiz_de_cotufa_amanecer_500g.jpg",
       "userId": "admin-1"
@@ -5120,7 +5120,7 @@
       "name": "Maiz Dulce 190gr",
       "price": 1.99,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/maiz_dulce_190gr.jpg",
       "userId": "admin-1"
@@ -5130,7 +5130,7 @@
       "name": "Maizina Americana 90g",
       "price": 1.1,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/maizina_americana_90g.jpg",
       "userId": "admin-1"
@@ -5140,7 +5140,7 @@
       "name": "Malta de Botella retornable",
       "price": 0.6,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/malta_de_botella_retornable.jpg",
       "userId": "admin-1"
@@ -5160,7 +5160,7 @@
       "name": "Malta desechable de botella",
       "price": 0.9,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/malta_desechable_de_botella.jpg",
       "userId": "admin-1"
@@ -5190,7 +5190,7 @@
       "name": "Mantequilla Mavesa 250g",
       "price": 1.7,
       "stock": 192,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/mantequilla_mavesa_250g.jpg",
       "userId": "admin-1",
@@ -5201,7 +5201,7 @@
       "name": "Mantequilla Mavesa 500g",
       "price": 3.2,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/mantequilla_mavesa_500g.jpg",
       "userId": "admin-1",
@@ -5242,7 +5242,7 @@
       "name": "Marcadores Resaltadores",
       "price": 0.96,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/marcadores_resaltadores.jpg",
       "userId": "admin-1"
@@ -5342,7 +5342,7 @@
       "name": "Media de caballero pelotero",
       "price": 1.93,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/media_de_caballero_pelotero.jpg",
       "userId": "admin-1"
@@ -5372,7 +5372,7 @@
       "name": "Mega Ball",
       "price": 0.45,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/mega_ball.jpg",
       "userId": "admin-1"
@@ -5452,7 +5452,7 @@
       "name": "Modes Alive Morada NOCTURNA",
       "price": 2.06,
       "stock": 197,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/modes_alive_morada_nocturna.jpg",
       "userId": "admin-1"
@@ -5462,7 +5462,7 @@
       "name": "Modes Alive Rosado 8 Unidades",
       "price": 1,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/modes_alive_rosado_8_unidades.jpg",
       "userId": "admin-1"
@@ -5472,7 +5472,7 @@
       "name": "Modes Always",
       "price": 2.37,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/modes_always.jpg",
       "userId": "admin-1"
@@ -5482,7 +5482,7 @@
       "name": "Modes detallado",
       "price": 0.1,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/modes_detallado.jpg",
       "userId": "admin-1"
@@ -5705,7 +5705,7 @@
       "name": "Omeprazol Detallado",
       "price": 0.12,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/omeprazol_detallado.jpg",
       "userId": "admin-1"
@@ -5806,7 +5806,7 @@
       "name": "Paletas Candy",
       "price": 0.28,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/paletas_candy.jpg",
       "userId": "admin-1"
@@ -5816,7 +5816,7 @@
       "name": "Palitos Danibisk",
       "price": 0.5,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/palitos_danibisk.jpg",
       "userId": "admin-1"
@@ -5826,7 +5826,7 @@
       "name": "Palo de Cepillo",
       "price": 0.96,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/palo_de_cepillo.jpg",
       "userId": "admin-1"
@@ -5836,7 +5836,7 @@
       "name": "Palomitas",
       "price": 0.46,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/palomitas.jpg",
       "userId": "admin-1"
@@ -5846,7 +5846,7 @@
       "name": "Panelada",
       "price": 0.7,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/panelada.jpg",
       "userId": "admin-1"
@@ -5856,7 +5856,7 @@
       "name": "Panque Crustisimo",
       "price": 1.2,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/panque_crustisimo.jpg",
       "userId": "admin-1"
@@ -5937,7 +5937,7 @@
       "name": "Papel de Aluminio 15.2M",
       "price": 2.5,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/papel_de_aluminio_15_2m.jpg",
       "userId": "admin-1"
@@ -5947,7 +5947,7 @@
       "name": "Papel Rosal 2 rollos",
       "price": 0.89,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/papel_rosal_2_rollos.jpg",
       "userId": "admin-1"
@@ -5957,7 +5957,7 @@
       "name": "Papel Rosal 4 Rollos",
       "price": 0.67,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/papel_rosal_4_rollos.jpg",
       "userId": "admin-1"
@@ -6107,7 +6107,7 @@
       "name": "Pasta Capri Corta 1Kg",
       "price": 2.3,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pasta_capri_corta_1kg.jpg",
       "userId": "admin-1"
@@ -6117,7 +6117,7 @@
       "name": "Pasta Capri LARGA de KG",
       "price": 2.1,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pasta_capri_larga_de_kg.jpg",
       "userId": "admin-1"
@@ -6127,7 +6127,7 @@
       "name": "Pasta de Pasticho",
       "price": 1.85,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pasta_de_pasticho.jpg",
       "userId": "admin-1"
@@ -6137,7 +6137,7 @@
       "name": "Pasta de tomate Frescarini",
       "price": 2.91,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pasta_de_tomate_frescarini.jpg",
       "userId": "admin-1"
@@ -6147,7 +6147,7 @@
       "name": "Pasta Larga y Corta Primor 500grs",
       "price": 1.3,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pasta_larga_y_corta_primor_500grs.jpg",
       "userId": "admin-1"
@@ -6317,7 +6317,7 @@
       "name": "Peine Sacapiojo de Metal Terminator",
       "price": 1.57,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/peine_sacapiojo_de_metal_terminator.jpg",
       "userId": "admin-1"
@@ -6487,7 +6487,7 @@
       "name": "Perfumes de Dama y Caballero Pequeño 52ml",
       "price": 2.25,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/perfumes_de_dama_y_caballero_peque_o_52ml.jpg",
       "userId": "admin-1"
@@ -6567,7 +6567,7 @@
       "name": "Pila AAA Alkaline",
       "price": 1.11,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pila_aaa_alkaline.jpg",
       "userId": "admin-1"
@@ -6597,7 +6597,7 @@
       "name": "Pilas AAA Alkaline",
       "price": 1.04,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pilas_aaa_alkaline.jpg",
       "userId": "admin-1"
@@ -6647,7 +6647,7 @@
       "name": "Pintura al Frio",
       "price": 1,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pintura_al_frio.jpg",
       "userId": "admin-1"
@@ -6657,7 +6657,7 @@
       "name": "Pintura de Labio MAC",
       "price": 1.2,
       "stock": 200,
-      "category": "Quicalleria",
+      "category": "Quincallería",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pintura_de_labio_mac.jpg",
       "userId": "admin-1"
@@ -6677,7 +6677,7 @@
       "name": "Pintura de Uña Valmy y wincolor",
       "price": 0.89,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/pintura_de_u_a_valmy_y_wincolor.jpg",
       "userId": "admin-1"
@@ -6757,7 +6757,7 @@
       "name": "Plagatox Lanju detallado",
       "price": 0.55,
       "stock": 16,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/plagatox_lanju_detallado.jpg",
       "userId": "admin-1"
@@ -6867,7 +6867,7 @@
       "name": "Protectores Diarios Alive 20 Unidades",
       "price": 1.11,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/protectores_diarios_alive_20_unidades.jpg",
       "userId": "admin-1"
@@ -7133,7 +7133,7 @@
       "name": "Removedor valmy",
       "price": 4.16,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/removedor_valmy.jpg",
       "userId": "admin-1"
@@ -7244,7 +7244,7 @@
       "name": "Sal MERU",
       "price": 0.75,
       "stock": 20,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/sal_meru.jpg",
       "userId": "admin-1"
@@ -7267,7 +7267,7 @@
       "name": "Salsa de Ajo, Inglesa y Soya IBERIA",
       "price": 1.75,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/salsa_de_ajo__inglesa_y_soya_iberia.jpg",
       "userId": "admin-1"
@@ -7277,7 +7277,7 @@
       "name": "Salsa de Tomate Pampero Grande",
       "price": 2.75,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/salsa_de_tomate_pampero_grande.jpg",
       "userId": "admin-1"
@@ -7287,7 +7287,7 @@
       "name": "Salsa de Tomate PAMPERO Pequeña",
       "price": 1.76,
       "stock": 198,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/salsa_de_tomate_pampero_peque_a.jpg",
       "userId": "admin-1"
@@ -7297,7 +7297,7 @@
       "name": "Salsa para pasta GUT 34g",
       "price": 0.92,
       "stock": 196,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/salsa_para_pasta_gut_34g.jpg",
       "userId": "admin-1"
@@ -7307,7 +7307,7 @@
       "name": "Saltitacos detallada",
       "price": 0.74,
       "stock": 199,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/saltitacos_detallada.jpg",
       "userId": "admin-1"
@@ -7317,7 +7317,7 @@
       "name": "Saltitacos Paquete",
       "price": 3.54,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/saltitacos_paquete.jpg",
       "userId": "admin-1"
@@ -7619,7 +7619,7 @@
       "name": "Sorbeticos Detallada",
       "price": 0.4,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/sorbeticos_detallada.jpg",
       "userId": "admin-1"
@@ -7700,7 +7700,7 @@
       "name": "Talco para los Pies Davey",
       "price": 1.42,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/talco_para_los_pies_davey.jpg",
       "userId": "admin-1"
@@ -7710,7 +7710,7 @@
       "name": "Talco Pequeño Baby Finger para niños 200g",
       "price": 0.45,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/talco_peque_o_baby_finger_para_ni_os_200g.jpg",
       "userId": "admin-1"
@@ -7810,7 +7810,7 @@
       "name": "Tetas",
       "price": 0.71,
       "stock": 1973,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/tetas.jpg",
       "userId": "admin-1"
@@ -7940,7 +7940,7 @@
       "name": "Tirro de Embalar",
       "price": 2.4,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/tirro_de_embalar.jpg",
       "userId": "admin-1"
@@ -7990,7 +7990,7 @@
       "name": "Toallin 50 hojas",
       "price": 1.37,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/toallin_50_hojas.jpg",
       "userId": "admin-1"
@@ -8000,7 +8000,7 @@
       "name": "Toallin Scott",
       "price": 1.86,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/toallin_scott.jpg",
       "userId": "admin-1"
@@ -8090,7 +8090,7 @@
       "name": "Torsilax Detallado",
       "price": 0.22,
       "stock": 196,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/torsilax_detallado.jpg",
       "userId": "admin-1"
@@ -8180,7 +8180,7 @@
       "name": "Trident INDIVIDUAL",
       "price": 0.1,
       "stock": 198,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/trident_individual.jpg",
       "userId": "admin-1"
@@ -8210,7 +8210,7 @@
       "name": "Trululu detallado",
       "price": 0.1,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/trululu_detallado.jpg",
       "userId": "admin-1"
@@ -8270,7 +8270,7 @@
       "name": "Uñas Postizas Davey Paq. 100 Unidades",
       "price": 1.56,
       "stock": 11,
-      "category": "Quicalleria",
+      "category": "Quincallería",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/u_as_postizas_davey_paq__100_unidades.jpg",
       "userId": "admin-1"
@@ -8390,7 +8390,7 @@
       "name": "Vinagre Mavesa 500ml",
       "price": 1.53,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/vinagre_mavesa_500ml.jpg",
       "userId": "admin-1"
@@ -8400,7 +8400,7 @@
       "name": "Vinagre Quidy Pequeño",
       "price": 1.4,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "barcode": "",
       "imageUri": "https://american-pos.pages.dev/product_images/vinagre_quidy_peque_o.jpg",
       "userId": "admin-1"
@@ -8540,7 +8540,7 @@
       "name": "Galak Tubito",
       "price": 0.5,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "imageUri": "https://american-pos.pages.dev/product_images/galak_tubito.jpg",
       "barcode": "",
       "userId": "admin-1"
@@ -8550,7 +8550,7 @@
       "name": "Gomitas Trululu individual",
       "price": 0.11,
       "stock": 200,
-      "category": "Alimentos",
+      "category": "Víveres",
       "imageUri": "https://american-pos.pages.dev/product_images/gomitas_trululu_individual.jpg",
       "barcode": "",
       "userId": "admin-1"
@@ -8670,7 +8670,7 @@
       "name": "Salsa de AJO Grande",
       "price": 2.6,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "imageUri": "https://american-pos.pages.dev/product_images/salsa_de_ajo_grande.jpg",
       "barcode": "",
       "userId": "admin-1"
@@ -8680,7 +8680,7 @@
       "name": "Salsa de Soya - Inglesa Sofia",
       "price": 1.25,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "imageUri": "https://american-pos.pages.dev/product_images/salsa_de_soya___inglesa_sofia.jpg",
       "barcode": "",
       "userId": "admin-1"
@@ -8700,7 +8700,7 @@
       "name": "Takita detallada",
       "price": 0.15,
       "stock": 12,
-      "category": "Alimentos",
+      "category": "Víveres",
       "imageUri": "https://american-pos.pages.dev/product_images/takita_detallada.jpg",
       "barcode": "",
       "userId": "admin-1"
@@ -8732,7 +8732,7 @@
       "price": 1.7,
       "priceBs": 450,
       "stock": 101,
-      "category": "Verduras",
+      "category": "Víveres",
       "imageUri": "",
       "barcode": "",
       "isSoldByWeight": 1,
@@ -8745,7 +8745,7 @@
       "price": 1,
       "priceBs": 280,
       "stock": 1000,
-      "category": "Otras",
+      "category": "General",
       "imageUri": "",
       "barcode": "",
       "isSoldByWeight": 1,
