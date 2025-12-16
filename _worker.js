@@ -119,6 +119,23 @@ export default {
                         products = products.filter(p => p.category === category);
                     }
 
+                    // Pagination
+                    const page = parseInt(url.searchParams.get('page')) || 1;
+                    const limit = parseInt(url.searchParams.get('limit')) || 0;
+
+                    if (limit > 0) {
+                        const startIndex = (page - 1) * limit;
+                        const endIndex = startIndex + limit;
+                        const paginatedProducts = products.slice(startIndex, endIndex);
+
+                        return jsonResponse({
+                            products: paginatedProducts,
+                            total: products.length,
+                            page,
+                            totalPages: Math.ceil(products.length / limit)
+                        });
+                    }
+
                     return jsonResponse(products);
                 }
                 // Verify Token for updates
