@@ -431,37 +431,49 @@ export default {
                     return saleDate >= openDate;
                 });
 
+                // Calculate payment breakdown
+                const paymentBreakdown = {};
                 let cashSalesTotal = 0;
+                let totalSalesAmount = 0;
+
                 sales.forEach(sale => {
-                    if (sale.paymentDetails && Array.isArray(sale.paymentDetails)) {
-                        sale.paymentDetails.forEach(pd => {
-                            if (['cash', 'cash_usd', 'cash_bs'].includes(pd.method)) {
-                                const amount = pd.currency === 'VES' ? (pd.amount / (sale.exchangeRate || 1)) : pd.amount;
-                                cashSalesTotal += amount;
-                            }
-                        });
-                    } else if (sale.paymentMethods && Array.isArray(sale.paymentMethods)) {
-                        sale.paymentMethods.forEach(pd => {
-                            if (['cash', 'cash_usd', 'cash_bs'].includes(pd.method)) {
-                                const amount = pd.currency === 'VES' ? (pd.amount / (sale.exchangeRate || 1)) : pd.amount;
+                    totalSalesAmount += sale.total || 0;
+                    const paymentArray = sale.paymentDetails || sale.paymentMethods || [];
+
+                    if (Array.isArray(paymentArray) && paymentArray.length > 0) {
+                        paymentArray.forEach(pd => {
+                            const method = pd.method || 'cash';
+                            const amount = pd.currency === 'VES' ? (pd.amount / (sale.exchangeRate || 1)) : pd.amount;
+                            paymentBreakdown[method] = (paymentBreakdown[method] || 0) + amount;
+                            if (['cash', 'cash_usd', 'cash_bs', 'cash_ves'].includes(method)) {
                                 cashSalesTotal += amount;
                             }
                         });
                     } else {
-                        if (sale.paymentMethod === 'cash') cashSalesTotal += sale.total;
+                        const method = sale.paymentMethod || 'cash';
+                        paymentBreakdown[method] = (paymentBreakdown[method] || 0) + (sale.total || 0);
+                        if (method === 'cash') cashSalesTotal += sale.total || 0;
                     }
                 });
 
                 const totalIn = movements.filter(m => m.type === 'in').reduce((sum, m) => sum + m.amount, 0);
                 const totalOut = movements.filter(m => m.type === 'out').reduce((sum, m) => sum + m.amount, 0);
+                const totalExpenses = movements.filter(m => m.type === 'expense').reduce((sum, m) => sum + m.amount, 0);
 
-                const expectedCash = (currentShift.startingCash || 0) + cashSalesTotal + totalIn - totalOut;
+                const expectedCash = (currentShift.startingCash || 0) + cashSalesTotal + totalIn - totalOut - totalExpenses;
 
                 currentShift.closedAt = new Date().toISOString();
                 currentShift.status = 'closed';
                 currentShift.actualCash = actualCash;
                 currentShift.expectedCash = expectedCash;
                 currentShift.difference = actualCash - expectedCash;
+                currentShift.salesCount = sales.length;
+                currentShift.totalSalesAmount = totalSalesAmount;
+                currentShift.cashSalesTotal = cashSalesTotal;
+                currentShift.paymentBreakdown = paymentBreakdown;
+                currentShift.totalIn = totalIn;
+                currentShift.totalOut = totalOut;
+                currentShift.totalExpenses = totalExpenses;
 
                 const success = await writeJson('db', db);
                 if (!success) return errorResponse('Database Write Failed', 500);
