@@ -326,45 +326,59 @@ export default {
                     return saleDate >= openDate;
                 });
 
-                // Calculate ONLY cash sales (same logic as close endpoint)
+                // Calculate payment breakdown by method
+                const paymentBreakdown = {};
                 let cashSalesTotal = 0;
+                let totalSalesAmount = 0;
+
                 sales.forEach(sale => {
-                    if (sale.paymentDetails && Array.isArray(sale.paymentDetails)) {
-                        sale.paymentDetails.forEach(pd => {
-                            if (['cash', 'cash_usd', 'cash_bs', 'cash_ves'].includes(pd.method)) {
-                                // Convert Bs to USD for consistent calculation
-                                const amount = pd.currency === 'VES' ? (pd.amount / (sale.exchangeRate || 1)) : pd.amount;
-                                cashSalesTotal += amount;
-                            }
-                        });
-                    } else if (sale.paymentMethods && Array.isArray(sale.paymentMethods)) {
-                        sale.paymentMethods.forEach(pd => {
-                            if (['cash', 'cash_usd', 'cash_bs', 'cash_ves'].includes(pd.method)) {
-                                // Convert Bs to USD for consistent calculation
-                                const amount = pd.currency === 'VES' ? (pd.amount / (sale.exchangeRate || 1)) : pd.amount;
+                    totalSalesAmount += sale.total || 0;
+                    const paymentArray = sale.paymentDetails || sale.paymentMethods || [];
+
+                    if (Array.isArray(paymentArray) && paymentArray.length > 0) {
+                        paymentArray.forEach(pd => {
+                            const method = pd.method || 'cash';
+                            const amount = pd.currency === 'VES' ? (pd.amount / (sale.exchangeRate || 1)) : pd.amount;
+
+                            paymentBreakdown[method] = (paymentBreakdown[method] || 0) + amount;
+
+                            if (['cash', 'cash_usd', 'cash_bs', 'cash_ves'].includes(method)) {
                                 cashSalesTotal += amount;
                             }
                         });
                     } else {
-                        // Legacy: if no payment methods array, assume cash if paymentMethod is cash
-                        if (sale.paymentMethod === 'cash' || !sale.paymentMethod) {
+                        // Legacy: assume cash
+                        const method = sale.paymentMethod || 'cash';
+                        paymentBreakdown[method] = (paymentBreakdown[method] || 0) + (sale.total || 0);
+                        if (method === 'cash' || !sale.paymentMethod) {
                             cashSalesTotal += sale.total || 0;
                         }
                     }
                 });
 
-                const totalIn = movements.filter(m => m.type === 'in').reduce((sum, m) => sum + m.amount, 0);
-                const totalOut = movements.filter(m => m.type === 'out').reduce((sum, m) => sum + m.amount, 0);
+                const deposits = movements.filter(m => m.type === 'in');
+                const withdrawals = movements.filter(m => m.type === 'out');
+                const expenses = movements.filter(m => m.type === 'expense');
+
+                const totalIn = deposits.reduce((sum, m) => sum + m.amount, 0);
+                const totalOut = withdrawals.reduce((sum, m) => sum + m.amount, 0);
+                const totalExpenses = expenses.reduce((sum, m) => sum + m.amount, 0);
 
                 // Expected cash in USD
-                const expectedCash = (currentShift.startingCash || 0) + cashSalesTotal + totalIn - totalOut;
+                const expectedCash = (currentShift.startingCash || 0) + cashSalesTotal + totalIn - totalOut - totalExpenses;
 
                 return jsonResponse({
                     ...currentShift,
-                    totalSales: cashSalesTotal,
+                    salesCount: sales.length,
+                    totalSalesAmount,
+                    avgTicket: sales.length > 0 ? totalSalesAmount / sales.length : 0,
+                    cashSalesTotal,
+                    paymentBreakdown,
                     totalIn,
                     totalOut,
-                    expectedCash
+                    totalExpenses,
+                    expectedCash,
+                    movements: movements.slice(-10) // Last 10 movements
                 });
             }
 
@@ -479,6 +493,83 @@ export default {
                 const success = await writeJson('db', db);
                 if (!success) return errorResponse('Database Write Failed', 500);
                 return jsonResponse(newMovement, 201);
+            }
+
+            // GET /cash/x-report (Partial report without closing)
+            if (url.pathname === '/cash/x-report' && request.method === 'GET') {
+                if (!user) return errorResponse('No autenticado', 401);
+                const db = await readJson('db') || {};
+
+                const currentShift = (db.cash_shifts || []).find(s => s.status === 'open');
+                if (!currentShift) {
+                    return errorResponse('No hay caja abierta', 400);
+                }
+
+                const movements = (db.cash_movements || []).filter(m => m.shiftId === currentShift.id);
+                const sales = (db.sales || []).filter(s => {
+                    const saleDate = new Date(s.timestamp);
+                    const openDate = new Date(currentShift.openedAt);
+                    return saleDate >= openDate;
+                });
+
+                // Calculate payment breakdown
+                const paymentBreakdown = {};
+                let cashSalesTotal = 0;
+                let totalSalesAmount = 0;
+
+                sales.forEach(sale => {
+                    totalSalesAmount += sale.total || 0;
+                    const paymentArray = sale.paymentDetails || sale.paymentMethods || [];
+
+                    if (Array.isArray(paymentArray) && paymentArray.length > 0) {
+                        paymentArray.forEach(pd => {
+                            const method = pd.method || 'cash';
+                            const amount = pd.currency === 'VES' ? (pd.amount / (sale.exchangeRate || 1)) : pd.amount;
+                            paymentBreakdown[method] = (paymentBreakdown[method] || 0) + amount;
+                            if (['cash', 'cash_usd', 'cash_bs', 'cash_ves'].includes(method)) {
+                                cashSalesTotal += amount;
+                            }
+                        });
+                    } else {
+                        const method = sale.paymentMethod || 'cash';
+                        paymentBreakdown[method] = (paymentBreakdown[method] || 0) + (sale.total || 0);
+                        if (method === 'cash') cashSalesTotal += sale.total || 0;
+                    }
+                });
+
+                const totalIn = movements.filter(m => m.type === 'in').reduce((sum, m) => sum + m.amount, 0);
+                const totalOut = movements.filter(m => m.type === 'out').reduce((sum, m) => sum + m.amount, 0);
+                const totalExpenses = movements.filter(m => m.type === 'expense').reduce((sum, m) => sum + m.amount, 0);
+                const expectedCash = (currentShift.startingCash || 0) + cashSalesTotal + totalIn - totalOut - totalExpenses;
+
+                return jsonResponse({
+                    type: 'X-REPORT',
+                    timestamp: new Date().toISOString(),
+                    shift: currentShift,
+                    salesCount: sales.length,
+                    totalSalesAmount,
+                    avgTicket: sales.length > 0 ? totalSalesAmount / sales.length : 0,
+                    paymentBreakdown,
+                    cashSalesTotal,
+                    deposits: totalIn,
+                    withdrawals: totalOut,
+                    expenses: totalExpenses,
+                    expectedCash,
+                    movements
+                });
+            }
+
+            // GET /cash/history
+            if (url.pathname === '/cash/history' && request.method === 'GET') {
+                if (!user) return errorResponse('No autenticado', 401);
+                const db = await readJson('db') || {};
+
+                const shifts = (db.cash_shifts || [])
+                    .filter(s => s.status === 'closed')
+                    .sort((a, b) => new Date(b.closedAt) - new Date(a.closedAt))
+                    .slice(0, 30); // Last 30 closed shifts
+
+                return jsonResponse(shifts);
             }
 
             // POST /sales/:id/email
