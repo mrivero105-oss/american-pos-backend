@@ -42,7 +42,7 @@ export async function onRequestGet(context) {
       products = products.map(p => ({
         ...p,
         isCustom: Boolean(p.isCustom),
-        stock: p.stockQuantity
+        stock: p.stock
       }));
 
       return new Response(JSON.stringify({
@@ -63,7 +63,7 @@ export async function onRequestGet(context) {
       products = results.map(p => ({
         ...p,
         isCustom: Boolean(p.isCustom),
-        stock: p.stockQuantity
+        stock: p.stock
       }));
 
       // If page param exists but limit is 0/missing, return object wrapper for consistency with local?
@@ -106,14 +106,14 @@ export async function onRequestPost(context) {
     const id = product.id || Date.now().toString();
 
     await context.env.DB.prepare(
-      `INSERT INTO products (id, name, price, priceBs, stockQuantity, category, barcode, imageUri, isCustom, isSoldByWeight, userId) 
+      `INSERT INTO products (id, name, price, priceBs, stock, category, barcode, imageUri, isCustom, isSoldByWeight, userId) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       id,
       product.name,
       product.price,
       product.priceBs || null,
-      product.stockQuantity || 0,
+      product.stock || 0,
       product.category || 'General',
       product.barcode || '',
       product.imageUri || '',

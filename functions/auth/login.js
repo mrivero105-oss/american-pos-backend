@@ -1,6 +1,7 @@
-const JWT_SECRET = "american-pos-secret-key-change-in-prod"; // In prod use env var
-
 export async function onRequestPost(context) {
+    // Get JWT_SECRET from environment variable (CRITICAL: Set this in Cloudflare Dashboard)
+    const JWT_SECRET = context.env.JWT_SECRET || "dev-fallback-key-change-in-prod";
+
     try {
         const { email, password } = await context.request.json();
 
@@ -16,12 +17,12 @@ export async function onRequestPost(context) {
         const user = results[0];
 
         if (!user) {
-            // Anti-timing attack check
+            // Anti-timing attack: same delay as password verification
             await new Promise(r => setTimeout(r, 100));
             return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401 });
         }
 
-        // Verify password
+        // Verify password (SHA-256 hash comparison)
         const myText = new TextEncoder().encode(password);
         const myDigest = await crypto.subtle.digest(
             { name: 'SHA-256' },
@@ -34,12 +35,12 @@ export async function onRequestPost(context) {
             return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401 });
         }
 
-        // Check Status
+        // Check account status
         if (user.status === 'blocked') {
             return new Response(JSON.stringify({ error: "Cuenta bloqueada. Contacte al administrador." }), { status: 403 });
         }
 
-        // Check Trial
+        // Check trial expiration
         if (user.trial_expires_at) {
             const now = Date.now();
             if (now > user.trial_expires_at) {
@@ -49,7 +50,7 @@ export async function onRequestPost(context) {
 
         const { password: _, ...userWithoutPassword } = user;
 
-        // CREATE SIGNED TOKEN
+        // CREATE SIGNED JWT TOKEN
         const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" })).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
         const payload = btoa(JSON.stringify({
             id: user.id,
@@ -75,7 +76,7 @@ export async function onRequestPost(context) {
     }
 }
 
-// Same simulated signing function as middleware
+// HMAC SHA-256 signing function (must match _middleware.js)
 async function sign(message, secret) {
     const enc = new TextEncoder();
     const key = await crypto.subtle.importKey(

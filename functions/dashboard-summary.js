@@ -19,7 +19,7 @@ export async function onRequestGet(context) {
 
         // 3. Low Stock Items
         const { results: lowStockItems } = await context.env.DB.prepare(
-            "SELECT name, stockQuantity as stock FROM products WHERE stockQuantity <= 5 AND userId = ?"
+            "SELECT name, stock FROM products WHERE stock <= 5 AND userId = ?"
         ).bind(user.id).all();
 
         // 4. Sales Last 7 Days

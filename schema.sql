@@ -11,7 +11,7 @@ CREATE TABLE products (
     name TEXT NOT NULL,
     price REAL NOT NULL,
     priceBs REAL,
-    stockQuantity INTEGER DEFAULT 0,
+    stock INTEGER DEFAULT 0,
     category TEXT,
     barcode TEXT,
     imageUri TEXT,

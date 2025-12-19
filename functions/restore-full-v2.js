@@ -69,7 +69,7 @@ export async function onRequest(context) {
 
         if (referencedProductIds.size > 0) {
             const productPlaceholderStmt = db.prepare(
-                `INSERT OR IGNORE INTO products (id, name, price, stockQuantity, userId, category, barcode, imageUri, isCustom, isSoldByWeight) 
+                `INSERT OR IGNORE INTO products (id, name, price, stock, userId, category, barcode, imageUri, isCustom, isSoldByWeight) 
                  VALUES (?, 'Producto (Restaurado)', 0, 0, ?, 'General', '', '', 0, 0)`
             );
             const batch = [];

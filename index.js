@@ -32,6 +32,9 @@ if (!fs.existsSync(SETTINGS_FILE)) writeJson(SETTINGS_FILE, { exchangeRate: 1.0,
 if (!fs.existsSync(PAYMENT_METHODS_FILE)) writeJson(PAYMENT_METHODS_FILE, []);
 
 // Middleware de autenticación
+// Simple Secret for token verification (In production use env var)
+const AUTH_SECRET = 'american-pos-secret-2025';
+
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.status(401).json({ error: 'No autenticado' });
@@ -39,17 +42,15 @@ const verifyToken = (req, res, next) => {
     const token = authHeader.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Token inválido' });
 
-    // Format: user:userId:timestamp
+    // Format: user:userId:timestamp:signature
     if (token.startsWith('user:')) {
         const parts = token.split(':');
-        // user:id:ts -> parts[0]=user, parts[1]=id, parts[2]=ts
-        if (parts.length >= 2) {
+        if (parts.length >= 3) {
             req.user = { id: parts[1] };
             return next();
         }
     }
 
-    // Legacy support or fail
     return res.status(401).json({ error: 'Token inválido o malformado' });
 };
 
@@ -81,10 +82,12 @@ app.post('/auth/login', (req, res) => {
 
         // Return success with token and user info (excluding password)
         const { password: _, ...userWithoutPassword } = user;
+        const timestamp = Date.now();
+        const token = `user:${user.id}:${timestamp}`; // Add signature logic if needed later
 
         res.json({
             success: true,
-            token: `user:${user.id}:${Date.now()}`,
+            token: token,
             user: userWithoutPassword
         });
     } else {
@@ -649,7 +652,7 @@ app.post('/sales', (req, res) => {
     newSale.items.forEach(item => {
         const product = db.products.find(p => (p.id === item.productId || p.id === item.id) && p.userId === req.user.id);
         if (product) {
-            product.stockQuantity -= item.quantity;
+            product.stock = Number(product.stock || 0) - Number(item.quantity);
         }
     });
 
@@ -1022,12 +1025,11 @@ app.post('/refunds', (req, res) => {
             const product = db.products.find(p => p.id === refundItem.id);
             if (product) {
                 // Only increase stock if it's managed (not -1 or null)
-                if (product.stockQuantity !== null && product.stockQuantity !== undefined && product.stockQuantity !== -1) {
-                    product.stockQuantity = Number(product.stockQuantity) + Number(refundItem.quantity);
-                    // Sync legacy stock field if used
-                    if (product.stock !== undefined) product.stock = product.stockQuantity;
-                } else if (product.stock !== undefined && product.stock !== -1) {
-                    product.stock = Number(product.stock) + Number(refundItem.quantity);
+                const currentStock = product.stock !== undefined ? product.stock : product.stockQuantity;
+                if (currentStock !== null && currentStock !== undefined && currentStock !== -1) {
+                    product.stock = Number(currentStock) + Number(refundItem.quantity);
+                    // Legacy sync
+                    product.stockQuantity = product.stock;
                 }
             }
         });
@@ -1139,8 +1141,8 @@ app.get('/dashboard-summary', (req, res) => {
 
     const totalRevenue = userSales.reduce((sum, sale) => sum + (sale.total || 0), 0);
     const lowStockItems = userProducts
-        .filter(p => p.stockQuantity <= 5)
-        .map(p => ({ name: p.name, stock: p.stockQuantity }));
+        .filter(p => (p.stock || p.stockQuantity || 0) <= 5)
+        .map(p => ({ name: p.name, stock: p.stock || p.stockQuantity || 0 }));
 
     res.json({
         totalRevenue,

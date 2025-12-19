@@ -62,11 +62,9 @@ export async function onRequestPost(context) {
             ));
 
             // Update Stock - STRICTLY ensure we only update products belonging to the user
-            if (item.productId || item.id) {
-                statements.push(context.env.DB.prepare(
-                    `UPDATE products SET stockQuantity = stockQuantity - ? WHERE id = ? AND userId = ?`
-                ).bind(item.quantity, item.productId || item.id, user.id));
-            }
+            statements.push(context.env.DB.prepare(
+                `UPDATE products SET stock = stock - ? WHERE id = ? AND userId = ?`
+            ).bind(item.quantity, item.productId || item.id, user.id));
         }
 
         // Execute all in batch
