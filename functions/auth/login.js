@@ -1,5 +1,9 @@
+import bcrypt from 'bcryptjs';
+
+const BCRYPT_ROUNDS = 10;
+
 export async function onRequestPost(context) {
-    // Get JWT_SECRET from environment variable (CRITICAL: Set this in Cloudflare Dashboard)
+    // Get JWT_SECRET from environment variable
     const JWT_SECRET = context.env.JWT_SECRET || "dev-fallback-key-change-in-prod";
 
     try {
@@ -18,21 +22,36 @@ export async function onRequestPost(context) {
 
         if (!user) {
             // Anti-timing attack: same delay as password verification
-            await new Promise(r => setTimeout(r, 100));
+            await bcrypt.hash("dummy", BCRYPT_ROUNDS);
             return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401 });
         }
 
-        // Verify password (SHA-256 hash comparison)
-        const myText = new TextEncoder().encode(password);
-        const myDigest = await crypto.subtle.digest(
-            { name: 'SHA-256' },
-            myText
-        );
-        const hashArray = Array.from(new Uint8Array(myDigest));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        // Determine hash type and verify password
+        const storedPassword = user.password;
+        let isValidPassword = false;
+        let needsMigration = false;
 
-        if (hashHex !== user.password) {
+        if (storedPassword.startsWith('$2a$') || storedPassword.startsWith('$2b$')) {
+            // Bcrypt hash - verify directly
+            isValidPassword = await bcrypt.compare(password, storedPassword);
+        } else {
+            // SHA-256 hash (legacy) - verify and mark for migration
+            const hashHex = await sha256Hash(password);
+            isValidPassword = hashHex === storedPassword;
+            needsMigration = isValidPassword; // Only migrate if password is correct
+        }
+
+        if (!isValidPassword) {
             return new Response(JSON.stringify({ error: "Invalid credentials" }), { status: 401 });
+        }
+
+        // Migrate SHA-256 password to bcrypt if needed
+        if (needsMigration) {
+            const bcryptHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+            await context.env.DB.prepare(
+                "UPDATE users SET password = ? WHERE id = ?"
+            ).bind(bcryptHash, user.id).run();
+            console.log(`Password migrated to bcrypt for user: ${email}`);
         }
 
         // Check account status
@@ -72,11 +91,20 @@ export async function onRequestPost(context) {
         });
 
     } catch (err) {
+        console.error("Login error:", err);
         return new Response(JSON.stringify({ error: err.message }), { status: 500 });
     }
 }
 
-// HMAC SHA-256 signing function (must match _middleware.js)
+// SHA-256 hash function (for legacy password verification)
+async function sha256Hash(password) {
+    const myText = new TextEncoder().encode(password);
+    const myDigest = await crypto.subtle.digest({ name: 'SHA-256' }, myText);
+    const hashArray = Array.from(new Uint8Array(myDigest));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// HMAC SHA-256 signing function for JWT
 async function sign(message, secret) {
     const enc = new TextEncoder();
     const key = await crypto.subtle.importKey(

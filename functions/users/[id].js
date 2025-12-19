@@ -1,3 +1,7 @@
+import bcrypt from 'bcryptjs';
+
+const BCRYPT_ROUNDS = 10;
+
 export async function onRequest(context) {
     const { request, env, params } = context;
 
@@ -45,7 +49,14 @@ export async function onRequest(context) {
             const values = [];
 
             if (data.email) { updates.push('email = ?'); values.push(data.email); }
-            if (data.password) { updates.push('password = ?'); values.push(data.password); }
+
+            // Hash password with bcrypt if provided
+            if (data.password) {
+                const hashedPassword = await bcrypt.hash(data.password, BCRYPT_ROUNDS);
+                updates.push('password = ?');
+                values.push(hashedPassword);
+            }
+
             if (data.role) { updates.push('role = ?'); values.push(data.role); }
             if (data.businessInfo) { updates.push('businessInfo = ?'); values.push(JSON.stringify(data.businessInfo)); }
             if (data.status) { updates.push('status = ?'); values.push(data.status); }

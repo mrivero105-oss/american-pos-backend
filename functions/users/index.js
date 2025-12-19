@@ -1,3 +1,7 @@
+import bcrypt from 'bcryptjs';
+
+const BCRYPT_ROUNDS = 10;
+
 export async function onRequestGet(context) {
     try {
         const user = context.data.user;
@@ -30,14 +34,8 @@ export async function onRequestPost(context) {
             return new Response(JSON.stringify({ error: "Email and password required" }), { status: 400 });
         }
 
-        // Hash password (simple SHA-256 for now, matching login.js)
-        const myText = new TextEncoder().encode(newUser.password);
-        const myDigest = await crypto.subtle.digest(
-            { name: 'SHA-256' },
-            myText
-        );
-        const hashArray = Array.from(new Uint8Array(myDigest));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        // Hash password with bcrypt (secure)
+        const hashedPassword = await bcrypt.hash(newUser.password, BCRYPT_ROUNDS);
 
         const id = crypto.randomUUID();
 
@@ -47,7 +45,7 @@ export async function onRequestPost(context) {
         ).bind(
             id,
             newUser.email,
-            hashHex,
+            hashedPassword,
             newUser.role || 'user',
             JSON.stringify(newUser.businessInfo || { currency: 'USD' })
         ).run();
