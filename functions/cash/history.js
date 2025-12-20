@@ -4,23 +4,13 @@ export async function onRequestGet(context) {
             return new Response(JSON.stringify({ error: "DB binding missing" }), { status: 500 });
         }
 
-        // Extract userId from JWT token (set by middleware)
-        const userId = context.data?.user?.uid || context.data?.user?.email || 'admin';
+        // Extract userId from JWT token - prioritize email for consistency
+        const user = context.data?.user;
+        const userId = user?.email || user?.uid || user?.sub || 'admin';
 
-        console.log('🔍 History request - User from JWT:', context.data?.user);
-        console.log('🔍 Extracted userId:', userId);
+        console.log('🔍 Cash history for userId:', userId, 'from JWT:', user);
 
-        // TEMPORARY: Get ALL shifts to debug userId mismatch
-        const { results: allShifts } = await context.env.DB.prepare(
-            `SELECT * FROM cash_shifts 
-             WHERE status = 'closed'
-             ORDER BY closedAt DESC
-             LIMIT 100`
-        ).all();
-
-        console.log('🔍 Sample userIds in database:', allShifts.slice(0, 5).map(s => s.userId));
-
-        // Get filtered shifts for this user
+        // Get closed shifts for this specific user ONLY
         const { results: shifts } = await context.env.DB.prepare(
             `SELECT * FROM cash_shifts 
              WHERE status = 'closed' AND userId = ?
@@ -28,21 +18,14 @@ export async function onRequestGet(context) {
              LIMIT 100`
         ).bind(userId).all();
 
-        console.log(`🔍 Found ${shifts.length} shifts for userId: ${userId}`);
-        console.log(`🔍 Total shifts in DB: ${allShifts.length}`);
+        console.log(`✅ Returning ${shifts.length} shifts for user: ${userId}`);
 
-        // TEMPORARY: Return debug info
-        return new Response(JSON.stringify({
-            debug: {
-                requestedUserId: userId,
-                jwtUser: context.data?.user,
-                totalShiftsInDB: allShifts.length,
-                shiftsForThisUser: shifts.length,
-                sampleUserIdsInDB: allShifts.slice(0, 10).map(s => ({ id: s.id, userId: s.userId, date: s.closedAt }))
-            },
-            shifts: shifts
-        }), {
-            headers: { "Content-Type": "application/json" }
+        // Return plain array (NO debug wrapper to avoid cache issues)
+        return new Response(JSON.stringify(shifts || []), {
+            headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache, no-store, must-revalidate"
+            }
         });
 
     } catch (err) {
