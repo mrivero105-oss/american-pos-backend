@@ -4,9 +4,9 @@ export async function onRequestGet(context) {
             return new Response(JSON.stringify({ error: "DB binding missing" }), { status: 500 });
         }
 
-        // Extract userId from JWT token - prioritize email for consistency
+        // Extract userId from JWT token (use id field)
         const user = context.data?.user;
-        const userId = user?.email || user?.uid || user?.sub || 'admin';
+        const userId = user?.id || user?.email || 'admin';
 
         console.log('🔍 Cash history for userId:', userId, 'from JWT:', user);
 

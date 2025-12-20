@@ -4,9 +4,9 @@ export async function onRequestGet(context) {
             return new Response(JSON.stringify({ error: "DB binding missing" }), { status: 500 });
         }
 
-        // Get userId from authenticated user
+        // Get userId from authenticated user (use id from JWT)
         const user = context.data?.user;
-        const userId = user?.email || user?.uid || user?.sub || 'admin';
+        const userId = user?.id || user?.email || 'admin';
 
         // 1. Get Open Shift for THIS USER ONLY
         const { results: shifts } = await context.env.DB.prepare(

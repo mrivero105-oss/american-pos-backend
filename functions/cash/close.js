@@ -7,9 +7,9 @@ export async function onRequestPost(context) {
         const body = await context.request.json();
         const actualCash = parseFloat(body.actualCash) || 0;
 
-        // Get userId from authenticated user
+        // Get userId from authenticated user (use id from JWT)
         const user = context.data?.user;
-        const userId = user?.email || user?.uid || user?.sub || 'admin';
+        const userId = user?.id || user?.email || 'admin';
 
         // Get current open shift for THIS USER ONLY
         const currentShift = await context.env.DB.prepare(

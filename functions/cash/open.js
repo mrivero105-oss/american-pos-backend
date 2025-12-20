@@ -6,9 +6,9 @@ export async function onRequestPost(context) {
 
         const body = await context.request.json();
 
-        // Get userId from authenticated user - prioritize email for consistency
+        // Get userId from authenticated user (use id from JWT)
         const user = context.data?.user;
-        const userId = user?.email || user?.uid || user?.sub || 'admin';
+        const userId = user?.id || user?.email || 'admin';
 
         console.log('🔍 Opening cash for userId:', userId, 'from JWT:', user);
 
