@@ -6,20 +6,20 @@ export async function onRequestPost(context) {
 
         const body = await context.request.json();
 
-        // Check if already open
-        const { results: openShifts } = await context.env.DB.prepare(
-            "SELECT id FROM cash_shifts WHERE status = 'open'"
-        ).all();
-
-        if (openShifts.length > 0) {
-            return new Response(JSON.stringify({ message: 'Ya hay una caja abierta' }), { status: 400 });
-        }
-
         // Get userId from authenticated user - prioritize email for consistency
         const user = context.data?.user;
         const userId = user?.email || user?.uid || user?.sub || 'admin';
 
         console.log('🔍 Opening cash for userId:', userId, 'from JWT:', user);
+
+        // Check if THIS USER already has an open shift
+        const { results: openShifts } = await context.env.DB.prepare(
+            "SELECT id FROM cash_shifts WHERE status = 'open' AND userId = ?"
+        ).bind(userId).all();
+
+        if (openShifts.length > 0) {
+            return new Response(JSON.stringify({ message: 'Ya has una caja abierta' }), { status: 400 });
+        }
 
         const newShift = {
             id: Date.now().toString(),

@@ -7,10 +7,14 @@ export async function onRequestPost(context) {
         const body = await context.request.json();
         const actualCash = parseFloat(body.actualCash) || 0;
 
-        // Get current open shift
+        // Get userId from authenticated user
+        const user = context.data?.user;
+        const userId = user?.email || user?.uid || user?.sub || 'admin';
+
+        // Get current open shift for THIS USER ONLY
         const currentShift = await context.env.DB.prepare(
-            "SELECT * FROM cash_shifts WHERE status = 'open' LIMIT 1"
-        ).first();
+            "SELECT * FROM cash_shifts WHERE status = 'open' AND userId = ? LIMIT 1"
+        ).bind(userId).first();
 
         if (!currentShift) {
             return new Response(JSON.stringify({ message: 'No hay caja abierta para cerrar' }), { status: 400 });

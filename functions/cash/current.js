@@ -4,10 +4,14 @@ export async function onRequestGet(context) {
             return new Response(JSON.stringify({ error: "DB binding missing" }), { status: 500 });
         }
 
-        // 1. Get Open Shift
+        // Get userId from authenticated user
+        const user = context.data?.user;
+        const userId = user?.email || user?.uid || user?.sub || 'admin';
+
+        // 1. Get Open Shift for THIS USER ONLY
         const { results: shifts } = await context.env.DB.prepare(
-            "SELECT * FROM cash_shifts WHERE status = 'open' LIMIT 1"
-        ).all();
+            "SELECT * FROM cash_shifts WHERE status = 'open' AND userId = ? LIMIT 1"
+        ).bind(userId).all();
 
         const currentShift = shifts[0];
 
