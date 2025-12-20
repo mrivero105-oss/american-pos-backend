@@ -4,18 +4,15 @@ export async function onRequestGet(context) {
         if (!user) return new Response("Unauthorized", { status: 401 });
 
         const result = await context.env.DB.prepare(
-            "SELECT businessInfo FROM users WHERE id = ?"
-        ).bind(user.id).first();
+            "SELECT value FROM settings WHERE key = 'businessInfo'"
+        ).first();
 
-        // Check if result.businessInfo is string stringified JSON or object. 
-        // D1 usually returns it as stored string unless parsed layer exists. 
-        // Based on restore-script it is stored as JSON string.
         let info = {};
-        if (result && result.businessInfo) {
+        if (result && result.value) {
             try {
-                info = JSON.parse(result.businessInfo);
+                info = JSON.parse(result.value);
             } catch (e) {
-                info = result.businessInfo; // Fallback
+                info = {};
             }
         }
 
@@ -35,8 +32,8 @@ export async function onRequestPost(context) {
         const info = await context.request.json();
 
         await context.env.DB.prepare(
-            "UPDATE users SET businessInfo = ? WHERE id = ?"
-        ).bind(JSON.stringify(info), user.id).run();
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('businessInfo', ?)"
+        ).bind(JSON.stringify(info)).run();
 
         return new Response(JSON.stringify({ message: "Business info updated" }), {
             headers: { "Content-Type": "application/json" },

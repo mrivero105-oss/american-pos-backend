@@ -16,9 +16,8 @@ export async function onRequestPut(context) {
             return updates[k];
         });
         values.push(id);
-        values.push(user.id); // Add userId for ownership check
 
-        const query = `UPDATE products SET ${setClause} WHERE id = ? AND userId = ?`;
+        const query = `UPDATE products SET ${setClause} WHERE id = ?`;
 
         const info = await context.env.DB.prepare(query).bind(...values).run();
 
@@ -41,8 +40,8 @@ export async function onRequestDelete(context) {
 
         const id = context.params.id;
         // Verify ownership
-        const info = await context.env.DB.prepare("DELETE FROM products WHERE id = ? AND userId = ?")
-            .bind(id, user.id)
+        const info = await context.env.DB.prepare("DELETE FROM products WHERE id = ?")
+            .bind(id)
             .run();
 
         if (info.meta.changes > 0) {

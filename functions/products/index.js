@@ -26,16 +26,16 @@ export async function onRequestGet(context) {
       const offset = (page - 1) * limit;
 
       const { results } = await context.env.DB.prepare(
-        "SELECT * FROM products WHERE userId = ? ORDER BY name ASC LIMIT ? OFFSET ?"
-      ).bind(user.id, limit, offset).all();
+        "SELECT * FROM products ORDER BY name ASC LIMIT ? OFFSET ?"
+      ).bind(limit, offset).all();
 
       products = results;
 
       // Get total count
       // Note: This is an extra query. D1 is fast enough.
       const countResult = await context.env.DB.prepare(
-        "SELECT COUNT(*) as count FROM products WHERE userId = ?"
-      ).bind(user.id).first();
+        "SELECT COUNT(*) as count FROM products"
+      ).first();
       total = countResult.count;
 
       // Parse boolean/JSON fields
@@ -57,8 +57,8 @@ export async function onRequestGet(context) {
     } else {
       // Legacy Mode (All)
       const { results } = await context.env.DB.prepare(
-        "SELECT * FROM products WHERE userId = ? ORDER BY name ASC"
-      ).bind(user.id).all();
+        "SELECT * FROM products ORDER BY name ASC"
+      ).all();
 
       products = results.map(p => ({
         ...p,
@@ -106,8 +106,8 @@ export async function onRequestPost(context) {
     const id = product.id || Date.now().toString();
 
     await context.env.DB.prepare(
-      `INSERT INTO products (id, name, price, priceBs, stock, category, barcode, imageUri, isCustom, isSoldByWeight, userId) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO products (id, name, price, priceBs, stock, category, barcode, imageUri, isCustom, isSoldByWeight) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       id,
       product.name,
@@ -118,8 +118,7 @@ export async function onRequestPost(context) {
       product.barcode || '',
       product.imageUri || '',
       product.isCustom ? 1 : 0,
-      product.isSoldByWeight ? 1 : 0,
-      user.id // Insert current user ID
+      product.isSoldByWeight ? 1 : 0
     ).run();
 
     return new Response(JSON.stringify({ ...product, id, userId: user.id }), {
