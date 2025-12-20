@@ -18,7 +18,9 @@ export async function onRequestPost(context) {
         ).bind(userId).all();
 
         if (openShifts.length > 0) {
-            return new Response(JSON.stringify({ message: 'Ya has una caja abierta' }), { status: 400 });
+            return new Response(JSON.stringify({
+                message: `Ya tienes una caja abierta (userId: ${userId})`
+            }), { status: 400 });
         }
 
         const newShift = {
