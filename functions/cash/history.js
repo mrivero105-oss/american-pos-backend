@@ -7,7 +7,20 @@ export async function onRequestGet(context) {
         // Extract userId from JWT token (set by middleware)
         const userId = context.data?.user?.uid || context.data?.user?.email || 'admin';
 
-        // Get all closed shifts for this user, ordered by most recent first
+        console.log('🔍 History request - User from JWT:', context.data?.user);
+        console.log('🔍 Extracted userId:', userId);
+
+        // TEMPORARY: Get ALL shifts to debug userId mismatch
+        const { results: allShifts } = await context.env.DB.prepare(
+            `SELECT * FROM cash_shifts 
+             WHERE status = 'closed'
+             ORDER BY closedAt DESC
+             LIMIT 100`
+        ).all();
+
+        console.log('🔍 Sample userIds in database:', allShifts.slice(0, 5).map(s => s.userId));
+
+        // Get filtered shifts for this user
         const { results: shifts } = await context.env.DB.prepare(
             `SELECT * FROM cash_shifts 
              WHERE status = 'closed' AND userId = ?
@@ -15,7 +28,20 @@ export async function onRequestGet(context) {
              LIMIT 100`
         ).bind(userId).all();
 
-        return new Response(JSON.stringify(shifts || []), {
+        console.log(`🔍 Found ${shifts.length} shifts for userId: ${userId}`);
+        console.log(`🔍 Total shifts in DB: ${allShifts.length}`);
+
+        // TEMPORARY: Return debug info
+        return new Response(JSON.stringify({
+            debug: {
+                requestedUserId: userId,
+                jwtUser: context.data?.user,
+                totalShiftsInDB: allShifts.length,
+                shiftsForThisUser: shifts.length,
+                sampleUserIdsInDB: allShifts.slice(0, 10).map(s => ({ id: s.id, userId: s.userId, date: s.closedAt }))
+            },
+            shifts: shifts
+        }), {
             headers: { "Content-Type": "application/json" }
         });
 
