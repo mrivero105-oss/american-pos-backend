@@ -10,7 +10,7 @@ export async function onRequestGet(context) {
         }
 
         const { results } = await context.env.DB.prepare(
-            "SELECT id, email, role, businessInfo FROM users ORDER BY email ASC"
+            "SELECT id, email, name, role FROM users ORDER BY email ASC"
         ).all();
 
         return new Response(JSON.stringify(results), {
@@ -40,14 +40,14 @@ export async function onRequestPost(context) {
         const id = crypto.randomUUID();
 
         await context.env.DB.prepare(
-            `INSERT INTO users (id, email, password, role, businessInfo) 
+            `INSERT INTO users (id, email, password, name, role) 
              VALUES (?, ?, ?, ?, ?)`
         ).bind(
             id,
             newUser.email,
             hashedPassword,
-            newUser.role || 'user',
-            JSON.stringify(newUser.businessInfo || { currency: 'USD' })
+            newUser.name || newUser.email.split('@')[0],
+            newUser.role || 'user'
         ).run();
 
         return new Response(JSON.stringify({ success: true, id }), {
