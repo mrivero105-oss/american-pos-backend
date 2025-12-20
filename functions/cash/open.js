@@ -15,11 +15,14 @@ export async function onRequestPost(context) {
             return new Response(JSON.stringify({ message: 'Ya hay una caja abierta' }), { status: 400 });
         }
 
+        // Get userId from authenticated user (set by middleware)
+        const userId = context.data?.user?.uid || context.data?.user?.email || 'admin';
+
         const newShift = {
             id: Date.now().toString(),
             openedAt: new Date().toISOString(),
             startingCash: parseFloat(body.amount) || 0,
-            userId: body.userId || 'admin',
+            userId: userId,
             status: 'open'
         };
 
