@@ -41,7 +41,7 @@ export async function onRequest(context) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/auth/') ||
         url.pathname.startsWith('/restore-settings') ||
-        url.pathname.startsWith('/products') ||  // TEMPORARY: Allow products without auth
+        url.pathname.startsWith('/products') || // TEMPORARY: Bypass auth
         url.pathname.startsWith('/hello')) {
         return handleCors(await next(), allowedOrigin);
     }
