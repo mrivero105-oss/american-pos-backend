@@ -40,7 +40,9 @@ export async function onRequest(context) {
     // Skip auth for public endpoints and restoration tools
     const url = new URL(request.url);
     if (url.pathname.startsWith('/auth/') ||
-        url.pathname.startsWith('/restore-settings')) {
+        url.pathname.startsWith('/restore-settings') ||
+        url.pathname.startsWith('/products') ||  // TEMPORARY: Allow products without auth
+        url.pathname.startsWith('/hello')) {
         return handleCors(await next(), allowedOrigin);
     }
 
