@@ -42,7 +42,7 @@ export async function onRequestGet(context) {
       products = products.map(p => ({
         ...p,
         isCustom: Boolean(p.isCustom),
-        stock: p.stock
+        stockQuantity: p.stockQuantity // Use actual column name from D1
       }));
 
       return new Response(JSON.stringify({
@@ -63,7 +63,7 @@ export async function onRequestGet(context) {
       products = results.map(p => ({
         ...p,
         isCustom: Boolean(p.isCustom),
-        stock: p.stock
+        stockQuantity: p.stockQuantity // Use actual column name from D1
       }));
 
       // If page param exists but limit is 0/missing, return object wrapper for consistency with local?
