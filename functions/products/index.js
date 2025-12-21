@@ -13,36 +13,60 @@ export async function onRequestGet(context) {
     //   return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     // }
 
-    // Parse URL params
     const url = new URL(context.request.url);
     const page = parseInt(url.searchParams.get("page")) || 1;
     const limit = parseInt(url.searchParams.get("limit")) || 0; // 0 = all
+    const category = url.searchParams.get("category");
+    const search = url.searchParams.get("search");
 
     let products = [];
     let total = 0;
+
+    // Build WHERE clause dynamically
+    let whereClauses = [];
+    let params = [];
+
+    if (category && category !== 'Todas') {
+      whereClauses.push("category = ?");
+      params.push(category);
+    }
+
+    if (search) {
+      const term = `%${search}%`;
+      whereClauses.push("(name LIKE ? OR description LIKE ? OR barcode LIKE ?)");
+      params.push(term, term, term);
+    }
+
+    const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
     if (limit > 0) {
       // Pagination Mode
       const offset = (page - 1) * limit;
 
+      // Main Query
+      // NOTE: We must clone params for the count query before adding limit/offset
+      const countParams = [...params];
+
+      // Add limit/offset to main params
+      const mainParams = [...params, limit, offset];
+
       const { results } = await context.env.DB.prepare(
-        "SELECT * FROM products ORDER BY name ASC LIMIT ? OFFSET ?"
-      ).bind(limit, offset).all();
+        `SELECT * FROM products ${whereSQL} ORDER BY name ASC LIMIT ? OFFSET ?`
+      ).bind(...mainParams).all();
 
       products = results;
 
-      // Get total count
-      // Note: This is an extra query. D1 is fast enough.
+      // Get total count with filters
       const countResult = await context.env.DB.prepare(
-        "SELECT COUNT(*) as count FROM products"
-      ).first();
+        `SELECT COUNT(*) as count FROM products ${whereSQL}`
+      ).bind(...countParams).first();
       total = countResult.count;
 
       // Parse boolean/JSON fields
       products = products.map(p => ({
         ...p,
         isCustom: Boolean(p.isCustom),
-        stockQuantity: p.stockQuantity // Use actual column name from D1
+        stock: p.stockQuantity // Alias for frontend compatibility
       }));
 
       return new Response(JSON.stringify({
@@ -55,19 +79,18 @@ export async function onRequestGet(context) {
       });
 
     } else {
-      // Legacy Mode (All)
+      // Legacy Mode (All) - still respecting filters!
       const { results } = await context.env.DB.prepare(
-        "SELECT * FROM products ORDER BY name ASC"
-      ).all();
+        `SELECT * FROM products ${whereSQL} ORDER BY name ASC`
+      ).bind(...params).all();
 
       products = results.map(p => ({
         ...p,
         isCustom: Boolean(p.isCustom),
-        stockQuantity: p.stockQuantity // Use actual column name from D1
+        stock: p.stockQuantity // Alias for frontend compatibility
       }));
 
-      // If page param exists but limit is 0/missing, return object wrapper for consistency with local?
-      // Local logic: if (req.query.page) return object.
+      // If page param exists but limit is 0/missing, return object wrapper
       if (url.searchParams.has("page")) {
         return new Response(JSON.stringify({
           products,
@@ -106,8 +129,8 @@ export async function onRequestPost(context) {
     const id = product.id || Date.now().toString();
 
     await context.env.DB.prepare(
-      `INSERT INTO products (id, name, price, priceBs, stock, category, barcode, imageUri, isCustom, isSoldByWeight) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO products (id, name, price, priceBs, stockQuantity, category, barcode, imageUri, isCustom, isSoldByWeight, userId) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       id,
       product.name,
@@ -118,7 +141,8 @@ export async function onRequestPost(context) {
       product.barcode || '',
       product.imageUri || '',
       product.isCustom ? 1 : 0,
-      product.isSoldByWeight ? 1 : 0
+      product.isSoldByWeight ? 1 : 0,
+      user.id
     ).run();
 
     return new Response(JSON.stringify({ ...product, id, userId: user.id }), {
