@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-01-14T13:53:20.962Z",
+  "message": "SQLITE_CONSTRAINT: FOREIGN KEY constraint failed",
+  "name": "SequelizeForeignKeyConstraintError",
+  "parentCode": "SQLITE_CONSTRAINT",
+  "originalCode": "SQLITE_CONSTRAINT",
+  "stack": "Error\n    at Database.<anonymous> (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:185:27)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:50\n    at new Promise (<anonymous>)\n    at Query.run (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:12)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\sequelize.js:315:28\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async SQLiteQueryInterface.bulkDelete (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\abstract\\query-interface.js:403:12)\n    at async Customer.destroy (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\model.js:1838:16)\n    at async C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\index.js:350:25"
+}
+---
+{
+  "timestamp": "2026-01-14T13:53:37.620Z",
+  "message": "SQLITE_CONSTRAINT: FOREIGN KEY constraint failed",
+  "name": "SequelizeForeignKeyConstraintError",
+  "parentCode": "SQLITE_CONSTRAINT",
+  "originalCode": "SQLITE_CONSTRAINT",
+  "stack": "Error\n    at Database.<anonymous> (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:185:27)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:50\n    at new Promise (<anonymous>)\n    at Query.run (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:12)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\sequelize.js:315:28\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async SQLiteQueryInterface.bulkDelete (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\abstract\\query-interface.js:403:12)\n    at async Customer.destroy (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\model.js:1838:16)\n    at async C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\index.js:350:25"
+}
+---
+{
+  "timestamp": "2026-01-14T13:53:40.500Z",
+  "message": "SQLITE_CONSTRAINT: FOREIGN KEY constraint failed",
+  "name": "SequelizeForeignKeyConstraintError",
+  "parentCode": "SQLITE_CONSTRAINT",
+  "originalCode": "SQLITE_CONSTRAINT",
+  "stack": "Error\n    at Database.<anonymous> (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:185:27)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:50\n    at new Promise (<anonymous>)\n    at Query.run (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:12)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\sequelize.js:315:28\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async SQLiteQueryInterface.bulkDelete (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\abstract\\query-interface.js:403:12)\n    at async Customer.destroy (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\model.js:1838:16)\n    at async C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\index.js:350:25"
+}
+---
+{
+  "timestamp": "2026-01-14T13:58:00.775Z",
+  "message": "SQLITE_CONSTRAINT: FOREIGN KEY constraint failed",
+  "name": "SequelizeForeignKeyConstraintError",
+  "parentCode": "SQLITE_CONSTRAINT",
+  "originalCode": "SQLITE_CONSTRAINT",
+  "stack": "Error\n    at Database.<anonymous> (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:185:27)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:50\n    at new Promise (<anonymous>)\n    at Query.run (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\sqlite\\query.js:183:12)\n    at C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\sequelize.js:315:28\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async SQLiteQueryInterface.bulkDelete (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\dialects\\abstract\\query-interface.js:403:12)\n    at async Customer.destroy (C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\node_modules\\sequelize\\lib\\model.js:1838:16)\n    at async C:\\Users\\mrive\\AndroidStudioProjects\\american-pos-backend\\index.js:350:25"
+}
+---

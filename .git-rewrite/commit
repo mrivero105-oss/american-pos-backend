@@ -1,0 +1,6 @@
+tree 1d357c1f04f4c6661d7cf5ef76f330013a107314
+parent 3ce8c675136d8bca21b9d2c1c252981bedecfba7
+author mrivero105-oss <mrivero105@gmail.com> 1766244514 -0400
+committer mrivero105-oss <mrivero105@gmail.com> 1766244514 -0400
+
+feat: Permitir múltiples cajas abiertas simultáneas por usuario

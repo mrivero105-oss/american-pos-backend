@@ -1,0 +1,43 @@
+{
+  "name": "american-pos-backend",
+  "version": "1.0.0",
+  "author": {
+    "name": "American POS Team",
+    "email": "support@americanpos.com"
+  },
+  "description": "Sistema de Punto de Venta American POS",
+  "main": "main.js",
+  "scripts": {
+    "start": "node index.js",
+    "build:css": "tailwindcss -i ./src/input.css -o ./public/css/output.css --watch",
+    "electron:start": "electron .",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@tailwindcss/aspect-ratio": "^0.4.2",
+    "bcryptjs": "^2.4.3",
+    "chart.js": "^4.5.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.1.0",
+    "html5-qrcode": "^2.3.8",
+    "nodemailer": "^7.0.10",
+    "puppeteer": "^24.31.0",
+    "sequelize": "^6.37.7",
+    "sqlite3": "^5.1.7",
+    "toastify-js": "^1.12.0",
+    "xlsx": "^0.18.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.2",
+    "autoprefixer": "^10.4.23",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17"
+  }
+}

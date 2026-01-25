@@ -1,0 +1,8 @@
+2025-12-25T17:15:52.509Z: Login attempt for: mrivero105@gmail.com
+2025-12-25T17:15:52.511Z: Using DB file: C:\Users\mrive\AppData\Roaming\american-pos-backend\db.json
+2025-12-25T17:15:52.513Z: User not found in DB
+2025-12-25T17:15:52.514Z: Available users: admin@americanpos.com
+2025-12-25T17:18:19.258Z: Login attempt for: mrivero105@gmail.com
+2025-12-25T17:18:19.259Z: Using DB file: C:\Users\mrive\AppData\Roaming\american-pos-backend\db.json
+2025-12-25T17:18:19.263Z: User found: mrivero105@gmail.com, Role: admin
+2025-12-25T17:18:19.264Z: Password matched

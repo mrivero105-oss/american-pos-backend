@@ -1,0 +1,5 @@
+[2026-01-10T17:42:19.478Z] Starting main.js execution. UserData: C:\Users\mrive\AppData\Roaming\american-pos-backend
+[2026-01-10T17:42:19.537Z] Set USER_DATA_PATH env var.
+[2026-01-10T17:42:19.537Z] Attempting to require ./index.js
+[2026-01-10T17:42:19.851Z] ./index.js requires successfully.
+[2026-01-10T17:42:26.410Z] Servidor iniciado en puerto: 3001

@@ -1,0 +1,9166 @@
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+
+// .wrangler/tmp/bundle-HMekS8/checked-fetch.js
+var urls = /* @__PURE__ */ new Set();
+function checkURL(request, init) {
+  const url = request instanceof URL ? request : new URL(
+    (typeof request === "string" ? new Request(request, init) : request).url
+  );
+  if (url.port && url.port !== "443" && url.protocol === "https:") {
+    if (!urls.has(url.toString())) {
+      urls.add(url.toString());
+      console.warn(
+        `WARNING: known issue with \`fetch()\` requests to custom HTTPS ports in published Workers:
+ - ${url.toString()} - the custom port will be ignored when the Worker is published using the \`wrangler deploy\` command.
+`
+      );
+    }
+  }
+}
+__name(checkURL, "checkURL");
+globalThis.fetch = new Proxy(globalThis.fetch, {
+  apply(target, thisArg, argArray) {
+    const [request, init] = argArray;
+    checkURL(request, init);
+    return Reflect.apply(target, thisArg, argArray);
+  }
+});
+
+// db.json
+var db_default = {
+  products: [
+    {
+      id: "1764206702146",
+      name: "Aceite Amanecer 500 ml",
+      price: 2.3,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/aceite_amanecer_500_ml.png",
+      priceBs: 575,
+      stockQuantity: -1,
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702154",
+      name: "Aceite Amanecer 850ml",
+      price: 3.9,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/aceite_amanecer_850ml.png",
+      stockQuantity: null,
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702159",
+      name: "Aceite de BEBE BabyFinger",
+      price: 1.84,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/aceite_de_bebe_babyfinger.png",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702163",
+      name: "Aceite Karsell",
+      price: 3.6,
+      stock: 12,
+      category: "Higiene Personal",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/aceite_karsell.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702166",
+      name: "Acetaminofen Blister de 10 pastillas",
+      price: 1.03,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/acetaminofen_blister_de_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702170",
+      name: "Acetaminofen Detallado",
+      price: 0.12,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/acetaminofen_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702175",
+      name: "Acetona VALMY",
+      price: 3.44,
+      stock: 173,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/acetona_valmy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702179",
+      name: "Acondicionador Dove",
+      price: 0.47,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/acondicionador_dove.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702183",
+      name: "Acondicionador Pantene",
+      price: 0.55,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/acondicionador_pantene.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702187",
+      name: "Adobo la comadre",
+      price: 0.78,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/adobo_la_comadre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702192",
+      name: "Adobo MAGGY",
+      price: 0.8,
+      stock: 15,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/adobo_maggy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702197",
+      name: "Afeitadora DORCO",
+      price: 0.45,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/afeitadora_dorco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702201",
+      name: "Afeitadora Gillette 2 Hojillas AZUL",
+      price: 1.2,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/afeitadora_gillette_2_hojillas_azul.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702207",
+      name: "Afeitadora Gillette 3 Hojillas gris de plastico",
+      price: 1.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/afeitadora_gillette_3_hojillas_gris_de_plastico.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702211",
+      name: "Afeitadora Gillette Carbono MACH 3",
+      price: 9.43,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/afeitadora_gillette_carbono_mach_3.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702219",
+      name: "Afeitadora VENUS",
+      price: 1.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/afeitadora_venus.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702224",
+      name: "Agua Ginsent 330ml",
+      price: 0.5,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_ginsent_330ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702230",
+      name: "Agua Ginsent Peque\xF1a",
+      price: 0.6,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_ginsent_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702236",
+      name: "Agua Minalba 600ml",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_minalba_600ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702241",
+      name: "Agua Mineral Minalba 1.5litros",
+      price: 2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_mineral_minalba_1_5litros.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702248",
+      name: "Agua NEVADA",
+      price: 1.6,
+      stock: 120,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_nevada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702253",
+      name: "Agua Oxigenada Medicinal 100ml",
+      price: 0.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_oxigenada_medicinal_100ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702258",
+      name: "Agua Oxigenada Rolda",
+      price: 3.02,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_oxigenada_rolda.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702267",
+      name: "Agua Oxigenada Vol 20 Rolda",
+      price: 0.71,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_oxigenada_vol_20_rolda.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702272",
+      name: "Agua Oxigenada Vol.10 Rolda",
+      price: 2.12,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_oxigenada_vol_10_rolda.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702280",
+      name: "Agua Tropical Color Plus",
+      price: 1.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/agua_tropical_color_plus.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702287",
+      name: "Aguja",
+      price: 0.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/aguja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702293",
+      name: "Ajinomoto Condimento",
+      price: 0.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ajinomoto_condimento.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702301",
+      name: "Ajo en Polvo OLIMPIA 6g",
+      price: 0.41,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ajo_en_polvo_olimpia_6g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702306",
+      name: "Alcohol Peque\xF1o",
+      price: 0.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/alcohol_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702313",
+      name: "Algodon peque\xF1o",
+      price: 0.84,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/algodon_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702319",
+      name: "Ali\xF1os",
+      price: 1.12,
+      stock: 157,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ali_os.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702325",
+      name: "Alka Seltzer / Disfruta",
+      price: 1.2,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/alka_seltzer___disfruta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702332",
+      name: "Amoxicilina 500mg 10 tab",
+      price: 1.91,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/amoxicilina_500mg_10_tab.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702339",
+      name: "Ampollas Pantene",
+      price: 2.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ampollas_pantene.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702345",
+      name: "Anillo de luz",
+      price: 0.54,
+      stock: 200,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/anillo_de_luz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702351",
+      name: "Anis Dulce",
+      price: 0.36,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/anis_dulce.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702354",
+      name: "Apaga FUEGO",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/apaga_fuego.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702356",
+      name: "Apagador",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/apagador.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702358",
+      name: "Apiret Sobre",
+      price: 1.69,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/apiret_sobre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702360",
+      name: "Arequipe Camponesa",
+      price: 3.86,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/arequipe_camponesa.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702364",
+      name: "Aromax Sobre",
+      price: 0.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/aromax_sobre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702367",
+      name: "Arroz Amanecer 900grs",
+      price: 1.7,
+      stock: 191,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/arroz_amanecer_900grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702369",
+      name: "Arroz Favorito",
+      price: 1.78,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/arroz_favorito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702371",
+      name: "Arroz MEDIO KL 500g",
+      price: 0.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/arroz_medio_kl_500g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702373",
+      name: "Arroz primor clasico superior",
+      price: 1.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/arroz_primor_clasico_superior.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702376",
+      name: "Arvejas Amanecer",
+      price: 1.26,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/arvejas_amanecer.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702378",
+      name: "Atun California",
+      price: 1.7,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/atun_california.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702380",
+      name: "Atun la abuela 170grs",
+      price: 4.5,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/atun_la_abuela_170grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702383",
+      name: "Atun Margarita GRANDE en Trozos",
+      price: 2.71,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/atun_margarita_grande_en_trozos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702385",
+      name: "Atun Margarita Peque\xF1o",
+      price: 2.55,
+      stock: 120,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/atun_margarita_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702387",
+      name: "Avena QUAKER 400grs",
+      price: 1.85,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/avena_quaker_400grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702389",
+      name: "Avena Vicone 200grs",
+      price: 0.95,
+      stock: 24,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/avena_vicone_200grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702391",
+      name: "Azitromicina 500mg 3 tab",
+      price: 1.88,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/azitromicina_500mg_3_tab.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702393",
+      name: "Azucar Amanecer 1 KG",
+      price: 2.02,
+      stock: 195,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/azucar_amanecer_1_kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702395",
+      name: "Azucar MEDIO KL 500g",
+      price: 1.02,
+      stock: 190,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/azucar_medio_kl_500g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702397",
+      name: "Balsamo para labio Vaseina",
+      price: 0.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/balsamo_para_labio_vaseina.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702400",
+      name: "Banderines HappyBirthday",
+      price: 3.08,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/banderines_happybirthday.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702402",
+      name: "Batidor",
+      price: 0.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/batidor.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702404",
+      name: "Ba\xF1o de crema alive",
+      price: 3.57,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ba_o_de_crema_alive.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702406",
+      name: "Bebida Achocolatada TIGO",
+      price: 1.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bebida_achocolatada_tigo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702408",
+      name: "Bebida RockStar",
+      price: 1.2,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bebida_rockstar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702410",
+      name: "Bebida Speed de lata",
+      price: 1.11,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bebida_speed_de_lata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702412",
+      name: "Bianchi en Barra 22g",
+      price: 0.5,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bianchi_en_barra_22g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702415",
+      name: "Bianchi Snack",
+      price: 0.99,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bianchi_snack.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702418",
+      name: "Bicarbonato",
+      price: 0.27,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bicarbonato.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702420",
+      name: "Blumas de Ni\xF1a",
+      price: 0.95,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/blumas_de_ni_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702422",
+      name: "Boka",
+      price: 0.4,
+      stock: 193,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/boka.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702424",
+      name: "Bolsa con ASA 10kg",
+      price: 2.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsa_con_asa_10kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702426",
+      name: "Bolsa con ASA 2 Kg",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsa_con_asa_2_kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702428",
+      name: "Bolsa con ASA 5 KG",
+      price: 1.86,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsa_con_asa_5_kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702430",
+      name: "Bolsa de regalo navide\xF1as GRANDE",
+      price: 1.33,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsa_de_regalo_navide_as_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702433",
+      name: "Bolsa de Teta por paquete",
+      price: 0.8,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsa_de_teta_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702435",
+      name: "Bolsa Negra de Basura",
+      price: 0.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsa_negra_de_basura.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702438",
+      name: "Bolsas de Regalo Gato y Oso",
+      price: 1.64,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsas_de_regalo_gato_y_oso.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702441",
+      name: "Bolsas de regalo peque\xF1as",
+      price: 0.62,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolsas_de_regalo_peque_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702443",
+      name: "Bolso de ni\xF1o GRANDE",
+      price: 9.87,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolso_de_ni_o_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702446",
+      name: "Bolso Escolar Peque\xF1o",
+      price: 9.87,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bolso_escolar_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702449",
+      name: "Bombas de Colores Detalladas",
+      price: 0.09,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombas_de_colores_detalladas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702452",
+      name: "Bombas por paquete",
+      price: 2.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombas_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702454",
+      name: "Bombillo Amarillo",
+      price: 0.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombillo_amarillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702457",
+      name: "Bombillo LED Cell 11W",
+      price: 1.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombillo_led_cell_11w.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702460",
+      name: "Bombillos LED CELL 15 W",
+      price: 1.2,
+      stock: 12,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombillos_led_cell_15_w.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702463",
+      name: "Bombones amarillo",
+      price: 0.36,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombones_amarillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702465",
+      name: "Bombones Bianchi",
+      price: 0.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombones_bianchi.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702467",
+      name: "Bombones CHOCOGRANDE",
+      price: 0.14,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombones_chocogrande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702470",
+      name: "Bombones Di Choco X 3",
+      price: 1.78,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombones_di_choco_x_3.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702472",
+      name: "Bombones Royal Ositos",
+      price: 0.11,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bombones_royal_ositos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702474",
+      name: "Borrador Davey",
+      price: 0.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/borrador_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702477",
+      name: "Brillo de Alambre",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/brillo_de_alambre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702480",
+      name: "Brillo de Jabon",
+      price: 0.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/brillo_de_jabon.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702482",
+      name: "Brillo de labio Frutas",
+      price: 0.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/brillo_de_labio_frutas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702485",
+      name: "Brillo de U\xF1as Valmy",
+      price: 0.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/brillo_de_u_as_valmy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702488",
+      name: "Brillo labial",
+      price: 0.62,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/brillo_labial.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702491",
+      name: "Brochas para Tinte",
+      price: 0.72,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/brochas_para_tinte.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702494",
+      name: "Bubaloo Sparkies",
+      price: 0.36,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bubaloo_sparkies.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702497",
+      name: "Bubble Roll",
+      price: 0.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bubble_roll.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702499",
+      name: "Bufito dulce de leche",
+      price: 0.8,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/bufito_dulce_de_leche.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702502",
+      name: "Burbujero",
+      price: 0.59,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/burbujero.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702504",
+      name: "Buscapina 10 Tab",
+      price: 2.57,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/buscapina_10_tab.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702507",
+      name: "Buscapina detallado",
+      price: 0.29,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/buscapina_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702509",
+      name: "Cacao en Polvo 100g SAVOY",
+      price: 3.55,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cacao_en_polvo_100g_savoy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702512",
+      name: "Cacheteros de ni\xF1a princesita sofia",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cacheteros_de_ni_a_princesita_sofia.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702515",
+      name: "Cadena con Zarcillo",
+      price: 1.92,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cadena_con_zarcillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702517",
+      name: "Cadenas con Nombre",
+      price: 2.12,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cadenas_con_nombre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702519",
+      name: "Cafe Amanecer 100g",
+      price: 1.47,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_amanecer_100g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702522",
+      name: "Cafe Amanecer 200g",
+      price: 3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_amanecer_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702524",
+      name: "Cafe Anzoategui 100g",
+      price: 1.58,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_anzoategui_100g.jpg",
+      stockQuantity: null,
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702526",
+      name: "Cafe Anzoategui 100grs",
+      price: 1.6,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_anzoategui_100grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702529",
+      name: "Cafe Anzoategui 50g",
+      price: 0.84,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_anzoategui_50g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702531",
+      name: "Cafe Arauca 100g",
+      price: 1.5,
+      stock: 190,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_arauca_100g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702534",
+      name: "Cafe Arauca 200G",
+      price: 3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_arauca_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702536",
+      name: "Cafe Arauca 50g",
+      price: 0.8,
+      stock: 190,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_arauca_50g.jpg",
+      stockQuantity: null,
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702539",
+      name: "Cafe Buen Cafe 100grs",
+      price: 1.63,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_buen_cafe_100grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702541",
+      name: "Cafe de Teta",
+      price: 0.82,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_de_teta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702543",
+      name: "Cafe DELLANONNA 100grs",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_dellanonna_100grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702546",
+      name: "Cafe DellaNonna 200G",
+      price: 3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_dellanonna_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702549",
+      name: "Cafe fama de america 100grs",
+      price: 1.01,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_fama_de_america_100grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702551",
+      name: "Cafe Fama de America 250g",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_fama_de_america_250g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702553",
+      name: "Cafe Favorito 100grs",
+      price: 1.4,
+      stock: 50,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_favorito_100grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702556",
+      name: "Cafe Favorito 200grs",
+      price: 2.8,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_favorito_200grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702558",
+      name: "Cafe Favorito 50grs",
+      price: 0.7,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_favorito_50grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702560",
+      name: "Cafe Flor de Arauca 200g",
+      price: 3.22,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cafe_flor_de_arauca_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702562",
+      name: "Caja peque\xF1a feliz dia",
+      price: 2.26,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/caja_peque_a_feliz_dia.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702565",
+      name: "Calcomania de ni\xF1a tipo cartera",
+      price: 1.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/calcomania_de_ni_a_tipo_cartera.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702567",
+      name: "Calcomania Infantil",
+      price: 0.72,
+      stock: 200,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/calcomania_infantil.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702569",
+      name: "Caldo de Costilla Sobresitos",
+      price: 0.25,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/caldo_de_costilla_sobresitos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702571",
+      name: "Caldo de Gallita Sobresito",
+      price: 0.25,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/caldo_de_gallita_sobresito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702574",
+      name: "Caldo de pollo Maggi",
+      price: 0.8,
+      stock: 12,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/caldo_de_pollo_maggi.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702576",
+      name: "Cambur",
+      price: 0.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cambur.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702578",
+      name: "Camisas",
+      price: 5.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/camisas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702581",
+      name: "Candenas con Zarcillos",
+      price: 1.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/candenas_con_zarcillos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702583",
+      name: "Candy Basquet ball",
+      price: 1.3,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/candy_basquet_ball.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702585",
+      name: "Canela en Concha",
+      price: 0.27,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/canela_en_concha.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702588",
+      name: "Canela en Polvo",
+      price: 0.2,
+      stock: 20,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/canela_en_polvo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702590",
+      name: "Caramelo PinPOP detallado",
+      price: 0.05,
+      stock: 999,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/caramelo_pinpop_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702592",
+      name: "Caramelos",
+      price: 0.05,
+      stock: 130,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/caramelos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702594",
+      name: "Caraota Amanecer 400g",
+      price: 1.35,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/caraota_amanecer_400g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702597",
+      name: "Cargadores",
+      price: 6.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cargadores.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702599",
+      name: "Carmencita",
+      price: 0.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carmencita.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702602",
+      name: "Carore\xF1a de lata",
+      price: 1.56,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carore_a_de_lata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702604",
+      name: "Carore\xF1a grande",
+      price: 8.1,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carore_a_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702606",
+      name: "Carpeta Manila amarilla",
+      price: 0.62,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carpeta_manila_amarilla.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702608",
+      name: "Carpeta Marron con Gancho TIPO OFICIO",
+      price: 0.8,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carpeta_marron_con_gancho_tipo_oficio.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702610",
+      name: "Carrito con dulce",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carrito_con_dulce.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702613",
+      name: "Carritos Peque\xF1o",
+      price: 0.38,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carritos_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702615",
+      name: "Carro Candy",
+      price: 1.28,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/carro_candy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702617",
+      name: "Cartas Espa\xF1ola",
+      price: 0.53,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cartas_espa_ola.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702620",
+      name: "Cartuchera Escolar Spiderman-Barbie",
+      price: 3.84,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cartuchera_escolar_spiderman_barbie.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702622",
+      name: "Cartuchera Pelusita",
+      price: 2.81,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cartuchera_pelusita.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702624",
+      name: "Cartuchera Sencilla",
+      price: 1.78,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cartuchera_sencilla.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702626",
+      name: "Cartulina Escarchada",
+      price: 1.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cartulina_escarchada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702629",
+      name: "Cartulina Escolar",
+      price: 0.71,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cartulina_escolar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702631",
+      name: "Casabe detallado",
+      price: 0.19,
+      stock: 185,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/casabe_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702634",
+      name: "Casabe Por Bulto",
+      price: 7.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/casabe_por_bulto.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702636",
+      name: "Cepillo de Barrer Con Palo",
+      price: 5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cepillo_de_barrer_con_palo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702638",
+      name: "Cepillo De Barrer sin palo",
+      price: 3.01,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cepillo_de_barrer_sin_palo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702640",
+      name: "Cepillo de Lavar",
+      price: 1.99,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cepillo_de_lavar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702642",
+      name: "Cepillo de PEINAR Pavito",
+      price: 1.54,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cepillo_de_peinar_pavito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702645",
+      name: "Cepillo Dental Oral-B ORIGINAL",
+      price: 2.12,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cepillo_dental_oral_b_original.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702648",
+      name: "Cepillo Oral B CHINO",
+      price: 0.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cepillo_oral_b_chino.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702650",
+      name: "Cera Blanca Oliger",
+      price: 3.01,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cera_blanca_oliger.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702653",
+      name: "Cera Verde Mi Peque\xF1a Yoha",
+      price: 1.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cera_verde_mi_peque_a_yoha.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702655",
+      name: "Cerelac 100gr",
+      price: 2.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cerelac_100gr.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702657",
+      name: "Cerelac 400 gr",
+      price: 6.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cerelac_400_gr.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702659",
+      name: "Cerveza de Lata Peque\xF1a",
+      price: 1.2,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cerveza_de_lata_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702662",
+      name: "Cerveza Pilsen LATA GRande",
+      price: 1.45,
+      stock: 194,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cerveza_pilsen_lata_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702664",
+      name: "Cerveza tercio botella",
+      price: 1.15,
+      stock: 176,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cerveza_tercio_botella.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702666",
+      name: "Charmy Detallada",
+      price: 0.3,
+      stock: 195,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/charmy_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702669",
+      name: "Charmy Paquete Sencilla",
+      price: 1.6,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/charmy_paquete_sencilla.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702671",
+      name: "Cheestre Familiar",
+      price: 1.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cheestre_familiar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702673",
+      name: "CheesTri peque\xF1o",
+      price: 0.95,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cheestri_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702676",
+      name: "Cheeto Boliqueso Grande",
+      price: 1.45,
+      stock: 6,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cheeto_boliqueso_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702678",
+      name: "Cheeto boliqueso peque\xF1o",
+      price: 0.7,
+      stock: 6,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cheeto_boliqueso_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702681",
+      name: "Cheeto Mega Puffs Grande color naranja",
+      price: 2.1,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cheeto_mega_puffs_grande_color_naranja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702683",
+      name: "Cheetos BOLIQUESO GRANDE",
+      price: 1.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cheetos_boliqueso_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702685",
+      name: "Cheetos Flamin Hot y MegaPufs Peque\xF1o",
+      price: 0.95,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cheetos_flamin_hot_y_megapufs_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702688",
+      name: "Chesitos grande",
+      price: 0.86,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chesitos_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702690",
+      name: "Chesitos Peque\xF1o",
+      price: 0.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chesitos_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702692",
+      name: "Chicharo por kilo",
+      price: 2.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chicharo_por_kilo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702695",
+      name: "Chicharron peque\xF1o",
+      price: 1.15,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chicharron_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702697",
+      name: "Chicle Buzzy",
+      price: 0.08,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chicle_buzzy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702699",
+      name: "Chicle Freegells",
+      price: 0.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chicle_freegells.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702702",
+      name: "Chicles Bola de colores",
+      price: 0.04,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chicles_bola_de_colores.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702704",
+      name: "Chicles Minty",
+      price: 0.74,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chicles_minty.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702706",
+      name: "Chimo TIGRITO",
+      price: 0.55,
+      stock: 194,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chimo_tigrito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702709",
+      name: "Chips Ahoy detallada",
+      price: 0.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chips_ahoy_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702712",
+      name: "Chips Ahoy Paquete",
+      price: 3.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chips_ahoy_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702715",
+      name: "Chispas de colores y chocolate",
+      price: 0.71,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chispas_de_colores_y_chocolate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702718",
+      name: "Chocolate Carre Mini",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_carre_mini.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702720",
+      name: "Chocolate KITKAT",
+      price: 1.7,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_kitkat.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702722",
+      name: "Chocolate LEXUS",
+      price: 4.69,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_lexus.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702725",
+      name: "Chocolate Postre OSCURO",
+      price: 6.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_postre_oscuro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702728",
+      name: "Chocolate Rich CALI",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_rich_cali.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702731",
+      name: "Chocolate Savoy  Cri-Cri y Galak Peque\xF1o",
+      price: 1.4,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_savoy__cri_cri_y_galak_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702733",
+      name: "Chocolate Savoy grande",
+      price: 2.64,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_savoy_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702736",
+      name: "Chocolate Savoy Grande 70g",
+      price: 2.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocolate_savoy_grande_70g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702738",
+      name: "Chocotigo UNTABLE",
+      price: 2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chocotigo_untable.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702741",
+      name: "Chuleta",
+      price: 14,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chuleta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702743",
+      name: "Chupetas PIN POP",
+      price: 0.2,
+      stock: 193,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/chupetas_pin_pop.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702746",
+      name: "Cigarro  Belmont Detallado",
+      price: 0.2,
+      stock: 170,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro__belmont_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702749",
+      name: "Cigarro Belmont Por Caja",
+      price: 3.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro_belmont_por_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702751",
+      name: "Cigarro Consul Por caja",
+      price: 1.73,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro_consul_por_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702754",
+      name: "Cigarro Lucky Detallado",
+      price: 0.23,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro_lucky_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702756",
+      name: "Cigarro Lucky Por caja",
+      price: 3.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro_lucky_por_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702759",
+      name: "Cigarro Universal detallado",
+      price: 0.13,
+      stock: 142,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro_universal_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702762",
+      name: "Cigarro Universal Media Caja",
+      price: 1.1,
+      stock: 196,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro_universal_media_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702764",
+      name: "Cigarro Universal Por Caja",
+      price: 2.2,
+      stock: 192,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cigarro_universal_por_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702767",
+      name: "Cinta Adhesiva Peque\xF1a",
+      price: 0.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cinta_adhesiva_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702769",
+      name: "Cintillo de Navidad con luces",
+      price: 1.81,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cintillo_de_navidad_con_luces.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702771",
+      name: "Cintillo de Orejitas para ni\xF1as",
+      price: 1.58,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cintillo_de_orejitas_para_ni_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702774",
+      name: "Cintillo de perla",
+      price: 1.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cintillo_de_perla.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702776",
+      name: "Cintillo Negro Brillante",
+      price: 1.92,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cintillo_negro_brillante.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702779",
+      name: "Cintillos de Navidad Sencillo",
+      price: 1.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cintillos_de_navidad_sencillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702781",
+      name: "Ciproflaxacina blister de 10 pastillas",
+      price: 2.22,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ciproflaxacina_blister_de_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702784",
+      name: "Clavo Especies",
+      price: 0.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/clavo_especies.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702786",
+      name: "Clik de Fresa",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/clik_de_fresa.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702789",
+      name: "Clik de Manga",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/clik_de_manga.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702791",
+      name: "Clik de Uva",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/clik_de_uva.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702794",
+      name: "Clik Durazno",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/clik_durazno.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702797",
+      name: "Clik Ensalada de Frutas",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/clik_ensalada_de_frutas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702800",
+      name: "Clips por unidad",
+      price: 0.27,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/clips_por_unidad.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702802",
+      name: "Cloro oso blanco",
+      price: 1.72,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cloro_oso_blanco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702805",
+      name: "Club Social Detallada",
+      price: 0.35,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/club_social_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702807",
+      name: "Club Social Paquete",
+      price: 1.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/club_social_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702810",
+      name: "Cocosette",
+      price: 1,
+      stock: 36,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cocosette.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702813",
+      name: "Cocosette Mini",
+      price: 0.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cocosette_mini.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702815",
+      name: "Cola con lazo",
+      price: 0.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cola_con_lazo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702818",
+      name: "Colador de Cafe",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/colador_de_cafe.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702820",
+      name: "Colador de JUGO",
+      price: 1.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/colador_de_jugo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702822",
+      name: "Colitas de colores 6 unidades",
+      price: 0.36,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/colitas_de_colores_6_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702825",
+      name: "Colitas y Ganchitos",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/colitas_y_ganchitos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702827",
+      name: "Colonia de bebe",
+      price: 2.31,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/colonia_de_bebe.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702830",
+      name: "Color Iberia",
+      price: 0.35,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/color_iberia.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702832",
+      name: "Colores DAVEY",
+      price: 2.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/colores_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702834",
+      name: "Coloretti Mini para torta",
+      price: 0.55,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/coloretti_mini_para_torta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702837",
+      name: "Comino IBERIA",
+      price: 0.45,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/comino_iberia.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702839",
+      name: "Compota GERBER",
+      price: 1.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/compota_gerber.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702842",
+      name: "Compota Grande Heinz",
+      price: 1.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/compota_grande_heinz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702844",
+      name: "Compota OSOLE",
+      price: 0.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/compota_osole.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702847",
+      name: "Compota Peque\xF1a Heinz",
+      price: 1.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/compota_peque_a_heinz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702849",
+      name: "Condones",
+      price: 0.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/condones.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702852",
+      name: "Conflake",
+      price: 3.4,
+      stock: 200,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/conflake.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702854",
+      name: "Consul Detallado",
+      price: 0.11,
+      stock: 195,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/consul_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702856",
+      name: "Corona de Metal",
+      price: 7.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/corona_de_metal.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702859",
+      name: "Corrector de OJERAS",
+      price: 0.82,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/corrector_de_ojeras.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702861",
+      name: "Corrector Escolar",
+      price: 1.11,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/corrector_escolar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702864",
+      name: "Corta U\xF1as",
+      price: 0.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/corta_u_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702866",
+      name: "Cortina de cumplea\xF1os",
+      price: 1.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cortina_de_cumplea_os.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702869",
+      name: "Cortinas Metalizadas",
+      price: 1.78,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cortinas_metalizadas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702871",
+      name: "Cotufas Acarameladas",
+      price: 0.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cotufas_acarameladas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702874",
+      name: "Crake\xF1a Detallada",
+      price: 0.95,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crake_a_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702876",
+      name: "Crema Alisadora Unicolor",
+      price: 3.29,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_alisadora_unicolor.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702879",
+      name: "Crema blanqueadora facial Davey",
+      price: 3.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_blanqueadora_facial_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702881",
+      name: "Crema Corporal Alive",
+      price: 2.19,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_corporal_alive.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702884",
+      name: "Crema de Arroz Agua Blanca 400grs",
+      price: 0.85,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_de_arroz_agua_blanca_400grs.jpg",
+      stockQuantity: null,
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702887",
+      name: "Crema de Arroz PRIMOR 225g",
+      price: 0.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_de_arroz_primor_225g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702889",
+      name: "Crema de Arroz PRIMOR 450g",
+      price: 1.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_de_arroz_primor_450g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702892",
+      name: "Crema de peinar ALIVE",
+      price: 3.41,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_de_peinar_alive.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702894",
+      name: "Crema de Peinar Everynight",
+      price: 4.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_de_peinar_everynight.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702897",
+      name: "Crema de peinar pantane sobre",
+      price: 0.45,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_de_peinar_pantane_sobre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702900",
+      name: "Crema de Zapato",
+      price: 0.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_de_zapato.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702902",
+      name: "Crema dental Alident 100g",
+      price: 1.55,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_dental_alident_100g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702905",
+      name: "Crema dental COLGATE",
+      price: 2.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_dental_colgate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702908",
+      name: "Crema dental las maravillas 100g",
+      price: 1.03,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_dental_las_maravillas_100g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702910",
+      name: "Crema dental ORAL-B",
+      price: 3.41,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_dental_oral_b.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702913",
+      name: "Crema Perfumada Peque\xF1a 80ml",
+      price: 2.19,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_perfumada_peque_a_80ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702915",
+      name: "Crema Skala",
+      price: 6.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/crema_skala.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702918",
+      name: "CronchFlakes 300g",
+      price: 3.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cronchflakes_300g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702920",
+      name: "Cuadernos Estampados",
+      price: 1.51,
+      stock: 200,
+      category: "Quicalleria",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cuadernos_estampados.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702922",
+      name: "Cubito",
+      price: 0.3,
+      stock: 175,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cubito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702925",
+      name: "Cubito de Carne",
+      price: 0.29,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cubito_de_carne.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702928",
+      name: "Cucharas grande",
+      price: 0.77,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cucharas_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702930",
+      name: "Cucharas peque\xF1as",
+      price: 0.44,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/cucharas_peque_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702933",
+      name: "Curitas Grandes de colores",
+      price: 0.09,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/curitas_grandes_de_colores.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702935",
+      name: "Curitas Redonda por unidad",
+      price: 0.06,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/curitas_redonda_por_unidad.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702938",
+      name: "Curry",
+      price: 0.27,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/curry.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702940",
+      name: "Dandy",
+      price: 0.5,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/dandy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702942",
+      name: "Decolorante de pelo BLONDOR",
+      price: 1.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/decolorante_de_pelo_blondor.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702945",
+      name: "Delineador de botellita",
+      price: 0.69,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/delineador_de_botellita.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702948",
+      name: "Desinfectante LAS LLAVES 1 Litro",
+      price: 4.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desinfectante_las_llaves_1_litro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702950",
+      name: "Desinfectante Oso Blanco",
+      price: 1.6,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desinfectante_oso_blanco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702953",
+      name: "Desloratadina 10 Tab",
+      price: 1.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desloratadina_10_tab.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702955",
+      name: "Desodorante AXE",
+      price: 5.73,
+      stock: 5,
+      category: "Higiene Personal",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_axe.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702957",
+      name: "Desodorante Clinical",
+      price: 0.58,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_clinical.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702960",
+      name: "Desodorante de SOBRE",
+      price: 0.86,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_de_sobre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702963",
+      name: "Desodorante de Tubo REXONA FOR MEN",
+      price: 2.23,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_de_tubo_rexona_for_men.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702966",
+      name: "Desodorante dove barra",
+      price: 7.24,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_dove_barra.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702968",
+      name: "Desodorante lady Speed Stick practitapa",
+      price: 0.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_lady_speed_stick_practitapa.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702971",
+      name: "Desodorante Lady Speed Stick TUBO 30g",
+      price: 1.83,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_lady_speed_stick_tubo_30g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702973",
+      name: "Desodorante Rexona Bolita",
+      price: 3.6,
+      stock: 6,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_rexona_bolita.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702976",
+      name: "Desodorante Rexona Bolita Aclarante",
+      price: 3.96,
+      stock: 6,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_rexona_bolita_aclarante.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702979",
+      name: "Desodorante REXONA en Crema",
+      price: 2.23,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_rexona_en_crema.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702981",
+      name: "Desodorante SECRET Barra",
+      price: 5.56,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/desodorante_secret_barra.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702984",
+      name: "Detergente 3N 400G",
+      price: 1.44,
+      stock: 200,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_3n_400g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702987",
+      name: "Detergente Alive 1kg",
+      price: 3.02,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_alive_1kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702991",
+      name: "Detergente Alive 200grs",
+      price: 0.7,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_alive_200grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702994",
+      name: "Detergente Alive 500g",
+      price: 1.71,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_alive_500g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206702997",
+      name: "Detergente Las LLAVES 400G",
+      price: 1.72,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_las_llaves_400g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703000",
+      name: "Detergente Multi Clean 400grs",
+      price: 1.35,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_multi_clean_400grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703003",
+      name: "Detergente Oso BLAnCO 200g",
+      price: 0.6,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_oso_blanco_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703005",
+      name: "Detergente Oso Blanco 400g",
+      price: 1.34,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detergente_oso_blanco_400g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703008",
+      name: "Detodito grande",
+      price: 2.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detodito_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703011",
+      name: "Detodito peque\xF1o",
+      price: 1.15,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/detodito_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703014",
+      name: "Diablito Abre Facil Peque\xF1o 50Gr",
+      price: 1.68,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/diablito_abre_facil_peque_o_50gr.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703017",
+      name: "Diablitos Under Wood 100g",
+      price: 3.6,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/diablitos_under_wood_100g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703019",
+      name: "Diclofenac Potasico 100mg Detallado",
+      price: 0.23,
+      stock: 199,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/diclofenac_potasico_100mg_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703022",
+      name: "Diclofenac Potasico 100mg por 10 PASTILLAS",
+      price: 1.47,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/diclofenac_potasico_100mg_por_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703025",
+      name: "Diclofenac Potasico 50mg DETALLADO",
+      price: 0.11,
+      stock: 198,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/diclofenac_potasico_50mg_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703027",
+      name: "Diclofenac Potasico 50mg Por 10 Pastillas",
+      price: 0.73,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/diclofenac_potasico_50mg_por_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703030",
+      name: "Discos para Torta",
+      price: 1.11,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/discos_para_torta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703033",
+      name: "Disfruta",
+      price: 0.87,
+      stock: 200,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/disfruta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703036",
+      name: "Dol Plus Detallado",
+      price: 0.29,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/dol_plus_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703038",
+      name: "Domino",
+      price: 5.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/domino.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703041",
+      name: "Doradita paq de 3 unidades",
+      price: 2.9,
+      stock: 200,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/doradita_paq_de_3_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703044",
+      name: "Doraditas",
+      price: 0.96,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/doraditas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703047",
+      name: "Dorito Grande",
+      price: 3.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/dorito_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703049",
+      name: "Dorito Normal, FlaminHot y Dinamita peque\xF1o",
+      price: 1.2,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/dorito_normal__flaminhot_y_dinamita_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703051",
+      name: "Ducream Avellana",
+      price: 0.18,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ducream_avellana.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703054",
+      name: "Envase de Aluminio para comida",
+      price: 0.35,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/envase_de_aluminio_para_comida.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703057",
+      name: "Escarcha de colores con dispensador",
+      price: 0.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/escarcha_de_colores_con_dispensador.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703059",
+      name: "Espejo Peque\xF1o",
+      price: 1.92,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/espejo_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703062",
+      name: "Esponja Verde de FREGAR",
+      price: 0.35,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/esponja_verde_de_fregar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703065",
+      name: "Estuche Nucita merienda",
+      price: 0.6,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/estuche_nucita_merienda.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703068",
+      name: "Estuche Sharoski",
+      price: 1.84,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/estuche_sharoski.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703070",
+      name: "Fin al  grip Detallado",
+      price: 0.22,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/fin_al__grip_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703073",
+      name: "Fin al Grip por caja",
+      price: 1.76,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/fin_al_grip_por_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703075",
+      name: "Flaquito",
+      price: 0.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/flaquito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703078",
+      name: "Flip peque\xF1o",
+      price: 0.72,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/flip_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703081",
+      name: "Flips grande",
+      price: 3.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/flips_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703083",
+      name: "Foami Escarchado",
+      price: 0.35,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/foami_escarchado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703087",
+      name: "Foami Sencillo sin escarcha",
+      price: 0.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/foami_sencillo_sin_escarcha.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703090",
+      name: "Fororo Valle Hondo 500g",
+      price: 1.44,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/fororo_valle_hondo_500g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703093",
+      name: "Fororo Vicone",
+      price: 1.3,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/fororo_vicone.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703096",
+      name: "Fosforo EL SOL Caja Peque\xF1a",
+      price: 0.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/fosforo_el_sol_caja_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703100",
+      name: "Freegells",
+      price: 0.3,
+      stock: 10,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/freegells.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703103",
+      name: "Frescarini Passata",
+      price: 2.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/frescarini_passata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703106",
+      name: "Frescarini Passata grande",
+      price: 3.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/frescarini_passata_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703109",
+      name: "Frijol Blanco Vicone",
+      price: 1.67,
+      stock: 5,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/frijol_blanco_vicone.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703113",
+      name: "Frunas",
+      price: 0.15,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/frunas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703115",
+      name: "Galak0. Tubito",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galak0__tubito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703118",
+      name: "Galleta BABO",
+      price: 0.5,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_babo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703121",
+      name: "galleta Babo de TUBO",
+      price: 0.7,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_babo_de_tubo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703124",
+      name: "Galleta CocoCrunch",
+      price: 1.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_cococrunch.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703127",
+      name: "Galleta Crake\xF1a Paquete",
+      price: 3.27,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_crake_a_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703130",
+      name: "Galleta Futurinhos 80g",
+      price: 0.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_futurinhos_80g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703133",
+      name: "Galleta Hony y Kraker DETALLADA",
+      price: 0.4,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_hony_y_kraker_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703136",
+      name: "Galleta Kraker y Hony bran por paquete",
+      price: 3.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_kraker_y_hony_bran_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703139",
+      name: "Galleta la pampa tipo Wafer",
+      price: 0.59,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_la_pampa_tipo_wafer.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703142",
+      name: "Galleta Maria GALEDONIA PAQUETE",
+      price: 1.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_maria_galedonia_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703145",
+      name: "Galleta Maria Inaica paquete",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_maria_inaica_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703148",
+      name: "Galleta Maria PUIG detallada",
+      price: 0.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_maria_puig_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703151",
+      name: "Galleta Maria PUIG Paquete",
+      price: 1.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_maria_puig_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703154",
+      name: "Galleta Marilu individual",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_marilu_individual.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703157",
+      name: "Galleta Radical Dallas",
+      price: 0.69,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_radical_dallas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703160",
+      name: "Galleta Radical Dallas",
+      price: 0.69,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_radical_dallas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703163",
+      name: "Galleta Rancheiro de Coco 300g",
+      price: 1.71,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_rancheiro_de_coco_300g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703166",
+      name: "Galleta Renata",
+      price: 0.84,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_renata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703169",
+      name: "Galleta Saltines detallada",
+      price: 0.25,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_saltines_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703172",
+      name: "Galleta Saltines Paquete",
+      price: 2.2,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_saltines_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703175",
+      name: "Galleta Soda puig DETALLADA",
+      price: 0.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_soda_puig_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703178",
+      name: "Galleta Soda Puig por paquete",
+      price: 1.9,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_soda_puig_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703181",
+      name: "Galleta Tip top individual",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_tip_top_individual.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703184",
+      name: "Galleta Tipo Wafer Gofita",
+      price: 0.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_tipo_wafer_gofita.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703187",
+      name: "Galleta TipTop",
+      price: 0.12,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_tiptop.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703190",
+      name: "Galleta TipTop 12 Unidades",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_tiptop_12_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703193",
+      name: "Galleta Wafer Colombina por PAQUETE",
+      price: 2.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_wafer_colombina_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703196",
+      name: "Galleta Yupi",
+      price: 0.5,
+      stock: 193,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galleta_yupi.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703199",
+      name: "Galletas Maria detallada",
+      price: 0.25,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galletas_maria_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703202",
+      name: "Galletas PRINCE XXL",
+      price: 0.47,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/galletas_prince_xxl.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703205",
+      name: "Gancheta y Pinza Brillante detalladas",
+      price: 1.68,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gancheta_y_pinza_brillante_detalladas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703208",
+      name: "Ganchito de conejito por Unidad",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ganchito_de_conejito_por_unidad.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703211",
+      name: "Ganchito de coronita el par",
+      price: 0.82,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ganchito_de_coronita_el_par.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703214",
+      name: "Ganchito de Pelo con perlas",
+      price: 0.62,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ganchito_de_pelo_con_perlas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703217",
+      name: "Gancho Negro de Pelo 48Unidades",
+      price: 0.74,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gancho_negro_de_pelo_48unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703220",
+      name: "Gatorade 500ml",
+      price: 2.21,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gatorade_500ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703223",
+      name: "Gel Acido",
+      price: 0.73,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gel_acido.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703226",
+      name: "Gelatina  Fruti\xF1o",
+      price: 0.83,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gelatina__fruti_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703229",
+      name: "Gelatina Every Night PEQUE\xD1O",
+      price: 2.14,
+      stock: 10,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gelatina_every_night_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703232",
+      name: "Gelatina Rolda Peque\xF1a",
+      price: 2.72,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gelatina_rolda_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703235",
+      name: "Gelatina TIGO",
+      price: 0.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gelatina_tigo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703238",
+      name: "Gelatina WINCO",
+      price: 0.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gelatina_winco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703241",
+      name: "Globo de Numero",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/globo_de_numero.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703244",
+      name: "Globos de Cumplea\xF1o Peque\xF1o",
+      price: 0.24,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/globos_de_cumplea_o_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703248",
+      name: "gomitas bombombun",
+      price: 1,
+      stock: 150,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gomitas_bombombun.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703250",
+      name: "Gomitas Brusli",
+      price: 0.6,
+      stock: 1111,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gomitas_brusli.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703254",
+      name: "Gomitas HotDog y Burger",
+      price: 0.22,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gomitas_hotdog_y_burger.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703257",
+      name: "Gomitas Play paquete y massmelow angelitos",
+      price: 0.55,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gomitas_play_paquete_y_massmelow_angelitos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703260",
+      name: "Gomitas Trululu Paquete",
+      price: 0.83,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gomitas_trululu_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703263",
+      name: "Gorra para ni\xF1os",
+      price: 4.15,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gorra_para_ni_os.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703266",
+      name: "Gorro de Ba\xF1o y Gorro Termico",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gorro_de_ba_o_y_gorro_termico.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703269",
+      name: "Gorro de malla para el cabello",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gorro_de_malla_para_el_cabello.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703272",
+      name: "Gorro de Navidad Lazos y VENADO",
+      price: 1.81,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gorro_de_navidad_lazos_y_venado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703275",
+      name: "Gorro de NAVIDAD SENCILLO",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gorro_de_navidad_sencillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703278",
+      name: "Gorro de Navidad Venado",
+      price: 1.78,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gorro_de_navidad_venado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703281",
+      name: "Gorro para mechas",
+      price: 1.59,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gorro_para_mechas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703284",
+      name: "Grapas para el cabello",
+      price: 1.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/grapas_para_el_cabello.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703287",
+      name: "Gripalce Detallado",
+      price: 0.27,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gripalce_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703290",
+      name: "Gripalce Por 10 Pastillas",
+      price: 2.74,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gripalce_por_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703293",
+      name: "Guantes amarillos Osoblanco",
+      price: 1.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/guantes_amarillos_osoblanco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703296",
+      name: "Guantes de Construccion el par",
+      price: 1.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/guantes_de_construccion_el_par.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703299",
+      name: "Guantes Negros por Par",
+      price: 0.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/guantes_negros_por_par.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703302",
+      name: "Guayabilla",
+      price: 0.38,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/guayabilla.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703305",
+      name: "Guds Ball",
+      price: 0.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/guds_ball.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703308",
+      name: "Guisantes de lata",
+      price: 2.53,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/guisantes_de_lata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703311",
+      name: "Gut Caldo de pollo",
+      price: 0.77,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/gut_caldo_de_pollo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703314",
+      name: "Harina de Trigo Do\xF1a Mara",
+      price: 1.6,
+      stock: 10,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_de_trigo_do_a_mara.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703317",
+      name: "Harina de Trigo La PAMPA 500g",
+      price: 0.86,
+      stock: 200,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_de_trigo_la_pampa_500g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703320",
+      name: "Harina de trigo la pampa de 1kilo",
+      price: 1.42,
+      stock: 199,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_de_trigo_la_pampa_de_1kilo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703323",
+      name: "Harina Kaly",
+      price: 1.5,
+      stock: 197,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_kaly.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703326",
+      name: "Harina PAN",
+      price: 1.7,
+      stock: 193,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_pan.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703329",
+      name: "Harina Pan de Arroz",
+      price: 1.6,
+      stock: 197,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_pan_de_arroz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703332",
+      name: "Harina para cachapa",
+      price: 2.5,
+      stock: 200,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_para_cachapa.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703336",
+      name: "Harina Sindoni todo uso",
+      price: 1.87,
+      stock: 6,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/harina_sindoni_todo_uso.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703339",
+      name: "Helado Chocomani",
+      price: 0.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_chocomani.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703342",
+      name: "Helado Chocomantecado",
+      price: 0.82,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_chocomantecado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703345",
+      name: "Helado de 1Litro",
+      price: 5.82,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_de_1litro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703348",
+      name: "Helado Fres",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_fres.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703351",
+      name: "Helado Mausi",
+      price: 0.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_mausi.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703354",
+      name: "Helado Max Polet",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_max_polet.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703357",
+      name: "Helado Peppa",
+      price: 0.93,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_peppa.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703360",
+      name: "Helado SuperCono",
+      price: 1.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_supercono.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703363",
+      name: "Helado tentacion",
+      price: 0.59,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_tentacion.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703366",
+      name: "Helado Tinitas",
+      price: 0.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_tinitas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703369",
+      name: "Helado Wonder",
+      price: 0.82,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/helado_wonder.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703372",
+      name: "Hilo de Coser",
+      price: 0.61,
+      stock: 195,
+      category: "Quicalleria",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hilo_de_coser.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703375",
+      name: "Hisopos",
+      price: 0.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hisopos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703378",
+      name: "Hojas Blanca Tipo Carta Detallada",
+      price: 0.02,
+      stock: 157,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hojas_blanca_tipo_carta_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703381",
+      name: "Hojas de Examen",
+      price: 0.15,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hojas_de_examen.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703384",
+      name: "Hojas Extra Oficio",
+      price: 0.07,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hojas_extra_oficio.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703387",
+      name: "Hojilla detallada DORCO",
+      price: 0.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hojilla_detallada_dorco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703390",
+      name: "Hojilla Dorco por PAQUETE",
+      price: 0.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hojilla_dorco_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703393",
+      name: "Hojilla Gillette Detallada",
+      price: 0.25,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hojilla_gillette_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703396",
+      name: "Hojilla Gillette X Caja",
+      price: 0.99,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/hojilla_gillette_x_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703399",
+      name: "Huevo DETALLADO",
+      price: 0.27,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/huevo_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703402",
+      name: "Huevos medio Carton",
+      price: 3.75,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/huevos_medio_carton.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703405",
+      name: "Huevos Sorpresa",
+      price: 0.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/huevos_sorpresa.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703408",
+      name: "Ibuprofeno 800mg 10 Pastillas",
+      price: 1.61,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ibuprofeno_800mg_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703411",
+      name: "Ibuprofeno detallado",
+      price: 0.22,
+      stock: 194,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ibuprofeno_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703414",
+      name: "Impermeable",
+      price: 7.14,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/impermeable.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703418",
+      name: "Inflador de Bomba",
+      price: 1.99,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/inflador_de_bomba.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703421",
+      name: "Interiores de Ni\xF1o",
+      price: 0.95,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/interiores_de_ni_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703424",
+      name: "Iselitas",
+      price: 0.65,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/iselitas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703427",
+      name: "Jabon anita grande",
+      price: 1.43,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_anita_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703430",
+      name: "Jabon Dove",
+      price: 2.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_dove.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703433",
+      name: "Jabon Las Llaves 250g",
+      price: 1.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_las_llaves_250g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703437",
+      name: "Jabon Las Llaves Bebe 160g",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_las_llaves_bebe_160g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703440",
+      name: "Jabon Multiuso 3n",
+      price: 0.83,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_multiuso_3n.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703443",
+      name: "Jabon Protex",
+      price: 1.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_protex.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703447",
+      name: "Jabon Puro de lavar",
+      price: 0.77,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_puro_de_lavar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703450",
+      name: "Jabon Rexona",
+      price: 1.85,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_rexona.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703454",
+      name: "Jack Chicharron grande",
+      price: 4.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jack_chicharron_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703457",
+      name: "Jamon",
+      price: 9.04,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jamon.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703460",
+      name: "Jamon de Pierna",
+      price: 9.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jamon_de_pierna.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703463",
+      name: "Jeringa Esteril 5ml",
+      price: 0.35,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jeringa_esteril_5ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703467",
+      name: "Jugo Del Monte peque\xF1o",
+      price: 0.9,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_del_monte_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703470",
+      name: "Jugo del Valle 1.5L",
+      price: 1.5,
+      stock: 15,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_del_valle_1_5l.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703473",
+      name: "Jugo Del Valle de 500ml",
+      price: 0.85,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_del_valle_de_500ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703477",
+      name: "Jugo Frubys",
+      price: 1.35,
+      stock: 36,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_frubys.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703480",
+      name: "Jugo Jucosa 1 litro",
+      price: 1.96,
+      stock: 18,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_jucosa_1_litro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703484",
+      name: "Jugo Jucosa 200ml",
+      price: 0.7,
+      stock: 35,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_jucosa_200ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703487",
+      name: "Jugo Justy  Duranzno 1.5L",
+      price: 1.55,
+      stock: 193,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_justy__duranzno_1_5l.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703490",
+      name: "Jugo justy Naranja",
+      price: 1.22,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_justy_naranja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703493",
+      name: "Jugo Kaito",
+      price: 1.01,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_kaito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703497",
+      name: "Jugo Natulac 1litro",
+      price: 2.47,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_natulac_1litro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703500",
+      name: "Jugo Tigo",
+      price: 3.1,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_tigo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703503",
+      name: "Jugo Yukeri  1.5 Litros",
+      price: 4.9,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_yukeri__1_5_litros.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703506",
+      name: "Jugo Yukeri de Botella 250ml",
+      price: 1.15,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_yukeri_de_botella_250ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703509",
+      name: "Jugo Yukery 500ML",
+      price: 1.9,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_yukery_500ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703512",
+      name: "Jugo Yukery Botella 250ml",
+      price: 1.2,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_yukery_botella_250ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703516",
+      name: "Jugo Yukery de Botellita de Vidrio",
+      price: 1.15,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_yukery_de_botellita_de_vidrio.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703519",
+      name: "Jugo Yuky-Park de Pitillito",
+      price: 1.15,
+      stock: 199,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_yuky_park_de_pitillito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703522",
+      name: "juguete pets candy",
+      price: 1.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/juguete_pets_candy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703525",
+      name: "Karseell",
+      price: 2.5,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/karseell.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703528",
+      name: "Lapicero",
+      price: 0.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lapicero.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703531",
+      name: "Lapicero de ni\xF1os con mu\xF1equitos",
+      price: 1.5,
+      stock: 200,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lapicero_de_ni_os_con_mu_equitos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703534",
+      name: "Lapiz Mongol",
+      price: 0.65,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lapiz_mongol.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703537",
+      name: "Lapiz para Cejas",
+      price: 0.5,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lapiz_para_cejas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703540",
+      name: "Laser linterna",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/laser_linterna.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703543",
+      name: "LAUREL",
+      price: 0.38,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/laurel.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703546",
+      name: "Lavaplato Oso Blanco LIQUIDO 450ml de PEROLL",
+      price: 1.29,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lavaplato_oso_blanco_liquido_450ml_de_peroll.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703549",
+      name: "Lavaplato Oso Blanco Sobre",
+      price: 1.29,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lavaplato_oso_blanco_sobre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703552",
+      name: "Lavaplato ZAGAZ Grande",
+      price: 2.65,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lavaplato_zagaz_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703556",
+      name: "Lavaplato Zagaz peque\xF1o",
+      price: 1.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lavaplato_zagaz_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703558",
+      name: "Lazitos peque\xF1o",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lazitos_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703561",
+      name: "Lazos con pinza grande",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lazos_con_pinza_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703565",
+      name: "Leche Amanecer de 125grs",
+      price: 2.46,
+      stock: 200,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_amanecer_de_125grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703567",
+      name: "Leche Carabobo 1 L",
+      price: 2.8,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_carabobo_1_l.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703571",
+      name: "Leche Completa la Campesina 200grs",
+      price: 4.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_completa_la_campesina_200grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703574",
+      name: "Leche Condesada Cremor",
+      price: 2.1,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_condesada_cremor.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703577",
+      name: "Leche Condesada Maita",
+      price: 1.9,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_condesada_maita.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703580",
+      name: "Leche DoBon 120grs",
+      price: 1.6,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_dobon_120grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703583",
+      name: "Leche La Campi\xF1a 200 Grs",
+      price: 4,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_la_campi_a_200_grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703586",
+      name: "Leche LIQUIDA",
+      price: 2.7,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/leche_liquida.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703589",
+      name: "Lentejas Amanecer",
+      price: 1.83,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lentejas_amanecer.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703592",
+      name: "Lentes de Lectura",
+      price: 0.89,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lentes_de_lectura.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703595",
+      name: "Ligas para el cabello",
+      price: 0.35,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ligas_para_el_cabello.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703598",
+      name: "Lima de U\xF1a Sencilla",
+      price: 0.62,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lima_de_u_a_sencilla.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703601",
+      name: "Lima Tipo Espatula para pies",
+      price: 1.99,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lima_tipo_espatula_para_pies.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703604",
+      name: "Limas de U\xF1as Davey",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/limas_de_u_as_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703607",
+      name: "Lisso Inteligente SOBRE",
+      price: 0.83,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lisso_inteligente_sobre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703610",
+      name: "Lluvia de Chocolate",
+      price: 0.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lluvia_de_chocolate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703613",
+      name: "Lluvia de colores",
+      price: 0.45,
+      stock: 200,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/lluvia_de_colores.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703616",
+      name: "Locion Coporal",
+      price: 3.74,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/locion_coporal.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703620",
+      name: "Loperam 10 Tab",
+      price: 1.32,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/loperam_10_tab.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703623",
+      name: "Loperam detallado",
+      price: 0.15,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/loperam_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703626",
+      name: "Loratadina 10 Pastillas",
+      price: 1.51,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/loratadina_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703629",
+      name: "Loratadina Detallado",
+      price: 0.12,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/loratadina_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703632",
+      name: "Maiz de cotufa Amanecer 500g",
+      price: 1.73,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/maiz_de_cotufa_amanecer_500g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703636",
+      name: "Maiz Dulce 190gr",
+      price: 1.99,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/maiz_dulce_190gr.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703639",
+      name: "Maizina Americana 90g",
+      price: 1.1,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/maizina_americana_90g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703642",
+      name: "Malta de Botella retornable",
+      price: 0.6,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/malta_de_botella_retornable.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703645",
+      name: "Malta de Litron",
+      price: 2.2,
+      stock: 199,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/malta_de_litron.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703648",
+      name: "Malta desechable de botella",
+      price: 0.9,
+      stock: 199,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/malta_desechable_de_botella.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703652",
+      name: "Mani Jacks",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mani_jacks.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703655",
+      name: "Mantequilla Deline 250g",
+      price: 1.46,
+      stock: 182,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mantequilla_deline_250g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703658",
+      name: "Mantequilla Mavesa 250g",
+      price: 1.7,
+      stock: 192,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mantequilla_mavesa_250g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703661",
+      name: "Mantequilla Mavesa 500g",
+      price: 3.2,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mantequilla_mavesa_500g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703664",
+      name: "Mantequilla Nelly 250g",
+      price: 1.47,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mantequilla_nelly_250g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703668",
+      name: "Manzanilla",
+      price: 0.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/manzanilla.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703671",
+      name: "Marcador Acrilico y Permanente",
+      price: 0.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/marcador_acrilico_y_permanente.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703674",
+      name: "Marcadores Resaltadores",
+      price: 0.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/marcadores_resaltadores.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703677",
+      name: "Marilu",
+      price: 0.25,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/marilu.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703680",
+      name: "Masa para Pastelito",
+      price: 1.85,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/masa_para_pastelito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703683",
+      name: "Max COCO",
+      price: 0.59,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/max_coco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703686",
+      name: "Mayonesa Kraft grande",
+      price: 4.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mayonesa_kraft_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703689",
+      name: "Mayonesa Kraft Peque\xF1a",
+      price: 2.15,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mayonesa_kraft_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703692",
+      name: "Mayonesa Mavesa GRANDE",
+      price: 4.51,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mayonesa_mavesa_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703696",
+      name: "Mayonesa Mavesa PEQUE\xD1A",
+      price: 2.3,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mayonesa_mavesa_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703699",
+      name: "Maza Broza 1kg",
+      price: 3.02,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/maza_broza_1kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703702",
+      name: "Mechon Con Pinza",
+      price: 1.64,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mechon_con_pinza.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703705",
+      name: "Media de caballero pelotero",
+      price: 1.93,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/media_de_caballero_pelotero.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703709",
+      name: "Media para ni\xF1o 3 pares",
+      price: 1.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/media_para_ni_o_3_pares.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703712",
+      name: "Medias de Damas 3 Pares",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/medias_de_damas_3_pares.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703715",
+      name: "Mega Ball",
+      price: 0.45,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mega_ball.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703718",
+      name: "Mentol Davis",
+      price: 1.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mentol_davis.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703721",
+      name: "Mentos",
+      price: 0.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mentos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703724",
+      name: "Metras por Paquete",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/metras_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703727",
+      name: "Migurt yogurt",
+      price: 1.5,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/migurt_yogurt.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703731",
+      name: "Mini torta renata",
+      price: 0.77,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mini_torta_renata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703734",
+      name: "Mode Kotex con Alas",
+      price: 1.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mode_kotex_con_alas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703737",
+      name: "Mode Wanita Morado",
+      price: 1.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mode_wanita_morado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703740",
+      name: "Modes Alive Morada NOCTURNA",
+      price: 2.06,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/modes_alive_morada_nocturna.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703744",
+      name: "Modes Alive Rosado 8 Unidades",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/modes_alive_rosado_8_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703748",
+      name: "Modes Always",
+      price: 2.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/modes_always.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703751",
+      name: "Modes detallado",
+      price: 0.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/modes_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703754",
+      name: "Modes Kotex",
+      price: 1.83,
+      stock: 200,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/modes_kotex.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703757",
+      name: "Modes Securezza 10 Unidades",
+      price: 4.28,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/modes_securezza_10_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703760",
+      name: "Modes Wanita Rosado",
+      price: 0.9,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/modes_wanita_rosado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703769",
+      name: "Moneda de Chocolate Bolsita",
+      price: 1.1,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/moneda_de_chocolate_bolsita.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703773",
+      name: "Monedas de chocolate",
+      price: 0.07,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/monedas_de_chocolate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703776",
+      name: "Monedas de Chocolate",
+      price: 0.07,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/monedas_de_chocolate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703779",
+      name: "Mordisquito",
+      price: 0.44,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mordisquito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703783",
+      name: "Mortadela  Milenium 600grs",
+      price: 2.65,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mortadela__milenium_600grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703787",
+      name: "Mostaza EUREKA",
+      price: 2.03,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mostaza_eureka.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703793",
+      name: "Mo\xF1eras PAQUETE",
+      price: 1.64,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/mo_eras_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703800",
+      name: "Muslo de pollo",
+      price: 4.15,
+      stock: 197,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/muslo_de_pollo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703805",
+      name: "Nestea",
+      price: 1.55,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nestea.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703809",
+      name: "Nestum 225Grs",
+      price: 4.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nestum_225grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703812",
+      name: "Nestum 50g",
+      price: 1.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nestum_50g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703816",
+      name: "Nucita Crunch Peque\xF1a 35g",
+      price: 0.55,
+      stock: 36,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nucita_crunch_peque_a_35g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703819",
+      name: "Nucita CrunhFlow",
+      price: 1.95,
+      stock: 18,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nucita_crunhflow.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703822",
+      name: "Nucita de Tubo",
+      price: 1.3,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nucita_de_tubo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703825",
+      name: "Nucita Merienda Peque\xF1a",
+      price: 0.65,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nucita_merienda_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703829",
+      name: "Nucita Peque\xF1a BARATA",
+      price: 0.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nucita_peque_a_barata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703832",
+      name: "Nutribela Sobre",
+      price: 0.86,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/nutribela_sobre.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703835",
+      name: "Omeprazol 10 Tab",
+      price: 1.03,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/omeprazol_10_tab.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703838",
+      name: "Omeprazol Detallado",
+      price: 0.12,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/omeprazol_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703841",
+      name: "Onoto en grano",
+      price: 0.85,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/onoto_en_grano.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703845",
+      name: "ONOTO EN GRANO",
+      price: 0.85,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/onoto_en_grano.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703849",
+      name: "OREGANO",
+      price: 0.76,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/oregano.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703852",
+      name: "Oreo de Tubo",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/oreo_de_tubo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703855",
+      name: "Oreo Fudge",
+      price: 0.55,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/oreo_fudge.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703859",
+      name: "Oreo Individual",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/oreo_individual.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703862",
+      name: "Oreo Mostrador",
+      price: 0.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/oreo_mostrador.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703866",
+      name: "Ovomaltina 35g",
+      price: 2.08,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ovomaltina_35g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703869",
+      name: "Pabilo",
+      price: 0.85,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pabilo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703872",
+      name: "Paletas Candy",
+      price: 0.28,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paletas_candy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703875",
+      name: "Palitos Danibisk",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/palitos_danibisk.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703878",
+      name: "Palo de Cepillo",
+      price: 0.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/palo_de_cepillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703882",
+      name: "Palomitas",
+      price: 0.46,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/palomitas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703885",
+      name: "Panelada",
+      price: 0.7,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/panelada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703888",
+      name: "Panque Crustisimo",
+      price: 1.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/panque_crustisimo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703891",
+      name: "Papa frita 160g",
+      price: 1.92,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papa_frita_160g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703895",
+      name: "Papa Jacks",
+      price: 1.04,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papa_jacks.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703898",
+      name: "Papel  Sedita de 4 Rollos",
+      price: 1.5,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel__sedita_de_4_rollos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703901",
+      name: "Papel Bond",
+      price: 0.5,
+      stock: 30,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_bond.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703905",
+      name: "Papel Caricias 4 Rollos",
+      price: 1.61,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_caricias_4_rollos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703908",
+      name: "Papel Creppe",
+      price: 0.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_creppe.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703911",
+      name: "Papel de 1 ROLLO CARICIAS",
+      price: 0.4,
+      stock: 195,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_de_1_rollo_caricias.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703914",
+      name: "Papel de Aluminio 15.2M",
+      price: 2.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_de_aluminio_15_2m.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703918",
+      name: "Papel Rosal 2 rollos",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_rosal_2_rollos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703921",
+      name: "Papel Rosal 4 Rollos",
+      price: 0.67,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_rosal_4_rollos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703924",
+      name: "Papelon Cono",
+      price: 2.36,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papelon_cono.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703927",
+      name: "Papita Fritas FRITZ",
+      price: 2.6,
+      stock: 20,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/papita_fritas_fritz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703930",
+      name: "Paquete de Pa\xF1al  Davey Talla M",
+      price: 3.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al__davey_talla_m.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703934",
+      name: "Paquete de Pa\xF1al Baby Finger XG",
+      price: 3.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_baby_finger_xg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703937",
+      name: "Paquete de Pa\xF1al Davey  Talla XG",
+      price: 3.9,
+      stock: 12,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_davey__talla_xg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703940",
+      name: "Paquete de Pa\xF1al Davey 10Unidades Talla G",
+      price: 3.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_davey_10unidades_talla_g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703943",
+      name: "Paquete de Pa\xF1al Davey 10Unidades Talla P",
+      price: 2.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_davey_10unidades_talla_p.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703947",
+      name: "Paquete de Pa\xF1al Huggies talla G",
+      price: 6.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_huggies_talla_g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703950",
+      name: "Paquete de Pa\xF1al Huggies talla XG 25 unidades",
+      price: 14.17,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_huggies_talla_xg_25_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703954",
+      name: "Paquete de Pa\xF1al RN",
+      price: 2.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_rn.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703957",
+      name: "Paquete Pa\xF1al Huggies RN",
+      price: 12.35,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_pa_al_huggies_rn.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703960",
+      name: "Paragua de ni\xF1o",
+      price: 4.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paragua_de_ni_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703964",
+      name: "Paraguas de ni\xF1os",
+      price: 5.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/paraguas_de_ni_os.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703967",
+      name: "Parchos para Bicicleta",
+      price: 1.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/parchos_para_bicicleta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703970",
+      name: "Pasta Capri Corta 1Kg",
+      price: 2.3,
+      stock: 12,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pasta_capri_corta_1kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703974",
+      name: "Pasta Capri LARGA de KG",
+      price: 2.1,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pasta_capri_larga_de_kg.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703977",
+      name: "Pasta de Pasticho",
+      price: 1.85,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pasta_de_pasticho.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703980",
+      name: "Pasta de tomate Frescarini",
+      price: 2.91,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pasta_de_tomate_frescarini.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703984",
+      name: "Pasta Larga y Corta Primor 500grs",
+      price: 1.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pasta_larga_y_corta_primor_500grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703987",
+      name: "Pastina",
+      price: 1.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pastina.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703990",
+      name: "Pa\xF1al XG Detallado",
+      price: 0.45,
+      stock: 195,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pa_al_xg_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703993",
+      name: "Pa\xF1ales detallado Davey",
+      price: 0.35,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pa_ales_detallado_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206703997",
+      name: "Pa\xF1ales Detallados",
+      price: 0.44,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pa_ales_detallados.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704001",
+      name: "Pa\xF1ito para la cara de ni\xF1os",
+      price: 0.98,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pa_ito_para_la_cara_de_ni_os.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704004",
+      name: "Pa\xF1o AMARILLO",
+      price: 1.64,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pa_o_amarillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704007",
+      name: "Pa\xF1oletas",
+      price: 1.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pa_oletas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704011",
+      name: "Pega Blanca Escolar 60ml",
+      price: 0.5,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pega_blanca_escolar_60ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704014",
+      name: "Pega blanca payasito 120g",
+      price: 1.32,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pega_blanca_payasito_120g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704017",
+      name: "Pega de pesta\xF1a pote grande 30ml",
+      price: 1.72,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pega_de_pesta_a_pote_grande_30ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704020",
+      name: "Pega de u\xF1as",
+      price: 0.62,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pega_de_u_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704024",
+      name: "Pega Loca",
+      price: 0.5,
+      stock: 194,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pega_loca.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704027",
+      name: "Pega para Moscas",
+      price: 0.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pega_para_moscas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704030",
+      name: "PegaTamke",
+      price: 4.93,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pegatamke.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704033",
+      name: "Peine Largo",
+      price: 0.77,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/peine_largo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704037",
+      name: "Peine saca piojos",
+      price: 0.36,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/peine_saca_piojos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704040",
+      name: "Peine Sacapiojo de Metal Terminator",
+      price: 1.57,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/peine_sacapiojo_de_metal_terminator.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704043",
+      name: "Pelota Conejo con luz",
+      price: 1.44,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pelota_conejo_con_luz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704047",
+      name: "Pelotas Grande",
+      price: 1.51,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pelotas_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704050",
+      name: "Pelotas Peque\xF1a",
+      price: 0.57,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pelotas_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704053",
+      name: "Pepas para el cabello",
+      price: 0.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepas_para_el_cabello.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704056",
+      name: "Pepitas Danibisk",
+      price: 0.49,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepitas_danibisk.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704059",
+      name: "Pepito Chesito",
+      price: 0.99,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepito_chesito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704064",
+      name: "Pepito ORIGINAL GRANDE 80g",
+      price: 1.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepito_original_grande_80g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704067",
+      name: "Pepito Original PEQUE\xD1O",
+      price: 0.7,
+      stock: 197,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepito_original_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704070",
+      name: "Pepito Pedrito",
+      price: 0.75,
+      stock: 192,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepito_pedrito.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704074",
+      name: "Pepito Puffy grande",
+      price: 0.91,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepito_puffy_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704077",
+      name: "Pepito TOM Grande",
+      price: 0.9,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepito_tom_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704080",
+      name: "Pepito TOM peque\xF1o",
+      price: 0.35,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepito_tom_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704083",
+      name: "Pepitona Margarita 140g",
+      price: 2.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepitona_margarita_140g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704087",
+      name: "Pepitos Puffy PEQUE\xD1O",
+      price: 0.35,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepitos_puffy_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704091",
+      name: "Pepitos Rapido",
+      price: 0.46,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pepitos_rapido.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704094",
+      name: "Perfilador de Cejas",
+      price: 1.19,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/perfilador_de_cejas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704098",
+      name: "Perfumes de Dama y Caballero Peque\xF1o 52ml",
+      price: 2.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/perfumes_de_dama_y_caballero_peque_o_52ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704101",
+      name: "Perinola",
+      price: 1.99,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/perinola.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704105",
+      name: "Pesta\xF1a punto por punto",
+      price: 1.28,
+      stock: 200,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pesta_a_punto_por_punto.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704108",
+      name: "Pesta\xF1as Corrida MAC",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pesta_as_corrida_mac.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704111",
+      name: "Piazza",
+      price: 0.24,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/piazza.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704115",
+      name: "Picante Chirelito OLIMPIA 150cm3",
+      price: 2.24,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/picante_chirelito_olimpia_150cm3.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704118",
+      name: "Picante FRIZZ",
+      price: 2.82,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/picante_frizz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704122",
+      name: "Pigmento para Cejas",
+      price: 2.13,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pigmento_para_cejas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704125",
+      name: "Pila AAA Alkaline",
+      price: 1.11,
+      stock: 200,
+      category: "Quicalleria",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pila_aaa_alkaline.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704128",
+      name: "Pilas  AAA ENERGIZER",
+      price: 2.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pilas__aaa_energizer.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704131",
+      name: "Pilas AA  kengever",
+      price: 1.28,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pilas_aa__kengever.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704134",
+      name: "Pilas AAA Alkaline",
+      price: 1.04,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pilas_aaa_alkaline.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704138",
+      name: "Pilas Energizer AA",
+      price: 4.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pilas_energizer_aa.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704141",
+      name: "Pimienta Iberia",
+      price: 0.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pimienta_iberia.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704145",
+      name: "Pinceles delgados",
+      price: 0.59,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pinceles_delgados.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704148",
+      name: "Pinceles gruesos",
+      price: 0.74,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pinceles_gruesos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704152",
+      name: "Pintura al Frio",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pintura_al_frio.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704155",
+      name: "Pintura de Labio MAC",
+      price: 1.2,
+      stock: 200,
+      category: "Quicalleria",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pintura_de_labio_mac.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704159",
+      name: "Pintura de U\xF1a Mariana Secret",
+      price: 0.95,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pintura_de_u_a_mariana_secret.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704162",
+      name: "Pintura de U\xF1a Valmy y wincolor",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pintura_de_u_a_valmy_y_wincolor.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704165",
+      name: "Pinza de Ceja",
+      price: 0.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pinza_de_ceja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704169",
+      name: "Piojito por paquetico",
+      price: 0.74,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/piojito_por_paquetico.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704172",
+      name: "Pirulin Max",
+      price: 1.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pirulin_max.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704175",
+      name: "Pirulin peque\xF1o",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pirulin_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704179",
+      name: "Pistola de dulces",
+      price: 0.34,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pistola_de_dulces.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704182",
+      name: "Pitillo por paquete",
+      price: 1.03,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pitillo_por_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704186",
+      name: "Plagatox Lanju caja",
+      price: 2.3,
+      stock: 15,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/plagatox_lanju_caja.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704189",
+      name: "Plagatox Lanju detallado",
+      price: 0.55,
+      stock: 16,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/plagatox_lanju_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704192",
+      name: "Platanito Natuchips Grande",
+      price: 2,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/platanito_natuchips_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704196",
+      name: "Platanitos Natuchips Peque\xF1o",
+      price: 1.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/platanitos_natuchips_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704199",
+      name: "Plato No.5",
+      price: 0.59,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/plato_no_5.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704203",
+      name: "Plato numero 6",
+      price: 0.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/plato_numero_6.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704206",
+      name: "Pollo Entero",
+      price: 3.97,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pollo_entero.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704209",
+      name: "Polvo Compacto Monreve",
+      price: 2.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/polvo_compacto_monreve.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704213",
+      name: "Polvo de hadas",
+      price: 1.72,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/polvo_de_hadas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704216",
+      name: "Polvo para Hornear",
+      price: 0.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/polvo_para_hornear.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704220",
+      name: "Ponque Renata",
+      price: 0.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/ponque_renata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704223",
+      name: "Protectores Diarios",
+      price: 0.36,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/protectores_diarios.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704226",
+      name: "Protectores Diarios Alive 20 Unidades",
+      price: 1.11,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/protectores_diarios_alive_20_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704230",
+      name: "Pure de Tomate",
+      price: 2.14,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/pure_de_tomate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704234",
+      name: "Queso Amarillo",
+      price: 12.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/queso_amarillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704237",
+      name: "Queso DURO",
+      price: 8.2,
+      stock: 194,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/queso_duro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704241",
+      name: "Quinchoncho",
+      price: 1.9,
+      stock: 20,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/quinchoncho.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704244",
+      name: "Rapido Peque\xF1o",
+      price: 0.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/rapido_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704248",
+      name: "Raquety peque\xF1o picante",
+      price: 0.55,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/raquety_peque_o_picante.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704251",
+      name: "Raquety picante 36grs",
+      price: 0.95,
+      stock: 24,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/raquety_picante_36grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704254",
+      name: "Recarga Digitel",
+      price: 1.03,
+      stock: 1999,
+      category: "Servicio de Recarga",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/recarga_digitel.jpg",
+      priceBs: 250,
+      stockQuantity: 1999,
+      isSoldByWeight: 1,
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704258",
+      name: "Recolector de HECES",
+      price: 0.51,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/recolector_de_heces.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704261",
+      name: "Recolector de Orina",
+      price: 0.7,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/recolector_de_orina.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704266",
+      name: "Red Bull",
+      price: 3.25,
+      stock: 10,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/red_bull.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704269",
+      name: "Refresco Cocacola 1.25L VIDRIO",
+      price: 1.1,
+      stock: 1111,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_cocacola_1_25l_vidrio.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704272",
+      name: "Refresco Cocacola 2Litros",
+      price: 1.8,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_cocacola_2litros.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704276",
+      name: "Refresco Cocacola de 1Litro",
+      price: 1.1,
+      stock: 100,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_cocacola_de_1litro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704279",
+      name: "Refresco Cocacola de Lata",
+      price: 1.1,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_cocacola_de_lata.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704283",
+      name: "Refresco de Botella PEPSI",
+      price: 0.6,
+      stock: 200,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_de_botella_pepsi.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704287",
+      name: "Refresco Glup 2L NEGRO",
+      price: 1.25,
+      stock: 165,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_glup_2l_negro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704290",
+      name: "Refresco Glup 400ml",
+      price: 0.55,
+      stock: 198,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_glup_400ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704294",
+      name: "Refresco Glup de 1Litro",
+      price: 1,
+      stock: 196,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_glup_de_1litro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704297",
+      name: "Refresco Hit de botella",
+      price: 0.55,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_hit_de_botella.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704301",
+      name: "Refresco Pepsi 1 LITRO",
+      price: 1.05,
+      stock: 191,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_pepsi_1_litro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704304",
+      name: "Refresco Pepsi 1.5L",
+      price: 1.5,
+      stock: 199,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_pepsi_1_5l.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704307",
+      name: "Refresco Pepsi 2 Litros",
+      price: 2,
+      stock: 191,
+      category: "Bebidas",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/refresco_pepsi_2_litros.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704311",
+      name: "Removedor Davey",
+      price: 2.34,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/removedor_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704314",
+      name: "Removedor valmy",
+      price: 4.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/removedor_valmy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704319",
+      name: "Rica Chicha 400Grs",
+      price: 4.55,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/rica_chicha_400grs.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704323",
+      name: "Rikesa 200g",
+      price: 4.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/rikesa_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704327",
+      name: "Rimmel para pesta\xF1as",
+      price: 1.61,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/rimmel_para_pesta_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704331",
+      name: "Rufle de Queso peque\xF1o",
+      price: 1.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/rufle_de_queso_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704334",
+      name: "Rufles Grande",
+      price: 4.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/rufles_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704338",
+      name: "Rutina Invertida Shampoo y Ba\xF1o de crema de almendra",
+      price: 0.7,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/rutina_invertida_shampoo_y_ba_o_de_crema_de_almendra.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704341",
+      name: "Sabroseador GUT",
+      price: 0.7,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sabroseador_gut.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704345",
+      name: "Sabroseador IBERIA",
+      price: 0.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sabroseador_iberia.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704349",
+      name: "Saca Cuticulas",
+      price: 2.19,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/saca_cuticulas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704352",
+      name: "SacaPunta de Hierro",
+      price: 0.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sacapunta_de_hierro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704356",
+      name: "Sal MERU",
+      price: 0.75,
+      stock: 20,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sal_meru.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704359",
+      name: "Salchicha Mana",
+      price: 6.78,
+      stock: 19,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/salchicha_mana.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704363",
+      name: "Salsa de Ajo, Inglesa y Soya IBERIA",
+      price: 1.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/salsa_de_ajo__inglesa_y_soya_iberia.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704366",
+      name: "Salsa de Tomate Pampero Grande",
+      price: 2.75,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/salsa_de_tomate_pampero_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704370",
+      name: "Salsa de Tomate PAMPERO Peque\xF1a",
+      price: 1.76,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/salsa_de_tomate_pampero_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704374",
+      name: "Salsa para pasta GUT 34g",
+      price: 0.92,
+      stock: 196,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/salsa_para_pasta_gut_34g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704378",
+      name: "Saltitacos detallada",
+      price: 0.74,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/saltitacos_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704381",
+      name: "Saltitacos Paquete",
+      price: 3.54,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/saltitacos_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704385",
+      name: "Samba Avellana",
+      price: 1.2,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/samba_avellana.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704388",
+      name: "Samba Mini",
+      price: 0.6,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/samba_mini.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704392",
+      name: "Samba Peque\xF1a Avellana",
+      price: 1.54,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/samba_peque_a_avellana.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704395",
+      name: "Samba Peque\xF1a Fresa y Chocolate",
+      price: 0.95,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/samba_peque_a_fresa_y_chocolate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704399",
+      name: "Sangria La que manda",
+      price: 5.95,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sangria_la_que_manda.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704402",
+      name: "Sapito de Chocolate",
+      price: 0.23,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sapito_de_chocolate.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704406",
+      name: "Sardina Dellanonna",
+      price: 1,
+      stock: 48,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sardina_dellanonna.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704409",
+      name: "Sardina Omega",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sardina_omega.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704413",
+      name: "Sardinas Margarita 170g",
+      price: 1.45,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sardinas_margarita_170g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704416",
+      name: "Sazonatodo",
+      price: 0.8,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sazonatodo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704420",
+      name: "Sellador de U\xF1as RAPIDO",
+      price: 1.81,
+      stock: 200,
+      category: "Charcuter\xEDa",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sellador_de_u_as_rapido.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704424",
+      name: "Servilletas Peque\xF1a",
+      price: 1.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/servilletas_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704428",
+      name: "Shampoo Alive de Pote",
+      price: 3.41,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_alive_de_pote.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704431",
+      name: "Shampoo chico de bebe",
+      price: 3.96,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_chico_de_bebe.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704435",
+      name: "Shampoo de Pote Sedal 340ml",
+      price: 4.73,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_de_pote_sedal_340ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704439",
+      name: "Shampoo de sobre Pantene-sedal-y shealshouder",
+      price: 0.5,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_de_sobre_pantene_sedal_y_shealshouder.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704443",
+      name: "Shampoo de Sobre Savital",
+      price: 0.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_de_sobre_savital.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704447",
+      name: "Shampoo Head Shouder de pote peque\xF1o",
+      price: 5.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_head_shouder_de_pote_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704451",
+      name: "Shampoo Head Shoulders Anti comezon",
+      price: 4.19,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_head_shoulders_anti_comezon.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704455",
+      name: "Shampoo Sedal 340 ML POTE GRANDE",
+      price: 6.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/shampoo_sedal_340_ml_pote_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704458",
+      name: "Short de Pijama",
+      price: 1.33,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/short_de_pijama.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704462",
+      name: "Silicon en Barra delgado",
+      price: 0.4,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/silicon_en_barra_delgado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704466",
+      name: "Silicon en Barra Grueso",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/silicon_en_barra_grueso.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704470",
+      name: "Silicon Liquido 60ml",
+      price: 0.9,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/silicon_liquido_60ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704474",
+      name: "Sobre amarillo",
+      price: 0.62,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sobre_amarillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704478",
+      name: "Socate de Plastico BLANCO",
+      price: 1.47,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/socate_de_plastico_blanco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704482",
+      name: "Socate Plastico Negro",
+      price: 0.87,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/socate_plastico_negro.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704486",
+      name: "Sombra de Ojo Escarchadas",
+      price: 2.12,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sombra_de_ojo_escarchadas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704490",
+      name: "Sopa MAGGY",
+      price: 1.45,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sopa_maggy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704494",
+      name: "Sorbeticos Detallada",
+      price: 0.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sorbeticos_detallada.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704498",
+      name: "Sorbeticos Paquete",
+      price: 1.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sorbeticos_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704501",
+      name: "Sticker Auto Adeshivo ROSTRO Y U\xD1AS",
+      price: 1.69,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/sticker_auto_adeshivo_rostro_y_u_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704505",
+      name: "Suavisante Downy",
+      price: 2.79,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/suavisante_downy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704508",
+      name: "Suavisante Suavitel",
+      price: 1.1,
+      stock: 190,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/suavisante_suavitel.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704512",
+      name: "Susy",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/susy.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704515",
+      name: "Tabaco",
+      price: 0.35,
+      stock: 195,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tabaco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704519",
+      name: "Takita galleta paquete",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/takita_galleta_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704523",
+      name: "Talco para los Pies Davey",
+      price: 1.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/talco_para_los_pies_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704526",
+      name: "Talco Peque\xF1o Baby Finger para ni\xF1os 200g",
+      price: 0.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/talco_peque_o_baby_finger_para_ni_os_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704530",
+      name: "Talco Rexona",
+      price: 3.81,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/talco_rexona.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704534",
+      name: "Tampones Kotex",
+      price: 3.43,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tampones_kotex.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704538",
+      name: "Tang",
+      price: 0.5,
+      stock: 12,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tang.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704541",
+      name: "Tapaboca",
+      price: 0.21,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tapaboca.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704545",
+      name: "Taza de Cafe Grande",
+      price: 2.95,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/taza_de_cafe_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704548",
+      name: "Te Lipton 1.5litros",
+      price: 5.1,
+      stock: 5,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/te_lipton_1_5litros.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704552",
+      name: "Teflon Peque\xF1o",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/teflon_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704555",
+      name: "Teipe Negro COBRA",
+      price: 3.2,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/teipe_negro_cobra.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704559",
+      name: "Teque\xF1os Jumbo",
+      price: 4.16,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/teque_os_jumbo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704563",
+      name: "Tetas",
+      price: 0.71,
+      stock: 1973,
+      category: "Alimentos",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tetas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704566",
+      name: "Tetero BabyFinger",
+      price: 4.93,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tetero_babyfinger.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704570",
+      name: "Tetina",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tetina.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704573",
+      name: "Tijera con formas",
+      price: 1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tijera_con_formas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704577",
+      name: "Tijera Escolar DAVEY",
+      price: 1.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tijera_escolar_davey.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704582",
+      name: "Tinte Bierser",
+      price: 0.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tinte_bierser.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704585",
+      name: "Tinte CHINO SIGLOOK",
+      price: 0.85,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tinte_chino_siglook.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704589",
+      name: "TINTE CHINO SIGLOOK",
+      price: 0.85,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tinte_chino_siglook.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704592",
+      name: "Tinte HUGME",
+      price: 0.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tinte_hugme.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704596",
+      name: "Tinte LOVIA GRANDE",
+      price: 3.05,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tinte_lovia_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704600",
+      name: "Tinte Lovia Peque\xF1o",
+      price: 1.01,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tinte_lovia_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704603",
+      name: "Tinte Unicolor",
+      price: 3.15,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tinte_unicolor.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704607",
+      name: "Tirro Blanco",
+      price: 1.44,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tirro_blanco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704610",
+      name: "Tirro de Embalar",
+      price: 2.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tirro_de_embalar.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704614",
+      name: "Tirro Doble cara",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tirro_doble_cara.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704618",
+      name: "Toallas Humedas Baby Finger",
+      price: 1.56,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toallas_humedas_baby_finger.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704621",
+      name: "Toallas Humedas Huggies",
+      price: 2.28,
+      stock: 200,
+      category: "Higiene Personal",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toallas_humedas_huggies.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704625",
+      name: "Toallas humedas OKI Peque\xF1a",
+      price: 0.95,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toallas_humedas_oki_peque_a.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704629",
+      name: "Toallin 50 hojas",
+      price: 1.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toallin_50_hojas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704633",
+      name: "Toallin Scott",
+      price: 1.86,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toallin_scott.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704636",
+      name: "Tocinetikas",
+      price: 1.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tocinetikas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704641",
+      name: "Tocinetikas peque\xF1as",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tocinetikas_peque_as.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704644",
+      name: "Toddy  Peque\xF1o 200g",
+      price: 3.45,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toddy__peque_o_200g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704648",
+      name: "TomaCorriente Amarillo",
+      price: 1.71,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tomacorriente_amarillo.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704652",
+      name: "Topper para torta",
+      price: 1.58,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/topper_para_torta.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704656",
+      name: "Toronto",
+      price: 0.7,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toronto.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704659",
+      name: "Toronto NEVADO",
+      price: 0.69,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toronto_nevado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704663",
+      name: "Toronto Paquete",
+      price: 7.89,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/toronto_paquete.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704667",
+      name: "Torsilax Detallado",
+      price: 0.22,
+      stock: 196,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/torsilax_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704671",
+      name: "Torsilax por 10 Pastillas",
+      price: 2.42,
+      stock: 200,
+      category: "Farmacia",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/torsilax_por_10_pastillas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704674",
+      name: "Torticas y Ponquesitos",
+      price: 0.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/torticas_y_ponquesitos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704678",
+      name: "Tostones Salserito peque\xF1o",
+      price: 0.4,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tostones_salserito_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704683",
+      name: "Tostones Salseritos Grande",
+      price: 1.15,
+      stock: 10,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tostones_salseritos_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704687",
+      name: "Tostones TOM GRANDE",
+      price: 1.1,
+      stock: 16,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tostones_tom_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704690",
+      name: "Tostones TOM peque\xF1o",
+      price: 0.45,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tostones_tom_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704694",
+      name: "Tozinetas  Peque\xF1a FRED 13g",
+      price: 0.55,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tozinetas__peque_a_fred_13g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704698",
+      name: "Tozinetas Fred 40g",
+      price: 1.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/tozinetas_fred_40g.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704701",
+      name: "Trident INDIVIDUAL",
+      price: 0.1,
+      stock: 198,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/trident_individual.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704705",
+      name: "Trident sobre de 5unidades",
+      price: 0.6,
+      stock: 24,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/trident_sobre_de_5unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704709",
+      name: "Trifogon",
+      price: 0.1,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/trifogon.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704712",
+      name: "Trululu detallado",
+      price: 0.1,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/trululu_detallado.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704716",
+      name: "Trululu Feroz",
+      price: 0.3,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/trululu_feroz.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704719",
+      name: "Trululu Sabores",
+      price: 0.39,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/trululu_sabores.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704723",
+      name: "U\xF1as con dise\xF1o",
+      price: 1.27,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/u_as_con_dise_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704727",
+      name: "U\xF1as Kiss",
+      price: 1.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/u_as_kiss.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704732",
+      name: "U\xF1as Pintadas  12 pares",
+      price: 1.88,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/u_as_pintadas__12_pares.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704736",
+      name: "U\xF1as Postizas Davey Paq. 100 Unidades",
+      price: 1.56,
+      stock: 11,
+      category: "Quicalleria",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/u_as_postizas_davey_paq__100_unidades.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704740",
+      name: "Vainilla  150ml",
+      price: 2.8,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vainilla__150ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704744",
+      name: "Vaselina GRANDE Baby Finger",
+      price: 2.37,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vaselina_grande_baby_finger.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704749",
+      name: "Vaso de Cafe No.27",
+      price: 1.11,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vaso_de_cafe_no_27.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704753",
+      name: "Vasos #77",
+      price: 2.4,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vasos__77.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704756",
+      name: "Vasos N107",
+      price: 1.5,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vasos_n107.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704760",
+      name: "Vela de Cumplea\xF1os de numeros",
+      price: 0.74,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vela_de_cumplea_os_de_numeros.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704764",
+      name: "Velas Blanca",
+      price: 0.25,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/velas_blanca.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704768",
+      name: "Velas de cumplea\xF1os Happy Birthday",
+      price: 1.66,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/velas_de_cumplea_os_happy_birthday.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704771",
+      name: "Velitas de Cumplea\xF1o",
+      price: 0.75,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/velitas_de_cumplea_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704775",
+      name: "Vick Vaporub",
+      price: 0.78,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vick_vaporub.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704779",
+      name: "Viki Viki",
+      price: 0.45,
+      stock: 195,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/viki_viki.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704784",
+      name: "Vinagre Mavesa 500ml",
+      price: 1.53,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vinagre_mavesa_500ml.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704787",
+      name: "Vinagre Quidy Peque\xF1o",
+      price: 1.4,
+      stock: 12,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/vinagre_quidy_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704791",
+      name: "Wiki-Wiki",
+      price: 0.57,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/wiki_wiki.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704794",
+      name: "Yesquero",
+      price: 0.2,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/yesquero.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704798",
+      name: "Yoyo NEON",
+      price: 1.28,
+      stock: 199,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/yoyo_neon.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704802",
+      name: "Zagaz GRANDE",
+      price: 0.73,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/zagaz_grande.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704805",
+      name: "Zagaz Peque\xF1o",
+      price: 1.42,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/zagaz_peque_o.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704809",
+      name: "Zarcillos",
+      price: 0.48,
+      stock: 200,
+      category: "V\xEDveres",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/zarcillos.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704813",
+      name: "Zucaritas",
+      price: 3.25,
+      stock: 15,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/zucaritas.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "1764206704816",
+      name: "Zucaritas Choco",
+      price: 3.65,
+      stock: 10,
+      category: "General",
+      barcode: "",
+      imageUri: "https://american-pos.pages.dev/product_images/zucaritas_choco.jpg",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528209_9",
+      name: "Adobo IBERIA 15g",
+      price: 0,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/adobo_iberia_15g.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528211_137",
+      name: "Caramelo Ricato",
+      price: 0.07,
+      stock: 130,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/caramelo_ricato.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528212_200",
+      name: "Chupetas",
+      price: 0.19,
+      stock: 193,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/chupetas.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528212_223",
+      name: "Cloro Kiss 500ML",
+      price: 0.65,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/cloro_kiss_500ml.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528213_275",
+      name: "Cucharas y tenedor grande",
+      price: 0.65,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/cucharas_y_tenedor_grande.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528214_342",
+      name: "Galak Tubito",
+      price: 0.5,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/galak_tubito.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528216_390",
+      name: "Gomitas Trululu individual",
+      price: 0.11,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/gomitas_trululu_individual.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528218_446",
+      name: "Jabon Anita peque\xF1o",
+      price: 0.9,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_anita_peque_o.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528219_452",
+      name: "Jabon Protex peque\xF1o 70grs",
+      price: 1,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/jabon_protex_peque_o_70grs.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528219_465",
+      name: "Jugo justy Naranja, Patilla y Tamarindo",
+      price: 1.23,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_justy_naranja__patilla_y_tamarindo.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528220_469",
+      name: "jugo valencia",
+      price: 0.47,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/jugo_valencia.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528221_528",
+      name: "Mascarilla pantene",
+      price: 1,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/mascarilla_pantene.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528223_595",
+      name: "Papel de 4 Rollos Sedita",
+      price: 1.46,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/papel_de_4_rollos_sedita.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528224_604",
+      name: "Paquete de Pa\xF1al Davey Talla G",
+      price: 3.4,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/paquete_de_pa_al_davey_talla_g.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528225_617",
+      name: "Pastillas",
+      price: 0,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/pastillas.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528225_625",
+      name: "Pega Bic",
+      price: 1.4,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/pega_bic.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528226_636",
+      name: "Pelota de pelusita con luz",
+      price: 0,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528228_684",
+      name: "Platos numero 7",
+      price: 0.8,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/platos_numero_7.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528230_729",
+      name: "Salsa de AJO Grande",
+      price: 2.6,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/salsa_de_ajo_grande.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528230_731",
+      name: "Salsa de Soya - Inglesa Sofia",
+      price: 1.25,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/salsa_de_soya___inglesa_sofia.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528231_745",
+      name: "Sardina Pacif Frozen",
+      price: 0.77,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/sardina_pacif_frozen.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528232_774",
+      name: "Takita detallada",
+      price: 0.15,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/takita_detallada.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528233_804",
+      name: "Toallas humedas Unitop",
+      price: 1.35,
+      stock: 200,
+      category: "V\xEDveres",
+      imageUri: "https://american-pos.pages.dev/product_images/toallas_humedas_unitop.jpg",
+      barcode: "",
+      userId: "admin-1"
+    },
+    {
+      id: "prod_1765403528235_847",
+      name: "Vitafer",
+      price: 1.26,
+      stock: 12,
+      category: "General",
+      imageUri: "https://american-pos.pages.dev/product_images/vitafer.jpg",
+      barcode: "",
+      userId: "admin-1"
+    }
+  ],
+  customers: [
+    {
+      id: "1764161563801",
+      name: "Manuel Rivero",
+      phone: "04248302226",
+      email: "mrivero105@gmail.com",
+      address: "Boca de Uchire",
+      idDocument: "V-22650692",
+      userId: "admin-1"
+    },
+    {
+      id: "1764161615557",
+      name: "Noel Rivero",
+      phone: "04123537451",
+      email: "noelrivero31@gmail.com",
+      address: "San Antonio, Nueva Esparta",
+      idDocument: "V-22650699",
+      userId: "admin-1"
+    },
+    {
+      id: "1764161679517",
+      name: "Carmen Gonzalez",
+      phone: "04141947019",
+      email: "carmeneyc@gmail.com",
+      address: "Boca de Uchire",
+      idDocument: "V-22851091",
+      userId: "admin-1"
+    }
+  ],
+  sales: [
+    {
+      id: "1764161727720",
+      timestamp: "2025-11-26T12:55:27.72Z",
+      items: [
+        {
+          id: "prod_1764091088203_3",
+          name: "Aceite Karsell",
+          price: 3.6,
+          stock: 12,
+          category: "Higiene Personal",
+          imageUri: "assets/products/aceite_karsell.png",
+          barcode: "GEN-1764091088203-3",
+          quantity: 1
+        }
+      ],
+      total: 3.6,
+      customerId: "1764161563801",
+      paymentMethod: "cash",
+      paymentDetails: {
+        cash: {
+          usd: 0,
+          ves: 0
+        },
+        change: -900
+      },
+      userId: "admin-1"
+    },
+    {
+      id: "1764161856442",
+      timestamp: "2025-11-26T12:57:36.442Z",
+      items: [
+        {
+          id: "prod_1764091088203_3",
+          name: "Aceite Karsell",
+          price: 3.6,
+          stock: 12,
+          category: "Higiene Personal",
+          imageUri: "assets/products/aceite_karsell.png",
+          barcode: "GEN-1764091088203-3",
+          stockQuantity: null,
+          quantity: 1
+        }
+      ],
+      total: 3.6,
+      customerId: "1764161679517",
+      paymentMethod: "cash",
+      paymentDetails: {
+        cash: {
+          usd: 0,
+          ves: 0
+        },
+        change: -900
+      },
+      userId: "admin-1"
+    },
+    {
+      id: "1764253243497",
+      timestamp: "2025-11-27T14:20:43.493Z",
+      items: [
+        {
+          id: "1764206702154",
+          name: "Aceite Amanecer 850ml",
+          price: 3.9,
+          stock: 24,
+          category: "General",
+          barcode: "",
+          imageUri: "/product_images/aceite_amanecer_850ml.png",
+          quantity: 1
+        }
+      ],
+      total: 3.9,
+      exchangeRate: 250,
+      customer: {
+        id: "1764161679517",
+        name: "Carmen Gonzalez",
+        phone: "04141947019",
+        email: "carmeneyc@gmail.com",
+        address: "Boca de Uchire",
+        idDocument: "V-22851091"
+      },
+      paymentMethod: "cash_bs",
+      userId: "admin-1"
+    },
+    {
+      id: "1764263875211",
+      timestamp: "2025-11-27T17:17:55.208Z",
+      items: [
+        {
+          id: "1764206702884",
+          name: "Crema de Arroz Agua Blanca 400grs",
+          price: 0.85,
+          stock: 12,
+          category: "General",
+          barcode: "",
+          imageUri: "/product_images/crema_de_arroz_agua_blanca_400grs.jpg",
+          quantity: 1
+        }
+      ],
+      total: 0.85,
+      exchangeRate: 250,
+      customer: null,
+      paymentMethod: "tarjeta-de-debito",
+      userId: "admin-1"
+    },
+    {
+      id: "1764297273083",
+      timestamp: "2025-11-28T02:34:32.777Z",
+      items: [
+        {
+          id: "1764206702146",
+          name: "Aceite Amanecer 500 ml",
+          price: 2.3,
+          stock: 24,
+          category: "General",
+          barcode: "",
+          imageUri: "/product_images/aceite_amanecer_500_ml.png",
+          priceBs: 575,
+          quantity: 1
+        }
+      ],
+      total: 2.3,
+      exchangeRate: 250,
+      customer: null,
+      paymentMethod: "pago_movil",
+      userId: "admin-1"
+    },
+    {
+      id: "1765076702260",
+      timestamp: "2025-12-07T03:05:02.255Z",
+      items: [
+        {
+          id: "1764206702536",
+          name: "Cafe Arauca 50g",
+          price: 0.8,
+          quantity: 2,
+          isWeighted: false,
+          category: "V\xEDveres"
+        },
+        {
+          id: "1764206702524",
+          name: "Cafe Anzoategui 100g",
+          price: 1.58,
+          quantity: 4,
+          isWeighted: false,
+          category: "V\xEDveres"
+        }
+      ],
+      total: 7.92,
+      customer: {
+        id: "1764161563801",
+        name: "Manuel Rivero",
+        phone: "04248302226",
+        email: "mrivero105@gmail.com",
+        address: "Boca de Uchire",
+        idDocument: "V-22650692"
+      },
+      paymentMethods: [
+        {
+          method: "cash_usd",
+          amount: 7.92,
+          currency: "USD",
+          reference: ""
+        }
+      ],
+      exchangeRate: 265,
+      userId: "admin-1"
+    },
+    {
+      id: "1765076855255",
+      timestamp: "2025-12-07T03:07:35.254Z",
+      items: [
+        {
+          id: "1764206702146",
+          name: "Aceite Amanecer 500 ml",
+          price: 2.3,
+          quantity: 1,
+          isWeighted: false,
+          category: "General"
+        }
+      ],
+      total: 2.3,
+      customer: {
+        id: "1764161563801",
+        name: "Manuel Rivero",
+        phone: "04248302226",
+        email: "mrivero105@gmail.com",
+        address: "Boca de Uchire",
+        idDocument: "V-22650692"
+      },
+      paymentMethods: [
+        {
+          method: "cash_usd",
+          amount: 2.3,
+          currency: "USD",
+          reference: ""
+        }
+      ],
+      exchangeRate: 265,
+      userId: "admin-1"
+    }
+  ],
+  cash_shifts: [
+    {
+      id: "1764790713745",
+      openedAt: "2025-12-03T19:38:33.745Z",
+      closedAt: "2025-12-03T19:42:16.562Z",
+      startingCash: 250,
+      expectedCash: 250,
+      actualCash: 250,
+      status: "closed",
+      userId: "admin",
+      difference: 0
+    },
+    {
+      id: "1764791489166",
+      openedAt: "2025-12-03T19:51:29.166Z",
+      closedAt: "2025-12-04T02:59:22.247Z",
+      startingCash: 250,
+      expectedCash: 250,
+      actualCash: 250,
+      status: "closed",
+      userId: "admin",
+      difference: 0
+    },
+    {
+      id: "1765076692483",
+      openedAt: "2025-12-07T03:04:52.483Z",
+      closedAt: null,
+      startingCash: 250,
+      expectedCash: 0,
+      actualCash: 0,
+      status: "open",
+      userId: "admin"
+    }
+  ],
+  users: [
+    {
+      id: "admin-1",
+      email: "mrivero105@gmail.com",
+      password: "admin",
+      role: "admin",
+      businessInfo: {
+        currency: "USD"
+      },
+      createdAt: "2025-01-01T00:00:00Z",
+      status: "active"
+    },
+    {
+      id: "1765079165259",
+      email: "carmeneyc@gmail.com",
+      password: "123456",
+      role: "user",
+      currency: "USD",
+      createdAt: "2025-12-07T03:46:05.259Z",
+      status: "active"
+    }
+  ]
+};
+
+// scripts/upload_db_worker.js
+var upload_db_worker_default = {
+  async fetch(request, env) {
+    if (!env.DB) return new Response("DB binding not found", { status: 500 });
+    try {
+      const value = JSON.stringify(db_default);
+      const stmt = env.DB.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)").bind("db", value);
+      await stmt.run();
+      return new Response("Database uploaded successfully!");
+    } catch (e) {
+      return new Response("Error: " + e.message, { status: 500 });
+    }
+  }
+};
+
+// ../../AppData/Local/npm-cache/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
+var drainBody = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
+  try {
+    return await middlewareCtx.next(request, env);
+  } finally {
+    try {
+      if (request.body !== null && !request.bodyUsed) {
+        const reader = request.body.getReader();
+        while (!(await reader.read()).done) {
+        }
+      }
+    } catch (e) {
+      console.error("Failed to drain the unused request body.", e);
+    }
+  }
+}, "drainBody");
+var middleware_ensure_req_body_drained_default = drainBody;
+
+// .wrangler/tmp/bundle-HMekS8/middleware-insertion-facade.js
+var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
+  middleware_ensure_req_body_drained_default
+];
+var middleware_insertion_facade_default = upload_db_worker_default;
+
+// ../../AppData/Local/npm-cache/_npx/32026684e21afda6/node_modules/wrangler/templates/middleware/common.ts
+var __facade_middleware__ = [];
+function __facade_register__(...args) {
+  __facade_middleware__.push(...args.flat());
+}
+__name(__facade_register__, "__facade_register__");
+function __facade_invokeChain__(request, env, ctx, dispatch, middlewareChain) {
+  const [head, ...tail] = middlewareChain;
+  const middlewareCtx = {
+    dispatch,
+    next(newRequest, newEnv) {
+      return __facade_invokeChain__(newRequest, newEnv, ctx, dispatch, tail);
+    }
+  };
+  return head(request, env, ctx, middlewareCtx);
+}
+__name(__facade_invokeChain__, "__facade_invokeChain__");
+function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
+  return __facade_invokeChain__(request, env, ctx, dispatch, [
+    ...__facade_middleware__,
+    finalMiddleware
+  ]);
+}
+__name(__facade_invoke__, "__facade_invoke__");
+
+// .wrangler/tmp/bundle-HMekS8/middleware-loader.entry.ts
+var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
+  constructor(scheduledTime, cron, noRetry) {
+    this.scheduledTime = scheduledTime;
+    this.cron = cron;
+    this.#noRetry = noRetry;
+  }
+  static {
+    __name(this, "__Facade_ScheduledController__");
+  }
+  #noRetry;
+  noRetry() {
+    if (!(this instanceof ___Facade_ScheduledController__)) {
+      throw new TypeError("Illegal invocation");
+    }
+    this.#noRetry();
+  }
+};
+function wrapExportedHandler(worker) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return worker;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  const fetchDispatcher = /* @__PURE__ */ __name(function(request, env, ctx) {
+    if (worker.fetch === void 0) {
+      throw new Error("Handler does not export a fetch() function.");
+    }
+    return worker.fetch(request, env, ctx);
+  }, "fetchDispatcher");
+  return {
+    ...worker,
+    fetch(request, env, ctx) {
+      const dispatcher = /* @__PURE__ */ __name(function(type, init) {
+        if (type === "scheduled" && worker.scheduled !== void 0) {
+          const controller = new __Facade_ScheduledController__(
+            Date.now(),
+            init.cron ?? "",
+            () => {
+            }
+          );
+          return worker.scheduled(controller, env, ctx);
+        }
+      }, "dispatcher");
+      return __facade_invoke__(request, env, ctx, dispatcher, fetchDispatcher);
+    }
+  };
+}
+__name(wrapExportedHandler, "wrapExportedHandler");
+function wrapWorkerEntrypoint(klass) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return klass;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  return class extends klass {
+    #fetchDispatcher = /* @__PURE__ */ __name((request, env, ctx) => {
+      this.env = env;
+      this.ctx = ctx;
+      if (super.fetch === void 0) {
+        throw new Error("Entrypoint class does not define a fetch() function.");
+      }
+      return super.fetch(request);
+    }, "#fetchDispatcher");
+    #dispatcher = /* @__PURE__ */ __name((type, init) => {
+      if (type === "scheduled" && super.scheduled !== void 0) {
+        const controller = new __Facade_ScheduledController__(
+          Date.now(),
+          init.cron ?? "",
+          () => {
+          }
+        );
+        return super.scheduled(controller);
+      }
+    }, "#dispatcher");
+    fetch(request) {
+      return __facade_invoke__(
+        request,
+        this.env,
+        this.ctx,
+        this.#dispatcher,
+        this.#fetchDispatcher
+      );
+    }
+  };
+}
+__name(wrapWorkerEntrypoint, "wrapWorkerEntrypoint");
+var WRAPPED_ENTRY;
+if (typeof middleware_insertion_facade_default === "object") {
+  WRAPPED_ENTRY = wrapExportedHandler(middleware_insertion_facade_default);
+} else if (typeof middleware_insertion_facade_default === "function") {
+  WRAPPED_ENTRY = wrapWorkerEntrypoint(middleware_insertion_facade_default);
+}
+var middleware_loader_entry_default = WRAPPED_ENTRY;
+export {
+  __INTERNAL_WRANGLER_MIDDLEWARE__,
+  middleware_loader_entry_default as default
+};
+//# sourceMappingURL=upload_db_worker.js.map
