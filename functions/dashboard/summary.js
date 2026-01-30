@@ -47,7 +47,7 @@ export async function onRequestGet(context) {
         // 6. Top Products
         const { results: topProducts } = await context.env.DB.prepare(
             `SELECT p.name, SUM(si.quantity) as quantity 
-             FROM sales_items si 
+             FROM sale_items si 
              JOIN products p ON si.productId = p.id 
              GROUP BY si.productId 
              ORDER BY quantity DESC 
@@ -64,7 +64,7 @@ export async function onRequestGet(context) {
         // 8. Category Sales
         const { results: categorySales } = await context.env.DB.prepare(
             `SELECT p.category, SUM(si.quantity * si.price) as total
-             FROM sales_items si
+             FROM sale_items si
              JOIN products p ON si.productId = p.id
              GROUP BY p.category
              ORDER BY total DESC
