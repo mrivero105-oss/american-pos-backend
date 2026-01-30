@@ -37,14 +37,50 @@ export async function onRequestGet(context) {
             data: salesTrend.map(s => s.total)
         };
 
+        // 5. Total Profit & Avg Margin
+        const profitResult = await context.env.DB.prepare(
+            "SELECT SUM(profit) as totalProfit, AVG(profitMargin) as avgMargin FROM sales WHERE profit IS NOT NULL"
+        ).first();
+        const totalProfit = profitResult?.totalProfit || 0;
+        const avgMargin = profitResult?.avgMargin || 0;
+
+        // 6. Top Products
+        const { results: topProducts } = await context.env.DB.prepare(
+            `SELECT p.name, SUM(si.quantity) as quantity 
+             FROM sales_items si 
+             JOIN products p ON si.productId = p.id 
+             GROUP BY si.productId 
+             ORDER BY quantity DESC 
+             LIMIT 5`
+        ).all();
+
+        // 7. Payment Methods
+        const { results: paymentMethods } = await context.env.DB.prepare(
+            `SELECT paymentMethod as method, SUM(total) as total 
+             FROM sales 
+             GROUP BY paymentMethod`
+        ).all();
+
+        // 8. Category Sales
+        const { results: categorySales } = await context.env.DB.prepare(
+            `SELECT p.category, SUM(si.quantity * si.price) as total
+             FROM sales_items si
+             JOIN products p ON si.productId = p.id
+             GROUP BY p.category
+             ORDER BY total DESC
+             LIMIT 5`
+        ).all();
+
         return new Response(JSON.stringify({
             totalRevenue,
             numberOfSales,
+            totalProfit,
+            avgMargin,
             lowStockItems,
             salesLast7Days,
-            debug: {
-                userId: user.id
-            }
+            topProducts: topProducts || [],
+            paymentMethods: paymentMethods || [],
+            categorySales: categorySales || []
         }), {
             headers: { "Content-Type": "application/json" },
         });
