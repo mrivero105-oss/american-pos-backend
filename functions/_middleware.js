@@ -55,9 +55,9 @@ export async function onRequest(context) {
         // Auth endpoints
         url.pathname.startsWith('/auth/login') ||
         url.pathname.startsWith('/auth/register') ||
+        url.pathname.startsWith('/auth/forgot-password') ||
         url.pathname.startsWith('/auth/reset-password') ||
         url.pathname.startsWith('/hello') ||
-        url.pathname === '/inspect-schema' ||
         // Static resources - no auth required
         url.pathname === '/favicon.ico' ||
         url.pathname === '/manifest.json' ||
