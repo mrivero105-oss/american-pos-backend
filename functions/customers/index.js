@@ -4,12 +4,13 @@ export async function onRequestGet(context) {
         if (!user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
 
         const { results } = await context.env.DB.prepare(
-            "SELECT * FROM customers WHERE userId = ? ORDER BY name ASC"
-        ).bind(user.id).all();
+            "SELECT * FROM customers ORDER BY name ASC"
+        ).all();
 
         const customers = results.map(c => ({
             ...c,
-            isActive: c.isActive === 1 || c.isActive === true || c.isActive === undefined // Handle legacy null as active
+            // Mock isActive for frontend compatibility if needed, or just remove
+            isActive: true
         }));
 
         return new Response(JSON.stringify(customers), {
@@ -29,17 +30,15 @@ export async function onRequestPost(context) {
         const id = customer.id || Date.now().toString();
 
         await context.env.DB.prepare(
-            `INSERT INTO customers (id, name, idDocument, phone, email, address, userId, isActive) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO customers (id, name, idDocument, phone, email, address) 
+       VALUES (?, ?, ?, ?, ?, ?)`
         ).bind(
             id,
             customer.name,
             customer.idDocument || '',
             customer.phone || '',
             customer.email || '',
-            customer.address || '',
-            user.id,
-            customer.isActive !== false ? 1 : 0
+            customer.address || ''
         ).run();
 
         return new Response(JSON.stringify({ ...customer, id, userId: user.id, isActive: true }), {

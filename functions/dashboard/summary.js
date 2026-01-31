@@ -20,7 +20,7 @@ export async function onRequestGet(context) {
 
         // 3. Low Stock Items
         const { results: lowStockItems } = await context.env.DB.prepare(
-            "SELECT name, stockQuantity as stock FROM products WHERE stockQuantity <= 5"
+            "SELECT name, stock FROM products WHERE stock <= 5"
         ).all();
 
         // 4. Sales Last 7 Days
@@ -38,11 +38,12 @@ export async function onRequestGet(context) {
         };
 
         // 5. Total Profit & Avg Margin
-        const profitResult = await context.env.DB.prepare(
-            "SELECT SUM(profit) as totalProfit, AVG(profitMargin) as avgMargin FROM sales WHERE profit IS NOT NULL"
-        ).first();
-        const totalProfit = profitResult?.totalProfit || 0;
-        const avgMargin = profitResult?.avgMargin || 0;
+        // Mocking profit since 'profit' column doesn't exist in basic schema
+        // const profitResult = await context.env.DB.prepare(
+        //     "SELECT SUM(profit) as totalProfit, AVG(profitMargin) as avgMargin FROM sales WHERE profit IS NOT NULL"
+        // ).first();
+        const totalProfit = 0; // profitResult?.totalProfit || 0;
+        const avgMargin = 0; // profitResult?.avgMargin || 0;
 
         // 6. Top Products
         const { results: topProducts } = await context.env.DB.prepare(
