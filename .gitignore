@@ -8,3 +8,10 @@ american_pos.sqlite
 dist_release/
 product_images/
 dist_final_installer/
+build/
+build_temp/
+auto-backups/
+.wwebjs_auth/
+logs/
+scratch/
+*.bat

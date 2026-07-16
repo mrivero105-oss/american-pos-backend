@@ -1,5 +1,6 @@
 const { sequelize, Product, Sale, SaleItem, VarianteProducto } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
+const LANClusterService = require('../services/LANClusterService');
 
 exports.syncOfflineSales = async (req, res) => {
     const { sales } = req.body;
@@ -91,6 +92,20 @@ exports.syncOfflineSales = async (req, res) => {
         }
 
         await t.commit();
+
+        // Propagate stock deduction events to all LAN peers instantly
+        try {
+            const allSyncedItems = [];
+            sales.forEach(localSale => {
+                if (syncedIds.includes(localSale.id) && Array.isArray(localSale.items)) {
+                    allSyncedItems.push(...localSale.items);
+                }
+            });
+            if (allSyncedItems.length > 0) {
+                LANClusterService.broadcastLANEvent('lan_stock_update', { items: allSyncedItems, timestamp: Date.now() });
+            }
+        } catch (lanErr) {}
+
         return res.json({ success: true, syncedIds, errors });
     } catch (error) {
         await t.rollback();

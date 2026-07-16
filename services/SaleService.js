@@ -5,6 +5,7 @@ const { SETTINGS_FILE } = require('../config/paths');
 const { Op, Transaction } = require('sequelize');
 const precision = require('../utils/precision');
 const cache = require('../utils/cacheService');
+const LANClusterService = require('./LANClusterService');
 
 const inFlightTransactions = new Set();
 
@@ -446,6 +447,13 @@ class SaleService {
 
             // Auditoría post-commit
             this._logAudit(reqUser, 'CREATE_SALE', `Venta completada: ${clientTransactionId}`, clientTransactionId, null, { total: saleTotal }).catch(() => {});
+
+            // Propagar cambio de stock por LAN en tiempo real
+            try {
+                if (Array.isArray(items) && items.length > 0) {
+                    LANClusterService.broadcastLANEvent('lan_stock_update', { items, timestamp: Date.now() });
+                }
+            } catch (lanErr) {}
 
             // INTEGRACIÓN SRI ECUADOR: Procesar comprobante electrónico asíncronamente
             const bizCountry = settings.businessInfo?.country || settings.country || '';

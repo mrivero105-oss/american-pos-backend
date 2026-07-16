@@ -325,6 +325,7 @@ const startServer = (ports, userDataPath = null) => {
             app.use('/services', serviceRoutes);
             app.use('/messages', messageRoutes);
             app.use('/sync', require('./routes/sync'));
+            app.use('/lan', require('./routes/lanCluster'));
             app.use('/system', systemRoutes);
             
             // Rutas que no requieren auth o tienen su propio manejo
@@ -413,6 +414,32 @@ const startServer = (ports, userDataPath = null) => {
                     socket.on('internal_chat_stop_typing', (data) => {
                         socket.broadcast.emit('internal_chat_stop_typing', data);
                     });
+
+                    // LAN Cluster P2P Socket Events
+                    socket.on('lan_announce', (peerData) => {
+                        try {
+                            const LANClusterService = require('./services/LANClusterService');
+                            if (peerData && peerData.nodeId) {
+                                LANClusterService.peers.set(`${peerData.nodeId}`, {
+                                    ...peerData,
+                                    lastSeen: Date.now()
+                                });
+                                LANClusterService.notifyTopologyChange();
+                            }
+                        } catch (e) {}
+                    });
+
+                    socket.on('lan_stock_update', async (data) => {
+                        try {
+                            socket.broadcast.emit('lan_stock_update', data);
+                        } catch (e) {}
+                    });
+
+                    socket.on('lan_sale_sync', async (payload) => {
+                        try {
+                            socket.broadcast.emit('lan_sale_sync', payload);
+                        } catch (e) {}
+                    });
                 });
 
                 await new Promise((resPort) => {
@@ -451,6 +478,15 @@ const startServer = (ports, userDataPath = null) => {
                 }
             };
             app.set('io', virtualIo);
+
+            // Initialize LAN Cluster Service (P2P Discovery & Sync)
+            try {
+                const LANClusterService = require('./services/LANClusterService');
+                const primaryPort = portList[0] || 3000;
+                LANClusterService.init(virtualIo, Number(primaryPort));
+            } catch (lanErr) {
+                console.warn('⚠️ Error al iniciar LAN Cluster Service:', lanErr.message);
+            }
 
             // Start WhatsApp Bot automatically
             try {
