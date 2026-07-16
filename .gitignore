@@ -1,0 +1,10 @@
+node_modules
+serviceAccountKey.json
+.env
+backups/
+
+american_pos.sqlite
+.terraform/
+dist_release/
+product_images/
+dist_final_installer/

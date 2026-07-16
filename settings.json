@@ -1,0 +1,48 @@
+{
+  "2": {
+    "exchangeRate": 450,
+    "businessInfo": {
+      "name": "Bodega Sigfrido y Familia",
+      "rif": "V-123456789-0",
+      "address": "Boca De Uchire",
+      "phone": "",
+      "email": "bodegaSyF@corp.com"
+    },
+    "currencyMode": "BOTH",
+    "paymentMethods": [
+      {
+        "id": "cash",
+        "name": "Efectivo $",
+        "icon": "DollarSign",
+        "type": "CASH"
+      },
+      {
+        "id": "cash_bs",
+        "name": "Efectivo Bs",
+        "icon": "Banknote",
+        "type": "CASH",
+        "defaultCurrency": "VES"
+      },
+      {
+        "id": "debit",
+        "name": "Débito",
+        "icon": "CreditCard",
+        "type": "DIGITAL",
+        "defaultCurrency": "VES"
+      },
+      {
+        "id": "transfer",
+        "name": "Transferencia",
+        "icon": "Send",
+        "type": "DIGITAL",
+        "defaultCurrency": "VES"
+      },
+      {
+        "id": "fiado",
+        "name": "Fiado",
+        "icon": "User",
+        "type": "CREDIT"
+      }
+    ]
+  }
+}

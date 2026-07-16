@@ -1,0 +1,17 @@
+const { Setting, Sale } = require('./database/models');
+
+async function checkFiado() {
+    try {
+        const methodsSetting = await Setting.findOne({ where: { key: 'payment_methods' } });
+        console.log("PAYMENT METHODS SETTING:");
+        console.log(JSON.stringify(methodsSetting ? JSON.parse(methodsSetting.value) : "NOT FOUND", null, 2));
+
+        const sale = await Sale.findOne({ where: { id: '1774226321357-3y7x3y4dq' } });
+        console.log("SALE IN QUESTION:", JSON.stringify(sale, null, 2));
+
+    } catch (e) {
+        console.error(e);
+    }
+    process.exit(0);
+}
+checkFiado();
