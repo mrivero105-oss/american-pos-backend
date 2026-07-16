@@ -1,15 +1,74 @@
 const jwt = require('jsonwebtoken');
 const path = require('path');
 
-// 🔒 SECURITY: JWT_SECRET stability between dev and production environments
-const STABLE_FALLBACK = 'f9921db9-be93-4469-b0ea-b0436a1017d6';
-const FINAL_SECRET = process.env.JWT_SECRET || STABLE_FALLBACK;
-
-if (!process.env.JWT_SECRET) {
-    console.warn('⚠️ WARNING: JWT_SECRET environment variable is NOT SET. Using stable fallback for production stability.');
+// 🔒 SECURITY: Strict JWT_SECRET validation
+const FINAL_SECRET = process.env.JWT_SECRET;
+if (!FINAL_SECRET) {
+    throw new Error('FATAL SECURITY ERROR: JWT_SECRET must be defined in environment. Refusing to start.');
 }
 
+const extractBearerToken = (authHeader) => {
+    if (!authHeader || typeof authHeader !== 'string') return null;
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && parts[0] === 'Bearer') {
+        return parts[1];
+    }
+    return null;
+};
+
 const verifyToken = async (req, res, next) => {
+    if (req.path.endsWith('/public-sync')) {
+        const companyId = req.headers['x-company-id'];
+        const branchId = req.headers['x-branch-id'] || companyId || '1';
+        const timestamp = req.headers['x-sync-timestamp'];
+        const signature = req.headers['x-sync-signature'];
+
+        const authHeader = req.headers['authorization'];
+        const extractedToken = extractBearerToken(authHeader);
+        if (extractedToken) {
+            try {
+                const decoded = jwt.verify(extractedToken, FINAL_SECRET);
+                req.user = decoded;
+                if (!req.user.companyId) {
+                    req.user.companyId = companyId || 'default';
+                }
+                return next();
+            } catch (e) {
+                return res.status(401).json({ error: 'Token inválido para sincronización' });
+            }
+        }
+
+        if (!companyId || !timestamp || !signature) {
+            return res.status(401).json({ error: 'Sincronización no autorizada: firma HMAC requerida' });
+        }
+
+        const SecurityHelper = require('../services/SecurityHelper');
+        const isValid = SecurityHelper.verifySignature(
+            req.body,
+            companyId,
+            branchId,
+            timestamp,
+            signature
+        );
+
+        if (!isValid) {
+            return res.status(401).json({ error: 'Firma HMAC inválida o expirada' });
+        }
+
+        req.user = {
+            companyId,
+            role: 'anonymous_sync',
+            name: `Dispositivo Móvil (Sucursal ${branchId})`,
+            activeBranchId: branchId
+        };
+        return next();
+    }
+
+    // Bloquear acceso público a listas
+    if (req.path.endsWith('/public-list') && !req.headers.authorization) {
+        return res.status(401).json({ error: 'Acceso denegado. Se requiere autenticación.' });
+    }
+
     // 1. Define SPA frontend routes
     const spaRoutes = [
         '/', '/dashboard', '/pos', '/inventory', '/customers',
@@ -41,11 +100,11 @@ const verifyToken = async (req, res, next) => {
         req.path.startsWith('/img/') ||
         req.path === '/hello' ||
         req.path === '/auth/login' ||
+        req.path === '/auth/me' ||
+        (req.method === 'GET' && req.path === '/settings/business') ||
         req.path === '/license/status' ||
         req.path === '/license/activate' ||
         req.path.startsWith('/reset-password') ||
-        req.path.endsWith('/public-list') || 
-        req.path.endsWith('/public-sync') ||
         req.path.replace(/\/$/, '') === '/auth/login') { 
         
         // --- PUBLIC IDENTITY FAILSAFE ---
@@ -53,12 +112,12 @@ const verifyToken = async (req, res, next) => {
         // to prevent 500 errors in downstream services that expect req.user.companyId
         
         const authHeader = req.headers['authorization'];
+        const extractedToken = extractBearerToken(authHeader) || (req.cookies && req.cookies.authToken) || req.query.token;
         const companyIdHeader = req.headers['x-company-id'];
         
-        if (authHeader) {
+        if (extractedToken) {
             try {
-                const token = authHeader.split(' ')[1];
-                const decoded = jwt.verify(token, FINAL_SECRET);
+                const decoded = jwt.verify(extractedToken, FINAL_SECRET);
                 req.user = decoded;
             } catch (e) { /* ignore invalid tokens on public routes */ }
         }
@@ -80,8 +139,11 @@ const verifyToken = async (req, res, next) => {
     let token = null;
 
     const authHeader = req.headers['authorization'];
-    if (authHeader) {
-        token = authHeader.split(' ')[1];
+    const extractedToken = extractBearerToken(authHeader);
+    if (extractedToken) {
+        token = extractedToken;
+    } else if (req.cookies && req.cookies.authToken) {
+        token = req.cookies.authToken;
     } else if (req.query.token) {
         token = req.query.token;
     }
@@ -95,6 +157,16 @@ const verifyToken = async (req, res, next) => {
     try {
         const decoded = jwt.verify(token, FINAL_SECRET);
         req.user = decoded;
+
+        // REAL-TIME DB CHECK: Ensure user is still active in the database
+        if (decoded.id && decoded.role !== 'anonymous_sync') {
+            const { User } = require('../database/models');
+            const dbUser = await User.findByPk(decoded.id, { attributes: ['status'] });
+            if (!dbUser || dbUser.status !== 'active') {
+                console.warn(`[AUTH] 401 Unauthorized: User ${decoded.id} is deleted or inactive.`);
+                return res.status(401).json({ error: 'Tu cuenta ha sido desactivada o eliminada' });
+            }
+        }
 
         // RULE D: Hardware ID (Machine ID) Binding
         // If the token has a mid (machineId), it MUST match the current machine
