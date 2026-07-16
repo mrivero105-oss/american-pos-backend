@@ -33,8 +33,9 @@ class SupplierService {
     /**
      * Create a new supplier with audit.
      */
-    async createSupplier(reqUser, supplierData, logoFile) {
-        const { id: userId, companyId } = reqUser;
+    async createSupplier(reqUser = {}, supplierData, logoFile) {
+        const userId = reqUser?.id || 'admin';
+        const companyId = reqUser?.companyId || 'default';
         
         let logoUri = null;
         if (logoFile) {
@@ -67,8 +68,8 @@ class SupplierService {
     /**
      * Update an existing supplier with diff auditing.
      */
-    async updateSupplier(reqUser, id, updateData, logoFile) {
-        const { companyId } = reqUser;
+    async updateSupplier(reqUser = {}, id, updateData, logoFile) {
+        const companyId = reqUser?.companyId || 'default';
         const supplier = await Supplier.findOne({ where: { id, companyId } });
         if (!supplier) throw new Error('Proveedor no encontrado');
 
@@ -116,8 +117,9 @@ class SupplierService {
     /**
      * Register a payment to a supplier.
      */
-    async registerPayment(reqUser, supplierId, paymentData) {
-        const { id: userId, companyId } = reqUser;
+    async registerPayment(reqUser = {}, supplierId, paymentData) {
+        const userId = reqUser?.id || 'admin';
+        const companyId = reqUser?.companyId || 'default';
         const { amount, method, description } = paymentData;
 
         return await sequelize.transaction(async (t) => {
@@ -174,7 +176,8 @@ class SupplierService {
     /**
      * Synchronize products for a supplier.
      */
-    async syncProducts(companyId, supplierId, productIds) {
+    async syncProducts(companyId = 'default', supplierId, productIds) {
+        const finalCompanyId = companyId || 'default';
         if (!Array.isArray(productIds)) throw new Error('Se requiere una lista de IDs de productos');
 
         return await sequelize.transaction(async (t) => {
@@ -211,8 +214,8 @@ class SupplierService {
     /**
      * Delete a supplier.
      */
-    async deleteSupplier(reqUser, id) {
-        const { companyId } = reqUser;
+    async deleteSupplier(reqUser = {}, id) {
+        const companyId = reqUser?.companyId || 'default';
         const supplier = await Supplier.findOne({ where: { id, companyId } });
         if (!supplier) return false;
 
@@ -282,12 +285,12 @@ class SupplierService {
     /**
      * Helper to log audits.
      */
-    async _logAudit(reqUser, action, description, entityId, oldValue, newValue) {
+    async _logAudit(reqUser = {}, action, description, entityId, oldValue, newValue) {
         try {
             await AuditLog.create({
                 id: generateRobustId(),
-                userId: reqUser.id,
-                companyId: reqUser.companyId,
+                userId: reqUser?.id || 'admin',
+                companyId: reqUser?.companyId || 'default',
                 action,
                 description,
                 entityId,

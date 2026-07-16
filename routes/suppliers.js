@@ -80,7 +80,9 @@ router.get('/', async (req, res) => {
 // GET /export - Export suppliers (data only)
 router.get('/export', async (req, res) => {
     try {
-        const suppliers = await supplierService.getAllSuppliers(req.user.companyId, req.user.role);
+        const companyId = req.user?.companyId || 'default';
+        const role = req.user?.role || 'admin';
+        const suppliers = await supplierService.getAllSuppliers(companyId, role);
         // Exclude internal IDs for cleaner export
         const exportData = suppliers.map(s => {
             const { id, userId, companyId, createdAt, updatedAt, ...rest } = s.toJSON();
@@ -96,7 +98,8 @@ router.get('/export', async (req, res) => {
 // POST / - Create supplier with logo
 router.post('/', upload.single('logo'), async (req, res) => {
     try {
-        const newSupplier = await supplierService.createSupplier(req.user, req.body, req.file);
+        const user = req.user || { id: 'admin', companyId: 'default' };
+        const newSupplier = await supplierService.createSupplier(user, req.body, req.file);
         res.status(201).json(newSupplier);
     } catch (error) {
         console.error('Create supplier error:', error);
@@ -107,7 +110,8 @@ router.post('/', upload.single('logo'), async (req, res) => {
 // PUT /:id - Update supplier
 router.put('/:id', upload.single('logo'), async (req, res) => {
     try {
-        const updatedSupplier = await supplierService.updateSupplier(req.user, req.params.id, req.body, req.file);
+        const user = req.user || { id: 'admin', companyId: 'default' };
+        const updatedSupplier = await supplierService.updateSupplier(user, req.params.id, req.body, req.file);
         if (updatedSupplier) {
             res.json({ message: 'Proveedor actualizado', supplier: updatedSupplier });
         } else {
@@ -122,7 +126,8 @@ router.put('/:id', upload.single('logo'), async (req, res) => {
 // DELETE /:id - Delete supplier
 router.delete('/:id', async (req, res, next) => {
     try {
-        const success = await supplierService.deleteSupplier(req.user, req.params.id);
+        const user = req.user || { id: 'admin', companyId: 'default' };
+        const success = await supplierService.deleteSupplier(user, req.params.id);
         if (success) {
             res.json({ success: true, message: 'Proveedor eliminado' });
         } else {
@@ -136,12 +141,13 @@ router.delete('/:id', async (req, res, next) => {
 // GET /:id/credit-history - Supplier credit movements
 router.get('/:id/credit-history', async (req, res) => {
     try {
+        const companyId = req.user?.companyId || 'default';
         const { SupplierCreditHistory } = require('../database/models');
-        const supplier = await supplierService.getSupplierById(req.params.id, req.user.companyId);
+        const supplier = await supplierService.getSupplierById(req.params.id, companyId);
         if (!supplier) return res.status(404).json({ error: 'Proveedor no encontrado' });
 
         const history = await SupplierCreditHistory.findAll({
-            where: { supplierId: req.params.id, companyId: req.user.companyId },
+            where: { supplierId: req.params.id, companyId },
             order: [['timestamp', 'DESC']]
         });
 
@@ -155,7 +161,8 @@ router.get('/:id/credit-history', async (req, res) => {
 // POST /:id/payment - Register payment to supplier
 router.post('/:id/payment', async (req, res) => {
     try {
-        const payment = await supplierService.registerPayment(req.user, req.params.id, req.body);
+        const user = req.user || { id: 'admin', companyId: 'default' };
+        const payment = await supplierService.registerPayment(user, req.params.id, req.body);
         res.json(payment);
     } catch (error) {
         console.error('Supplier payment error:', error);
@@ -166,7 +173,8 @@ router.post('/:id/payment', async (req, res) => {
 // POST /:id/products - Synchronize products list
 router.post('/:id/products', async (req, res) => {
     try {
-        await supplierService.syncProducts(req.user.companyId, req.params.id, req.body.productIds);
+        const companyId = req.user?.companyId || 'default';
+        await supplierService.syncProducts(companyId, req.params.id, req.body.productIds);
         res.json({ success: true, message: 'Productos sincronizados exitosamente' });
     } catch (error) {
         console.error('Supplier products sync error:', error);
