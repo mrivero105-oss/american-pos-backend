@@ -49,28 +49,31 @@ const upload = multer({
  */
 router.get('/public-list', async (req, res) => {
     try {
+        const companyId = req.user?.companyId || 'default';
         const suppliers = await Supplier.findAll({
-            where: { isActive: true, companyId: req.user.companyId },
+            where: { isActive: true, companyId },
             attributes: [
                 'id', 'name', 'rif', 'phone', 'email', 'address', 
                 'creditBalance', ['contact', 'contactPerson'], 'logoUri'
             ]
         });
-        res.json(suppliers);
+        res.json(suppliers || []);
     } catch (error) {
         console.error('Public suppliers list error:', error);
-        res.status(500).json({ error: 'Error al obtener proveedores' });
+        res.status(500).json({ error: `Error al obtener proveedores: ${error.message || error}` });
     }
 });
 
 // GET / - List all suppliers
 router.get('/', async (req, res) => {
     try {
-        const suppliers = await supplierService.getAllSuppliers(req.user.companyId, req.user.role);
-        res.json(suppliers);
+        const companyId = req.user?.companyId || 'default';
+        const role = req.user?.role || 'admin';
+        const suppliers = await supplierService.getAllSuppliers(companyId, role);
+        res.json(suppliers || []);
     } catch (error) {
         console.error('Get suppliers error:', error);
-        res.status(500).json({ error: 'Error al obtener proveedores' });
+        res.status(500).json({ error: `Error al obtener proveedores: ${error.message || error}` });
     }
 });
 

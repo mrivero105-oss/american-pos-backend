@@ -11,19 +11,23 @@ class SupplierService {
     /**
      * Get all suppliers.
      */
-    async getAllSuppliers(companyId, role) {
-        console.log(`[SUPPLIER-DEBUG] Fetching for Company: ${companyId}, Role: ${role}`);
+    async getAllSuppliers(companyId = 'default', role) {
+        const finalCompanyId = companyId || 'default';
+        console.log(`[SUPPLIER-DEBUG] Fetching for Company: ${finalCompanyId}, Role: ${role}`);
+        const whereClause = finalCompanyId && finalCompanyId !== 'all' ? { companyId: finalCompanyId } : {};
         const suppliers = await Supplier.findAll({
-            where: { companyId }
+            where: whereClause
         });
-        return suppliers.map(s => s.get ? s.get({ plain: true }) : s);
+        return (suppliers || []).map(s => s.get ? s.get({ plain: true }) : s);
     }
 
     /**
      * Get supplier by ID.
      */
-    async getSupplierById(id, companyId) {
-        return await Supplier.findOne({ where: { id, companyId } });
+    async getSupplierById(id, companyId = 'default') {
+        const finalCompanyId = companyId || 'default';
+        const whereClause = finalCompanyId && finalCompanyId !== 'all' ? { id, companyId: finalCompanyId } : { id };
+        return await Supplier.findOne({ where: whereClause });
     }
 
     /**

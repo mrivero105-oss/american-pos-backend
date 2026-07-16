@@ -35,7 +35,7 @@ router.get('/categories', async (req, res) => {
             attributes: [
                 [require('../database/connection').sequelize.fn('DISTINCT', require('../database/connection').sequelize.col('category')), 'category']
             ],
-            where: { companyId: req.user.companyId }
+            where: { companyId: req.user?.companyId || 'default' }
         });
         const rawCategories = categories.map(c => c.category).filter(Boolean);
         
