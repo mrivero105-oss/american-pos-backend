@@ -821,7 +821,7 @@ app.whenReady().then(async () => {
                 `SYNC_SECRET_KEY=${syncSecret}`,
                 `PORT=3005,5005,8080`,
                 `DB_DIALECT=sqlite`,
-                `GOOGLE_API_KEY=AIzaSyCTW2cSAxoXnG5NJo59dHGHk0jEbtcLuyI`
+                `GOOGLE_API_KEY=`
             ].join('\n');
             
             try {
