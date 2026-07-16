@@ -309,9 +309,20 @@ const getUpdaterConfig = () => {
         const filePath = getSettingsFilePath();
         if (fs.existsSync(filePath)) {
             const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            let owner = data.githubOwner || 'mrivero105-oss';
+            let repo = data.githubRepo || 'american-pos-backend';
+            if (owner === 'AmericanPOS' && repo === 'american-pos') {
+                owner = 'mrivero105-oss';
+                repo = 'american-pos-backend';
+                try {
+                    data.githubOwner = owner;
+                    data.githubRepo = repo;
+                    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+                } catch (saveErr) {}
+            }
             return {
-                githubOwner: data.githubOwner || 'mrivero105-oss',
-                githubRepo: data.githubRepo || 'american-pos-backend',
+                githubOwner: owner,
+                githubRepo: repo,
                 autoUpdateEnabled: data.autoUpdateEnabled !== false
             };
         }

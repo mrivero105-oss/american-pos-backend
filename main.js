@@ -774,7 +774,10 @@ if ($success) { exit 0 } else { exit 1 }`;
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
         if (electronUpdaterInstance) {
             try {
-                const res = await electronUpdaterInstance.checkForUpdates();
+                const res = await Promise.race([
+                    electronUpdaterInstance.checkForUpdates(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Consulta nativa expirada (4s, usando verificación API)')), 4000))
+                ]);
                 return { success: true, res };
             } catch (e) {
                 return { success: false, error: e.message };
