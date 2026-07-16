@@ -194,6 +194,21 @@ function createWindow(serverPort) {
             label: 'Ayuda',
             submenu: [
                 {
+                    label: 'Verificar Actualizaciones de American POS...',
+                    click: async () => {
+                        if (mainWindow) {
+                            if (electronUpdaterInstance) {
+                                mainWindow.webContents.send('updater-event', { status: 'checking' });
+                                electronUpdaterInstance.checkForUpdates().catch(e => {
+                                    log(`Check for updates error: ${e.message}`);
+                                    mainWindow.webContents.send('updater-event', { status: 'error', error: e.message });
+                                });
+                            }
+                        }
+                    }
+                },
+                { type: 'separator' },
+                {
                     label: 'Acerca de...',
                     click: async () => {
                         if (mainWindow) {

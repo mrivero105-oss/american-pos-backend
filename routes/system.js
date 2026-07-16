@@ -310,13 +310,13 @@ const getUpdaterConfig = () => {
         if (fs.existsSync(filePath)) {
             const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
             return {
-                githubOwner: data.githubOwner || 'AmericanPOS',
-                githubRepo: data.githubRepo || 'american-pos',
+                githubOwner: data.githubOwner || 'mrivero105-oss',
+                githubRepo: data.githubRepo || 'american-pos-backend',
                 autoUpdateEnabled: data.autoUpdateEnabled !== false
             };
         }
     } catch (e) {}
-    return { githubOwner: 'AmericanPOS', githubRepo: 'american-pos', autoUpdateEnabled: true };
+    return { githubOwner: 'mrivero105-oss', githubRepo: 'american-pos-backend', autoUpdateEnabled: true };
 };
 
 const saveUpdaterConfig = (config) => {
@@ -326,8 +326,8 @@ const saveUpdaterConfig = (config) => {
         if (fs.existsSync(filePath)) {
             data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         }
-        data.githubOwner = config.githubOwner || data.githubOwner || 'AmericanPOS';
-        data.githubRepo = config.githubRepo || data.githubRepo || 'american-pos';
+        data.githubOwner = config.githubOwner || data.githubOwner || 'mrivero105-oss';
+        data.githubRepo = config.githubRepo || data.githubRepo || 'american-pos-backend';
         if (typeof config.autoUpdateEnabled === 'boolean') {
             data.autoUpdateEnabled = config.autoUpdateEnabled;
         }
