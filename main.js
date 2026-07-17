@@ -490,7 +490,9 @@ function createWindow(serverPort) {
                 const { spawn } = require('child_process');
                 
                 // Enhanced PowerShell script using C# Interop to send TRUE RAW BYTES to the printer
-                // Using $args[0] and $args[1] to avoid interpolation injection
+                // We inject the printer name and byte string directly into the script since
+                // -EncodedCommand does NOT support -args for positional parameters ($args[0], $args[1]).
+                const escapedPrinterName = safePrinterName.replace(/'/g, "''");
                 const psScript = `
 $code = @'
 using System;
@@ -541,7 +543,7 @@ public class RawPrinterHelper {
 }
 '@; 
 Add-Type -TypeDefinition $code; 
-$success = [RawPrinterHelper]::SendBytesToPrinter($args[0], [byte[]]($args[1] -split ','));
+$success = [RawPrinterHelper]::SendBytesToPrinter('${escapedPrinterName}', [byte[]]('${byteString}' -split ','));
 if ($success) { exit 0 } else { exit 1 }`;
 
                 // To avoid here-string newline issues in spawn, we encode the script
@@ -551,8 +553,7 @@ if ($success) { exit 0 } else { exit 1 }`;
                 const child = spawn('powershell.exe', [
                     '-NoProfile', 
                     '-ExecutionPolicy', 'Bypass', 
-                    '-EncodedCommand', encodedScript,
-                    '-args', safePrinterName, byteString
+                    '-EncodedCommand', encodedScript
                 ]);
 
                 child.on('error', (err) => {
@@ -569,7 +570,15 @@ if ($success) { exit 0 } else { exit 1 }`;
                         resolve({ success: true });
                     } else {
                         log(`PowerShell spawn method failed for ${printerName} with code ${code}. Stderr: ${stderr}`);
-                        resolve({ success: false, error: `Fallo al abrir cajón (Código ${code})` });
+                        let userError = `Fallo al abrir cajón.`;
+                        if (stderr.includes('not found') || stderr.includes('no existe')) {
+                            userError = `Impresora "${safePrinterName}" no encontrada. Verifique el nombre en Ajustes.`;
+                        } else if (code === 1) {
+                            userError = `La impresora "${safePrinterName}" rechazó el comando de apertura. Verifique que el cajón esté conectado al puerto RJ11/DK de la impresora.`;
+                        } else {
+                            userError = `Fallo al abrir cajón (Código ${code}). Verifique la conexión de la impresora y el cajón.`;
+                        }
+                        resolve({ success: false, error: userError });
                     }
                 });
 
@@ -749,7 +758,7 @@ if ($success) { exit 0 } else { exit 1 }`;
     });
 
     ipcMain.handle('get-app-version', async (event) => {
-        return app.getVersion() || '2.0.8';
+        return app.getVersion() || '2.0.9';
     });
 
     let electronUpdaterInstance = null;
