@@ -116,7 +116,28 @@ async function runMigrations() {
         await addColSafe('CashMovements', 'paymentMethodId', { type: require('sequelize').TEXT });
         await addColSafe('CashMovements', 'currency', { type: require('sequelize').TEXT, defaultValue: 'USD' });
 
-        // Redundant raw migrations removed - handled by addColSafe above
+        // --- MIGRACIONES DE ESQUEMA RECIENTES (SRI, Proveedores RIF, Caja y Sucursales) ---
+        await addColSafe('Suppliers', 'rif', { type: require('sequelize').TEXT });
+        await addColSafe('Suppliers', 'logoUri', { type: require('sequelize').TEXT });
+        await addColSafe('Suppliers', 'isActive', { type: require('sequelize').BOOLEAN, defaultValue: true });
+
+        await addColSafe('Sales', 'registerName', { type: require('sequelize').TEXT });
+        await addColSafe('Sales', 'sriAccessKey', { type: require('sequelize').TEXT });
+        await addColSafe('Sales', 'sriStatus', { type: require('sequelize').TEXT });
+        await addColSafe('Sales', 'sriAuthorizationDate', { type: require('sequelize').TEXT });
+        await addColSafe('Sales', 'sriXmlUrl', { type: require('sequelize').TEXT });
+
+        await addColSafe('CashShifts', 'registerName', { type: require('sequelize').TEXT });
+
+        await addColSafe('Refunds', 'timestamp', { type: require('sequelize').TEXT });
+        await addColSafe('Refunds', 'paymentMethods', { type: require('sequelize').JSON });
+        await addColSafe('Refunds', 'status', { type: require('sequelize').TEXT, defaultValue: 'completed' });
+        await addColSafe('Refunds', 'supervisorApprovalId', { type: require('sequelize').TEXT });
+
+        await addColSafe('Branches', 'address', { type: require('sequelize').TEXT });
+        await addColSafe('Branches', 'phone', { type: require('sequelize').TEXT });
+        await addColSafe('Branches', 'email', { type: require('sequelize').TEXT });
+        await addColSafe('Branches', 'isActive', { type: require('sequelize').BOOLEAN, defaultValue: true });
 
         // --- MULTI-TENANT (COMPANY ID) MIGRATIONS ---
         const tablesWithCompanyId = [

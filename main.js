@@ -749,7 +749,7 @@ if ($success) { exit 0 } else { exit 1 }`;
     });
 
     ipcMain.handle('get-app-version', async (event) => {
-        return app.getVersion() || '2.0.7';
+        return app.getVersion() || '2.0.8';
     });
 
     let electronUpdaterInstance = null;
