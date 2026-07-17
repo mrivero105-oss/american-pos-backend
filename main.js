@@ -9,6 +9,21 @@ try {
     }
 } catch (e) {}
 
+// 🔒 SINGLE INSTANCE LOCK: Evitar doble inicio al encender la PC o al abrir el acceso directo varias veces
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+    process.exit(0);
+}
+
+app.on('second-instance', (event, commandLine, workingDirectory) => {
+    // Si Windows o el usuario intentan abrir una segunda instancia del POS, enfocamos la existente
+    if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+    }
+});
+
 const handleEpipe = (err) => {
     if (err.code === 'EPIPE') return;
     // Rethrow other errors
@@ -734,7 +749,7 @@ if ($success) { exit 0 } else { exit 1 }`;
     });
 
     ipcMain.handle('get-app-version', async (event) => {
-        return app.getVersion() || '2.0.5';
+        return app.getVersion() || '2.0.6';
     });
 
     let electronUpdaterInstance = null;
