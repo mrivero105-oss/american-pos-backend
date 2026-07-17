@@ -749,7 +749,7 @@ if ($success) { exit 0 } else { exit 1 }`;
     });
 
     ipcMain.handle('get-app-version', async (event) => {
-        return app.getVersion() || '2.0.6';
+        return app.getVersion() || '2.0.7';
     });
 
     let electronUpdaterInstance = null;
@@ -816,9 +816,18 @@ if ($success) { exit 0 } else { exit 1 }`;
             const { shell } = require('electron');
             let url = downloadUrl;
             if (!url || typeof url !== 'string') {
-                const res = await axios.get('https://api.github.com/repos/mrivero105-oss/american-pos-backend/releases/latest', { timeout: 6000 });
-                const exeAsset = res.data?.assets?.find(a => a.name.endsWith('.exe'));
-                if (exeAsset) url = exeAsset.browser_download_url;
+                const res = await axios.get('https://github.com/mrivero105-oss/american-pos-backend/releases/latest/download/latest.yml', {
+                    timeout: 6000,
+                    headers: { 'User-Agent': 'AmericanPOS-Updater-Service/2.0' }
+                });
+                const ymlText = res.data || '';
+                const versionMatch = ymlText.match(/version:\s*([^\s\n\r]+)/);
+                const remoteTag = versionMatch ? versionMatch[1] : null;
+                const pathMatch = ymlText.match(/path:\s*([^\s\n\r]+)/);
+                const pathVal = pathMatch ? pathMatch[1] : null;
+                if (remoteTag && pathVal) {
+                    url = `https://github.com/mrivero105-oss/american-pos-backend/releases/download/v${remoteTag}/${pathVal}`;
+                }
             }
             if (url) {
                 log(`Fallback download: abriendo ${url} en navegador...`);

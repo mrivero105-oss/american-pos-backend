@@ -380,60 +380,59 @@ router.get('/updater/status', async (req, res) => {
             gitInfo = { isGitWorkspace: false, branch: '', statusSummary: 'Entorno de producción empaquetado (.exe / Asar)' };
         }
 
-        // Check GitHub API for latest release
+        // Check GitHub Releases by downloading latest.yml directly (Rate limit immune)
         let latestRelease = null;
         let isUpdateAvailable = false;
         try {
-            const githubUrl = `https://api.github.com/repos/${config.githubOwner}/${config.githubRepo}/releases/latest`;
+            const githubYmlUrl = `https://github.com/${config.githubOwner}/${config.githubRepo}/releases/latest/download/latest.yml`;
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
 
-            const response = await fetch(githubUrl, {
-                headers: {
-                    'User-Agent': 'AmericanPOS-Updater-Service/2.0',
-                    'Accept': 'application/vnd.github.v3+json'
-                },
+            const response = await fetch(githubYmlUrl, {
+                headers: { 'User-Agent': 'AmericanPOS-Updater-Service/2.0' },
                 signal: controller.signal
             });
             clearTimeout(timeoutId);
 
             if (response.ok) {
-                const data = await response.json();
-                const remoteTag = (data.tag_name || '').replace(/^v/i, '').trim();
-                const cleanCurrent = currentVersion.replace(/^v/i, '').trim();
+                const ymlText = await response.text();
+                const versionMatch = ymlText.match(/version:\s*([^\s\n\r]+)/);
+                const remoteTag = versionMatch ? versionMatch[1] : null;
 
-                // Simple semver compare
-                const parseVer = (v) => v.split('.').map(n => parseInt(n) || 0);
-                const [rMaj, rMin, rPat] = parseVer(remoteTag);
-                const [cMaj, cMin, cPat] = parseVer(cleanCurrent);
+                if (remoteTag) {
+                    const cleanCurrent = currentVersion.replace(/^v/i, '').trim();
 
-                if (rMaj > cMaj || (rMaj === cMaj && rMin > cMin) || (rMaj === cMaj && rMin === cMin && rPat > cPat)) {
-                    isUpdateAvailable = true;
-                }
+                    // Simple semver compare
+                    const parseVer = (v) => v.split('.').map(n => parseInt(n) || 0);
+                    const [rMaj, rMin, rPat] = parseVer(remoteTag);
+                    const [cMaj, cMin, cPat] = parseVer(cleanCurrent);
 
-                // Find exe asset if available
-                let exeDownloadUrl = data.html_url;
-                if (Array.isArray(data.assets)) {
-                    const exeAsset = data.assets.find(a => a.name && a.name.endsWith('.exe'));
-                    if (exeAsset && exeAsset.browser_download_url) {
-                        exeDownloadUrl = exeAsset.browser_download_url;
+                    if (rMaj > cMaj || (rMaj === cMaj && rMin > cMin) || (rMaj === cMaj && rMin === cMin && rPat > cPat)) {
+                        isUpdateAvailable = true;
                     }
-                }
 
-                latestRelease = {
-                    tagName: data.tag_name || `v${remoteTag}`,
-                    version: remoteTag,
-                    title: data.name || data.tag_name,
-                    notes: data.body || 'Mejoras generales de rendimiento, estabilidad y seguridad en el sistema.',
-                    publishedAt: data.published_at,
-                    htmlUrl: data.html_url,
-                    downloadUrl: exeDownloadUrl
-                };
-            } else if (response.status === 404) {
-                console.log(`[GitHub Updater] No releases found in repo ${config.githubOwner}/${config.githubRepo}`);
+                    const pathMatch = ymlText.match(/path:\s*([^\s\n\r]+)/);
+                    const pathVal = pathMatch ? pathMatch[1] : `American-POS-Setup-${remoteTag}.exe`;
+                    const exeDownloadUrl = `https://github.com/${config.githubOwner}/${config.githubRepo}/releases/download/v${remoteTag}/${pathVal}`;
+
+                    const dateMatch = ymlText.match(/releaseDate:\s*'([^']+)'/);
+                    const publishedAt = dateMatch ? dateMatch[1] : new Date().toISOString();
+
+                    latestRelease = {
+                        tagName: `v${remoteTag}`,
+                        version: remoteTag,
+                        title: `American POS v${remoteTag}`,
+                        notes: 'Mejoras generales de rendimiento, estabilidad y seguridad en el sistema.',
+                        publishedAt: publishedAt,
+                        htmlUrl: `https://github.com/${config.githubOwner}/${config.githubRepo}/releases/tag/v${remoteTag}`,
+                        downloadUrl: exeDownloadUrl
+                    };
+                }
+            } else {
+                console.log(`[GitHub Updater] Error fetching latest.yml. Status: ${response.status}`);
             }
         } catch (netErr) {
-            console.warn('[GitHub Updater] API check failed or timed out:', netErr.message);
+            console.warn('[GitHub Updater] Check failed or timed out:', netErr.message);
         }
 
         res.json({
