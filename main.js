@@ -801,15 +801,32 @@ if ($success) { exit 0 } else { exit 1 }`;
         return { success: false, error: 'Soporte de actualización nativa no activo (usando API web)' };
     });
 
-    ipcMain.handle('download-update', async (event) => {
+    ipcMain.handle('download-update', async (event, downloadUrl) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
         if (electronUpdaterInstance) {
             try {
                 await electronUpdaterInstance.downloadUpdate();
                 return { success: true };
             } catch (e) {
-                return { success: false, error: e.message };
+                log(`electronUpdaterInstance error: ${e.message}`);
             }
+        }
+        try {
+            const axios = require('axios');
+            const { shell } = require('electron');
+            let url = downloadUrl;
+            if (!url || typeof url !== 'string') {
+                const res = await axios.get('https://api.github.com/repos/mrivero105-oss/american-pos-backend/releases/latest', { timeout: 6000 });
+                const exeAsset = res.data?.assets?.find(a => a.name.endsWith('.exe'));
+                if (exeAsset) url = exeAsset.browser_download_url;
+            }
+            if (url) {
+                log(`Fallback download: abriendo ${url} en navegador...`);
+                await shell.openExternal(url);
+                return { success: true, fallbackWeb: true };
+            }
+        } catch (err) {
+            log(`Error en fallback web de descarga: ${err.message}`);
         }
         return { success: false, error: 'Modo escritorio de descarga no disponible en este entorno' };
     });
