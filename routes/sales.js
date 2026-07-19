@@ -199,6 +199,48 @@ router.get('/:id/items', async (req, res) => {
 });
 
 /**
+ * POST /:id/email - Enviar factura por correo electrónico
+ */
+router.post('/:id/email', async (req, res) => {
+    try {
+        const { recipientEmail, recipientName } = req.body;
+        
+        // Validate email format
+        if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+            return res.status(400).json({ error: 'Email del destinatario inválido' });
+        }
+
+        // Load sale with items
+        const sale = await Sale.findOne({
+            where: { id: req.params.id, companyId: req.user.companyId },
+            include: [{ model: SaleItem, as: 'SaleItems' }]
+        });
+        if (!sale) return res.status(404).json({ error: 'Venta no encontrada' });
+
+        // Load business settings
+        const { readJson, getUserSettings } = require('../utils/helpers');
+        const { SETTINGS_FILE } = require('../config/paths');
+        const settings = getUserSettings(readJson(SETTINGS_FILE), req.user.companyId);
+        const businessInfo = settings.businessInfo || {};
+
+        // Send email
+        const InvoiceEmailService = require('../services/InvoiceEmailService');
+        await InvoiceEmailService.sendInvoiceEmail(
+            sale.toJSON(),
+            sale.SaleItems.map(i => i.toJSON()),
+            businessInfo,
+            recipientEmail,
+            recipientName
+        );
+
+        res.json({ success: true, message: 'Factura enviada exitosamente' });
+    } catch (error) {
+        console.error('Email invoice error:', error);
+        res.status(500).json({ error: 'Error al enviar la factura: ' + error.message });
+    }
+});
+
+/**
  * POST / - Register a new sale
  */
 router.post('/', validate(saleSchema), async (req, res) => {

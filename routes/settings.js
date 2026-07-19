@@ -464,4 +464,16 @@ router.post('/auto-launch', isAdmin, async (req, res) => {
     }
 });
 
+router.post('/email-test', isAdmin, async (req, res) => {
+    try {
+        const { user, pass } = req.body;
+        const InvoiceEmailService = require('../services/InvoiceEmailService');
+        await InvoiceEmailService.testConnection(user, pass);
+        res.json({ success: true, message: 'Conexión exitosa' });
+    } catch (error) {
+        console.error('Email test error:', error);
+        res.status(400).json({ error: error.message });
+    }
+});
+
 module.exports = router;

@@ -800,7 +800,7 @@ if ($success) { exit 0 } else { exit 1 }`;
             try {
                 const res = await Promise.race([
                     electronUpdaterInstance.checkForUpdates(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Consulta nativa expirada (4s, usando verificación API)')), 4000))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Consulta nativa expirada (15s, usando verificación API)')), 15000))
                 ]);
                 return { success: true, res };
             } catch (e) {
@@ -822,6 +822,9 @@ if ($success) { exit 0 } else { exit 1 }`;
         }
         try {
             const axios = require('axios');
+            const fs = require('fs');
+            const path = require('path');
+            const os = require('os');
             const { shell } = require('electron');
             let url = downloadUrl;
             if (!url || typeof url !== 'string') {
@@ -839,18 +842,65 @@ if ($success) { exit 0 } else { exit 1 }`;
                 }
             }
             if (url) {
-                log(`Fallback download: abriendo ${url} en navegador...`);
-                await shell.openExternal(url);
-                return { success: true, fallbackWeb: true };
+                log(`Fallback download: descargando ${url} manualmente en segundo plano...`);
+                const tempDir = os.tmpdir();
+                const exePath = path.join(tempDir, `AmericanPOS-Update-${Date.now()}.exe`);
+                const writer = fs.createWriteStream(exePath);
+                
+                try {
+                    const response = await axios({
+                        url,
+                        method: 'GET',
+                        responseType: 'stream',
+                        timeout: 30000 // 30s connection timeout
+                    });
+                    
+                    const totalSize = parseInt(response.headers['content-length'], 10);
+                    let downloaded = 0;
+                    
+                    response.data.on('data', (chunk) => {
+                        downloaded += chunk.length;
+                        const percent = totalSize ? Math.round((downloaded * 100) / totalSize) : 0;
+                        if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloading', info: { percent } });
+                    });
+                    
+                    response.data.pipe(writer);
+                    
+                    await new Promise((resolve, reject) => {
+                        writer.on('finish', resolve);
+                        writer.on('error', reject);
+                    });
+                    
+                    log(`Descarga manual completa en: ${exePath}`);
+                    if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloaded' });
+                    global.downloadedUpdatePath = exePath;
+                    return { success: true };
+                } catch (dlErr) {
+                    log(`Error descargando fallback en segundo plano: ${dlErr.message}`);
+                    log(`Abriendo fallback en navegador externo...`);
+                    await shell.openExternal(url);
+                    return { success: true, fallbackWeb: true };
+                }
             }
         } catch (err) {
-            log(`Error en fallback web de descarga: ${err.message}`);
+            log(`Error general en fallback de descarga: ${err.message}`);
         }
         return { success: false, error: 'Modo escritorio de descarga no disponible en este entorno' };
     });
 
     ipcMain.handle('install-update', async (event) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
+        if (global.downloadedUpdatePath) {
+            log(`Instalando actualizacion manual desde: ${global.downloadedUpdatePath}`);
+            try {
+                const { spawn } = require('child_process');
+                spawn(global.downloadedUpdatePath, ['/S'], { detached: true, stdio: 'ignore' }).unref();
+                app.quit();
+                return { success: true };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        }
         if (electronUpdaterInstance) {
             electronUpdaterInstance.quitAndInstall();
             return { success: true };
@@ -860,6 +910,14 @@ if ($success) { exit 0 } else { exit 1 }`;
 }
 
 app.whenReady().then(async () => {
+    // Interceptar aperturas de ventanas nuevas (target="_blank") y redirigirlas al navegador del SO
+    app.on('web-contents-created', (event, contents) => {
+        contents.setWindowOpenHandler(({ url }) => {
+            require('electron').shell.openExternal(url);
+            return { action: 'deny' };
+        });
+    });
+
     // 1. Obtener ruta de datos persistente de Electron
     const userDataPath = app.getPath('userData');
     console.log('Ruta de datos de usuario:', userDataPath);
@@ -908,6 +966,7 @@ app.whenReady().then(async () => {
     try {
         log('Checking database...');
         const fs = require('fs');
+        const APP_VERSION = '2.1.5';
         const dbPath = path.join(userDataPath, 'pos_v1.sqlite');
         // Source DB path handling for asar environments
         let sourceDb = path.join(__dirname, 'database', 'pos_v1.sqlite');
