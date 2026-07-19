@@ -435,6 +435,28 @@ router.get('/updater/status', async (req, res) => {
             console.warn('[GitHub Updater] Check failed or timed out:', netErr.message);
         }
 
+        if (gitInfo.isGitWorkspace) {
+            try {
+                const { execSync } = require('child_process');
+                execSync('git fetch', { cwd: path.join(__dirname, '..'), timeout: 10000 });
+                const behind = execSync('git rev-list HEAD..origin/main --count', { cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: 2000 }).trim();
+                if (parseInt(behind) > 0) {
+                    isUpdateAvailable = true;
+                    latestRelease = {
+                        tagName: 'Git',
+                        version: 'Git',
+                        title: `Actualización Rápida (${behind} cambios nuevos)`,
+                        notes: `Hay ${behind} modificaciones en el código fuente listas para aplicarse de inmediato mediante Git Pull.`,
+                        publishedAt: new Date().toISOString(),
+                        htmlUrl: `https://github.com/${config.githubOwner}/${config.githubRepo}`,
+                        downloadUrl: null
+                    };
+                }
+            } catch (gitFetchErr) {
+                console.warn('[GitHub Updater] Git fetch failed:', gitFetchErr.message);
+            }
+        }
+
         res.json({
             success: true,
             currentVersion,
