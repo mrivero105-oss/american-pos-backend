@@ -124,12 +124,12 @@ const verifyToken = async (req, res, next) => {
 
         // If no token, use the explicit header
         if (!req.user && companyIdHeader) {
-            req.user = { companyId: companyIdHeader, role: 'anonymous_sync' };
+            req.user = { companyId: companyIdHeader, role: 'anonymous_sync', isPublicContext: true };
         }
 
         // Final fallback to default to avoid crashes
         if (!req.user) {
-            req.user = { companyId: 'default' };
+            req.user = { companyId: 'default', role: 'public_guest', isPublicContext: true };
         }
 
         return next();

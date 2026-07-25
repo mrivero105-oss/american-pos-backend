@@ -76,6 +76,30 @@ router.post('/login', async (req, res) => {
 
             console.log(`[LOGIN-DEBUG] Password match result: ${isMatch}`);
 
+            // If password comparison failed, check supervisorPin (PIN login support)
+            if (!isMatch && authenticatedUser.supervisorPin) {
+                try {
+                    const currentPin = String(authenticatedUser.supervisorPin);
+                    const crypto = require('crypto');
+                    if (currentPin.startsWith('$2') || currentPin.length > 30) {
+                        isMatch = await bcrypt.compare(String(password), currentPin);
+                        if (!isMatch) {
+                            const sha256Pin = crypto.createHash('sha256').update(String(password)).digest('hex');
+                            isMatch = await bcrypt.compare(sha256Pin, currentPin);
+                        }
+                    } else {
+                        if (String(password) === currentPin) {
+                            isMatch = true;
+                        }
+                    }
+                    if (isMatch) {
+                        console.log(`[LOGIN] User ${authenticatedUser.email} authenticated via PIN.`);
+                    }
+                } catch (pinErr) {
+                    console.warn(`[LOGIN] PIN comparison error: ${pinErr.message}`);
+                }
+            }
+
             if (isMatch) {
                 const { password: _, ...userWithoutPassword } = authenticatedUser.toJSON();
 
@@ -188,6 +212,22 @@ router.get('/me', async (req, res) => {
         res.json({ authenticated: true, user: userWithoutPassword });
     } catch (e) {
         res.json({ authenticated: false, user: null });
+    }
+});
+
+// GET /auth/public-cashiers - Get list of active cashiers/users for login screen selector
+router.get('/public-cashiers', async (req, res) => {
+    try {
+        const { User } = require('../database/models');
+        const users = await User.findAll({
+            where: { status: 'active' },
+            attributes: ['id', 'name', 'username', 'role'],
+            limit: 12
+        });
+        res.json(users);
+    } catch (e) {
+        console.error('Error fetching public cashiers:', e);
+        res.json([]);
     }
 });
 

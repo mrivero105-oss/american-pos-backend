@@ -357,11 +357,12 @@ router.post('/:id/generate-image', isAdmin, async (req, res) => {
  */
 router.post('/:id/search-images-ia', isAdmin, async (req, res) => {
     try {
-        const result = await ProductService.searchImagesIA(req.params.id);
+        const { name, category } = req.body || {};
+        const result = await ProductService.searchImagesIA(req.params.id, name, category);
         res.json(result);
     } catch (error) {
-        console.error('IA Image search error:', error);
-        res.status(500).json({ error: error.message });
+        console.warn('[IA IMAGE SEARCH] Aviso:', error.message);
+        res.json({ images: [], error: error.message });
     }
 });
 
@@ -370,12 +371,12 @@ router.post('/:id/search-images-ia', isAdmin, async (req, res) => {
  */
 router.post('/:id/select-image-ia', isAdmin, async (req, res) => {
     try {
-        const { imageUrl } = req.body;
+        const { imageUrl, name, category } = req.body || {};
         if (!imageUrl) return res.status(400).json({ error: 'Falta la URL de la imagen' });
         
-        const result = await ProductService.downloadAndSetImage(req.params.id, imageUrl);
+        const result = await ProductService.downloadAndSetImage(req.params.id, imageUrl, name, category);
         const io = req.app.get('io');
-        if (io) io.to(req.user.companyId).emit('inventory_changed');
+        if (io && req.user?.companyId) io.to(req.user.companyId).emit('inventory_changed');
         res.json(result);
     } catch (error) {
         console.error('IA Image download error:', error);

@@ -294,12 +294,13 @@ router.post('/taxes', isAdmin, async (req, res) => {
 router.get('/is-setup', async (req, res) => {
     try {
         const allSettings = getCachedSettings();
-        const userSettings = allSettings[req.user.companyId];
-        // Forzamos que se muestre si no existe la bandera explícita de completado
-        const isSetup = !!(userSettings && userSettings.wizardCompleted);
-        res.json({ isSetup });
+        const companyId = req.user?.companyId || 'default';
+        const userSettings = allSettings[companyId] || allSettings['default'] || Object.values(allSettings)[0];
+        // Retornar true por defecto salvo que explícitamente se indique wizardCompleted: false
+        const isSetup = userSettings ? userSettings.wizardCompleted !== false : true;
+        res.json({ isSetup: Boolean(isSetup) });
     } catch (error) {
-        res.status(500).json({ error: 'Error al verificar configuración' });
+        res.json({ isSetup: true });
     }
 });
 

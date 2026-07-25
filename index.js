@@ -53,7 +53,29 @@ const patchConsole = (method) => {
 };
 ['log', 'error', 'warn', 'info', 'debug'].forEach(patchConsole);
 
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+try {
+    require('dotenv').config({ path: path.join(__dirname, '.env') });
+} catch (dotenvErr) {
+    try {
+        const fs = require('fs');
+        const envPath = path.join(__dirname, '.env');
+        if (fs.existsSync(envPath)) {
+            const envLines = fs.readFileSync(envPath, 'utf8').split('\n');
+            envLines.forEach(line => {
+                const trimmed = line.trim();
+                if (trimmed && !trimmed.startsWith('#')) {
+                    const eqIdx = trimmed.indexOf('=');
+                    if (eqIdx > 0) {
+                        const key = trimmed.substring(0, eqIdx).trim();
+                        let val = trimmed.substring(eqIdx + 1).trim();
+                        if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+                        if (!process.env[key]) process.env[key] = val;
+                    }
+                }
+            });
+        }
+    } catch (e) {}
+}
 const express = require('express');
 require('express-async-errors');
 const http = require('http');
@@ -248,10 +270,11 @@ const startServer = (ports, userDataPath = null) => {
                 // No estamos en el entorno de Electron o no se puede cargar el módulo
             }
 
-            // Static files - Handle asar unpacked path for packaged apps
-            const staticPath = isPackaged 
-                ? path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'public')
-                : path.join(__dirname, 'public');
+            // Static files - Handle both packed (app.asar) and unpacked paths
+            let staticPath = path.join(__dirname, 'public');
+            if (!fs.existsSync(staticPath) && isPackaged) {
+                staticPath = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'public');
+            }
 
             const safeStaticMimeTypes = (req, res, next) => {
                 if (req.method !== 'GET' && req.method !== 'HEAD') return next();
@@ -265,16 +288,26 @@ const startServer = (ports, userDataPath = null) => {
                 next();
             };
 
-            app.use(safeStaticMimeTypes, express.static(staticPath));
+            app.use(safeStaticMimeTypes, express.static(staticPath, {
+                etag: false,
+                maxAge: 0,
+                setHeaders: (res, path) => {
+                    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                    res.setHeader('Pragma', 'no-cache');
+                    res.setHeader('Expires', '0');
+                }
+            }));
             app.use('/uploads', safeStaticMimeTypes, express.static(path.join(staticPath, 'uploads')));
             
-            // Serve local images first (using unpacked path if packaged to prevent ASAR stream errors)
-            const productImagesPath = isPackaged
-                ? path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'product_images')
-                : path.join(__dirname, 'product_images');
-            const supplierLogosPath = isPackaged
-                ? path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'supplier_logos')
-                : path.join(__dirname, 'supplier_logos');
+            // Serve local images (fallback safely if inside asar or unpacked)
+            let productImagesPath = path.join(__dirname, 'product_images');
+            if (!fs.existsSync(productImagesPath) && isPackaged) {
+                productImagesPath = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'product_images');
+            }
+            let supplierLogosPath = path.join(__dirname, 'supplier_logos');
+            if (!fs.existsSync(supplierLogosPath) && isPackaged) {
+                supplierLogosPath = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'supplier_logos');
+            }
 
             app.use('/product_images', safeStaticMimeTypes, express.static(productImagesPath));
             app.use('/supplier_logos', safeStaticMimeTypes, express.static(supplierLogosPath));
@@ -488,19 +521,20 @@ const startServer = (ports, userDataPath = null) => {
                 console.warn('⚠️ Error al iniciar LAN Cluster Service:', lanErr.message);
             }
 
-            // Start WhatsApp Bot automatically
-            try {
-                const WhatsappBotService = require('./services/WhatsappBotService');
-                const { User } = require('./database/models');
-                // Get the admin user to get the companyId
-                const firstUser = await User.findOne({ where: { role: 'admin' } });
-                const companyId = firstUser?.companyId || 'DEFAULT_COMPANY';
-                
-                WhatsappBotService.init(companyId);
-                console.log('✅ WhatsApp Bot auto-start initiated.');
-            } catch (err) {
-                console.error('⚠️ Could not auto-start WhatsApp Bot:', err);
-            }
+            // Start WhatsApp Bot asynchronously in background to avoid blocking main POS startup
+            setImmediate(async () => {
+                try {
+                    const WhatsappBotService = require('./services/WhatsappBotService');
+                    const { User } = require('./database/models');
+                    const firstUser = await User.findOne({ where: { role: 'admin' } });
+                    const companyId = firstUser?.companyId || 'DEFAULT_COMPANY';
+                    
+                    WhatsappBotService.init(companyId);
+                    console.log('✅ WhatsApp Bot background init completed.');
+                } catch (err) {
+                    console.warn('⚠️ WhatsApp Bot background init notice:', err.message);
+                }
+            });
 
             resolve({ servers, mainPort: portList[0] });
         } catch (error) {

@@ -18,13 +18,13 @@ class HardwareIdentity {
     async getMachineUUID() {
         return new Promise((resolve) => {
             if (process.platform === 'win32') {
-                exec('powershell.exe -Command "(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID"', (error, stdout) => {
+                exec('powershell.exe -Command "(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID"', { timeout: 3000 }, (error, stdout) => {
                     const psUuid = stdout ? stdout.trim() : '';
                     if (!error && psUuid) {
                         return resolve(psUuid);
                     }
                     // Fallback to WMIC if powershell fails
-                    exec('wmic csproject get UUID', (err, wmicOut) => {
+                    exec('wmic csproject get UUID', { timeout: 3000 }, (err, wmicOut) => {
                         if (err) {
                             console.warn('[HWID] Fallo al leer WMIC y Powershell, usando fallback.');
                             return resolve('FALLBACK-' + os.hostname());

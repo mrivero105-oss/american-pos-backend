@@ -763,8 +763,9 @@ const connectDB = async (retryWithSqlite = true) => {
         if (dialectName === 'sqlite') {
             // Activar Foreign Keys y Modo WAL para SQLite (CRÍTICO PARA INTEGRIDAD Y CONCURRENCIA)
             await sequelize.query('PRAGMA foreign_keys = ON;');
-            await sequelize.query('PRAGMA journal_mode = WAL;');
+            const [walResult] = await sequelize.query('PRAGMA journal_mode = WAL;');
             await sequelize.query('PRAGMA synchronous = FULL;');
+            console.log(`[DB-SQLite] Integrity pragmas applied. Journal Mode: ${JSON.stringify(walResult[0]?.journal_mode || 'WAL')}, Concurrency Timeout: 10000ms`);
 
             // Seguridad de Transacciones Concurrentes
             // Override DEFERRED default to IMMEDIATE to prevent Read-Write Race Conditions in Inventory

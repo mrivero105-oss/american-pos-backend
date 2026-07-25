@@ -1,85 +1,127 @@
 class ImageSearchService {
     static async findProductImageUrl(query) {
-        console.log(`[IMAGE SEARCH] Buscando imagen via fetch nativo: "${query}"...`);
+        console.log(`[IMAGE SEARCH] Buscando imagen ultra-precisa para: "${query}"...`);
+        const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+        const urls = [];
+
+        // ESTRATEGIA 1: Bing Images (Ultra rápido y con mayor tasa de éxito en imágenes de alta resolución)
         try {
-            const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-            const urls = [];
+            const bingUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(query + ' producto')}&form=HDRSC2`;
+            const res = await fetch(bingUrl, {
+                headers: {
+                    'User-Agent': userAgent,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
+                }
+            });
 
-            // 1. Intentar con Bing (Es el más fiable para scrapping ligero)
-            try {
-                const bingUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&form=HDRSC2&first=1`;
-                const bingResponse = await fetch(bingUrl, { 
-                    headers: { 
-                        'User-Agent': userAgent,
-                        'Accept-Language': 'en-US,en;q=0.9'
-                    } 
-                });
-
-                if (bingResponse.ok) {
-                    const bingHtml = await bingResponse.text();
-                    
-                    // Estrategia A: Buscar en el JSON de metadatos de Bing (contiene la URL original 'murl')
-                    // Las comillas pueden venir como " o como &quot;. Permitimos & dentro de la URL.
-                    const murlRegex = /(?:"murl"|&quot;murl&quot;)\s*[:=]\s*(?:"|&quot;)(https?:\/\/[^"\s<>]+?)(?=(?:"|&quot;))/g;
-                    let murlMatch;
-                    while ((murlMatch = murlRegex.exec(bingHtml)) !== null) {
-                        urls.push(murlMatch[1].replace(/\\/g, ''));
-                        if (urls.length >= 7) break;
+            if (res.ok) {
+                const html = await res.text();
+                
+                // Patrón 1: &quot;murl&quot;:&quot;URL&quot;
+                const murlRegex = /&quot;murl&quot;:&quot;(https?:\/\/[^&"]+)&quot;/gi;
+                let m;
+                while ((m = murlRegex.exec(html)) !== null) {
+                    let imgUrl = m[1].replace(/\\u0026/g, '&');
+                    if (imgUrl.startsWith('http') && !urls.includes(imgUrl)) {
+                        urls.push(imgUrl);
                     }
+                    if (urls.length >= 15) break;
+                }
 
-                    // Estrategia B: Fallback a miniaturas de Bing si no hay murls
-                    if (urls.length < 3) {
-                        const thumbRegex = /src="(https:\/\/th\.bing\.com\/th\/id\/[^"]+)"/g;
-                        let thumbMatch;
-                        while ((thumbMatch = thumbRegex.exec(bingHtml)) !== null) {
-                            const cleanThumb = thumbMatch[1].replace(/&amp;/g, '&');
-                            if (!urls.includes(cleanThumb)) urls.push(cleanThumb);
-                            if (urls.length >= 8) break;
+                // Patrón 2: m="{...}" JSON en atributo m
+                if (urls.length < 10) {
+                    const mAttrRegex = /m="([^"]+)"/g;
+                    while ((m = mAttrRegex.exec(html)) !== null) {
+                        try {
+                            const jsonStr = m[1].replace(/&quot;/g, '"');
+                            const parsed = JSON.parse(jsonStr);
+                            if (parsed.murl && typeof parsed.murl === 'string' && !urls.includes(parsed.murl)) {
+                                urls.push(parsed.murl);
+                            }
+                        } catch (e) {}
+                        if (urls.length >= 20) break;
+                    }
+                }
+
+                // Patrón 3: iusc JSON legacy fallback
+                if (urls.length < 10) {
+                    const iuscRegex = /iusc="([^"]+)"/g;
+                    while ((m = iuscRegex.exec(html)) !== null) {
+                        try {
+                            const jsonStr = m[1].replace(/&quot;/g, '"');
+                            const parsed = JSON.parse(jsonStr);
+                            if (parsed.murl && typeof parsed.murl === 'string' && !urls.includes(parsed.murl)) {
+                                urls.push(parsed.murl);
+                            }
+                        } catch (err) {}
+                        if (urls.length >= 20) break;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[IMAGE SEARCH] Fallo en Bing Images:', e.message);
+        }
+
+        // ESTRATEGIA 2: Open Food Facts API (Imágenes oficiales de productos de supermercado/alimentos)
+        if (urls.length < 5) {
+            try {
+                const offUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1`;
+                const res = await fetch(offUrl, { headers: { 'User-Agent': userAgent } });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.products && Array.isArray(data.products)) {
+                        data.products.forEach(p => {
+                            const img = p.image_front_url || p.image_url || p.image_front_small_url;
+                            if (img && typeof img === 'string' && img.startsWith('http') && !urls.includes(img)) {
+                                urls.push(img);
+                            }
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('[IMAGE SEARCH] Fallo en OpenFoodFacts:', e.message);
+            }
+        }
+
+        // ESTRATEGIA 3: DuckDuckGo Image API (Fallback adicional)
+        if (urls.length < 5) {
+            try {
+                const tokenRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`, {
+                    headers: { 'User-Agent': userAgent }
+                });
+                if (tokenRes.ok) {
+                    const tokenHtml = await tokenRes.text();
+                    const vqdMatch = /vqd=['"]([^'"]+)['"]/.exec(tokenHtml) || /vqd=([\d-]+)/.exec(tokenHtml);
+                    if (vqdMatch) {
+                        const vqd = vqdMatch[1];
+                        const ddgImgUrl = `https://duckduckgo.com/i.js?l=es-es&o=json&q=${encodeURIComponent(query)}&vqd=${vqd}&f=,,,`;
+                        const ddgRes = await fetch(ddgImgUrl, { headers: { 'User-Agent': userAgent } });
+                        if (ddgRes.ok) {
+                            const ddgData = await ddgRes.json();
+                            if (ddgData.results && Array.isArray(ddgData.results)) {
+                                ddgData.results.forEach(r => {
+                                    const img = r.image || r.thumbnail;
+                                    if (img && typeof img === 'string' && img.startsWith('http') && !urls.includes(img)) {
+                                        urls.push(img);
+                                    }
+                                });
+                            }
                         }
                     }
                 }
             } catch (e) {
-                console.warn("[IMAGE SEARCH] Fallo en Bing:", e.message);
+                console.warn('[IMAGE SEARCH] Fallo en DuckDuckGo API:', e.message);
             }
-
-            // 2. Intentar con DuckDuckGo (como respaldo secundario)
-            if (urls.length === 0) {
-                try {
-                    const ddgUrl = `https://lite.duckduckgo.com/lite/`;
-                    const ddgRes = await fetch(ddgUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'User-Agent': userAgent
-                        },
-                        body: `q=${encodeURIComponent(query)}` // Sin 'amazon' para evitar protecciones extremas
-                    });
-
-                    if (ddgRes.ok) {
-                        const ddgHtml = await ddgRes.text();
-                        const fallbackRegex = /(https:\/\/[^"'\s]+?\.(?:jpg|jpeg|png|webp))/gi;
-                        let match;
-                        while ((match = fallbackRegex.exec(ddgHtml)) !== null) {
-                            if (!urls.includes(match[1])) urls.push(match[1]);
-                            if (urls.length >= 5) break;
-                        }
-                    }
-                } catch (e) {
-                    console.warn("[IMAGE SEARCH] Fallo en DDG:", e.message);
-                }
-            }
-
-            if (urls.length > 0) {
-                console.log(`[IMAGE SEARCH] ${urls.length} candidatos encontrados.`);
-                return [...new Set(urls)]; // Eliminar duplicados
-            }
-
-            return null;
-
-        } catch (error) {
-            console.error("[IMAGE SEARCH] Error crítico en búsqueda:", error.message);
-            return null;
         }
+
+        if (urls.length > 0) {
+            console.log(`[IMAGE SEARCH] ${urls.length} imágenes ultra-precisas encontradas.`);
+            return [...new Set(urls)];
+        }
+
+        console.warn('[IMAGE SEARCH] No se encontraron candidatos.');
+        return null;
     }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "americanpos",
-  "version": "2.1.6",
+  "version": "2.2.1",
   "author": {
     "name": "American POS Team",
     "email": "support@americanpos.com"
@@ -54,7 +54,7 @@
     "@electron/rebuild": "^4.0.2",
     "autoprefixer": "^10.4.23",
     "axios": "^1.18.1",
-    "electron": "^28.3.3",
+    "electron": "22.3.27",
     "electron-builder": "^24.13.3",
     "googleapis": "^171.4.0",
     "postcss": "^8.5.6",
@@ -65,7 +65,12 @@
     "productName": "American POS",
     "compression": "normal",
     "npmRebuild": false,
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/sqlite3/**",
+      "**/database/pos_v1.sqlite",
+      "**/product_images/**"
+    ],
     "directories": {
       "output": "dist_final_installer"
     },
@@ -85,18 +90,20 @@
       "!test_backup.zip",
       "!.wwebjs_auth",
       "!.wwebjs_cache",
-      "!dist_installer",
-      "!dist_final_installer",
-      "!dist_legacy_installer",
+      "!dist*",
       "!backups",
       "!build_temp",
       "!auto-backups",
       "!scratch",
       "!uploads",
+      "!product_images",
       "!*.log",
       "!db.json",
       "!.git",
       "!*.md",
+      "!**/README*.md",
+      "!**/CHANGELOG*.md",
+      "!**/LICENSE*",
       "!*.ps1",
       "!node_modules/electron",
       "!node_modules/electron-builder",
@@ -105,14 +112,24 @@
       "!node_modules/typescript"
     ],
     "win": {
-      "target": "nsis",
-      "icon": "public/favicon.ico"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/favicon.ico",
+      "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "shortcutName": "American POS",
-      "include": "build/installer.nsh"
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }

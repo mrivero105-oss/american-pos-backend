@@ -892,33 +892,78 @@ class ProductService {
     /**
      * Busca imágenes candidatas con IA y las devuelve sin descargar.
      */
-    async searchImagesIA(productId) {
+    async searchImagesIA(productId, fallbackName = '', fallbackCategory = '') {
         try {
-            const product = await Product.findByPk(productId);
-            if (!product) throw new Error('Producto no encontrado');
+            let name = (fallbackName || '').trim();
+            let category = (fallbackCategory || '').trim();
 
-            console.log(`[IA IMAGE] Buscando imágenes candidatas para: ${product.name}`);
-            const searchQuery = await AIService.generateProductSearchQuery(product.name, product.category);
-            const imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
+            if (productId && productId !== 'new' && !productId.toString().startsWith('local-')) {
+                const product = await Product.findByPk(productId);
+                if (product) {
+                    name = name || product.name;
+                    category = category || product.category;
+                }
+            }
+
+            if (!name) {
+                throw new Error('Ingresa el nombre del producto primero para buscar su imagen con IA');
+            }
+
+            console.log(`[IA IMAGE] Buscando imágenes candidatas para: "${name}" (${category || 'General'})`);
+            
+            let searchQuery = name;
+            try {
+                searchQuery = await AIService.generateProductSearchQuery(name, category);
+            } catch (e) {
+                searchQuery = `${name} ${category || ''}`.trim();
+            }
+
+            let imageUrls = null;
+            try {
+                imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
+            } catch (e) {
+                console.warn('[IA IMAGE] Fallo primera búsqueda:', e.message);
+            }
+            
+            // Fallback 1: Si no hay imágenes con el query de IA, buscar con el nombre directo del producto
+            if ((!imageUrls || imageUrls.length === 0) && searchQuery !== name) {
+                console.log(`[IA IMAGE] Reintentando búsqueda con nombre directo: "${name}"`);
+                try {
+                    imageUrls = await ImageSearchService.findProductImageUrl(name);
+                } catch (e) {}
+            }
+
+            // Fallback 2: Si el nombre tiene palabras adicionales (ej: "Lata Roja", "170GR"), buscar simplificado
+            if (!imageUrls || imageUrls.length === 0) {
+                const cleanName = name.replace(/lata|roja|azul|verde|paquete|caja|\b\d+(g|gr|kg|ml|l|oz)\b/gi, '').trim();
+                if (cleanName && cleanName.length >= 3 && cleanName !== name) {
+                    console.log(`[IA IMAGE] Reintentando búsqueda simplificada: "${cleanName}"`);
+                    try {
+                        imageUrls = await ImageSearchService.findProductImageUrl(cleanName);
+                    } catch (e) {}
+                }
+            }
             
             if (!imageUrls || imageUrls.length === 0) {
-                throw new Error('No se encontró ninguna imagen en la búsqueda');
+                throw new Error('No se encontraron imágenes candidatas para este producto en la web. Puedes subir una manualmente o colocar su URL.');
             }
 
             return { images: imageUrls };
         } catch (error) {
             console.error('[IA IMAGE SEARCH] Error:', error.message);
-            throw new Error('No se pudo buscar la imagen: ' + error.message);
+            throw new Error(error.message);
         }
     }
 
     /**
      * Descarga la imagen seleccionada y la asigna al producto.
      */
-    async downloadAndSetImage(productId, imageUrl) {
+    async downloadAndSetImage(productId, imageUrl, fallbackName = '', fallbackCategory = '') {
         try {
-            const product = await Product.findByPk(productId);
-            if (!product) throw new Error('Producto no encontrado');
+            let product = null;
+            if (productId && productId !== 'new' && !productId.toString().startsWith('local-')) {
+                product = await Product.findByPk(productId);
+            }
 
             console.log(`[IA IMAGE] Intentando descargar imagen seleccionada desde: ${imageUrl}`);
             
@@ -930,21 +975,19 @@ class ProductService {
             });
             
             if (!response.ok) {
-                throw new Error(`Error HTTP: ${response.status} al descargar imagen.`);
+                throw new Error(`Error HTTP: ${response.status} al descargar la imagen.`);
             }
 
             const contentType = response.headers.get('content-type') || '';
-            if (!contentType.toLowerCase().startsWith('image/')) {
-                throw new Error(`URL devolvió un tipo no válido (${contentType}).`);
+            if (contentType && !contentType.toLowerCase().includes('image') && !contentType.toLowerCase().includes('octet-stream')) {
+                throw new Error(`La URL no devolvió una imagen válida (${contentType}).`);
             }
             
             const arrayBuffer = await response.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
 
-            // Prepare storage
-            const filename = `ai_product_${productId}_${Date.now()}.jpg`;
+            const filename = `ai_product_${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
             
-            // Lógica de rutas para Windows AppData
             let userDataPath = process.env.USER_DATA_PATH;
             if (!userDataPath && process.platform === 'win32') {
                 const path = require('path');
@@ -963,9 +1006,11 @@ class ProductService {
             fs.writeFileSync(filePath, buffer);
 
             const imageUri = `/product_images/${filename}`;
-            await product.update({ imageUri, imageUrl: null });
+            if (product) {
+                await product.update({ imageUri, imageUrl: imageUri });
+            }
 
-            return { imageUri };
+            return { imageUri, imageUrl: imageUri };
         } catch (error) {
             console.error('[IA IMAGE DOWNLOAD] Error:', error.message);
             throw new Error('Fallo al descargar la imagen elegida: ' + error.message);

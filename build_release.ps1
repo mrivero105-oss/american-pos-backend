@@ -22,8 +22,10 @@ New-Item -ItemType Directory -Force -Path $GlobalTemp | Out-Null
 $env:TEMP = $GlobalTemp
 $env:TMP = $GlobalTemp
 
-Write-Host "`n[0/6] Deteniendo instancias activas de American POS para liberar archivos bloqueados..." -ForegroundColor Yellow
+Write-Host "`n[0/6] Deteniendo instancias activas de American POS, Node y Electron para liberar archivos bloqueados..." -ForegroundColor Yellow
 Stop-Process -Name "American POS" -Force -ErrorAction SilentlyContinue | Out-Null
+Stop-Process -Name "electron" -Force -ErrorAction SilentlyContinue | Out-Null
+Stop-Process -Name "node" -Force -ErrorAction SilentlyContinue | Out-Null
 Start-Sleep -Seconds 2
 
 Write-Host "`n[1/6] Limpiando temporales y compilaciones previas..." -ForegroundColor Yellow
@@ -81,6 +83,9 @@ try {
 }
 
 Write-Host "`n[4/6] Recompilando dependencias nativas de C++ (SQLite3) para Electron..." -ForegroundColor Yellow
+Stop-Process -Name "node" -Force -ErrorAction SilentlyContinue | Out-Null
+Stop-Process -Name "electron" -Force -ErrorAction SilentlyContinue | Out-Null
+Start-Sleep -Seconds 1
 Push-Location $BackendDir
 try {
     Write-Host "-> Asegurando dependencias de backend (npm install)..." -ForegroundColor Gray

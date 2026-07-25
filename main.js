@@ -1,5 +1,22 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, session } = require('electron');
 const path = require('path');
+
+// Configuración de Renderizado Gráfico
+// Se utiliza el motor gráfico nativo de Chromium con aceleración GPU habilitada.
+const isLegacyWin = process.platform === 'win32' && /^6\./.test(require('os').release());
+if (isLegacyWin || process.env.DISABLE_GPU === 'true') {
+    app.disableHardwareAcceleration();
+    app.commandLine.appendSwitch('disable-gpu');
+} else {
+    app.commandLine.appendSwitch('enable-gpu-rasterization');
+    app.commandLine.appendSwitch('enable-zero-copy');
+}
+
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512');
+app.commandLine.appendSwitch('disable-breakpad');
+app.commandLine.appendSwitch('disable-component-update');
+app.commandLine.appendSwitch('disable-print-preview');
+app.commandLine.appendSwitch('default-background-color', 'ff030712');
 
 // Handle Squirrel events for Windows immediately on startup
 try {
@@ -8,6 +25,9 @@ try {
         process.exit(0);
     }
 } catch (e) {}
+
+let mainWindow = null;
+let isQuittingAfterBackup = false;
 
 // 🔒 SINGLE INSTANCE LOCK: Evitar doble inicio al encender la PC o al abrir el acceso directo varias veces
 const gotTheLock = app.requestSingleInstanceLock();
@@ -41,7 +61,26 @@ function sanitizePrinterName(name) {
 }
 
 // AND to optionally redirect all logs to our persistent desktop log file.
-const LOGS_ENABLED = process.env.ENABLE_FILE_LOGS === 'true';
+const LOGS_ENABLED = true;
+
+let logStream = null;
+try {
+    const fs = require('fs');
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logFile = path.join(logDir, 'pos_startup_log.txt');
+    logStream = fs.createWriteStream(logFile, { flags: 'a' });
+} catch (e) {}
+
+function log(message) {
+    if (!LOGS_ENABLED || !logStream) return;
+    try {
+        const timestamp = new Date().toISOString();
+        logStream.write(`[${timestamp}] ${message}\n`);
+    } catch (e) {}
+}
 
 const patchConsole = (method) => {
     const original = console[method];
@@ -61,8 +100,8 @@ const patchConsole = (method) => {
         } catch (err) {
             // Silently ignore EPIPE, log nothing to avoid recursion
             if (err.code !== 'EPIPE' && method !== 'error') {
-                if (LOGS_ENABLED) {
-                    try { fs.appendFileSync(logFile, `[ERR] Failed to log console.${method}: ${err.message}\n`); } catch (e) { }
+                if (LOGS_ENABLED && logStream) {
+                    try { logStream.write(`[ERR] Failed to log console.${method}: ${err.message}\n`); } catch (e) { }
                 }
             }
         }
@@ -71,27 +110,32 @@ const patchConsole = (method) => {
 ['log', 'error', 'warn', 'info', 'debug'].forEach(patchConsole);
 
 // Load environment variables immediately to ensure DB_DIALECT and other settings are available
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+try {
+    require('dotenv').config({ path: path.join(__dirname, '.env') });
+} catch (dotenvErr) {
+    try {
+        const fs = require('fs');
+        const envPath = path.join(__dirname, '.env');
+        if (fs.existsSync(envPath)) {
+            const envLines = fs.readFileSync(envPath, 'utf8').split('\n');
+            envLines.forEach(line => {
+                const trimmed = line.trim();
+                if (trimmed && !trimmed.startsWith('#')) {
+                    const eqIdx = trimmed.indexOf('=');
+                    if (eqIdx > 0) {
+                        const key = trimmed.substring(0, eqIdx).trim();
+                        let val = trimmed.substring(eqIdx + 1).trim();
+                        if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+                        if (!process.env[key]) process.env[key] = val;
+                    }
+                }
+            });
+        }
+    } catch (e) {}
+}
 
 const fs = require('fs');
 const os = require('os');
-
-const logDir = path.join(app.getPath('userData'), 'logs');
-if (!fs.existsSync(logDir)) {
-    try { fs.mkdirSync(logDir, { recursive: true }); } catch (e) { }
-}
-const logFile = path.join(logDir, 'pos_startup_log.txt');
-const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-
-function log(message) {
-    if (!LOGS_ENABLED) return;
-    try {
-        const timestamp = new Date().toISOString();
-        logStream.write(`[${timestamp}] ${message}\n`);
-    } catch (e) {
-        // Fallback
-    }
-}
 
 try {
     log(`Starting main.js execution. UserData: ${app.getPath('userData')}`);
@@ -100,10 +144,6 @@ try {
 }
 
 // const { startServer } = require('./index.js'); // Moved to whenReady
-
-
-let mainWindow;
-let isQuittingAfterBackup = false;
 
 async function performFastDbBackupOnly() {
     log('Fast Exit: Running atomic SQLite database backup...');
@@ -157,18 +197,40 @@ async function performAutoBackup() {
 }
 
 function createWindow(serverPort) {
-    log('Entering createWindow function...');
+    log(`Entering createWindow function. serverPort: ${serverPort}`);
+    session.defaultSession.clearCache().then(() => {
+        log('Web cache cleared successfully.');
+    });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (serverPort) {
+            log(`Redirecting existing window to http://localhost:${serverPort}`);
+            mainWindow.loadURL(`http://localhost:${serverPort}`);
+        }
+        return;
+    }
+
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
+        minWidth: 1024,
+        minHeight: 728,
+        backgroundColor: '#030712',
         icon: path.join(__dirname, 'public/assets/icon.png'),
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
-            preload: path.join(__dirname, 'preload.js')
+            preload: path.join(__dirname, 'preload.js'),
+            scrollBounce: false
         },
-        autoHideMenuBar: true, // Ocultar barra de menú (presionar Alt para mostrar temporalmente)
-        show: true // Force show
+        autoHideMenuBar: true,
+        show: false
+    });
+
+    mainWindow.once('ready-to-show', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show();
+            mainWindow.maximize();
+        }
     });
 
     // Create Logic Menu
@@ -241,12 +303,20 @@ function createWindow(serverPort) {
         mainWindow.setMenuBarVisibility(false);
     }
 
-    // Cargar la app desde el servidor local usando el puerto dinámico
-    const portToUse = serverPort || 3005;
-    const url = `http://localhost:${portToUse}`;
-    log(`Loading URL: ${url}`);
+    // Cargar el splash screen oscuro de inmediato (0.1s response time) y cambiar al servidor HTTP al estar listo
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    const splashFile = path.join(__dirname, 'public', 'splash.html');
 
-    mainWindow.loadURL(url);
+    if (serverPort) {
+        const url = `http://localhost:${serverPort}`;
+        mainWindow.loadURL(url, { extraHeaders: 'pragma: no-cache\n' });
+    } else if (fs.existsSync(splashFile)) {
+        mainWindow.loadFile(splashFile);
+    } else if (fs.existsSync(indexPath)) {
+        mainWindow.loadFile(indexPath);
+    } else {
+        mainWindow.loadURL('http://localhost:3005', { extraHeaders: 'pragma: no-cache\n' });
+    }
 
     mainWindow.webContents.on('did-finish-load', () => {
         log('Page loaded successfully.');
@@ -286,15 +356,21 @@ function createWindow(serverPort) {
             // Race the fast backup against a 1.5-second timeout for instant shutdown
             const backupTimeout = new Promise(resolve => setTimeout(() => resolve(false), 1500));
             Promise.race([performFastDbBackupOnly(), backupTimeout]).then((success) => {
-                log(`Fast auto-backup result: ${success ? 'SUCCESS' : 'FAILED/TIMEOUT'}. Closing now.`);
+                log(`Fast auto-backup result: ${success ? 'SUCCESS' : 'FAILED/TIMEOUT'}. Closing process.`);
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.close(); // Now allow the real close
-                } else {
-                    app.quit();
+                    mainWindow.destroy();
                 }
+                app.quit();
+                setTimeout(() => process.exit(0), 300);
             });
         }
     });
+}
+
+let ipcHandlersInitialized = false;
+function setupIpcHandlers() {
+    if (ipcHandlersInitialized) return;
+    ipcHandlersInitialized = true;
 
     // --- IPC Hardware Hub ---
     const { ipcMain } = require('electron');
@@ -761,6 +837,15 @@ if ($success) { exit 0 } else { exit 1 }`;
         return app.getVersion() || '2.0.9';
     });
 
+    ipcMain.handle('is-windows-7', async (event) => {
+        try {
+            const os = require('os');
+            return os.platform() === 'win32' && os.release().startsWith('6.1');
+        } catch (e) {
+            return false;
+        }
+    });
+
     let electronUpdaterInstance = null;
     try {
         const { autoUpdater } = require('electron-updater');
@@ -910,6 +995,9 @@ if ($success) { exit 0 } else { exit 1 }`;
 }
 
 app.whenReady().then(async () => {
+    // Inicializar manejadores IPC una sola vez
+    setupIpcHandlers();
+
     // Interceptar aperturas de ventanas nuevas (target="_blank") y redirigirlas al navegador del SO
     app.on('web-contents-created', (event, contents) => {
         contents.setWindowOpenHandler(({ url }) => {
@@ -994,8 +1082,11 @@ app.whenReady().then(async () => {
             log('Database not found in UserData. A fresh one will be created via migrations.');
         }
 
+        // 1. Mostrar ventana principal de inmediato con pantalla de carga Splash (0.2s response time)
+        createWindow();
+
         log('Attempting to require ./index.js');
-        // 2. Iniciar el servidor Express (require here to ensure env var is set)
+        // 2. Iniciar el servidor Express en paralelo
         const { startServer } = require('./index.js');
         log('./index.js requires successfully.');
 
@@ -1082,5 +1173,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', function () {
-    if (process.platform !== 'darwin') app.quit();
+    log('All windows closed. Terminating process.');
+    if (process.platform !== 'darwin') {
+        app.quit();
+        process.exit(0);
+    }
 });

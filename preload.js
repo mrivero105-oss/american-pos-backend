@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     // Updater & App Info
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+    isWindows7: () => ipcRenderer.invoke('is-windows-7'),
     checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
     downloadUpdate: (url) => ipcRenderer.invoke('download-update', url),
     installUpdate: () => ipcRenderer.invoke('install-update'),
