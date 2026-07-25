@@ -10,6 +10,8 @@ if (isLegacyWin || process.env.DISABLE_GPU === 'true') {
 } else {
     app.commandLine.appendSwitch('enable-gpu-rasterization');
     app.commandLine.appendSwitch('enable-zero-copy');
+    app.commandLine.appendSwitch('high-dpi-support', '1');
+    app.commandLine.appendSwitch('enable-font-antialiasing');
 }
 
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512');
