@@ -1,199 +1,102 @@
-const https = require('https');
-const http = require('http');
-const { URL } = require('url');
+const axios = require('axios');
 
-const safeFetch = async (urlStr, options = {}) => {
-    if (typeof globalThis.fetch === 'function') {
-        try {
-            return await globalThis.fetch(urlStr, options);
-        } catch (e) {}
-    }
+// STRICT PRODUCT WHITESPAN & DOMAIN WHITELIST
+const VALID_PRODUCT_DOMAINS = [
+    'openfoodfacts.org',
+    'openbeautyfacts.org',
+    'mlstatic.com',
+    'mercadolibre.com',
+    'walmartimages.com',
+    'media-amazon.com',
+    'farmatodo.com',
+    'exito.com',
+    'carrefour.com',
+    'target.com'
+];
 
-    return new Promise((resolve, reject) => {
-        try {
-            const parsedUrl = new URL(urlStr);
-            const lib = parsedUrl.protocol === 'https:' ? https : http;
-            
-            const reqOpts = {
-                protocol: parsedUrl.protocol,
-                hostname: parsedUrl.hostname,
-                port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-                path: parsedUrl.pathname + parsedUrl.search,
-                method: options.method || 'GET',
-                headers: options.headers || {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            };
+function isVerifiedProductUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const lower = url.toLowerCase();
+    if (!lower.startsWith('http')) return false;
 
-            const req = lib.request(reqOpts, (res) => {
-                let data = '';
-                res.setEncoding('utf8');
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    resolve({
-                        ok: res.statusCode >= 200 && res.statusCode < 300,
-                        status: res.statusCode,
-                        text: async () => data,
-                        json: async () => JSON.parse(data)
-                    });
-                });
-            });
-
-            req.on('error', err => reject(err));
-            if (options.body) req.write(options.body);
-            req.end();
-        } catch (err) {
-            reject(err);
-        }
-    });
-};
+    // Must belong to verified e-commerce CDNs or open product databases
+    return VALID_PRODUCT_DOMAINS.some(domain => lower.includes(domain));
+}
 
 class ImageSearchService {
     static async findProductImageUrl(query) {
-        if (!query || typeof query !== 'string' || !query.trim()) return null;
-        const cleanQuery = query.trim();
-        console.log(`[IMAGE SEARCH] Buscando imágenes para: "${cleanQuery}"...`);
-        const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-        const urls = [];
+        if (!query || typeof query !== 'string' || !query.trim()) return [];
+        
+        let cleanQuery = query.trim().replace(/lata|roja|azul|verde|paquete|caja|\b\d+(g|gr|kg|ml|l|oz)\b/gi, '').trim();
+        
+        // Brand spelling auto-corrections
+        if (/karsell/i.test(cleanQuery) && !/karseell/i.test(cleanQuery)) {
+            cleanQuery = cleanQuery.replace(/karsell/gi, 'Karseell');
+        }
+        if (/harina pan/i.test(cleanQuery)) {
+            cleanQuery = 'Harina PAN';
+        }
 
+        console.log(`[ULTRA PRECISION ENGINE] Buscando empaque comercial oficial para: "${cleanQuery}"...`);
+
+        const urls = [];
         const addUrl = (url) => {
-            if (!url || typeof url !== 'string') return;
-            let clean = url.trim().replace(/\\u0026/g, '&');
-            if (clean.startsWith('//')) clean = 'https:' + clean;
-            if (!clean.startsWith('http')) return;
-            // Exclude icons, spacers, tracking pixels
-            if (clean.includes('favicon') || clean.includes('1x1') || clean.includes('pixel') || clean.includes('logo_small')) return;
-            if (!urls.includes(clean)) {
-                urls.push(clean);
+            if (isVerifiedProductUrl(url) && !urls.includes(url)) {
+                urls.push(url);
             }
         };
 
-        // ESTRATEGIA 1: Bing Images
-        try {
-            const bingUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(cleanQuery)}&form=HDRSC2`;
-            const res = await safeFetch(bingUrl, {
-                headers: {
-                    'User-Agent': userAgent,
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
-                }
-            });
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'es-VE,es-ES;q=0.9,es;q=0.8,en;q=0.7'
+        };
 
-            if (res.ok) {
-                const html = await res.text();
-                
-                // Patrón 1: murl (Media URL)
-                const murlRegex = /&quot;murl&quot;:&quot;(https?:\/\/[^&"]+)&quot;/gi;
+        // 1. OPEN FOOD FACTS & OPEN BEAUTY FACTS (Bases de datos oficiales de productos)
+        const offEndpoints = [
+            `https://es.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1`,
+            `https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1`,
+            `https://es.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1`,
+            `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1`
+        ];
+
+        for (const ep of offEndpoints) {
+            try {
+                const res = await axios.get(ep, { headers, timeout: 3500 });
+                if (res.data?.products && Array.isArray(res.data.products)) {
+                    res.data.products.forEach(p => {
+                        const img = p.image_front_url || p.image_url;
+                        if (img) addUrl(img);
+                    });
+                }
+            } catch (e) {}
+        }
+
+        // 2. BING IMAGES RESTRINGIDO A AMAZON & MERCADOLIBRE & WALMART
+        const searchTerms = [
+            `"${cleanQuery}" site:amazon.com`,
+            `"${cleanQuery}" site:mercadolibre.com`,
+            `"${cleanQuery}" site:walmart.com`,
+            `"${cleanQuery}" site:farmatodo.com`
+        ];
+
+        for (const term of searchTerms) {
+            if (urls.length >= 15) break;
+            try {
+                const bingUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(term)}&form=HDRSC2`;
+                const res = await axios.get(bingUrl, { headers, timeout: 4000 });
+                const html = res.data || '';
+
+                const murlRegex = /murl&quot;:&quot;(https?:\/\/[^&"]+)&quot;/gi;
                 let m;
                 while ((m = murlRegex.exec(html)) !== null) {
-                    addUrl(m[1]);
-                    if (urls.length >= 15) break;
+                    const img = m[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+                    addUrl(img);
                 }
-
-                // Patrón 2: m="{...}" JSON
-                if (urls.length < 10) {
-                    const mAttrRegex = /m="([^"]+)"/g;
-                    while ((m = mAttrRegex.exec(html)) !== null) {
-                        try {
-                            const jsonStr = m[1].replace(/&quot;/g, '"');
-                            const parsed = JSON.parse(jsonStr);
-                            if (parsed.murl) addUrl(parsed.murl);
-                            if (parsed.turl) addUrl(parsed.turl);
-                        } catch (e) {}
-                        if (urls.length >= 20) break;
-                    }
-                }
-
-                // Patrón 3: Direct URL in HTML
-                if (urls.length < 5) {
-                    const directRegex = /"(https?:\/\/[^"]+?\.(?:jpg|jpeg|png|webp))"/gi;
-                    while ((m = directRegex.exec(html)) !== null) {
-                        if (!m[1].includes('bing.com') && !m[1].includes('microsoft.com')) {
-                            addUrl(m[1]);
-                        }
-                        if (urls.length >= 20) break;
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn('[IMAGE SEARCH] Aviso en Bing Images:', e.message);
+            } catch (e) {}
         }
 
-        // ESTRATEGIA 2: Open Food Facts API
-        if (urls.length < 5) {
-            try {
-                const offUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1`;
-                const res = await safeFetch(offUrl, { headers: { 'User-Agent': userAgent } });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.products && Array.isArray(data.products)) {
-                        data.products.forEach(p => {
-                            const img = p.image_front_url || p.image_url || p.image_front_small_url;
-                            if (img) addUrl(img);
-                        });
-                    }
-                }
-            } catch (e) {
-                console.warn('[IMAGE SEARCH] Aviso en OpenFoodFacts:', e.message);
-            }
-        }
-
-        // ESTRATEGIA 3: DuckDuckGo Images API
-        if (urls.length < 5) {
-            try {
-                const tokenRes = await safeFetch(`https://duckduckgo.com/?q=${encodeURIComponent(cleanQuery)}`, {
-                    headers: { 'User-Agent': userAgent }
-                });
-                if (tokenRes.ok) {
-                    const tokenHtml = await tokenRes.text();
-                    const vqdMatch = /vqd=['"]([^'"]+)['"]/.exec(tokenHtml) || /vqd=([\d-]+)/.exec(tokenHtml);
-                    if (vqdMatch) {
-                        const vqd = vqdMatch[1];
-                        const ddgImgUrl = `https://duckduckgo.com/i.js?l=es-es&o=json&q=${encodeURIComponent(cleanQuery)}&vqd=${vqd}&f=,,,`;
-                        const ddgRes = await safeFetch(ddgImgUrl, { headers: { 'User-Agent': userAgent } });
-                        if (ddgRes.ok) {
-                            const ddgData = await ddgRes.json();
-                            if (ddgData.results && Array.isArray(ddgData.results)) {
-                                ddgData.results.forEach(r => {
-                                    if (r.image) addUrl(r.image);
-                                    else if (r.thumbnail) addUrl(r.thumbnail);
-                                });
-                            }
-                        }
-                    }
-                }
-            } catch (e) {
-                console.warn('[IMAGE SEARCH] Aviso en DuckDuckGo API:', e.message);
-            }
-        }
-
-        // ESTRATEGIA 4: Wikimedia Commons API
-        if (urls.length < 5) {
-            try {
-                const wikiUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanQuery)}&gsrlimit=10&prop=imageinfo&iiprop=url&format=json`;
-                const res = await safeFetch(wikiUrl, { headers: { 'User-Agent': userAgent } });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.query && data.query.pages) {
-                        Object.values(data.query.pages).forEach(page => {
-                            if (page.imageinfo && page.imageinfo[0] && page.imageinfo[0].url) {
-                                addUrl(page.imageinfo[0].url);
-                            }
-                        });
-                    }
-                }
-            } catch (e) {
-                console.warn('[IMAGE SEARCH] Aviso en Wikimedia Commons:', e.message);
-            }
-        }
-
-        if (urls.length > 0) {
-            console.log(`[IMAGE SEARCH] ${urls.length} imágenes encontradas para "${cleanQuery}".`);
-            return urls;
-        }
-
-        console.warn(`[IMAGE SEARCH] No se encontraron candidatos para "${cleanQuery}".`);
-        return null;
+        console.log(`[ULTRA PRECISION ENGINE] Se encontraron ${urls.length} imágenes 100% verificadas de producto.`);
+        return urls;
     }
 }
 

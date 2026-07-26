@@ -570,19 +570,19 @@ PROMPT:
      * Genera un query optimizado para buscar la imagen real del producto en Google
      */
     async generateProductSearchQuery(productName) {
-        if (!this.initialized) return productName + " product photo";
+        if (!productName || typeof productName !== 'string') return '';
+        const clean = productName.replace(/lata|roja|azul|verde|paquete|caja|\b\d+(g|gr|kg|ml|l|oz)\b/gi, '').trim();
+        if (!this.initialized) return clean || productName;
         try {
-            const prompt = `Convert the following product name into a precise Google Search query to find its official commercial photo. 
-            Aim for the product packaging or front view. 
-            Product: "${productName}"
-            Return ONLY the search query string, nothing else.`;
+            const prompt = `Extrae el nombre de la marca y modelo del producto para buscar su imagen comercial en tiendas.
+            Producto: "${productName}"
+            Responde ÚNICAMENTE con la marca y nombre principal del producto, sin añadir la palabra 'photo', 'image' ni explicaciones.`;
 
             const result = await this.model.generateContent(prompt);
             const query = result.response.text().trim().replace(/"/g, '');
-            return query + " product image";
+            return query || clean || productName;
         } catch (error) {
-            console.error("[AMERICAN AI] Error generando query de búsqueda:", error.message);
-            return productName + " product photo";
+            return clean || productName;
         }
     }
 
