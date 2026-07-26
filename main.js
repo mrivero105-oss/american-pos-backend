@@ -851,19 +851,20 @@ if ($success) { exit 0 } else { exit 1 }`;
     let electronUpdaterInstance = null;
     try {
         const { autoUpdater } = require('electron-updater');
-        autoUpdater.autoDownload = false;
+        autoUpdater.autoDownload = true;
+        autoUpdater.autoInstallOnAppQuit = true;
         electronUpdaterInstance = autoUpdater;
 
         autoUpdater.on('checking-for-update', () => {
-            log('Electron AutoUpdater: Checking for update...');
+            log('Electron AutoUpdater: Buscando actualizaciones...');
             if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'checking' });
         });
         autoUpdater.on('update-available', (info) => {
-            log(`Electron AutoUpdater: Update available ${info.version}`);
+            log(`Electron AutoUpdater: Nueva versión disponible v${info.version}. Descargando silenciosamente en segundo plano...`);
             if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'available', info });
         });
         autoUpdater.on('update-not-available', (info) => {
-            log('Electron AutoUpdater: Update not available.');
+            log('Electron AutoUpdater: El sistema está actualizado.');
             if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'not-available', info });
         });
         autoUpdater.on('error', (err) => {
@@ -874,7 +875,7 @@ if ($success) { exit 0 } else { exit 1 }`;
             if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloading', progress: progressObj.percent });
         });
         autoUpdater.on('update-downloaded', (info) => {
-            log(`Electron AutoUpdater: Update downloaded ${info.version}`);
+            log(`Electron AutoUpdater: Actualización v${info.version} descargada. Se instalará automáticamente de forma silenciosa al salir o reiniciar.`);
             if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloaded', info });
         });
     } catch (updaterErr) {
@@ -1148,6 +1149,16 @@ app.whenReady().then(async () => {
                 log('Ejecutando respaldo automático doble periódico cada 4 horas en segundo plano...');
                 performAutoBackup().catch(e => log(`Error en auto-backup periódico: ${e.message}`));
             }, 4 * 60 * 60 * 1000);
+
+            // Verificación y descarga 100% automática y silenciosa de actualizaciones a los 10 segundos del inicio
+            if (electronUpdaterInstance) {
+                setTimeout(() => {
+                    log('Verificación automática de actualizaciones iniciada (10s post-arranque)...');
+                    electronUpdaterInstance.checkForUpdatesAndNotify().catch(e => {
+                        log(`Notice auto-update check: ${e.message}`);
+                    });
+                }, 10000);
+            }
         }).catch(err => {
             log(`Error al iniciar el servidor: ${err.message}\n${err.stack}`);
             console.error('Error al iniciar el servidor:', err);

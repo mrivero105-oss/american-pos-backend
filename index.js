@@ -201,10 +201,7 @@ const startServer = (ports, userDataPath = null) => {
             });
 
             const corsOptions = {
-                origin: (origin, callback) => {
-                    // Permitir siempre cualquier origen para máxima compatibilidad POS en red local (LAN WiFi / terminales móviles / capacitor)
-                    callback(null, true);
-                },
+                origin: true, // Refleja dinámicamente el Origen de la petición para compatibilidad total (LAN/Browser)
                 credentials: true,
                 methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
                 allowedHeaders: [
@@ -214,10 +211,12 @@ const startServer = (ports, userDataPath = null) => {
                     'x-signature', 'X-Signature', 'x-timestamp', 'X-Timestamp',
                     'x-signature-timestamp', 'X-Signature-Timestamp'
                 ],
-                exposedHeaders: ['Content-Disposition']
+                exposedHeaders: ['Content-Disposition'],
+                optionsSuccessStatus: 200
             };
 
             app.use(cors(corsOptions));
+            app.options('*', cors(corsOptions));
             app.use(cookieParser());
             app.use(compression());
 

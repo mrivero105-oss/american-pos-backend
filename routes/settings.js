@@ -100,9 +100,15 @@ router.get('/rate', async (req, res) => {
             rate: isSingleCountry ? 1.0 : (userSettings.exchangeRate || 1.0),
             currencyMode: currencyMode
         });
+const BCVRateService = require('../services/BCVRateService');
+
+router.get('/bcv', async (req, res) => {
+    try {
+        const result = await BCVRateService.getOfficialRate();
+        res.json(result);
     } catch (error) {
-        console.error('Get rate error:', error);
-        res.status(500).json({ error: 'Error al obtener tasa' });
+        console.error('Error al consultar BCV:', error.message);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 

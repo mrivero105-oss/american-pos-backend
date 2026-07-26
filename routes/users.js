@@ -55,6 +55,14 @@ router.post('/', async (req, res) => {
         const newUserId = generateRobustId();
         const isNewCompany = (role === 'superadmin');
 
+        // Protección estricta: Solo un Superadmin/Propietario puede asignar el rol superadmin
+        if (role === 'superadmin' && req.user.role !== 'superadmin') {
+            return res.status(403).json({
+                error: 'forbidden',
+                message: 'Solo el Superadministrador / Propietario principal puede asignar el rol de Superadmin.'
+            });
+        }
+
         const newUser = await User.create({
             id: newUserId,
             email: sanitizedEmail,
@@ -82,6 +90,21 @@ router.put('/:id', async (req, res) => {
         const { email } = req.body;
         
         console.log(`[DEBUG] Updating user ${id} with body:`, req.body);
+
+        const targetUser = await User.findOne({ where: { id, companyId: req.user.companyId } });
+        if (!targetUser) {
+            return res.status(404).json({ message: 'Usuario no encontrado' });
+        }
+
+        // Protección de rol: Solo un superadmin puede promover a superadmin o modificar a un superadmin existente
+        if (req.user.role !== 'superadmin') {
+            if (req.body.role === 'superadmin' || targetUser.role === 'superadmin') {
+                return res.status(403).json({
+                    error: 'forbidden',
+                    message: 'Solo el Superadministrador / Propietario principal puede asignar o modificar cuentas de Superadmin.'
+                });
+            }
+        }
 
         // 1. If email is being changed, check for duplicates
         if (email) {
@@ -150,6 +173,13 @@ router.delete('/:id', async (req, res) => {
 
         if (targetUser.id === req.user.id) {
             return res.status(400).json({ message: 'No puedes eliminar tu propia cuenta' });
+        }
+
+        if (targetUser.role === 'superadmin' && req.user.role !== 'superadmin') {
+            return res.status(403).json({
+                error: 'forbidden',
+                message: 'Solo el Superadministrador / Propietario principal puede alterar o eliminar cuentas de Superadmin.'
+            });
         }
 
         // Si el usuario está activo, el primer clic en eliminar lo desactiva (Soft Delete)
