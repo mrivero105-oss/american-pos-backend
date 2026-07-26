@@ -966,24 +966,17 @@ class ProductService {
 
             console.log(`[IA IMAGE] Intentando descargar imagen seleccionada desde: ${imageUrl}`);
             
-            const response = await fetch(imageUrl, {
+            const axios = require('axios');
+            const response = await axios.get(imageUrl, {
+                responseType: 'arraybuffer',
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                     'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-                }
+                },
+                timeout: 15000
             });
             
-            if (!response.ok) {
-                throw new Error(`Error HTTP: ${response.status} al descargar la imagen.`);
-            }
-
-            const contentType = response.headers.get('content-type') || '';
-            if (contentType && !contentType.toLowerCase().includes('image') && !contentType.toLowerCase().includes('octet-stream')) {
-                throw new Error(`La URL no devolvió una imagen válida (${contentType}).`);
-            }
-            
-            const arrayBuffer = await response.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
+            const buffer = Buffer.from(response.data);
 
             const filename = `ai_product_${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
             

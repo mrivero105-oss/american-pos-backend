@@ -1,3 +1,53 @@
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
+
+const safeFetch = async (urlStr, options = {}) => {
+    if (typeof globalThis.fetch === 'function') {
+        try {
+            return await globalThis.fetch(urlStr, options);
+        } catch (e) {}
+    }
+
+    return new Promise((resolve, reject) => {
+        try {
+            const parsedUrl = new URL(urlStr);
+            const lib = parsedUrl.protocol === 'https:' ? https : http;
+            
+            const reqOpts = {
+                protocol: parsedUrl.protocol,
+                hostname: parsedUrl.hostname,
+                port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+                path: parsedUrl.pathname + parsedUrl.search,
+                method: options.method || 'GET',
+                headers: options.headers || {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            };
+
+            const req = lib.request(reqOpts, (res) => {
+                let data = '';
+                res.setEncoding('utf8');
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    resolve({
+                        ok: res.statusCode >= 200 && res.statusCode < 300,
+                        status: res.statusCode,
+                        text: async () => data,
+                        json: async () => JSON.parse(data)
+                    });
+                });
+            });
+
+            req.on('error', err => reject(err));
+            if (options.body) req.write(options.body);
+            req.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+};
+
 class ImageSearchService {
     static async findProductImageUrl(query) {
         if (!query || typeof query !== 'string' || !query.trim()) return null;
@@ -21,7 +71,7 @@ class ImageSearchService {
         // ESTRATEGIA 1: Bing Images
         try {
             const bingUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(cleanQuery)}&form=HDRSC2`;
-            const res = await fetch(bingUrl, {
+            const res = await safeFetch(bingUrl, {
                 headers: {
                     'User-Agent': userAgent,
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -73,7 +123,7 @@ class ImageSearchService {
         if (urls.length < 5) {
             try {
                 const offUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1`;
-                const res = await fetch(offUrl, { headers: { 'User-Agent': userAgent } });
+                const res = await safeFetch(offUrl, { headers: { 'User-Agent': userAgent } });
                 if (res.ok) {
                     const data = await res.json();
                     if (data.products && Array.isArray(data.products)) {
@@ -91,7 +141,7 @@ class ImageSearchService {
         // ESTRATEGIA 3: DuckDuckGo Images API
         if (urls.length < 5) {
             try {
-                const tokenRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(cleanQuery)}`, {
+                const tokenRes = await safeFetch(`https://duckduckgo.com/?q=${encodeURIComponent(cleanQuery)}`, {
                     headers: { 'User-Agent': userAgent }
                 });
                 if (tokenRes.ok) {
@@ -100,7 +150,7 @@ class ImageSearchService {
                     if (vqdMatch) {
                         const vqd = vqdMatch[1];
                         const ddgImgUrl = `https://duckduckgo.com/i.js?l=es-es&o=json&q=${encodeURIComponent(cleanQuery)}&vqd=${vqd}&f=,,,`;
-                        const ddgRes = await fetch(ddgImgUrl, { headers: { 'User-Agent': userAgent } });
+                        const ddgRes = await safeFetch(ddgImgUrl, { headers: { 'User-Agent': userAgent } });
                         if (ddgRes.ok) {
                             const ddgData = await ddgRes.json();
                             if (ddgData.results && Array.isArray(ddgData.results)) {
@@ -121,7 +171,7 @@ class ImageSearchService {
         if (urls.length < 5) {
             try {
                 const wikiUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanQuery)}&gsrlimit=10&prop=imageinfo&iiprop=url&format=json`;
-                const res = await fetch(wikiUrl, { headers: { 'User-Agent': userAgent } });
+                const res = await safeFetch(wikiUrl, { headers: { 'User-Agent': userAgent } });
                 if (res.ok) {
                     const data = await res.json();
                     if (data.query && data.query.pages) {
