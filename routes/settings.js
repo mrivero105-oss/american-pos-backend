@@ -100,6 +100,12 @@ router.get('/rate', async (req, res) => {
             rate: isSingleCountry ? 1.0 : (userSettings.exchangeRate || 1.0),
             currencyMode: currencyMode
         });
+    } catch (error) {
+        console.error('Error getting rate:', error);
+        res.status(500).json({ error: 'Error al obtener tasa' });
+    }
+});
+
 const BCVRateService = require('../services/BCVRateService');
 
 router.get('/bcv', async (req, res) => {
