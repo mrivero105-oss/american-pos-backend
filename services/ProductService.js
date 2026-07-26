@@ -911,29 +911,28 @@ class ProductService {
 
             console.log(`[IA IMAGE] Buscando imágenes candidatas para: "${name}" (${category || 'General'})`);
             
-            let searchQuery = name;
+            let imageUrls = null;
+
+            // 1. Búsqueda Directa por Nombre del Producto (Infalible y Ultra-rápida)
             try {
-                searchQuery = await AIService.generateProductSearchQuery(name, category);
+                imageUrls = await ImageSearchService.findProductImageUrl(name);
             } catch (e) {
-                searchQuery = `${name} ${category || ''}`.trim();
+                console.warn('[IA IMAGE] Fallo búsqueda por nombre directo:', e.message);
             }
 
-            let imageUrls = null;
-            try {
-                imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
-            } catch (e) {
-                console.warn('[IA IMAGE] Fallo primera búsqueda:', e.message);
-            }
-            
-            // Fallback 1: Si no hay imágenes con el query de IA, buscar con el nombre directo del producto
-            if ((!imageUrls || imageUrls.length === 0) && searchQuery !== name) {
-                console.log(`[IA IMAGE] Reintentando búsqueda con nombre directo: "${name}"`);
+            // 2. Fallback: Query Generado por IA
+            if (!imageUrls || imageUrls.length === 0) {
+                let searchQuery = name;
                 try {
-                    imageUrls = await ImageSearchService.findProductImageUrl(name);
+                    searchQuery = await AIService.generateProductSearchQuery(name, category);
+                    if (searchQuery && searchQuery !== name) {
+                        console.log(`[IA IMAGE] Reintentando con query IA: "${searchQuery}"`);
+                        imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
+                    }
                 } catch (e) {}
             }
-
-            // Fallback 2: Si el nombre tiene palabras adicionales (ej: "Lata Roja", "170GR"), buscar simplificado
+            
+            // 3. Fallback: Nombre Simplificado (Removiendo medidas o variantes)
             if (!imageUrls || imageUrls.length === 0) {
                 const cleanName = name.replace(/lata|roja|azul|verde|paquete|caja|\b\d+(g|gr|kg|ml|l|oz)\b/gi, '').trim();
                 if (cleanName && cleanName.length >= 3 && cleanName !== name) {
