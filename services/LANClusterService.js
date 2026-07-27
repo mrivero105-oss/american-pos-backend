@@ -47,8 +47,12 @@ class LANClusterService {
             this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 
             this.socket.on('error', (err) => {
-                logger.warn(`[LAN_CLUSTER] UDP Socket error (${err.message}). Re-intentando enlace de descubrimiento...`);
+                logger.warn(`[LAN_CLUSTER] UDP Socket error (${err.message}). Re-intentando enlace de descubrimiento en 5s...`);
                 try { this.socket.close(); } catch (e) {}
+                setTimeout(() => {
+                    this.isInitialized = false;
+                    this.init(this.io, this.httpPort);
+                }, 5000);
             });
 
             this.socket.on('message', (msg, rinfo) => {

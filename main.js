@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, session } = require('electron');
+const { app, BrowserWindow, dialog, session, shell } = require('electron');
 const path = require('path');
 
 // Configuración de Renderizado Gráfico
@@ -26,10 +26,11 @@ try {
         app.quit();
         process.exit(0);
     }
-} catch (e) {}
+} catch (e) { }
 
 let mainWindow = null;
 let isQuittingAfterBackup = false;
+let electronUpdaterInstance = null;
 
 // 🔒 SINGLE INSTANCE LOCK: Evitar doble inicio al encender la PC o al abrir el acceso directo varias veces
 const gotTheLock = app.requestSingleInstanceLock();
@@ -74,14 +75,14 @@ try {
     }
     const logFile = path.join(logDir, 'pos_startup_log.txt');
     logStream = fs.createWriteStream(logFile, { flags: 'a' });
-} catch (e) {}
+} catch (e) { }
 
 function log(message) {
     if (!LOGS_ENABLED || !logStream) return;
     try {
         const timestamp = new Date().toISOString();
         logStream.write(`[${timestamp}] ${message}\n`);
-    } catch (e) {}
+    } catch (e) { }
 }
 
 const patchConsole = (method) => {
@@ -133,7 +134,7 @@ try {
                 }
             });
         }
-    } catch (e) {}
+    } catch (e) { }
 }
 
 const fs = require('fs');
@@ -172,7 +173,7 @@ async function performAutoBackup() {
         const userDataPath = app.getPath('userData');
         const { performSqliteBackup } = require('./utils/sqliteBackupHelper');
         const { createMasterSnapshot } = require('./utils/snapshotHelper');
-        
+
         log('Running 1/2: Atomic SQLite backup...');
         try {
             const backupFile = await performSqliteBackup(userDataPath);
@@ -226,6 +227,13 @@ function createWindow(serverPort) {
         },
         autoHideMenuBar: true,
         show: false
+    });
+
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (url.startsWith('http:') || url.startsWith('https:')) {
+            shell.openExternal(url);
+        }
+        return { action: 'deny' };
     });
 
     mainWindow.once('ready-to-show', () => {
@@ -400,13 +408,13 @@ function setupIpcHandlers() {
                 if (app.getLoginItemSettings) {
                     isOpenAtLogin = app.getLoginItemSettings().openAtLogin;
                 }
-            } catch (e) {}
+            } catch (e) { }
             try {
                 const regOutput = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS"', { encoding: 'utf-8' });
                 if (regOutput && regOutput.includes('American POS')) {
                     isOpenAtLogin = true;
                 }
-            } catch (e) {}
+            } catch (e) { }
             return isOpenAtLogin;
         } catch (err) {
             log(`Error getting auto-launch: ${err.message}`);
@@ -420,12 +428,14 @@ function setupIpcHandlers() {
             const exePath = process.execPath;
             log(`Setting auto-launch to ${enabled} with path: ${exePath}`);
 
+            const launchArgs = app.isPackaged ? [] : [path.resolve(__dirname)];
+
             try {
                 if (app.setLoginItemSettings) {
                     app.setLoginItemSettings({
                         openAtLogin: enabled,
                         path: exePath,
-                        args: []
+                        args: launchArgs
                     });
                 }
             } catch (e) {
@@ -435,14 +445,16 @@ function setupIpcHandlers() {
             const { execSync } = require('child_process');
             if (enabled) {
                 try {
-                    let targetPath = exePath;
+                    let targetCmd = `"${exePath}"`;
                     if (exePath.toLowerCase().includes('node.exe') || exePath.toLowerCase().includes('electron.exe')) {
                         const defaultInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'AmericanPOS', 'American POS.exe');
                         if (fs.existsSync(defaultInstallPath)) {
-                            targetPath = defaultInstallPath;
+                            targetCmd = `"${defaultInstallPath}"`;
+                        } else if (!app.isPackaged) {
+                            targetCmd = `"${exePath}" "${path.resolve(__dirname)}"`;
                         }
                     }
-                    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS" /t REG_SZ /d "\\"${targetPath}\\"" /f`, { stdio: 'ignore' });
+                    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS" /t REG_SZ /d "${targetCmd.replace(/"/g, '\\"')}" /f`, { stdio: 'ignore' });
                 } catch (e) {
                     log(`Reg add error: ${e.message}`);
                 }
@@ -462,7 +474,7 @@ function setupIpcHandlers() {
                 }
                 settings.autoLaunch = enabled;
                 fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
-            } catch (e) {}
+            } catch (e) { }
 
             log(`Auto-launch set successfully to ${enabled}`);
             return { success: true, enabled };
@@ -486,7 +498,7 @@ function setupIpcHandlers() {
         if (!verifyIpcSender(event)) {
             return { success: false, error: 'Origen de IPC no autorizado ni autenticado' };
         }
-        
+
         log(`Print request received for printer: ${printerName}`);
         return new Promise((resolve) => {
             try {
@@ -501,6 +513,12 @@ function setupIpcHandlers() {
                 });
 
                 printWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(content)}`);
+
+                printWin.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+                    log(`Print content load failed: ${errorDescription}`);
+                    if (!printWin.isDestroyed()) printWin.close();
+                    resolve({ success: false, error: `Error de carga en impresora: ${errorDescription}` });
+                });
 
                 printWin.webContents.on('did-finish-load', () => {
                     log(`Content loaded in hidden window, starting silent print to ${printerName}...`);
@@ -566,7 +584,7 @@ function setupIpcHandlers() {
         return new Promise((resolve) => {
             try {
                 const { spawn } = require('child_process');
-                
+
                 // Enhanced PowerShell script using C# Interop to send TRUE RAW BYTES to the printer
                 // We inject the printer name and byte string directly into the script since
                 // -EncodedCommand does NOT support -args for positional parameters ($args[0], $args[1]).
@@ -629,8 +647,8 @@ if ($success) { exit 0 } else { exit 1 }`;
 
                 log(`Spawning C# interop drawer process for: "${safePrinterName}"`);
                 const child = spawn('powershell.exe', [
-                    '-NoProfile', 
-                    '-ExecutionPolicy', 'Bypass', 
+                    '-NoProfile',
+                    '-ExecutionPolicy', 'Bypass',
                     '-EncodedCommand', encodedScript
                 ]);
 
@@ -697,7 +715,7 @@ if ($success) { exit 0 } else { exit 1 }`;
         return new Promise((resolve) => {
             try {
                 const { spawn } = require('child_process');
-                
+
                 // Content to Bytes (UTF8 or ASCII)
                 const bytes = Buffer.from(content, 'utf8');
                 const byteString = Array.from(bytes).join(',');
@@ -759,8 +777,8 @@ if ($success) { exit 0 } else { exit 1 }`;
                 const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
 
                 const child = spawn('powershell.exe', [
-                    '-NoProfile', 
-                    '-ExecutionPolicy', 'Bypass', 
+                    '-NoProfile',
+                    '-ExecutionPolicy', 'Bypass',
                     '-EncodedCommand', encodedScript,
                     '-args', safePrinterName, byteString
                 ]);
@@ -801,17 +819,17 @@ if ($success) { exit 0 } else { exit 1 }`;
         if (!verifyIpcSender(event)) {
             return { canceled: true, error: 'Origen de IPC no autorizado ni autenticado' };
         }
-        
+
         try {
             const userDataPath = app.getPath('userData');
             const backupDir = path.join(userDataPath, 'backups');
-            
+
             if (!fs.existsSync(backupDir)) {
                 fs.mkdirSync(backupDir, { recursive: true });
             }
 
             log(`Opening file dialog for backup restore starting in: ${backupDir}`);
-            
+
             const result = await dialog.showOpenDialog(mainWindow, {
                 title: 'Seleccionar Copia de Seguridad',
                 defaultPath: backupDir,
@@ -848,7 +866,6 @@ if ($success) { exit 0 } else { exit 1 }`;
         }
     });
 
-    let electronUpdaterInstance = null;
     try {
         const { autoUpdater } = require('electron-updater');
         autoUpdater.autoDownload = true;
@@ -934,7 +951,7 @@ if ($success) { exit 0 } else { exit 1 }`;
                 const tempDir = os.tmpdir();
                 const exePath = path.join(tempDir, `AmericanPOS-Update-${Date.now()}.exe`);
                 const writer = fs.createWriteStream(exePath);
-                
+
                 try {
                     const response = await axios({
                         url,
@@ -942,23 +959,23 @@ if ($success) { exit 0 } else { exit 1 }`;
                         responseType: 'stream',
                         timeout: 30000 // 30s connection timeout
                     });
-                    
+
                     const totalSize = parseInt(response.headers['content-length'], 10);
                     let downloaded = 0;
-                    
+
                     response.data.on('data', (chunk) => {
                         downloaded += chunk.length;
                         const percent = totalSize ? Math.round((downloaded * 100) / totalSize) : 0;
                         if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloading', info: { percent } });
                     });
-                    
+
                     response.data.pipe(writer);
-                    
+
                     await new Promise((resolve, reject) => {
                         writer.on('finish', resolve);
                         writer.on('error', reject);
                     });
-                    
+
                     log(`Descarga manual completa en: ${exePath}`);
                     if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloaded' });
                     global.downloadedUpdatePath = exePath;
@@ -1023,7 +1040,7 @@ app.whenReady().then(async () => {
             log('Loading environment variables from UserData .env...');
             require('dotenv').config({ path: userEnvPath });
         }
-        
+
         // Si aún no está definido (o el archivo no existía/estaba vacío), lo generamos
         if (!process.env.JWT_SECRET) {
             log('No JWT_SECRET found in UserData .env. Generating a new secure one...');
@@ -1040,7 +1057,7 @@ app.whenReady().then(async () => {
                 `DB_DIALECT=sqlite`,
                 `GOOGLE_API_KEY=`
             ].join('\n');
-            
+
             try {
                 fs.writeFileSync(userEnvPath, defaultEnvContent, 'utf8');
                 log('UserData .env file created successfully.');
@@ -1095,7 +1112,7 @@ app.whenReady().then(async () => {
 
         const rawPort = process.env.PORT || "3005,5005,8080";
         const ports = rawPort.toString().split(',').map(p => p.trim());
-        
+
         startServer(ports, userDataPath).then(({ mainPort }) => {
             log(`Servidor iniciado en múltiples puertos. Principal: ${mainPort}`);
             createWindow(mainPort);
@@ -1164,7 +1181,7 @@ app.whenReady().then(async () => {
             console.error('Error al iniciar el servidor:', err);
             try {
                 require('fs').writeFileSync(require('path').join(require('os').homedir(), 'Desktop', 'server_error.txt'), err.stack || err.message);
-            } catch (e) {}
+            } catch (e) { }
             dialog.showErrorBox('Error del Servidor', `Fallo al iniciar el servidor local:\n${err.message}\nRevisa server_error.txt en el escritorio.`);
             app.quit();
         });
@@ -1172,7 +1189,7 @@ app.whenReady().then(async () => {
         log(`CRITICAL ERROR during startup: ${error.message}\n${error.stack}`);
         try {
             require('fs').writeFileSync(require('path').join(require('os').homedir(), 'Desktop', 'error.txt'), error.stack);
-        } catch (e) {}
+        } catch (e) { }
         dialog.showErrorBox('Error de Inicio', `Error crítico:\n${error.message}\n\nRevisa el archivo error.txt en tu Escritorio para ver el detalle.`);
         app.quit();
     }

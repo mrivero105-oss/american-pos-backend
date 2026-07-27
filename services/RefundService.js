@@ -128,11 +128,14 @@ class RefundService {
                                 transaction: t
                             });
 
-                            const stockBefore = Number(branchStock.quantity) || 0;
+                            const stockBefore = Number(product.stockQuantity || product.stock || 0);
                             const stockAfter = precision.add([stockBefore, item.quantity]);
 
+                            await product.update({ 
+                                stockQuantity: String(stockAfter), 
+                                stock: null 
+                            }, { transaction: t });
                             await branchStock.increment('quantity', { by: item.quantity, transaction: t });
-                            await product.increment('stockQuantity', { by: item.quantity, transaction: t });
 
                             await StockMovement.create({
                                 id: generateRobustId(),

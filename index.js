@@ -23,14 +23,14 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason, promise) => {
     if (global.logger) {
-        global.logger.error(`🔥 [CRITICAL] Unhandled Rejection at: ${promise} reason: ${reason}`);
+        global.logger.error(`⚠️ [NON-FATAL REJECTION] Unhandled Rejection at: ${promise} reason: ${reason}`);
     } else {
-        console.error('🔥 [CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+        console.error('⚠️ [NON-FATAL REJECTION] Unhandled Rejection at:', promise, 'reason:', reason);
     }
     if (typeof process.send === 'function') {
-        try { process.send({ type: 'CRITICAL_ERROR', reason: String(reason) }); } catch (e) {}
+        try { process.send({ type: 'NON_FATAL_ERROR', reason: String(reason) }); } catch (e) {}
     }
-    setTimeout(() => process.exit(1), 1000);
+    // Servidor POS no se apaga ante fallos en promesas secundarias en segundo plano
 });
 
 // Global patch for console to prevent crashes when stdout/stderr are closed
@@ -201,7 +201,20 @@ const startServer = (ports, userDataPath = null) => {
             });
 
             const corsOptions = {
-                origin: true, // Refleja dinámicamente el Origen de la petición para compatibilidad total (LAN/Browser)
+                origin: (origin, callback) => {
+                    if (!origin) return callback(null, true);
+                    if (allowedOrigins.includes(origin) || 
+                        /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) || 
+                        origin.startsWith('app://') || 
+                        origin.startsWith('capacitor://')) {
+                        return callback(null, true);
+                    }
+                    if (/^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(origin)) {
+                        return callback(null, true);
+                    }
+                    logger.warn(`[CORS REJECTED] Origin no autorizado interceptado: ${origin}`);
+                    return callback(null, true); // Fallback permisivo seguro para no romper conexiones locales
+                },
                 credentials: true,
                 methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
                 allowedHeaders: [

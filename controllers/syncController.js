@@ -15,40 +15,17 @@ exports.syncOfflineSales = async (req, res) => {
     try {
         for (const localSale of sales) {
             try {
-                // Deduct stock with row-level locking to prevent concurrency anomalies between instances
-                for (const item of localSale.items) {
-                    const prodId = String(item.producto_id || item.id);
-                    const product = await Product.findOne({
-                        where: { id: prodId },
-                        transaction: t,
-                        lock: t.LOCK.UPDATE
-                    });
-
-                    if (product) {
-                        const rawStock = Number(product.stockQuantity || 0) - Number(item.quantity);
-                        const newStock = Math.round(rawStock * 1000) / 1000;
-                        await product.update({
-                            stockQuantity: String(newStock),
-                            stock: null
-                        }, { transaction: t });
-                    }
-
-                    if (item.variante_id) {
-                        const variant = await VarianteProducto.findOne({
-                            where: { id: String(item.variante_id) },
-                            transaction: t,
-                            lock: t.LOCK.UPDATE
-                        });
-                        if (variant) {
-                            const rawVarStock = Number(variant.stock || 0) - Number(item.quantity);
-                            const newVarStock = Math.round(rawVarStock * 1000) / 1000;
-                            await variant.update({ stock: newVarStock }, { transaction: t });
-                        }
-                    }
+                const saleId = localSale.id ? String(localSale.id) : generateRobustId();
+                
+                // 1. Verificación de Idempotencia: Si la venta ya existe, omitir sin descontar stock
+                const existing = await Sale.findByPk(saleId, { transaction: t });
+                if (existing) {
+                    console.log(`[SYNC-IDEMPOTENCY] Venta ${saleId} ya procesada. Omitiendo duplicado.`);
+                    syncedIds.push(localSale.id);
+                    continue;
                 }
 
-                // Create Sale record in backend
-                const saleId = localSale.id ? String(localSale.id) : generateRobustId();
+                // 2. Crear registro de venta principal
                 const saleDate = localSale.created_at || new Date().toISOString();
                 const cleanTotal = Math.round(Number(localSale.total || 0) * 100) / 100;
                 const newSale = await Sale.create({
@@ -71,7 +48,7 @@ exports.syncOfflineSales = async (req, res) => {
                     offlineId: localSale.id
                 }, { transaction: t });
 
-                // Create SaleItems
+                // 3. Crear detalles de productos (SaleItems)
                 if (localSale.items && localSale.items.length > 0) {
                     const itemsData = localSale.items.map(i => ({
                         saleId: newSale.id,
@@ -82,6 +59,40 @@ exports.syncOfflineSales = async (req, res) => {
                         name: i.nombre
                     }));
                     await SaleItem.bulkCreate(itemsData, { transaction: t });
+                }
+
+                // 4. Descontar inventario únicamente tras la creación exitosa de la venta
+                if (localSale.items && Array.isArray(localSale.items)) {
+                    for (const item of localSale.items) {
+                        const prodId = String(item.producto_id || item.id);
+                        const product = await Product.findOne({
+                            where: { id: prodId },
+                            transaction: t,
+                            lock: t.LOCK.UPDATE
+                        });
+
+                        if (product) {
+                            const rawStock = Number(product.stockQuantity || 0) - Number(item.quantity);
+                            const newStock = Math.round(rawStock * 1000) / 1000;
+                            await product.update({
+                                stockQuantity: String(newStock),
+                                stock: null
+                            }, { transaction: t });
+                        }
+
+                        if (item.variante_id) {
+                            const variant = await VarianteProducto.findOne({
+                                where: { id: String(item.variante_id) },
+                                transaction: t,
+                                lock: t.LOCK.UPDATE
+                            });
+                            if (variant) {
+                                const rawVarStock = Number(variant.stock || 0) - Number(item.quantity);
+                                const newVarStock = Math.round(rawVarStock * 1000) / 1000;
+                                await variant.update({ stock: newVarStock }, { transaction: t });
+                            }
+                        }
+                    }
                 }
 
                 syncedIds.push(localSale.id);

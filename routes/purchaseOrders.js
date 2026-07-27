@@ -61,21 +61,24 @@ async function processOrderReception(orderId, userId, activeBranchId, t) {
         });
 
         if (product) {
-            // Always update the cost based on the new purchase (most recent price becomes base cost)
-            await product.update({ cost: item.cost }, { transaction: t });
+            // Always update global catalog stock and cost
+            const currentProdStock = Number(product.stockQuantity || product.stock || 0);
+            const newProdStock = precision.round(currentProdStock + Number(item.quantity), 3);
+            await product.update({ 
+                cost: item.cost,
+                stockQuantity: String(newProdStock),
+                stock: null
+            }, { transaction: t });
 
             if (activeBranchId) {
-                // Receive into Branch Stock
-                let branchStock = await BranchStock.findOne({ where: { productId: item.productId, branchId: activeBranchId }, transaction: t });
-                if (branchStock) {
-                    await branchStock.update({ quantity: branchStock.quantity + Number(item.quantity) }, { transaction: t });
-                } else {
-                    await BranchStock.create({ branchId: activeBranchId, productId: item.productId, quantity: Number(item.quantity) }, { transaction: t });
-                }
-            } else {
-                // Receive globally (Legacy fallback)
-                const currentStock = (product.stockQuantity !== undefined && product.stockQuantity !== null) ? product.stockQuantity : (product.stock || 0);
-                await product.update({ stockQuantity: currentStock + Number(item.quantity) }, { transaction: t });
+                let [branchStock] = await BranchStock.findOrCreate({
+                    where: { productId: item.productId, branchId: activeBranchId, companyId: order.companyId || 'default' },
+                    defaults: { quantity: 0 },
+                    transaction: t
+                });
+                await branchStock.update({ 
+                    quantity: precision.round((Number(branchStock.quantity) || 0) + Number(item.quantity), 3) 
+                }, { transaction: t });
             }
 
             // Log Movement (Kardex)

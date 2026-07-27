@@ -102,16 +102,19 @@ router.post('/', async (req, res) => {
             const product = await Product.findOne({ where: { id: pId }, transaction: t });
             if (product) {
                 const itemQty = precision.round(Number(item.quantity) || 0, 3);
+                // Descontar inventario global del producto
+                const currentProdStock = Number(product.stockQuantity || product.stock || 0);
+                const newProdStock = precision.round(currentProdStock - itemQty, 3);
+                await product.update({ stockQuantity: String(newProdStock), stock: null }, { transaction: t });
+
+                // Descontar inventario específico de sucursal
                 if (activeBranchId) {
-                    let branchStock = await BranchStock.findOne({ where: { productId: pId, branchId: activeBranchId }, transaction: t });
-                    if (branchStock) {
-                        await branchStock.update({ quantity: precision.round(branchStock.quantity - itemQty, 3) }, { transaction: t });
-                    } else {
-                        await BranchStock.create({ branchId: activeBranchId, productId: pId, quantity: -itemQty }, { transaction: t });
-                    }
-                } else {
-                    const currentStock = (product.stockQuantity !== undefined && product.stockQuantity !== null) ? product.stockQuantity : (product.stock || 0);
-                    await product.update({ stockQuantity: precision.round(currentStock - itemQty, 3) }, { transaction: t });
+                    let [branchStock] = await BranchStock.findOrCreate({
+                        where: { productId: pId, branchId: activeBranchId, companyId: req.user.companyId },
+                        defaults: { quantity: 0 },
+                        transaction: t
+                    });
+                    await branchStock.update({ quantity: precision.round((Number(branchStock.quantity) || 0) - itemQty, 3) }, { transaction: t });
                 }
 
                 // Kardex
@@ -219,16 +222,17 @@ router.delete('/:id', async (req, res) => {
             const pId = item.productId;
             const qty = item.quantity;
 
+            const product = await Product.findOne({ where: { id: pId }, transaction: t });
+            if (product) {
+                const currentProdStock = Number(product.stockQuantity || product.stock || 0);
+                const newProdStock = precision.round(currentProdStock + Number(qty), 3);
+                await product.update({ stockQuantity: String(newProdStock), stock: null }, { transaction: t });
+            }
+
             if (activeBranchId) {
                 let branchStock = await BranchStock.findOne({ where: { productId: pId, branchId: activeBranchId }, transaction: t });
                 if (branchStock) {
-                    await branchStock.update({ quantity: branchStock.quantity + Number(qty) }, { transaction: t });
-                }
-            } else {
-                const product = await Product.findOne({ where: { id: pId }, transaction: t });
-                if (product) {
-                    const currentStock = (product.stockQuantity !== undefined && product.stockQuantity !== null) ? product.stockQuantity : (product.stock || 0);
-                    await product.update({ stockQuantity: currentStock + Number(qty) }, { transaction: t });
+                    await branchStock.update({ quantity: precision.round((Number(branchStock.quantity) || 0) + Number(qty), 3) }, { transaction: t });
                 }
             }
 

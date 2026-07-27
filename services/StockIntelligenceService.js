@@ -41,7 +41,7 @@ class StockIntelligenceService {
             const productIds = salesStats.map(s => s.productId).filter(Boolean);
             const products = await Product.findAll({
                 where: { id: { [Op.in]: productIds }, companyId },
-                attributes: ['id', 'name', 'stock', 'minStock'],
+                attributes: ['id', 'name', 'stockQuantity', 'stock', 'minStock'],
                 raw: true
             });
 
@@ -55,7 +55,7 @@ class StockIntelligenceService {
                 // For a prediction engine, we use the full window to flatten spikes.
                 const velocity = totalSold / daysWindow; 
                 
-                const stock = parseFloat(product.stock) || 0;
+                const stock = parseFloat(product.stockQuantity !== undefined && product.stockQuantity !== null ? product.stockQuantity : product.stock) || 0;
                 let daysRemaining = velocity > 0 ? (stock / velocity) : 999;
 
                 // Determine Status

@@ -1,4 +1,4 @@
-const { Sale, SaleItem, Product, ProductLot, BranchStock, StockMovement, AuditLog, Customer, CreditHistory, SupervisorApproval, VarianteProducto } = require('../database/models');
+const { Sale, SaleItem, Product, ProductLot, BranchStock, StockMovement, AuditLog, Customer, CreditHistory, SupervisorApproval, VarianteProducto, CashShift } = require('../database/models');
 const { sequelize } = require('../database/connection');
 const { generateRobustId, getUserSettings, readJson, readJsonAsync } = require('../utils/helpers');
 const { SETTINGS_FILE } = require('../config/paths');
@@ -26,7 +26,7 @@ class SaleService {
     async processSale(reqUser, saleData, options = {}) {
         const companyId = String(reqUser.companyId);
         const userId = String(reqUser.id);
-                const userBranchId = String(reqUser.activeBranchId || '1');
+        const userBranchId = String(reqUser.activeBranchId || '1');
 
         // 1. VERIFICAR CLIENT_TRANSACTION_ID & IDEMPOTENCY LOCK
         const clientTransactionId = saleData.clientTransactionId || saleData.id || generateRobustId();
@@ -47,6 +47,16 @@ class SaleService {
         }
         inFlightTransactions.add(clientTransactionId);
         setTimeout(() => inFlightTransactions.delete(clientTransactionId), 10000);
+
+        // 1C. VERIFICACIÓN DE CAJA ABIERTA
+        if (!options.bypassShiftCheck) {
+            const openShift = await CashShift.findOne({
+                where: { userId: String(userId), companyId: String(companyId), status: 'open' }
+            });
+            if (!openShift) {
+                throw new Error('CAJA_CERRADA: Debes abrir el turno de caja antes de realizar una venta.');
+            }
+        }
 
         const { items, customerId, total, discount, receivedAmount, changeAmount, branchId: clientBranchId } = saleData;
         

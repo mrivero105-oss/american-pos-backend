@@ -285,14 +285,17 @@ router.post('/bulk-stock-increase', isAdmin, async (req, res) => {
                 
                 if (quantityToAdd <= 0) continue;
                 
-                // Update batch and expiration
+                // Always update global product catalog stock
                 let updates = {};
                 if (item.batchNumber) updates.batchNumber = item.batchNumber;
                 if (item.expirationDate) updates.expirationDate = item.expirationDate;
-                
-                if (Object.keys(updates).length > 0) {
-                    await product.update(updates, { transaction: t });
-                }
+
+                const currentProdStock = Number(product.stockQuantity || product.stock || 0);
+                const newProdStock = precision.round(currentProdStock + quantityToAdd, 3);
+                updates.stockQuantity = String(newProdStock);
+                updates.stock = null;
+
+                await product.update(updates, { transaction: t });
                 
                 if (activeBranchId) {
                     const bs = await BranchStock.findOne({ where: { productId: product.id, branchId: activeBranchId }, transaction: t });

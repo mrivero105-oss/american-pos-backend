@@ -374,7 +374,7 @@ SINTAXIS TÉCNICA:
             // Formatear catálogo limpio (sin exponer costos, solo precio y disponibilidad general)
             const publicCatalog = allProducts.map(p => {
                 const stockStatus = parseFloat(p.stockQuantity) > 0 ? 'Disponible' : 'Agotado';
-                const priceBs = (parseFloat(p.price) * rate).toFixed(2);
+                const priceBs = precision.multiply(p.price || 0, rate).toFixed(2);
                 return `- ${p.name} | Precio: Bs ${priceBs} | Categoría: ${p.category} | Estado: ${stockStatus}`;
             }).join('\n');
 

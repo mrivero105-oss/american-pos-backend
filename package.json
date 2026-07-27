@@ -20,6 +20,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@tailwindcss/aspect-ratio": "^0.4.2",
+    "axios": "^1.18.1",
     "bcryptjs": "^2.4.3",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
@@ -53,7 +54,6 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.2",
     "autoprefixer": "^10.4.23",
-    "axios": "^1.18.1",
     "electron": "22.3.27",
     "electron-builder": "^24.13.3",
     "googleapis": "^171.4.0",
@@ -67,7 +67,7 @@
     "npmRebuild": false,
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/sqlite3/**",
+      "**/node_modules/**",
       "**/database/pos_v1.sqlite",
       "**/product_images/**"
     ],
@@ -100,10 +100,10 @@
       "!*.log",
       "!db.json",
       "!.git",
-      "!*.md",
-      "!**/README*.md",
-      "!**/CHANGELOG*.md",
-      "!**/LICENSE*",
+      "!/*.md",
+      "!README.md",
+      "!CHANGELOG.md",
+      "!LICENSE",
       "!*.ps1",
       "!node_modules/electron",
       "!node_modules/electron-builder",

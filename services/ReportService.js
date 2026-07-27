@@ -141,13 +141,18 @@ class ReportService {
             inventoryValuation = Number(valuationStats.totalValue) || 0;
             itemCount = Number(valuationStats.count) || 0;
 
+            const isSqlite = sequelize.getDialect() === 'sqlite';
+            const stockCol = isSqlite ? sequelize.literal('CAST("stockQuantity" AS REAL)') : sequelize.col('stockQuantity');
+            const minStockCol = isSqlite ? sequelize.literal('CAST("minStock" AS REAL)') : sequelize.col('minStock');
+            const orderCol = isSqlite ? sequelize.literal('CAST("stockQuantity" AS REAL)') : 'stockQuantity';
+
             lowStockItems = await Product.findAll({
                 where: {
                     companyId,
-                    [Op.and]: [sequelize.where(sequelize.col('stockQuantity'), Op.lte, sequelize.col('minStock'))]
+                    [Op.and]: [sequelize.where(stockCol, Op.lte, minStockCol)]
                 },
                 attributes: ['id', 'name', 'stockQuantity', 'minStock', 'stockUnit'],
-                order: [['stockQuantity', 'ASC']],
+                order: [[orderCol, 'ASC']],
                 limit: 8,
                 raw: true
             });
@@ -201,12 +206,17 @@ class ReportService {
      */
     async getLowStock(companyId, page = 1, limit = 20) {
         const offset = (page - 1) * limit;
+        const isSqlite = sequelize.getDialect() === 'sqlite';
+        const stockCol = isSqlite ? sequelize.literal('CAST("stockQuantity" AS REAL)') : sequelize.col('stockQuantity');
+        const minStockCol = isSqlite ? sequelize.literal('CAST("minStock" AS REAL)') : sequelize.col('minStock');
+        const orderCol = isSqlite ? sequelize.literal('CAST("stockQuantity" AS REAL)') : 'stockQuantity';
+
         const { rows, count } = await Product.findAndCountAll({
             where: {
                 companyId,
-                [Op.and]: [sequelize.where(sequelize.col('stockQuantity'), Op.lte, sequelize.col('minStock'))]
+                [Op.and]: [sequelize.where(stockCol, Op.lte, minStockCol)]
             },
-            limit, offset, order: [['stockQuantity', 'ASC']],
+            limit, offset, order: [[orderCol, 'ASC']],
             attributes: ['id', 'name', 'stockQuantity', 'minStock', 'stockUnit', 'category']
         });
         return { items: rows, total: count, page, totalPages: Math.ceil(count / limit) };
@@ -375,7 +385,7 @@ class ReportService {
         });
 
         const numberOfSales = Number(stats.numberOfSales) || 0;
-        const avgTicket = numberOfSales > 0 ? precision.round(totalRevenue / numberOfSales) : 0;
+        const avgTicket = numberOfSales > 0 ? precision.round(totalRevenue / numberOfSales, 6) : 0;
 
         return {
             summary: {

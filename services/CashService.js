@@ -41,6 +41,14 @@ class CashService {
             include: [{ model: CashMovement, as: 'CashMovements' }]
         });
 
+        if (!currentShift) {
+            currentShift = await CashShift.findOne({
+                where: { userId: String(userId), status: 'open', companyId },
+                order: [['openedAt', 'DESC']],
+                include: [{ model: CashMovement, as: 'CashMovements' }]
+            });
+        }
+
         if (!currentShift) return null;
         
         // ROBUST PARSE: Ensure JSON fields are objects (SQLite double-encoding protection)
@@ -160,11 +168,13 @@ class CashService {
             ...currentShift.toJSON(),
             cashSalesTotal: stats.cashSalesTotal,
             totalSalesAmount: stats.totalSalesAmount,
+            totalSalesAmountNative: stats.totalSalesAmountNative,
             salesCount: stats.salesCount,
             expectedAmount: precision.round(expectedAmountTotalUsd),
             expectedCashUsd: precision.round(expectedCashUsd),
             expectedCashBs: precision.round(expectedCashBs),
             paymentBreakdown: stats.paymentBreakdown, // USD breakdown
+            paymentBreakdownNative: stats.paymentBreakdownNative, // Native breakdown
             expectedBreakdown, // Native breakdown
             generatedAt: new Date().toISOString()
         };
@@ -832,14 +842,21 @@ class CashService {
     /**
      * Centralized logic to calculate statistics for a given shift.
      */
-    async getShiftStats(userId, openedAt, companyId, registerId = '1', transaction = null) {
+    async getShiftStats(userId, openedAt, companyId, registerId = '1', transaction = null, closedAt = null) {
+        const salesWhere = {
+            userId: String(userId),
+            companyId: String(companyId),
+            status: { [Op.ne]: 'cancelled' }
+        };
+
+        if (closedAt) {
+            salesWhere.date = { [Op.between]: [openedAt, closedAt] };
+        } else {
+            salesWhere.date = { [Op.gte]: openedAt };
+        }
+
         const sales = await Sale.findAll({
-            where: {
-                userId: String(userId),
-                date: { [Op.gte]: openedAt },
-                companyId: String(companyId),
-                registerId: String(registerId)
-            },
+            where: salesWhere,
             attributes: ['id', 'total', 'paymentMethods', 'paymentMethod', 'exchangeRate'],
             transaction
         });
@@ -899,9 +916,12 @@ class CashService {
             });
         }
 
+        const totalSalesAmountNative = precision.round(precision.add(Object.values(paymentBreakdownNative)));
+
         return {
             salesCount: sales.length,
             totalSalesAmount: precision.round(totalSalesAmountUsd),
+            totalSalesAmountNative,
             cashSalesTotal: precision.round(cashSalesTotalUsd),
             paymentBreakdown: Object.fromEntries(
                 Object.entries(paymentBreakdownUsd).map(([k, v]) => [k, precision.round(v)])
