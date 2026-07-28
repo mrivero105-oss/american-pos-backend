@@ -12,8 +12,8 @@ const CACHE_TTL = 1000 * 60 * 5; // 5 minutos
  * Features: Regex-based strict exemption and TTL Memoization.
  */
 const verifyLicense = async (req, res, next) => {
-    // Exempt routes (activation, health check, and mobile sync)
-    const isExactExempt = ['/license/status', '/license/activate', '/license/force-activate', '/hello'].includes(req.path);
+    // Exempt routes (activation, health check, business info and mobile sync)
+    const isExactExempt = ['/license/status', '/license/activate', '/license/force-activate', '/hello', '/settings/business', '/settings/is-setup'].includes(req.path);
     const isAuthRoute = req.path.startsWith('/auth/'); 
     // Strict regex to prevent spoofing with `/public-something` anywhere in the path
     const isPublicSync = /^\/[a-zA-Z0-9_-]+\/public-/.test(req.path);
