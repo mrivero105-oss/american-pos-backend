@@ -1,19 +1,10 @@
 const { Sequelize } = require('sequelize');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-// Initialize Sequelize with SQLite
-// Priority: 
-// 1. USER_DATA_PATH (Electron)
-// 2. Roaming AppData (Windows Dev Fallback - to sync with installed app)
-// 3. Local directory (Other Dev Fallback)
-
-let storagePath;
-const fs = require('fs');
-
 const { BASE_PATH } = require('../config/paths');
-
-let storagePath = path.join(BASE_PATH, 'pos_v1.sqlite');
+const storagePath = path.join(BASE_PATH, 'pos_v1.sqlite');
 
 // AUTO-MIGRATION: Detect legacy database files and rename to new format
 try {
