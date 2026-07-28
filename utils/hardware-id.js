@@ -18,20 +18,23 @@ class HardwareIdentity {
     async getMachineUUID() {
         return new Promise((resolve) => {
             if (process.platform === 'win32') {
-                exec('powershell.exe -Command "(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID"', { timeout: 3000 }, (error, stdout) => {
+                // Windows 7 compatibility: Use Get-WmiObject (supported in PowerShell 2.0+)
+                exec('powershell.exe -NoProfile -Command "(Get-WmiObject -Class Win32_ComputerSystemProduct).UUID"', { timeout: 4000 }, (error, stdout) => {
                     const psUuid = stdout ? stdout.trim() : '';
-                    if (!error && psUuid) {
+                    if (!error && psUuid && psUuid.length > 5 && !psUuid.includes('Error')) {
                         return resolve(psUuid);
                     }
-                    // Fallback to WMIC if powershell fails
-                    exec('wmic csproject get UUID', { timeout: 3000 }, (err, wmicOut) => {
-                        if (err) {
-                            console.warn('[HWID] Fallo al leer WMIC y Powershell, usando fallback.');
-                            return resolve('FALLBACK-' + os.hostname());
+                    // Fallback to WMIC (csproduct is the correct alias)
+                    exec('wmic csproduct get UUID', { timeout: 4000 }, (err, wmicOut) => {
+                        if (!err && wmicOut) {
+                            const lines = wmicOut.split('\n');
+                            const uuid = lines[1] ? lines[1].trim() : '';
+                            if (uuid && uuid !== 'UUID' && uuid.length > 5) {
+                                return resolve(uuid);
+                            }
                         }
-                        const lines = wmicOut.split('\n');
-                        const uuid = lines[1] ? lines[1].trim() : 'UNKNOWN-UUID';
-                        resolve(uuid);
+                        console.warn('[HWID] Fallo al leer WMIC y Powershell en Win7, usando ID inmutable por Hostname.');
+                        resolve('WIN-' + os.hostname().toUpperCase().replace(/[^A-Z0-9]/g, ''));
                     });
                 });
             } else {
@@ -43,28 +46,32 @@ class HardwareIdentity {
     async getStableNetId() {
         if (this.cachedHwid) return this.cachedHwid;
 
+        const fsSync = require('fs');
         try {
-            // Intenta leer el HWID previamente fijado en disco (Async)
-            const existingHwid = await fs.readFile(this.hwidPath, 'utf8');
-            this.cachedHwid = existingHwid;
-            return existingHwid;
-        } catch (error) {
-            // Si no existe, genera uno inmutable basado en la placa base y lo guarda
-            const baseUUID = await this.getMachineUUID();
-            const newHwid = `POS-${baseUUID}`;
-            
-            try {
-                // Ensure directory exists
-                await fs.mkdir(this.dirPath, { recursive: true });
-                await fs.writeFile(this.hwidPath, newHwid, 'utf8');
-                this.cachedHwid = newHwid;
-            } catch (writeErr) {
-                console.error('[HWID] FATAL: No se pudo escribir el sticky file. Permisos EPERM.', writeErr.message);
-                this.cachedHwid = newHwid; // Fallback to memory
+            // Intenta leer el HWID previamente fijado en disco
+            if (fsSync.existsSync(this.hwidPath)) {
+                const existingHwid = fsSync.readFileSync(this.hwidPath, 'utf8').trim();
+                if (existingHwid && existingHwid.startsWith('POS-')) {
+                    this.cachedHwid = existingHwid;
+                    return existingHwid;
+                }
             }
-            
-            return newHwid;
+        } catch (e) {}
+
+        // Genera uno inmutable y lo guarda síncronamente
+        const baseUUID = await this.getMachineUUID();
+        const newHwid = `POS-${baseUUID}`;
+        
+        try {
+            fsSync.mkdirSync(this.dirPath, { recursive: true });
+            fsSync.writeFileSync(this.hwidPath, newHwid, 'utf8');
+            this.cachedHwid = newHwid;
+        } catch (writeErr) {
+            console.error('[HWID] Permiso de escritura denegado en HWID sticky file:', writeErr.message);
+            this.cachedHwid = newHwid;
         }
+
+        return newHwid;
     }
 }
 
