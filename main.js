@@ -484,46 +484,6 @@ function setupIpcHandlers() {
         }
     });
 
-    // Auto-Updater & App Version Handlers
-    ipcMain.handle('get-app-version', async () => {
-        return app.getVersion();
-    });
-
-    ipcMain.handle('is-windows-7', async () => {
-        const os = require('os');
-        return process.platform === 'win32' && os.release().startsWith('6.1');
-    });
-
-    ipcMain.handle('check-for-updates', async (event) => {
-        if (!verifyIpcSender(event)) return { success: false, error: 'IPC no autorizado' };
-        log('[AutoUpdater] IPC check-for-updates triggered');
-        try {
-            const axios = require('axios');
-            const targetPort = process.env.PORT || 5005;
-            const res = await axios.get(`http://127.0.0.1:${targetPort}/system/updater/status`, { timeout: 10000 });
-            return { success: true, data: res.data };
-        } catch (err) {
-            log(`[AutoUpdater] Check failed: ${err.message}`);
-            return { success: false, error: err.message };
-        }
-    });
-
-    ipcMain.handle('download-update', async (event, url) => {
-        if (!verifyIpcSender(event)) return { success: false, error: 'IPC no autorizado' };
-        log(`[AutoUpdater] IPC download-update requested: ${url}`);
-        if (url) {
-            const { shell } = require('electron');
-            shell.openExternal(url);
-            return { success: true, openedBrowser: true };
-        }
-        return { success: false, error: 'No download URL provided' };
-    });
-
-    ipcMain.handle('install-update', async () => {
-        log('[AutoUpdater] IPC install-update requested');
-        return { success: true };
-    });
-
     ipcMain.handle('get-printers', async (event) => {
         if (!verifyIpcSender(event)) return [];
         try {

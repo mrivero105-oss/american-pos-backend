@@ -349,6 +349,10 @@ const startServer = (ports, userDataPath = null) => {
             app.use('/license', licenseRoutes);
             app.use('/public-catalog', require('./routes/publicCatalog'));
             app.use('/ai/public-query', require('./routes/publicAi'));
+            app.get('/lan/peers', (req, res) => {
+                const LANClusterService = require('./services/LANClusterService');
+                res.json({ success: true, ...LANClusterService.getClusterTopology() });
+            });
 
             app.use(verifyToken);
             app.use(verifyLicense);

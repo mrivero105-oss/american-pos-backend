@@ -57,32 +57,80 @@ async function createMasterSnapshot(userDataPath) {
             return reject(new Error('No hay componentes para respaldar.'));
         }
 
-        const zipCommand = `tar -ac -f "backups/${zipFileName}" -C "${userDataPath}" ${components.join(' ')}`;
-        
-        exec(zipCommand, { cwd: userDataPath }, (zipError) => {
-            // Cleanup temp DB
+        // Check if 'tar' is available (native in Windows 10+, Linux, macOS, but absent in Windows 7)
+        const { execSync } = require('child_process');
+        let hasTar = false;
+        try {
+            execSync('tar --version', { stdio: 'ignore' });
+            hasTar = true;
+        } catch (e) {
+            hasTar = false;
+        }
+
+        const cleanupTempAndRotate = () => {
             try { if (fs.existsSync(tempDbPath)) fs.unlinkSync(tempDbPath); } catch (e) {}
+            try {
+                const allSnapshots = fs.readdirSync(backupDir)
+                    .filter(f => (f.startsWith('master_snapshot_') || f.startsWith('backup_')) && (f.endsWith('.zip') || f.endsWith('.sqlite')))
+                    .map(f => ({ name: f, time: fs.statSync(path.join(backupDir, f)).mtime.getTime() }))
+                    .sort((a, b) => b.time - a.time);
 
-            if (zipError) {
-                logMsg(`Compression error: ${zipError.message}`);
-                return reject(zipError);
+                if (allSnapshots.length > 10) {
+                    allSnapshots.slice(10).forEach(f => {
+                        try { fs.unlinkSync(path.join(backupDir, f.name)); } catch (e) {}
+                    });
+                }
+            } catch (e) {}
+        };
+
+        if (hasTar) {
+            const zipCommand = `tar -ac -f "backups/${zipFileName}" -C "${userDataPath}" ${components.join(' ')}`;
+            exec(zipCommand, { cwd: userDataPath }, (zipError) => {
+                cleanupTempAndRotate();
+                if (zipError) {
+                    logMsg(`Compression error: ${zipError.message}`);
+                    return reject(zipError);
+                }
+                logMsg(`Instantánea Maestra (tar) completada: ${zipPath}`);
+                resolve(zipPath);
+            });
+        } else if (process.platform === 'win32') {
+            // Windows 7 Fallback 1: PowerShell Compress-Archive
+            const rawComponents = components.map(c => `"${path.join(userDataPath, c.replace(/"/g, ''))}"`).join(',');
+            const psScript = `Compress-Archive -Path ${rawComponents} -DestinationPath "${zipPath}" -Force`;
+            const psCommand = `powershell -NoProfile -Command "${psScript}"`;
+
+            exec(psCommand, { cwd: userDataPath }, (psError) => {
+                if (psError) {
+                    // Windows 7 Fallback 2: Simple SQLite copy
+                    logMsg(`Compress-Archive warning (Win7 legacy): ${psError.message}. Realizando respaldo directo .sqlite...`);
+                    const fallbackPath = path.join(backupDir, `master_snapshot_${timestamp}.sqlite`);
+                    try {
+                        fs.copyFileSync(dbPath, fallbackPath);
+                        cleanupTempAndRotate();
+                        logMsg(`Respaldo directo SQLite completado: ${fallbackPath}`);
+                        return resolve(fallbackPath);
+                    } catch (copyErr) {
+                        cleanupTempAndRotate();
+                        return reject(copyErr);
+                    }
+                }
+                cleanupTempAndRotate();
+                logMsg(`Instantánea Maestra (PowerShell) completada: ${zipPath}`);
+                resolve(zipPath);
+            });
+        } else {
+            // Non-windows without tar
+            const fallbackPath = path.join(backupDir, `master_snapshot_${timestamp}.sqlite`);
+            try {
+                fs.copyFileSync(dbPath, fallbackPath);
+                cleanupTempAndRotate();
+                resolve(fallbackPath);
+            } catch (copyErr) {
+                cleanupTempAndRotate();
+                reject(copyErr);
             }
-
-            // Cleanup: Keep only last 5 master snapshots
-            const allSnapshots = fs.readdirSync(backupDir)
-                .filter(f => f.startsWith('master_snapshot_') && f.endsWith('.zip'))
-                .map(f => ({ name: f, time: fs.statSync(path.join(backupDir, f)).mtime.getTime() }))
-                .sort((a, b) => b.time - a.time);
-
-            if (allSnapshots.length > 5) {
-                allSnapshots.slice(5).forEach(f => {
-                    try { fs.unlinkSync(path.join(backupDir, f.name)); } catch (e) {}
-                });
-            }
-
-            logMsg(`Instantánea Maestra completada: ${zipPath}`);
-            resolve(zipPath);
-        });
+        }
     });
 }
 

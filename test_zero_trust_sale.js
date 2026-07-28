@@ -10,9 +10,9 @@ async function runZeroTrustTest() {
     const userId = 'user-100';
     const mockUser = { id: userId, companyId, name: 'Cajero de Prueba', activeBranchId: '1' };
 
-    // 1. Create a product with exact DB price of $25.00
+    const prodId = `PROD-ZT-${Date.now()}`;
     const prod = await Product.create({
-        id: 'PROD-ZT-1',
+        id: prodId,
         name: 'Producto Auditado Enterprise',
         price: 25.00,
         cost: 15.00,
@@ -20,14 +20,14 @@ async function runZeroTrustTest() {
         companyId,
         taxStatus: 'gravado'
     });
-    console.log(`[SETUP] Producto creado en DB: "${prod.name}" a precio oficial $${prod.price.toFixed(2)}`);
+    console.log(`[SETUP] Producto creado en DB: "${prod.name}" (ID: ${prodId}) a precio oficial $${prod.price.toFixed(2)}`);
 
     // 2. TEST CASE 1: Attack attempt - Frontend sends item with manipulated price $10.00 and total $10.00
     console.log('\n--- CASO 1: Intento de Manipulación de Precio por el Frontend ($10 en vez de $25) ---');
     const manipulatedSaleData = {
         clientTransactionId: `TX-ATTACK-${Date.now()}`,
         items: [
-            { productId: 'PROD-ZT-1', name: 'Producto Auditado Enterprise', quantity: 1, price: 10.00 }
+            { productId: prodId, name: 'Producto Auditado Enterprise', quantity: 1, price: 10.00 }
         ],
         total: 10.00,
         subtotal: 10.00,
@@ -35,7 +35,7 @@ async function runZeroTrustTest() {
     };
 
     try {
-        await saleService.processSale(mockUser, manipulatedSaleData, { bypassCreditLimit: true, bypassStockCheck: true });
+        await saleService.processSale(mockUser, manipulatedSaleData, { bypassShiftCheck: true, bypassCreditLimit: true, bypassStockCheck: true });
         console.error('[FAIL] El servidor aceptó la venta manipulada indebidamente.');
         process.exit(1);
     } catch (err) {
@@ -52,7 +52,7 @@ async function runZeroTrustTest() {
     const validSaleData = {
         clientTransactionId: `TX-VALID-${Date.now()}`,
         items: [
-            { productId: 'PROD-ZT-1', name: 'Producto Auditado Enterprise', quantity: 1, price: 25.00 }
+            { productId: prodId, name: 'Producto Auditado Enterprise', quantity: 1, price: 25.00 }
         ],
         total: 25.00,
         subtotal: 25.00,
@@ -60,7 +60,7 @@ async function runZeroTrustTest() {
     };
 
     try {
-        const processed = await saleService.processSale(mockUser, validSaleData, { bypassCreditLimit: true, bypassStockCheck: true });
+        const processed = await saleService.processSale(mockUser, validSaleData, { bypassShiftCheck: true, bypassCreditLimit: true, bypassStockCheck: true });
         console.log(`[PASS] Venta legítima verificada y guardada exitosamente con ID SQLite: ${processed.id}`);
     } catch (err) {
         console.error('[FAIL] La venta legítima fue rechazada erróneamente:', err.message);
