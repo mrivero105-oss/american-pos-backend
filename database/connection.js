@@ -11,16 +11,17 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 let storagePath;
 const fs = require('fs');
 
-if (process.env.USER_DATA_PATH) {
-    // Ensure the folder exists to prevent EACCES or EPERM errors
-    if (!fs.existsSync(process.env.USER_DATA_PATH)) {
-        fs.mkdirSync(process.env.USER_DATA_PATH, { recursive: true });
-    }
-    storagePath = path.join(process.env.USER_DATA_PATH, 'pos_v1.sqlite');
+const { BASE_PATH } = require('../config/paths');
 
-    // AUTO-MIGRATION: Detect legacy database files and rename to new format
-    const legacyPath = path.join(process.env.USER_DATA_PATH, 'database.sqlite');
-    const oldPath = path.join(process.env.USER_DATA_PATH, 'pos.sqlite');
+let storagePath = path.join(BASE_PATH, 'pos_v1.sqlite');
+
+// AUTO-MIGRATION: Detect legacy database files and rename to new format
+try {
+    if (!fs.existsSync(BASE_PATH)) {
+        fs.mkdirSync(BASE_PATH, { recursive: true });
+    }
+    const legacyPath = path.join(BASE_PATH, 'database.sqlite');
+    const oldPath = path.join(BASE_PATH, 'pos.sqlite');
 
     if (!fs.existsSync(storagePath)) {
         if (fs.existsSync(legacyPath)) {
@@ -31,32 +32,8 @@ if (process.env.USER_DATA_PATH) {
             fs.renameSync(oldPath, storagePath);
         }
     }
-} else if (process.platform === 'win32' && process.env.APPDATA) {
-    let appDataPath = path.join(process.env.APPDATA, 'americanpos');
-    if (!fs.existsSync(appDataPath)) {
-        appDataPath = path.join(process.env.APPDATA, 'american-pos-backend');
-        if (!fs.existsSync(appDataPath)) {
-            fs.mkdirSync(appDataPath, { recursive: true });
-        }
-    }
-    storagePath = path.join(appDataPath, 'pos_v1.sqlite');
-
-    // AUTO-MIGRATION (Windows AppData)
-    const legacyPath = path.join(appDataPath, 'database.sqlite');
-    const oldPath = path.join(appDataPath, 'pos.sqlite');
-    if (!fs.existsSync(storagePath)) {
-        if (fs.existsSync(legacyPath)) {
-            console.log('[DB-Migration] Found legacy Windows database.sqlite. Migrating...');
-            fs.renameSync(legacyPath, storagePath);
-        } else if (fs.existsSync(oldPath)) {
-            console.log('[DB-Migration] Found legacy Windows pos.sqlite. Migrating...');
-            fs.renameSync(oldPath, storagePath);
-        }
-    }
-} else if (process.env.NODE_ENV === 'development') {
-    storagePath = path.join(__dirname, 'pos_v1.sqlite');
-} else {
-    storagePath = path.join(__dirname, 'pos_v1.sqlite');
+} catch (e) {
+    console.warn('[DB-Migration] Warning during storage path initialization:', e.message);
 }
 
 try {

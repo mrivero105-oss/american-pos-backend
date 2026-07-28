@@ -1,22 +1,31 @@
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
-let BASE_PATH = process.env.USER_DATA_PATH;
+let BASE_PATH = process.env.USER_DATA_PATH ? process.env.USER_DATA_PATH.trim() : null;
 
-if (!BASE_PATH && process.platform === 'win32' && process.env.APPDATA) {
-    let appDataPath = path.join(process.env.APPDATA, 'americanpos');
-    if (!fs.existsSync(appDataPath)) {
-        appDataPath = path.join(process.env.APPDATA, 'american-pos-backend');
-        if (!fs.existsSync(appDataPath)) {
-            fs.mkdirSync(appDataPath, { recursive: true });
-        }
-    }
-    BASE_PATH = appDataPath;
-    console.log('Path Detection: Using Windows AppData path:', BASE_PATH);
+// Si contiene texto literal como "/tmp (o ..." limpiar a "/tmp"
+if (BASE_PATH && BASE_PATH.includes(' ')) {
+    BASE_PATH = BASE_PATH.split(' ')[0];
 }
 
 if (!BASE_PATH) {
-    throw new Error('FATAL SECURITY ERROR: DIRECTORIO DE DATOS INACCESIBLE. No se pudo determinar USER_DATA_PATH o APPDATA. El sistema se niega a iniciar en almacenamiento temporal volátil.');
+    if (process.platform === 'win32' && process.env.APPDATA) {
+        let appDataPath = path.join(process.env.APPDATA, 'americanpos');
+        if (!fs.existsSync(appDataPath)) {
+            appDataPath = path.join(process.env.APPDATA, 'american-pos-backend');
+            if (!fs.existsSync(appDataPath)) {
+                fs.mkdirSync(appDataPath, { recursive: true });
+            }
+        }
+        BASE_PATH = appDataPath;
+        console.log('Path Detection: Using Windows AppData path:', BASE_PATH);
+    } else {
+        // Fallback automático para Linux / Render / MacOS / Cloud
+        const baseDir = os.homedir() || '/tmp';
+        BASE_PATH = path.join(baseDir, '.americanpos');
+        console.log('Path Detection: Using Linux/Cloud POS Data path:', BASE_PATH);
+    }
 }
 
 try {

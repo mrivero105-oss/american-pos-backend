@@ -332,6 +332,12 @@ const startServer = (ports, userDataPath = null) => {
             }
 
             // Routes
+            app.get('/', (req, res) => res.json({
+                status: 'online',
+                service: 'american-pos-backend',
+                message: 'American POS API Server Running',
+                timestamp: new Date().toISOString()
+            }));
             app.get('/hello', (req, res) => res.json({ status: 'ready', server: 'american-pos' }));
             app.get(['/api/time', '/time'], (req, res) => res.json({
                 success: true,
