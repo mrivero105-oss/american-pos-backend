@@ -78,6 +78,14 @@ async function main() {
         throw renameErr;
     }
 
+    // 5. Mantener actualizado el icono oficial en el acceso directo del escritorio
+    const updateIconScript = path.join(PROJECT_ROOT, 'scripts', 'update_desktop_icon.ps1');
+    if (fs.existsSync(updateIconScript)) {
+        try {
+            execSync(`powershell -ExecutionPolicy Bypass -File "${updateIconScript}"`, { stdio: 'ignore' });
+        } catch (_e) {}
+    }
+
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n🎉 [DEPLOY COMPLETADO EXITOSAMENTE en ${elapsed}s]`);
     console.log(`✔ Aplicación instalada actualizada en: ${targetAsar}`);
