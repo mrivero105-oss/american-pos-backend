@@ -71,6 +71,19 @@ router.get('/bi/profitability', requirePermission('canViewReports'), async (req,
     }
 });
 
+// GET /ai/predictive-analytics (Estricto Modo SOLO LECTURA)
+router.get('/ai/predictive-analytics', requirePermission('canViewReports'), async (req, res) => {
+    try {
+        const aiService = require('../services/AIService');
+        const companyId = req.user?.companyId || '2';
+        const result = await aiService.getPredictiveAnalytics(companyId, req.user, req.query);
+        res.json(result);
+    } catch (error) {
+        console.error('AI Predictive Analytics error:', error);
+        res.status(500).json({ error: 'Error al generar análisis predictivo con IA', details: error.message });
+    }
+});
+
 // GET /bi/customers/ranking
 router.get('/bi/customers/ranking', requirePermission('canViewReports'), async (req, res) => {
     try {

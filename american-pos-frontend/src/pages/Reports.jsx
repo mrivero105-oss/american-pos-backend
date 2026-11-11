@@ -19,6 +19,7 @@ import MiniCalendar from '../components/MiniCalendar';
 import ExecutiveStats from '../components/dashboard/ExecutiveStats';
 import PerformanceHeatmap from '../components/dashboard/PerformanceHeatmap';
 import DashboardCharts from '../components/DashboardCharts';
+import AIPredictiveAnalytics from '../components/dashboard/AIPredictiveAnalytics';
 
 export default function Reports() {
     const { socket } = useSocket();
@@ -319,6 +320,11 @@ export default function Reports() {
                         )}
                     </div>
                 </div>
+            </div>
+
+            {/* AI Predictive Intelligence (Modo Estricto Solo Lectura) */}
+            <div className="px-3 sm:px-6">
+                <AIPredictiveAnalytics range={range} />
             </div>
 
             {/* Smart Metrics Grid */}

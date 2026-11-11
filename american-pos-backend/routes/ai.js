@@ -34,6 +34,18 @@ router.post('/manager/analyze', async (req, res) => {
 
 // Ruta publica extraída a publicAi.js
 
+// GET /api/ai/predictive-analytics (Estricto Modo SOLO LECTURA)
+router.get('/predictive-analytics', async (req, res) => {
+    try {
+        const companyId = req.user?.companyId || '2';
+        const result = await AIService.getPredictiveAnalytics(companyId, req.user || { role: 'admin', companyId: '2' }, req.query);
+        res.json(result);
+    } catch (error) {
+        console.error('[AI_PREDICTIVE_ERROR]', error);
+        res.status(500).json({ error: 'Fallo al ejecutar análisis predictivo con IA.', details: error.message });
+    }
+});
+
 // POST /api/ai/cross-selling
 router.post('/cross-selling', async (req, res) => {
     try {

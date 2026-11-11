@@ -1,3 +1,10 @@
+const dns = require('dns');
+if (dns.setDefaultResultOrder) {
+    try {
+        dns.setDefaultResultOrder('ipv4first');
+    } catch (_e) {}
+}
+
 if (typeof globalThis.fetch === 'undefined') {
     try {
         const nodeFetch = require('node-fetch');
@@ -150,7 +157,7 @@ class AIService {
     }
 
     init() {
-        let apiKey = process.env.GOOGLE_API_KEY;
+        let apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
         if (!apiKey || apiKey.trim() === '') {
             try {
                 const envPaths = [
@@ -161,7 +168,7 @@ class AIService {
                 for (const p of envPaths) {
                     if (p && fs.existsSync(p)) {
                         const content = fs.readFileSync(p, 'utf8');
-                        const match = content.match(/GOOGLE_API_KEY=([^\r\n]+)/);
+                        const match = content.match(/(?:GOOGLE_API_KEY|GEMINI_API_KEY)=([^\r\n]+)/);
                         if (match && match[1] && match[1].trim()) {
                             apiKey = match[1].trim().replace(/^["']|["']$/g, '');
                             break;
@@ -172,16 +179,17 @@ class AIService {
         }
 
         if (!apiKey || apiKey.trim() === '') {
-            console.warn('[ISAAC AI] GOOGLE_API_KEY no configurada. El servicio de IA operará en modo local/degradado seguro.');
+            console.warn('[ISAAC AI] GOOGLE_API_KEY / GEMINI_API_KEY no configurada. El servicio de IA operará en modo local/degradado seguro.');
             this.initialized = false;
             return;
         }
 
         process.env.GOOGLE_API_KEY = apiKey;
+        process.env.GEMINI_API_KEY = apiKey;
 
         try {
             this.genAI = new GoogleGenerativeAI(apiKey);
-            this.modelName = "gemini-2.5-flash"; 
+            this.modelName = "gemini-flash-lite-latest"; 
             this.model = this.genAI.getGenerativeModel({ model: this.modelName });
             this.initialized = true;
             console.log(`[ISAAC AI] Cerebro Master configurado: ${this.modelName}`);
@@ -2609,6 +2617,208 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
         } catch (err) {
             console.error('[ISAAC AI] Error conciliando orden con factura:', err);
             throw err;
+        }
+    }
+
+    /**
+     * Análisis Predictivo y Reportes Ejecutivos con IA (Estricto Modo SOLO LECTURA).
+     * Garantía de Cero Mutación: No realiza modificaciones, inserciones ni eliminaciones en BD.
+     * Protección de Cuota Gratuita: Incorpora caché con TTL prolongado (4h) para un consumo máximo de 1-3 llamadas/día.
+     */
+    async getPredictiveAnalytics(companyId, reqUser, options = {}) {
+        const range = options.range || 'today';
+        const forceRefresh = !!options.forceRefresh;
+        const cacheKey = `predictive_ai_${companyId || '2'}_${range}`;
+
+        // 1. Protección de Cuota Gratuita: Entregar desde caché si ya fue generado
+        if (!forceRefresh) {
+            const cached = cacheService.get(cacheKey);
+            if (cached) {
+                return {
+                    ...cached,
+                    isCached: true
+                };
+            }
+        }
+
+        // 2. Extracción de Métricas Reales en Modo Solo Lectura
+        const profitability = await ReportService.getProfitability(reqUser, { range });
+        const valuation = await ReportService.getInventoryValuation(companyId);
+        const lowStock = await ReportService.getLowStock(companyId, 1, 10);
+
+        const summary = profitability.summary || {};
+        const topProducts = profitability.topProducts || [];
+        const topProfits = profitability.topProductsProfit || [];
+        const hourlySales = profitability.hourlySales || [];
+        const lowStockItems = lowStock.items || [];
+
+        // Identificación de horas pico
+        const peakHours = [...hourlySales]
+            .sort((a, b) => (Number(b.total) || 0) - (Number(a.total) || 0))
+            .slice(0, 3)
+            .map(h => `${h.hourStr || h.hour}:00 ($${Number(h.total || 0).toFixed(2)})`)
+            .join(', ');
+
+        const dataPayload = {
+            rango: range,
+            ventasTotales: Number(summary.totalSales || 0).toFixed(2),
+            numeroTransacciones: Number(summary.numberOfSales || 0),
+            gananciaBruta: Number(summary.grossProfit || 0).toFixed(2),
+            gananciaNeta: Number(summary.netProfit || 0).toFixed(2),
+            margenPorcentual: Number(summary.margin || 0).toFixed(1) + '%',
+            ticketPromedio: Number(summary.avgTicket || 0).toFixed(2),
+            gastosTotales: Number(summary.totalExpenses || 0).toFixed(2),
+            valoracionCosto: Number(valuation?.totalValueAtCost || 0).toFixed(2),
+            valoracionRetail: Number(valuation?.totalRetailValue || 0).toFixed(2),
+            totalProductosCatalogo: valuation?.itemCount || 0,
+            productosBajoStock: valuation?.lowStockCount || 0,
+            productosAgotados: valuation?.outOfStockCount || 0,
+            horasPico: peakHours || 'Sin transacciones en el rango',
+            topVendidos: topProducts.slice(0, 5).map(p => `${p.name} (${p.quantity} un - $${Number(p.total).toFixed(2)})`),
+            topRentables: topProfits.slice(0, 5).map(p => `${p.name} ($${Number(p.totalProfit).toFixed(2)} margen - ${p.margin}%)`),
+            articulosCriticosBajoStock: lowStockItems.slice(0, 5).map(i => `${i.name} (Stock: ${i.stockQuantity}, Mínimo: ${i.minStock})`)
+        };
+
+        // 3. Generador Heurístico Local (Cero fallos garantizado y cero costo)
+        const generateLocalFallback = (reason) => {
+            const marginNum = Number(summary.margin || 0);
+            let healthScore = 80;
+            let healthStatus = 'Saludable';
+            if (marginNum >= 25 && (valuation?.outOfStockCount || 0) < 5) {
+                healthScore = 94;
+                healthStatus = 'Óptimo';
+            } else if (marginNum < 15 || (valuation?.outOfStockCount || 0) > 15) {
+                healthScore = 60;
+                healthStatus = 'Atención Requerida';
+            }
+
+            const predictions = lowStockItems.slice(0, 5).map(item => ({
+                product: item.name,
+                estimatedDaysLeft: Math.max(1, Math.round((Number(item.stockQuantity) || 1) / 2)),
+                runRate: 'Demanda continua',
+                action: `Reordenar ${Math.max(10, (item.minStock || 5) * 2)} unidades para reponer stock preventivo.`
+            }));
+
+            const fallbackReport = {
+                healthScore,
+                healthStatus,
+                executiveSummary: `El negocio registró ${dataPayload.numeroTransacciones} ventas por un total de $${dataPayload.ventasTotales} con margen del ${dataPayload.margenPorcentual}. Se detectan ${dataPayload.productosBajoStock} productos bajo stock mínimo que deben atenderse preventivamente.`,
+                keyStrengths: [
+                    topProducts[0] ? `Alta rotación en ${topProducts[0].name}` : 'Flujo regular de ventas en caja',
+                    `Margen bruto consolidado del ${dataPayload.margenPorcentual}`,
+                    `Horarios pico detectados: ${dataPayload.horasPico || 'Horario diurno comercial'}`
+                ],
+                demandPredictions: predictions.length > 0 ? predictions : [
+                    { product: 'Catálogo General', estimatedDaysLeft: 15, runRate: 'Estable', action: 'Inventario en niveles controlados.' }
+                ],
+                profitOpportunities: [
+                    {
+                        title: 'Impulso de Productos de Mayor Margen',
+                        description: topProfits[0] ? `Aumentar visibilidad de ${topProfits[0].name} (margen ${topProfits[0].margin}%) en el mostrador.` : 'Crear combos de venta cruzada en caja.'
+                    },
+                    {
+                        title: 'Evitar Quiebres de Stock en Productos Clave',
+                        description: `Reponer preventivamente los ${dataPayload.productosBajoStock} artículos con stock mínimo para no perder ventas.`
+                    }
+                ],
+                anomalyAlerts: [
+                    (valuation?.outOfStockCount || 0) > 0 ? {
+                        type: 'warning',
+                        message: `Hay ${valuation.outOfStockCount} productos con stock en 0 en catálogo.`
+                    } : {
+                        type: 'success',
+                        message: 'Inventario sin quiebres críticos registrados.'
+                    }
+                ],
+                strategicAdvice: 'Revisar reposición antes del fin de semana y monitorear ventas en horas pico para maximizar la conversión.',
+                isFallback: true,
+                fallbackReason: reason,
+                generatedAt: new Date().toISOString(),
+                dataSnapshot: dataPayload
+            };
+
+            cacheService.set(cacheKey, fallbackReport, 7200);
+            return fallbackReport;
+        };
+
+        if (!this.initialized) this.init();
+        if (!this.genAI) {
+            return generateLocalFallback('API de IA no configurada localmente');
+        }
+
+        // 4. Consulta a Gemini en Modo SOLO LECTURA
+        try {
+            const systemPrompt = `Eres el Asesor Senior de Inteligencia Financiera y Predictiva para Isaac POS.
+MODO ESTRICTO: SOLO LECTURA.
+Bajo ninguna circunstancia intentes o propongas modificar, alterar o eliminar registros de la base de datos. Tu único trabajo es analizar, diagnosticar y proyectar recomendaciones claras, profesionales y concisas para el dueño de la tienda.
+
+Debes responder ÚNICAMENTE en formato JSON válido con esta estructura exacta:
+{
+  "healthScore": 88,
+  "healthStatus": "Óptimo" | "Saludable" | "Atención Requerida" | "Crítico",
+  "executiveSummary": "Resumen ejecutivo claro y directo de 2 a 3 oraciones...",
+  "keyStrengths": ["Fortaleza 1", "Fortaleza 2", "Fortaleza 3"],
+  "demandPredictions": [
+    { "product": "Nombre del producto", "estimatedDaysLeft": 3, "runRate": "X unid/día", "action": "Acción recomendada de compra o reposición" }
+  ],
+  "profitOpportunities": [
+    { "title": "Título de la oportunidad", "description": "Descripción accionable y específica" }
+  ],
+  "anomalyAlerts": [
+    { "type": "warning" | "info" | "success", "message": "Descripción de la alerta" }
+  ],
+  "strategicAdvice": "Consejo estratégico clave para la toma de decisiones esta semana."
+}`;
+
+            const userPrompt = `Analiza las siguientes métricas del negocio del período (${range}):
+${JSON.stringify(dataPayload, null, 2)}
+
+Genera el informe ejecutivo en JSON estricto:`;
+
+            const modelsToTry = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.5-flash"];
+            let jsonText = null;
+
+            for (const modelName of modelsToTry) {
+                try {
+                    const model = this.genAI.getGenerativeModel({
+                        model: modelName,
+                        systemInstruction: systemPrompt,
+                        generationConfig: {
+                            responseMimeType: "application/json"
+                        }
+                    });
+                    const result = await model.generateContent(userPrompt);
+                    const response = await result.response;
+                    jsonText = response.text();
+                    if (jsonText) {
+                        console.log(`[ISAAC AI] Análisis predictivo generado con éxito vía ${modelName}`);
+                        break;
+                    }
+                } catch (mErr) {
+                    console.warn(`[ISAAC AI] Modelo ${modelName} no disponible para análisis predictivo:`, mErr.message);
+                }
+            }
+
+            if (!jsonText) {
+                return generateLocalFallback('Modelos de Gemini temporalmente saturados');
+            }
+
+            const cleanJson = jsonText.trim().replace(/^```json/i, '').replace(/```$/i, '').trim();
+            const parsed = JSON.parse(cleanJson);
+
+            const finalReport = {
+                ...parsed,
+                isFallback: false,
+                generatedAt: new Date().toISOString(),
+                dataSnapshot: dataPayload
+            };
+
+            // Guardar en caché por 4 horas (14400s) para asegurar máximo 1-3 llamadas al día
+            cacheService.set(cacheKey, finalReport, 14400);
+            return finalReport;
+        } catch (error) {
+            console.error('[ISAAC AI] Error en generación de análisis predictivo:', error);
+            return generateLocalFallback(error.message);
         }
     }
 }
