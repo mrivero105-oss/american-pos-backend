@@ -57,6 +57,29 @@ router.get('/health', async (req, res) => {
                         dbDetails.databaseSize = pgStats[0].formatted_size;
                         dbDetails.activeConnections = parseInt(pgStats[0].active_backend_connections, 10);
                     }
+
+                    // PostgreSQL 16 I/O Telemetry (pg_stat_io)
+                    try {
+                        const [ioRows] = await sequelize.query(`
+                            SELECT 
+                                COALESCE(SUM(reads), 0)::bigint as total_reads,
+                                COALESCE(SUM(writes), 0)::bigint as total_writes,
+                                COALESCE(SUM(hits), 0)::bigint as total_hits
+                            FROM pg_stat_io;
+                        `);
+                        if (ioRows && ioRows[0]) {
+                            const reads = Number(ioRows[0].total_reads || 0);
+                            const writes = Number(ioRows[0].total_writes || 0);
+                            const hits = Number(ioRows[0].total_hits || 0);
+                            const ioHitRatio = (hits + reads) > 0 ? Number(((hits / (hits + reads)) * 100).toFixed(2)) : 100;
+                            dbDetails.ioStats = {
+                                ioHitRatio,
+                                totalBufferHits: hits,
+                                totalDiskReads: reads,
+                                totalDiskWrites: writes
+                            };
+                        }
+                    } catch (_ioErr) {}
                 } catch (pgErr) {}
 
                 // Pool telemetry

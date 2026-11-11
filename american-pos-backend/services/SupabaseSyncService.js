@@ -2,6 +2,7 @@ const axios = require('axios');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const SyncOutbox = require('../database/models/SyncOutbox');
+const { sequelize } = require('../database/connection');
 
 class SupabaseSyncService {
     constructor() {
@@ -68,20 +69,49 @@ class SupabaseSyncService {
         if (this.isSyncing) return { success: false, message: 'Sincronización en curso' };
         this.isSyncing = true;
 
+        let pending = [];
+        const t = await sequelize.transaction();
         try {
-            const pending = await SyncOutbox.findAll({
-                where: {
-                    status: 'PENDING'
-                },
-                order: [['created_at', 'ASC']],
-                limit: limit
+            // PostgreSQL 16: Selección atómica no bloqueante con SKIP LOCKED
+            // Evita colisiones si hay múltiples workers o llamadas concurrentes
+            const [rows] = await sequelize.query(`
+                SELECT id, entity_name, entity_id, operation, payload, retry_count
+                FROM sync_outbox
+                WHERE status = 'PENDING'
+                ORDER BY created_at ASC
+                LIMIT :limit
+                FOR UPDATE SKIP LOCKED;
+            `, {
+                replacements: { limit },
+                transaction: t
             });
 
-            if (pending.length === 0) {
+            if (!rows || rows.length === 0) {
+                await t.commit();
                 this.isSyncing = false;
                 return { success: true, count: 0 };
             }
 
+            const processingIds = rows.map(r => r.id);
+            await sequelize.query(`
+                UPDATE sync_outbox
+                SET status = 'PROCESSING'
+                WHERE id IN (:processingIds);
+            `, {
+                replacements: { processingIds },
+                transaction: t
+            });
+
+            await t.commit();
+            pending = rows;
+        } catch (lockErr) {
+            await t.rollback().catch(() => {});
+            this.isSyncing = false;
+            console.error('[SYNC LOCK ERROR]:', lockErr.message);
+            return { success: false, error: lockErr.message };
+        }
+
+        try {
             // Agrupar por tabla de destino
             const grouped = {};
             for (const item of pending) {
@@ -114,24 +144,32 @@ class SupabaseSyncService {
                         }
                     );
 
-                    // Marcar registros como sincronizados
+                    // Marcar registros como sincronizados en PostgreSQL
                     const syncedIds = items.map(i => i.id);
-                    await SyncOutbox.update({
-                        status: 'SYNCED',
-                        synced_at: new Date(),
-                        last_error: null
-                    }, {
-                        where: { id: syncedIds }
+                    await sequelize.query(`
+                        UPDATE sync_outbox
+                        SET status = 'SYNCED',
+                            synced_at = NOW(),
+                            last_error = NULL
+                        WHERE id IN (:syncedIds);
+                    `, {
+                        replacements: { syncedIds }
                     });
 
                 } catch (tableError) {
                     console.error(`[SYNC ERROR TABLE ${table}]:`, tableError.response?.data || tableError.message);
-                    const failedIds = items.map(i => i.id);
+                    const errMsg = String(tableError.response?.data?.message || tableError.message || 'Error desconocido').slice(0, 1000);
                     for (const fItem of items) {
-                        await fItem.update({
-                            status: fItem.retry_count >= 5 ? 'FAILED' : 'PENDING',
-                            retry_count: fItem.retry_count + 1,
-                            last_error: tableError.response?.data?.message || tableError.message
+                        const newRetry = Number(fItem.retry_count || 0) + 1;
+                        const newStatus = newRetry >= 5 ? 'FAILED' : 'PENDING';
+                        await sequelize.query(`
+                            UPDATE sync_outbox
+                            SET status = :newStatus,
+                                retry_count = :newRetry,
+                                last_error = :errMsg
+                            WHERE id = :itemId;
+                        `, {
+                            replacements: { newStatus, newRetry, errMsg, itemId: fItem.id }
                         });
                     }
                 }

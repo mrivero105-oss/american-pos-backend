@@ -156,6 +156,10 @@ class AutoMaintenanceService {
 
             // Índices de Auditoría y Conflictos
             'CREATE INDEX IF NOT EXISTS idx_audit_logs_company_created ON "AuditLogs" ("companyId", "createdAt" DESC);',
+            // Índices BRIN (PostgreSQL 16) para series temporales de alto volumen
+            'CREATE INDEX IF NOT EXISTS idx_brin_audit_logs_created ON "AuditLogs" USING brin ("createdAt");',
+            'CREATE INDEX IF NOT EXISTS idx_brin_stock_movements_created ON "StockMovements" USING brin ("createdAt");',
+            'CREATE INDEX IF NOT EXISTS idx_brin_cash_movements_created ON "CashMovements" USING brin ("createdAt");',
             'CREATE INDEX IF NOT EXISTS idx_stock_alerts_resolved ON "StockAlerts" ("resolved", "createdAt" DESC);',
 
             // Índices de Promociones JSONB
@@ -177,6 +181,15 @@ class AutoMaintenanceService {
             }
         }
 
+        try {
+            const { initializeDatabaseSecurity } = require('../database/tenantContext');
+            await initializeDatabaseSecurity(sequelize);
+        } catch (_secErr) {}
+
+        try {
+            await this.ensurePartitionTables();
+        } catch (_partErr) {}
+
         return { indexesChecked: indexStatements.length, createdCount };
     }
 
@@ -196,37 +209,169 @@ class AutoMaintenanceService {
     }
 
     /**
-     * Prepara tablas históricas de particionamiento y archiva registros > 365 días en PostgreSQL
+     * Asegura la creación y vigencia de tablas particionadas declarativas anuales en PostgreSQL 16
+     */
+    async ensurePartitionTables() {
+        try {
+            // 1. Tabla padre particionada SalesHistory
+            await sequelize.query(`
+                CREATE TABLE IF NOT EXISTS "SalesHistory" (
+                    "id" VARCHAR(255) NOT NULL,
+                    "createdAt" TIMESTAMPTZ NOT NULL,
+                    "date" VARCHAR(255),
+                    "total" NUMERIC(20, 6),
+                    "paymentMethod" VARCHAR(255),
+                    "paymentMethods" JSONB,
+                    "subtotal" NUMERIC(20, 6),
+                    "tax" NUMERIC(20, 6),
+                    "discount" NUMERIC(20, 6),
+                    "customerId" VARCHAR(255),
+                    "customerName" VARCHAR(255),
+                    "userId" VARCHAR(255),
+                    "companyId" VARCHAR(255),
+                    "branchId" VARCHAR(255),
+                    "status" VARCHAR(255) DEFAULT 'completed',
+                    "exchangeRate" NUMERIC(20, 6),
+                    "igtfAmount" NUMERIC(20, 6) DEFAULT 0,
+                    "documentType" VARCHAR(255) DEFAULT 'factura',
+                    "paymentStatus" VARCHAR(255) DEFAULT 'paid',
+                    "registerId" VARCHAR(255) DEFAULT '1',
+                    "promoDiscount" NUMERIC(20, 6) DEFAULT 0,
+                    "appliedPromotions" JSONB DEFAULT '[]'::jsonb,
+                    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY ("id", "createdAt")
+                ) PARTITION BY RANGE ("createdAt");
+            `);
+
+            // 2. Tabla padre particionada SaleItemsHistory
+            await sequelize.query(`
+                CREATE TABLE IF NOT EXISTS "SaleItemsHistory" (
+                    "id" BIGINT NOT NULL,
+                    "saleId" VARCHAR(255) NOT NULL,
+                    "productId" VARCHAR(255) NOT NULL,
+                    "name" VARCHAR(255) NOT NULL DEFAULT 'Producto',
+                    "quantity" NUMERIC(20, 6) NOT NULL,
+                    "price" NUMERIC(20, 6) NOT NULL,
+                    "subtotal" NUMERIC(20, 6) NOT NULL DEFAULT 0,
+                    "cost" NUMERIC(20, 6) DEFAULT 0,
+                    "companyId" VARCHAR(255) DEFAULT '2',
+                    "createdAt" TIMESTAMPTZ NOT NULL,
+                    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY ("id", "createdAt")
+                ) PARTITION BY RANGE ("createdAt");
+            `);
+
+            // 3. Crear dinámicamente particiones por año (2024..año_siguiente)
+            const currentYear = new Date().getFullYear();
+            const startYear = 2024;
+            const endYear = currentYear + 1;
+
+            for (let y = startYear; y <= endYear; y++) {
+                const nextYear = y + 1;
+                const fromTs = `${y}-01-01 00:00:00+00`;
+                const toTs = `${nextYear}-01-01 00:00:00+00`;
+
+                await sequelize.query(`
+                    CREATE TABLE IF NOT EXISTS "SalesHistory_${y}" PARTITION OF "SalesHistory"
+                    FOR VALUES FROM ('${fromTs}') TO ('${toTs}');
+
+                    CREATE TABLE IF NOT EXISTS "SaleItemsHistory_${y}" PARTITION OF "SaleItemsHistory"
+                    FOR VALUES FROM ('${fromTs}') TO ('${toTs}');
+                `).catch(() => {});
+            }
+
+            // Particiones default
+            await sequelize.query(`
+                CREATE TABLE IF NOT EXISTS "SalesHistory_default" PARTITION OF "SalesHistory" DEFAULT;
+                CREATE TABLE IF NOT EXISTS "SaleItemsHistory_default" PARTITION OF "SaleItemsHistory" DEFAULT;
+            `).catch(() => {});
+
+            // Índices locales propagados en particiones
+            await sequelize.query(`
+                CREATE INDEX IF NOT EXISTS idx_saleshistory_company_created ON "SalesHistory" ("companyId", "createdAt" DESC);
+                CREATE INDEX IF NOT EXISTS idx_saleshistory_payment_gin ON "SalesHistory" USING gin ("paymentMethods" jsonb_path_ops);
+                CREATE INDEX IF NOT EXISTS idx_saleitemshistory_sale ON "SaleItemsHistory" ("saleId");
+                CREATE INDEX IF NOT EXISTS idx_saleitemshistory_product ON "SaleItemsHistory" ("productId");
+            `).catch(() => {});
+
+            return { success: true };
+        } catch (err) {
+            console.warn('[AutoMaintenance] Warning ensuring partition tables:', err.message);
+            return { success: false, error: err.message };
+        }
+    }
+
+    /**
+     * Archiva atómicamente ventas e ítems antiguos (> 365 días) en tablas particionadas declarativas de PostgreSQL 16
      */
     async archiveHistoricalData(daysOld = 365) {
         const safeDays = Math.max(1, parseInt(daysOld, 10) || 365);
         const cutoffDate = new Date(Date.now() - (safeDays * 24 * 60 * 60 * 1000)).toISOString();
 
         try {
-            await sequelize.query(`
-                CREATE TABLE IF NOT EXISTS "SalesHistory" (
-                    LIKE "Sales" INCLUDING ALL
-                );
-            `);
-            await sequelize.query(`
-                CREATE TABLE IF NOT EXISTS "SaleItemsHistory" (
-                    LIKE "SaleItems" INCLUDING ALL
-                );
-            `);
+            await this.ensurePartitionTables();
 
-            const [copyResult] = await sequelize.query(`
-                INSERT INTO "SalesHistory"
-                SELECT s.* FROM "Sales" s
-                WHERE s."createdAt" < :cutoffDate
-                AND s."status" IN ('completed', 'cancelled')
-                AND NOT EXISTS (SELECT 1 FROM "SalesHistory" sh WHERE sh."id" = s."id")
-                ON CONFLICT DO NOTHING;
-            `, {
-                replacements: { cutoffDate }
-            });
+            let archivedSales = 0;
+            let archivedItems = 0;
 
-            const archivedCount = copyResult?.rowCount || 0;
-            return { archivedSales: archivedCount, cutoffDate, status: 'SUCCESS' };
+            const t = await sequelize.transaction();
+            try {
+                // 1. Enrutar ventas antiguas hacia SalesHistory particionada
+                const [salesCopy] = await sequelize.query(`
+                    INSERT INTO "SalesHistory" (
+                        "id", "createdAt", "updatedAt", "date", "total", "companyId", 
+                        "status", "subtotal", "tax", "discount", "paymentMethod", "paymentMethods"
+                    )
+                    SELECT 
+                        s.id, s."createdAt", s."updatedAt", s.date, s.total, s."companyId", 
+                        s.status, s.subtotal, s.tax, s.discount, s."paymentMethod", s."paymentMethods"
+                    FROM "Sales" s
+                    WHERE s."createdAt" < :cutoffDate
+                      AND s.status IN ('completed', 'cancelled')
+                    ON CONFLICT ("id", "createdAt") DO NOTHING;
+                `, { replacements: { cutoffDate }, transaction: t });
+
+                archivedSales = salesCopy?.rowCount || 0;
+
+                // 2. Enrutar ítems antiguos hacia SaleItemsHistory particionada
+                const [itemsCopy] = await sequelize.query(`
+                    INSERT INTO "SaleItemsHistory" (
+                        "id", "saleId", "productId", "name", "quantity", "price", 
+                        "subtotal", "cost", "companyId", "createdAt", "updatedAt"
+                    )
+                    SELECT 
+                        si.id, si."saleId", si."productId", COALESCE(si.name, 'Producto'), 
+                        si.quantity, si.price, COALESCE(si.subtotal, 0), si.cost, 
+                        si."companyId", si."createdAt", si."updatedAt"
+                    FROM "SaleItems" si
+                    JOIN "Sales" s ON s.id = si."saleId"
+                    WHERE s."createdAt" < :cutoffDate
+                      AND s.status IN ('completed', 'cancelled')
+                    ON CONFLICT ("id", "createdAt") DO NOTHING;
+                `, { replacements: { cutoffDate }, transaction: t });
+
+                archivedItems = itemsCopy?.rowCount || 0;
+
+                // 3. Purgar ventas archivadas de las tablas activas operativas
+                if (archivedSales > 0) {
+                    await sequelize.query(`
+                        DELETE FROM "Sales"
+                        WHERE "createdAt" < :cutoffDate
+                          AND status IN ('completed', 'cancelled');
+                    `, { replacements: { cutoffDate }, transaction: t });
+                }
+
+                await t.commit();
+            } catch (txErr) {
+                await t.rollback();
+                throw txErr;
+            }
+
+            if (archivedSales > 0) {
+                console.log(`📦 [AutoMaintenance] Archivo particionado exitoso: ${archivedSales} ventas y ${archivedItems} ítems transferidos a particiones declarativas.`);
+            }
+
+            return { archivedSales, archivedItems, cutoffDate, status: 'SUCCESS' };
         } catch (e) {
             console.warn('[AutoMaintenance] Warning archiving postgres data:', e.message);
             return { archivedSales: 0, error: e.message };
@@ -306,11 +451,68 @@ class AutoMaintenanceService {
                 const PostgresRealtimeService = require('./PostgresRealtimeService');
                 metrics.realtimeListen = PostgresRealtimeService.getStatus();
             } catch (_rtErr) { /* optional */ }
+
+            metrics.ioStats = await this.getPostgresIoStats();
         } catch (e) {
             console.warn('[AutoMaintenance] Warning getting db metrics:', e.message);
         }
 
         return metrics;
+    }
+
+    /**
+     * Obtiene estadísticas avanzadas de I/O de PostgreSQL 16 (pg_stat_io)
+     * Desglosa aciertos de memoria vs lecturas/escrituras en disco para backends normales,
+     * autovacuum y checkpointer.
+     */
+    async getPostgresIoStats() {
+        try {
+            const [ioRows] = await sequelize.query(`
+                SELECT 
+                    backend_type,
+                    object,
+                    context,
+                    COALESCE(reads, 0) AS reads,
+                    COALESCE(writes, 0) AS writes,
+                    COALESCE(writebacks, 0) AS writebacks,
+                    COALESCE(extends, 0) AS extends,
+                    COALESCE(hits, 0) AS hits,
+                    COALESCE(evictions, 0) AS evictions,
+                    COALESCE(reuses, 0) AS reuses
+                FROM pg_stat_io
+                WHERE reads > 0 OR writes > 0 OR hits > 0;
+            `);
+
+            let totalReads = 0;
+            let totalWrites = 0;
+            let totalHits = 0;
+
+            for (const r of ioRows) {
+                totalReads += Number(r.reads || 0);
+                totalWrites += Number(r.writes || 0);
+                totalHits += Number(r.hits || 0);
+            }
+
+            const ioHitRatio = (totalHits + totalReads) > 0
+                ? Number(((totalHits / (totalHits + totalReads)) * 100).toFixed(2))
+                : 100;
+
+            return {
+                available: true,
+                ioHitRatio,
+                summary: {
+                    totalBufferHits: totalHits,
+                    totalDiskReads: totalReads,
+                    totalDiskWrites: totalWrites
+                },
+                details: ioRows
+            };
+        } catch (err) {
+            return {
+                available: false,
+                error: err.message
+            };
+        }
     }
 
     /**
@@ -329,6 +531,16 @@ class AutoMaintenanceService {
             const tuningResult = await this.tunePostgresEngine();
             const indexResult = await this.ensureIndexes();
             const vacuumResult = await this.executeVacuumAnalyze();
+
+            // Refresco concurrente de vistas materializadas (PostgreSQL 16)
+            let viewsResult = { success: true };
+            try {
+                const PostgresAnalyticsService = require('./PostgresAnalyticsService');
+                viewsResult = await PostgresAnalyticsService.refreshViews(sequelize);
+            } catch (vErr) {
+                viewsResult = { success: false, error: vErr.message };
+            }
+
             const archiveResult = await this.archiveHistoricalData(options.daysOld || 365);
             const purgeResult = await this.purgeAuditLogs(options.auditDaysOld || 90);
             const dbMetrics = await this.getDatabaseMetrics();
@@ -341,6 +553,7 @@ class AutoMaintenanceService {
                 tuningResult,
                 indexResult,
                 vacuumResult,
+                viewsResult,
                 archiveResult,
                 purgeResult,
                 dbMetrics

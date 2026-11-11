@@ -473,6 +473,22 @@ async function runPostConnectMigrations(sequelize) {
             }
         }
         console.log('[Schema] PostgreSQL stock integrity & LISTEN/NOTIFY triggers active.');
+
+        // 3.1 Seguridad de motor y aislamiento multi-tenant en PostgreSQL 16 (RLS + Triggers JSONB Diff)
+        try {
+            const { initializeDatabaseSecurity } = require('./tenantContext');
+            await initializeDatabaseSecurity(sequelize);
+        } catch (secErr) {
+            console.warn('[Schema] Warning setting up database security & RLS:', secErr.message);
+        }
+
+        // 3.2 Vistas Materializadas Analíticas de PostgreSQL 16
+        try {
+            const PostgresAnalyticsService = require('../services/PostgresAnalyticsService');
+            await PostgresAnalyticsService.initMaterializedViews(sequelize);
+        } catch (analyticsErr) {
+            console.warn('[Schema] Warning initializing materialized views:', analyticsErr.message);
+        }
     } catch (trgErr) {
         console.warn('[Schema] Warning setting up PostgreSQL triggers:', trgErr.message);
     }
@@ -567,6 +583,10 @@ async function runPostConnectMigrations(sequelize) {
             'CREATE INDEX IF NOT EXISTS idx_warehouse_stock_wh_prod ON "WarehouseStocks" ("warehouseId", "productId")',
             'CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_trf ON "StockTransferItems" ("stockTransferId", "productId")',
             'CREATE INDEX IF NOT EXISTS idx_audit_logs_company_created ON "AuditLogs" ("companyId", "createdAt" DESC)',
+            // Índices BRIN (PostgreSQL 16) para series temporales de alto volumen
+            'CREATE INDEX IF NOT EXISTS idx_brin_audit_logs_created ON "AuditLogs" USING brin ("createdAt")',
+            'CREATE INDEX IF NOT EXISTS idx_brin_stock_movements_created ON "StockMovements" USING brin ("createdAt")',
+            'CREATE INDEX IF NOT EXISTS idx_brin_cash_movements_created ON "CashMovements" USING brin ("createdAt")',
             'CREATE STATISTICS IF NOT EXISTS stat_products_company_status_cat (dependencies, ndistinct) ON "companyId", "status", "category" FROM "Products"',
             'CREATE STATISTICS IF NOT EXISTS stat_sales_company_status_pay (dependencies, ndistinct) ON "companyId", "status", "paymentStatus" FROM "Sales"'
         ];

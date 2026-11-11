@@ -222,4 +222,62 @@ router.get('/bi/export', requirePermission('canViewReports'), async (req, res) =
     }
 });
 
+// ========================================================
+// ENDPOINTS DE ANALÍTICA ACELERADA EN POSTGRESQL 16
+// ========================================================
+const PostgresAnalyticsService = require('../services/PostgresAnalyticsService');
+
+// GET /reports/pg-analytics/daily-summary - Resumen diario de ventas instantáneo
+router.get('/pg-analytics/daily-summary', requirePermission('canViewReports'), async (req, res) => {
+    try {
+        const companyId = req.user?.companyId || '2';
+        const data = await PostgresAnalyticsService.getDailySalesSummary(companyId, req.query);
+        res.json({ success: true, count: data.length, data });
+    } catch (error) {
+        console.error('Error fetching daily sales summary:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /reports/pg-analytics/top-products - Rotación y ranking de productos
+router.get('/pg-analytics/top-products', requirePermission('canViewReports'), async (req, res) => {
+    try {
+        const companyId = req.user?.companyId || '2';
+        const data = await PostgresAnalyticsService.getTopProducts(companyId, req.query);
+        res.json({ success: true, count: data.length, data });
+    } catch (error) {
+        console.error('Error fetching top products:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /reports/pg-analytics/payment-breakdown - Desglose financiero SQL/JSON de alta velocidad
+router.get('/pg-analytics/payment-breakdown', requirePermission('canViewReports'), async (req, res) => {
+    try {
+        const companyId = req.user?.companyId || '2';
+        const data = await PostgresAnalyticsService.getShiftPaymentBreakdownNative({
+            companyId,
+            openedAt: req.query.openedAt,
+            closedAt: req.query.closedAt,
+            registerId: req.query.registerId,
+            userId: req.query.userId
+        });
+        res.json({ success: true, breakdown: data });
+    } catch (error) {
+        console.error('Error fetching native payment breakdown:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// POST /reports/pg-analytics/refresh - Refresco concurrente sin bloqueos
+router.post('/pg-analytics/refresh', requirePermission('canManageSettings'), async (req, res) => {
+    try {
+        const result = await PostgresAnalyticsService.refreshViews();
+        res.json(result);
+    } catch (error) {
+        console.error('Error refreshing materialized views:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 module.exports = router;
