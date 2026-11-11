@@ -577,6 +577,23 @@ router.post('/:id/generate-barcode', requirePermission('canCreateProducts'), gen
 router.post('/:id/generate_barcode', requirePermission('canCreateProducts'), generateBarcodeHandler);
 
 /**
+ * GET /semantic-search - Búsqueda semántica híbrida con IA y Trigramas (PostgreSQL 16)
+ */
+router.get('/semantic-search', async (req, res) => {
+    try {
+        const query = req.query.q || req.query.query || req.query.search;
+        const companyId = req.user?.companyId || '2';
+        const limit = parseInt(req.query.limit, 10) || 15;
+        const SemanticSearchService = require('../services/SemanticSearchService');
+        const results = await SemanticSearchService.searchProducts(query, companyId, limit);
+        res.json({ success: true, count: results.length, data: results });
+    } catch (error) {
+        console.error('Semantic search error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
  * GET /search-for-link - Quick search for linking products
  */
 router.get('/search-for-link', async (req, res) => {

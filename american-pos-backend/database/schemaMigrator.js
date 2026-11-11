@@ -489,6 +489,16 @@ async function runPostConnectMigrations(sequelize) {
         } catch (analyticsErr) {
             console.warn('[Schema] Warning initializing materialized views:', analyticsErr.message);
         }
+
+        // 3.3 Extensión opcional pgvector (Búsqueda Semántica Vectorial con IA)
+        try {
+            await sequelize.query('CREATE EXTENSION IF NOT EXISTS vector;');
+            await sequelize.query('ALTER TABLE "Products" ADD COLUMN IF NOT EXISTS "embedding" vector(768);');
+            await sequelize.query('CREATE INDEX IF NOT EXISTS idx_products_embedding_hnsw ON "Products" USING hnsw ("embedding" vector_cosine_ops);');
+            console.log('⚡ [Schema] Extensión pgvector e índice HNSW activos en Products.');
+        } catch (_vecErr) {
+            // pgvector requiere copiar los binarios con privilegios de administrador; opera con fallback de trigramas
+        }
     } catch (trgErr) {
         console.warn('[Schema] Warning setting up PostgreSQL triggers:', trgErr.message);
     }
