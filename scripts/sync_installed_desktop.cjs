@@ -57,11 +57,26 @@ async function main() {
     console.log('🛡️ [4/4] Aplicando nuevo app.asar de forma atómica...');
     if (fs.existsSync(targetAsar)) {
         const backupPath = path.join(INSTALLED_DIR, `app.asar.bak_deploy_${Date.now()}`);
-        fs.copyFileSync(targetAsar, backupPath);
-        console.log(`✔ Respaldo generado: ${path.basename(backupPath)}`);
+        try {
+            fs.copyFileSync(targetAsar, backupPath);
+            console.log(`✔ Respaldo generado: ${path.basename(backupPath)}`);
+        } catch (copyErr) {
+            console.warn(`⚠ No se pudo generar copia previa (posible archivo en uso): ${copyErr.message}`);
+        }
     }
 
-    fs.renameSync(targetNewAsar, targetAsar);
+    try {
+        fs.renameSync(targetNewAsar, targetAsar);
+    } catch (renameErr) {
+        if (renameErr.code === 'EPERM' || renameErr.code === 'EBUSY') {
+            console.error('\n⚠️ [AVISO DE BLOQUEO DE ARCHIVO]');
+            console.error('La aplicación "Isaac POS Modern" está abierta en este momento.');
+            console.error('El paquete actualizado ya está listo en: "resources/app.asar.new".');
+            console.error('Por favor cierra la aplicación en pantalla para que se pueda reemplazar el archivo "app.asar".');
+            throw new Error('APLICACION_EN_EJECUCION: Cierra "Isaac POS Modern" para finalizar la inyección del paquete.');
+        }
+        throw renameErr;
+    }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n🎉 [DEPLOY COMPLETADO EXITOSAMENTE en ${elapsed}s]`);

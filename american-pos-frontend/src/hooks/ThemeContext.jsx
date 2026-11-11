@@ -9,7 +9,7 @@ function normalizeTheme(rawTheme) {
     if (rawTheme === 'dark' || rawTheme === 'oled' || rawTheme === '2025' || rawTheme === 'glass') {
         return 'titanium';
     }
-    return 'studio';
+    return 'titanium';
 }
 
 export function ThemeProvider({ children }) {

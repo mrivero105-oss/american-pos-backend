@@ -622,7 +622,8 @@ const CartSidebar = memo(({
                 )}
 
                 {/* Barra de Identidad del Ticket */}
-                <div className="px-3 py-2.5 bg-white/80 dark:bg-slate-900/90 backdrop-blur-xs flex justify-between items-center border-b border-slate-200/90 dark:border-slate-800">
+                {/* Cabecera del Ticket */}
+                <div className="pos-ticket-header px-3 py-2.5 bg-white/80 dark:bg-slate-900/90 backdrop-blur-xs flex justify-between items-center border-b border-slate-200/90 dark:border-slate-800">
                     <div className="flex items-center gap-2.5 min-w-0">
                         {onClose && (
                             <button
@@ -709,7 +710,7 @@ const CartSidebar = memo(({
                 </div>
 
                 {/* Comandos Rápidos del POS (Botonera Táctica con Identidad Semántica) */}
-                <div className="p-2 bg-slate-100/80 dark:bg-slate-900/90 grid grid-cols-5 gap-1.5 border-b border-slate-200/90 dark:border-slate-800">
+                <div className="pos-ticket-commands p-2 bg-slate-100/80 dark:bg-slate-900/90 grid grid-cols-5 gap-1.5 border-b border-slate-200/90 dark:border-slate-800">
                     {[
                         { 
                             icon: PlusCircle, 
