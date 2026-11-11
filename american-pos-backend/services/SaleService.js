@@ -922,19 +922,67 @@ class SaleService {
                 // 🛡️ REGLA FINANCIERA: Verificación de facturas vencidas por días de mora (creditLimitDays)
                 const creditLimitDays = Number(customer.creditLimitDays) || 0;
                 if (creditLimitDays > 0 && Number(customer.creditBalance) > 0 && !options.bypassCreditLimit && !saleData.supervisorApprovalId) {
-                    const oldestPendingCharge = await CreditHistory.findOne({
-                        where: {
-                            customerId: customer.id,
-                            companyId,
-                            type: 'charge'
-                        },
-                        order: [['createdAt', 'ASC']],
-                        transaction: t
+                    // Conciliación FIFO exacta de cuentas por cobrar (idéntica a ReportService / Cobranzas):
+                    const allCharges = await CreditHistory.findAll({
+                        where: { customerId: customer.id, companyId, type: { [Op.in]: ['charge', 'debit'] } },
+                        order: [['timestamp', 'ASC'], ['createdAt', 'ASC']],
+                        transaction: t,
+                        raw: true
+                    });
+                    const allPayments = await CreditHistory.findAll({
+                        where: { customerId: customer.id, companyId, type: { [Op.in]: ['payment', 'credit'] } },
+                        order: [['timestamp', 'ASC'], ['createdAt', 'ASC']],
+                        transaction: t,
+                        raw: true
                     });
 
-                    if (oldestPendingCharge && oldestPendingCharge.createdAt) {
-                        const oldestDate = new Date(oldestPendingCharge.createdAt);
-                        const daysDiff = Math.floor((Date.now() - oldestDate.getTime()) / (1000 * 60 * 60 * 24));
+                    let availablePayments = allPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+                    let oldestDate = null;
+
+                    if (allCharges.length > 0) {
+                        for (const ch of allCharges) {
+                            const amt = Number(ch.amount) || 0;
+                            if (availablePayments >= (amt - 0.005)) {
+                                availablePayments = Math.max(0, availablePayments - amt);
+                            } else {
+                                oldestDate = ch.timestamp || ch.createdAt;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Fallback con ventas vivas a crédito si no se detectó fecha en CreditHistory
+                    if (!oldestDate) {
+                        const creditSales = await Sale.findAll({
+                            where: {
+                                customerId: customer.id,
+                                companyId,
+                                status: { [Op.ne]: 'cancelled' },
+                                [Op.or]: [
+                                    { paymentStatus: { [Op.in]: ['unpaid', 'partial', 'pending'] } },
+                                    { paymentMethod: { [Op.in]: ['credit', 'fiado'] } }
+                                ]
+                            },
+                            order: [['createdAt', 'DESC']],
+                            transaction: t,
+                            raw: true
+                        });
+
+                        let remainingToAllocate = Number(customer.creditBalance) || 0;
+                        for (const sale of creditSales) {
+                            if (remainingToAllocate <= 0.005) break;
+                            const saleTotal = Number(sale.total) || 0;
+                            const paid = Number(sale.amountPaid) || 0;
+                            const remaining = Math.max(0, saleTotal - paid);
+                            if (remaining > 0) {
+                                remainingToAllocate = Math.max(0, remainingToAllocate - remaining);
+                                oldestDate = sale.createdAt || sale.date;
+                            }
+                        }
+                    }
+
+                    if (oldestDate) {
+                        const daysDiff = Math.floor((Date.now() - new Date(oldestDate).getTime()) / (1000 * 60 * 60 * 24));
                         if (daysDiff > creditLimitDays) {
                             throw new Error(`CREDIT_ERROR: El cliente "${customer.name}" posee deuda con ${daysDiff} días de vencimiento (Plazo concedido: ${creditLimitDays} días). Se requiere liquidar el saldo pendiente o autorización de un supervisor.`);
                         }
