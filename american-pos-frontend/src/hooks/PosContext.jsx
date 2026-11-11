@@ -25,6 +25,7 @@ export function PosProvider({ children }) {
     const [searchTerm, setSearchTerm] = useState('');
     const [heldSales, setHeldSales] = useState([]);
     const [country, setCountry] = useState(() => localStorage.getItem('pos_country') || 'Venezuela');
+    const [pendingRecoveryDraft, setPendingRecoveryDraft] = useState(null);
 
     // Motor de Promociones y Combos en Tiempo Real
     const [activePromotions, setActivePromotions] = useState(() => {
@@ -294,6 +295,17 @@ export function PosProvider({ children }) {
                         if (!Array.isArray(data.cart)) data.cart = [];
                         setPosState(data);
                     }
+                }
+                
+                // Resiliencia ante Apagones: Si no hay carrito local activo, consultar borrador persistente en PostgreSQL
+                const currentRegId = localStorage.getItem('isaac_pos_register_id') || localStorage.getItem('pos_register_id') || 'Caja_1';
+                if ((!sessionDoc?.value?.cart || sessionDoc.value.cart.length === 0) && currentRegId) {
+                    try {
+                        const { data: resDraft } = await api.get(`/sales/register-draft/${currentRegId}`, { timeout: 3500 });
+                        if (resDraft?.success && resDraft?.draft && Array.isArray(resDraft.draft.items) && resDraft.draft.items.length > 0) {
+                            setPendingRecoveryDraft(resDraft.draft);
+                        }
+                    } catch (_) {}
                 }
                 
                 // Background: Held Sales
@@ -691,6 +703,32 @@ export function PosProvider({ children }) {
         db.put('metadata', { key: 'pos_active_session', value: posState }).catch(e => console.error("Error saving session", e));
     }, [posState, isHydrating]);
 
+    // Resiliencia ante Apagones: Auto-guardado en caliente (Debounced 1200ms) en PostgreSQL
+    useEffect(() => {
+        if (!isReady.current || isHydrating || !registerId) return;
+
+        const timer = setTimeout(async () => {
+            try {
+                const rawCart = Array.isArray(posState.cart) ? posState.cart : [];
+                if (rawCart.length > 0) {
+                    const subtotalUSD = rawCart.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 1)), 0);
+                    const subtotalVES = subtotalUSD * (exchangeRate || 1);
+                    await api.put(`/sales/register-draft/${registerId}`, {
+                        items: rawCart,
+                        customer: posState.selectedCustomerInfo || null,
+                        totals: { subtotalUSD, subtotalVES },
+                        totalUSD: subtotalUSD,
+                        totalVES: subtotalVES
+                    }, { timeout: 3500 });
+                } else {
+                    await api.delete(`/sales/register-draft/${registerId}`, { timeout: 2500 }).catch(() => {});
+                }
+            } catch (_) {}
+        }, 1200);
+
+        return () => clearTimeout(timer);
+    }, [posState.cart, posState.selectedCustomerInfo, registerId, exchangeRate, isHydrating]);
+
     useEffect(() => {
         if (!isReady.current || isHydrating) return;
         db.put('metadata', { key: 'pos_held_sales', value: heldSales }).catch(e => console.error("Error saving held sales", e));
@@ -921,8 +959,34 @@ export function PosProvider({ children }) {
 
     const clearPosState = useCallback(() => {
         db.delete('metadata', 'pos_active_session').catch(()=>{}); // Limpiamos disco asíncronamente
+        if (registerId) {
+            api.delete(`/sales/register-draft/${registerId}`).catch(() => {});
+        }
         setPosState(INITIAL_STATE);
-    }, []);
+    }, [registerId]);
+
+    const handleRestoreDraft = useCallback((draftToRestore) => {
+        const draft = draftToRestore || pendingRecoveryDraft;
+        if (!draft || !Array.isArray(draft.items) || draft.items.length === 0) return;
+
+        setPosState(prev => ({
+            ...prev,
+            cart: draft.items,
+            selectedCustomer: draft.customer?.id || '',
+            selectedCustomerInfo: draft.customer || null
+        }));
+
+        setPendingRecoveryDraft(null);
+        toast.success(`Ticket recuperado: ${draft.items.length} productos ($${Number(draft.totalUSD || 0).toFixed(2)})`);
+    }, [pendingRecoveryDraft]);
+
+    const handleDiscardDraft = useCallback(async () => {
+        if (registerId) {
+            await api.delete(`/sales/register-draft/${registerId}`).catch(() => {});
+        }
+        setPendingRecoveryDraft(null);
+        toast('Borrador descartado', { icon: '🗑️' });
+    }, [registerId]);
 
     const handleSetCurrencyMode = useCallback((newMode) => {
         const isDollar = isDollarOnlyCountry(country);
@@ -986,13 +1050,17 @@ export function PosProvider({ children }) {
         refreshActivePromotions,
         promoEvaluation,
         appliedPromotions: promoEvaluation.appliedPromotions,
-        totalPromoSavings: promoEvaluation.totalPromoSavings
+        totalPromoSavings: promoEvaluation.totalPromoSavings,
+        pendingRecoveryDraft,
+        handleRestoreDraft,
+        handleDiscardDraft
     }), [
         posState, searchTerm, heldSales, activeEffectiveRate, activeEffectiveMode, isUsdOnlyActive, isDollarCountryActive, country, globalSettings, businessMode,
         registerId, registerDisplayName, allowedCategories, setAllowedCategories, allowedProducts, setAllowedProducts, posViewMode, isHydrating, isShiftOpen, currentShift,
         activePromotions, refreshActivePromotions, promoEvaluation,
         setCart, setSelectedCustomer, setDiscountActive, setSearchTermVal, 
-        clearPosState, handleSetCurrencyMode, fetchExchangeRate, fetchShiftStatus, promptOpenCashShift
+        clearPosState, handleSetCurrencyMode, fetchExchangeRate, fetchShiftStatus, promptOpenCashShift,
+        pendingRecoveryDraft, handleRestoreDraft, handleDiscardDraft
     ]);
 
     return (

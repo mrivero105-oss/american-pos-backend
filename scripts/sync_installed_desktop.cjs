@@ -1,6 +1,7 @@
 /**
  * sync_installed_desktop.cjs
  * Script atómico y automatizado para compilar y desplegar Isaac POS hacia la aplicación instalada en Windows.
+ * Utiliza el API nativo de @electron/asar directamente en Node.js.
  */
 const fs = require('fs');
 const path = require('path');
@@ -11,6 +12,8 @@ const FRONTEND_DIR = path.join(PROJECT_ROOT, 'american-pos-frontend');
 const BACKEND_DIR = path.join(PROJECT_ROOT, 'american-pos-backend');
 const INSTALLED_DIR = 'C:\\Users\\mrive\\AppData\\Local\\Programs\\Isaac POS Modern\\resources';
 const TEMP_EXTRACTED = 'C:\\Users\\mrive\\AppData\\Local\\Temp\\isaac_asar_extracted';
+
+const asar = require(path.join(BACKEND_DIR, 'node_modules/@electron/asar'));
 
 async function main() {
     console.log('🚀 [DEPLOY] Iniciando despliegue atómico a Isaac POS Modern...');
@@ -31,7 +34,7 @@ async function main() {
     const stagingPublic = path.join(TEMP_EXTRACTED, 'public');
     fs.cpSync(distDir, stagingPublic, { recursive: true, force: true });
 
-    // Copiar archivos clave del backend
+    // Copiar carpetas clave del backend
     const backendFiles = ['routes', 'services', 'database', 'utils', 'middleware', 'controllers'];
     for (const folder of backendFiles) {
         const srcFolder = path.join(BACKEND_DIR, folder);
@@ -41,13 +44,14 @@ async function main() {
         }
     }
 
-    // 3. Empaquetar asar en archivo temporal .new
-    console.log('🗜️ [3/4] Empaquetando nuevo app.asar con @electron/asar...');
+    // 3. Empaquetar asar en archivo temporal .new usando API nativa
+    console.log('🗜️ [3/4] Empaquetando nuevo app.asar con @electron/asar (API Nativa)...');
     const targetAsar = path.join(INSTALLED_DIR, 'app.asar');
     const targetNewAsar = path.join(INSTALLED_DIR, 'app.asar.new');
 
-    const asarCmd = `npx --yes @electron/asar pack "${TEMP_EXTRACTED}" "${targetNewAsar}" --unpack "{**/*.node,**/bin/**,**/scripts/**}"`;
-    execSync(asarCmd, { stdio: 'inherit' });
+    await asar.createPackageWithOptions(TEMP_EXTRACTED, targetNewAsar, {
+        unpack: '{**/*.node,**/bin/**,**/scripts/**}'
+    });
 
     // 4. Reemplazo atómico con backup
     console.log('🛡️ [4/4] Aplicando nuevo app.asar de forma atómica...');

@@ -20,6 +20,9 @@ build/
 build_temp/
 build_ultra/
 archive/
+american-pos-backend/public/assets/
+american-pos-backend/public/dist.zip
+american-pos-backend/public/index.html
 *.asar
 *.asar.new
 *.asar.bak*

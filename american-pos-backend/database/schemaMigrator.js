@@ -492,6 +492,35 @@ async function runPostConnectMigrations(sequelize) {
         console.warn('[Schema] Warning creating DailyRegisterSequences:', seqTableErr.message);
     }
 
+    // 4.1 Tabla de Borradores Persistentes de Caja (Resiliencia ante Apagones Súbitos y Preventas)
+    try {
+        await sequelize.query(`
+            CREATE TABLE IF NOT EXISTS "RegisterDrafts" (
+                "id" VARCHAR(64) PRIMARY KEY,
+                "registerId" VARCHAR(64) NOT NULL,
+                "companyId" VARCHAR(64) NOT NULL DEFAULT '2',
+                "userId" VARCHAR(64),
+                "userName" VARCHAR(128),
+                "code" VARCHAR(32),
+                "type" VARCHAR(32) NOT NULL DEFAULT 'auto_draft',
+                "customer" JSONB,
+                "items" JSONB NOT NULL DEFAULT '[]'::jsonb,
+                "totals" JSONB,
+                "notes" TEXT,
+                "itemCount" INTEGER DEFAULT 0,
+                "totalUSD" NUMERIC(12, 4) DEFAULT 0.0000,
+                "totalVES" NUMERIC(16, 4) DEFAULT 0.0000,
+                "status" VARCHAR(20) DEFAULT 'active',
+                "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_regdrafts_reg_type ON "RegisterDrafts"("companyId", "registerId", "type", "status");
+            CREATE INDEX IF NOT EXISTS idx_regdrafts_status_updated ON "RegisterDrafts"("companyId", "status", "updatedAt" DESC);
+        `);
+    } catch (draftErr) {
+        console.warn('[Schema] Warning creating RegisterDrafts:', draftErr.message);
+    }
+
     // 5. Índices GIN (pg_trgm + jsonb_path_ops), B-Tree compuestos y Estadísticas Extendidas (PostgreSQL 16)
     try {
         console.log('[Schema] Applying high-performance PostgreSQL 16 indexes & extended statistics...');

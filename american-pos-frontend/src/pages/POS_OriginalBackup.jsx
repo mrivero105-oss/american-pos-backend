@@ -30,6 +30,7 @@ import { usePosShortcuts } from '../hooks/usePosShortcuts';
 import ActionDialog from '../components/ActionDialog';
 import ProductGrid from '../components/ProductGrid';
 import CartSidebar from '../components/CartSidebar';
+import DraftRecoveryBanner from '../components/DraftRecoveryBanner';
 import { groupProductsByFamily, consolidateLooseUnitsToWholesale } from '../utils/productFamilies';
 
 import { usePOSData, getProductStock } from '../hooks/usePOSData';
@@ -1368,6 +1369,7 @@ export default function POS() {
                 </div>
             )}
             
+            <DraftRecoveryBanner />
 
             <div className={`flex flex-1 min-h-0 overflow-hidden ${posLayout === 'reversed' ? 'flex-row-reverse' : ''}`}>
                 <ProductGrid 

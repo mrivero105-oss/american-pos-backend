@@ -61,6 +61,7 @@ const StockAlert = require('./StockAlert');
 const FiscalSequence = require('./FiscalSequence');
 const TelecomRecharge = require('./TelecomRecharge');
 const DailyRegisterSequence = require('./DailyRegisterSequence');
+const RegisterDraft = require('./RegisterDraft');
 
 // --- Relationships ---
 
@@ -264,5 +265,6 @@ module.exports = {
     StockAlert,
     FiscalSequence,
     TelecomRecharge,
-    DailyRegisterSequence
+    DailyRegisterSequence,
+    RegisterDraft
 };

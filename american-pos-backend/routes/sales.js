@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const SaleService = require('../services/SaleService');
-const { Sale, SaleItem } = require('../database/models');
+const { Sale, SaleItem, RegisterDraft } = require('../database/models');
 const { Op } = require('sequelize');
 const { sequelize } = require('../database/connection');
 const validate = require('../middleware/validate');
@@ -226,16 +226,23 @@ router.get('/', async (req, res) => {
 
         const sanitizedRows = rows.map(r => {
             const sale = (typeof r.toJSON === 'function') ? r.toJSON() : { ...r };
-            const currentTotal = parseFloat(sale.total);
-            if (isNaN(currentTotal) || currentTotal <= 0) {
+            let numTotal = parseFloat(sale.total);
+            if (isNaN(numTotal) || numTotal <= 0) {
                 const sub = parseFloat(sale.subtotal);
                 if (!isNaN(sub) && sub > 0) {
-                    sale.total = sub;
-                } else if (Array.isArray(sale.paymentMethods)) {
-                    const pmSum = sale.paymentMethods.reduce((acc, p) => acc + (parseFloat(p?.amount) || 0), 0);
-                    if (pmSum > 0) sale.total = pmSum;
+                    numTotal = sub;
+                } else {
+                    let pms = sale.paymentMethods;
+                    if (typeof pms === 'string') {
+                        try { pms = JSON.parse(pms); } catch (_) {}
+                    }
+                    if (Array.isArray(pms)) {
+                        const pmSum = pms.reduce((acc, p) => acc + (parseFloat(p?.amount) || 0), 0);
+                        if (pmSum > 0) numTotal = pmSum;
+                    }
                 }
             }
+            sale.total = !isNaN(numTotal) && numTotal > 0 ? numTotal : 0;
             return sale;
         });
 
@@ -444,27 +451,148 @@ router.get('/registers', async (req, res) => {
 });
 
 /**
- * GET /remote-held-sales - Lista preventas/comandas móviles activas en memoria para hidratar cajas PC
+ * GET /register-draft/:registerId - Recupera el borrador activo en caliente de la caja (Resiliencia ante Apagones)
+ */
+router.get('/register-draft/:registerId', async (req, res) => {
+    try {
+        const { registerId } = req.params;
+        const compId = String(req.user?.companyId || '2');
+        const companyCondition = (compId === '2' || compId === 'default') ? ['2', 'default', '1'] : [compId];
+
+        const draft = await RegisterDraft.findOne({
+            where: {
+                registerId,
+                companyId: { [Op.in]: companyCondition },
+                type: 'auto_draft',
+                status: 'active'
+            },
+            order: [['updatedAt', 'DESC']]
+        });
+
+        if (!draft) {
+            return res.json({ success: true, draft: null });
+        }
+
+        // Si el borrador fue guardado hace más de 24 horas, descartarlo
+        const ageHours = (Date.now() - new Date(draft.updatedAt).getTime()) / (1000 * 3600);
+        if (ageHours > 24) {
+            await draft.update({ status: 'discarded' });
+            return res.json({ success: true, draft: null });
+        }
+
+        return res.json({ success: true, draft });
+    } catch (error) {
+        console.error('Error obteniendo borrador de caja:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * PUT /register-draft/:registerId - Guarda o actualiza atómicamente el borrador en caliente en PostgreSQL
+ */
+router.put('/register-draft/:registerId', async (req, res) => {
+    try {
+        const { registerId } = req.params;
+        const compId = String(req.user?.companyId || '2');
+        const { items, customer, totals, notes, totalUSD, totalVES } = req.body;
+
+        // Si el carrito está vacío, limpiar el borrador activo de esa caja
+        if (!Array.isArray(items) || items.length === 0) {
+            await RegisterDraft.destroy({
+                where: {
+                    registerId,
+                    type: 'auto_draft'
+                }
+            });
+            return res.json({ success: true, cleared: true });
+        }
+
+        const draftId = `draft_${compId}_${registerId}`;
+        const [draft] = await RegisterDraft.upsert({
+            id: draftId,
+            registerId,
+            companyId: compId,
+            userId: req.user?.id || null,
+            userName: req.user?.name || req.user?.username || 'Cajero',
+            type: 'auto_draft',
+            customer: customer || null,
+            items,
+            totals: totals || null,
+            notes: notes || null,
+            itemCount: items.length,
+            totalUSD: parseFloat(totalUSD || 0),
+            totalVES: parseFloat(totalVES || 0),
+            status: 'active',
+            updatedAt: new Date()
+        });
+
+        return res.json({ success: true, draftId: draft.id });
+    } catch (error) {
+        console.error('Error guardando borrador en caliente:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * DELETE /register-draft/:registerId - Elimina el borrador tras finalizar la venta o reiniciar el carrito
+ */
+router.delete('/register-draft/:registerId', async (req, res) => {
+    try {
+        const { registerId } = req.params;
+        await RegisterDraft.destroy({
+            where: {
+                registerId,
+                type: 'auto_draft'
+            }
+        });
+        return res.json({ success: true });
+    } catch (error) {
+        console.error('Error eliminando borrador de caja:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /remote-held-sales - Lista preventas/comandas móviles y borradores persistidos en PostgreSQL
  */
 router.get('/remote-held-sales', async (req, res) => {
     try {
-        const reg = global.__remoteHeldSalesRegistry || (global.__remoteHeldSalesRegistry = { items: new Map(), recentBroadcasts: new Map() });
-        const now = Date.now();
-        const userCompany = String(req.user?.companyId || '1');
-        const defaultCompanies = new Set(['1', '2', 'default']);
+        const compId = String(req.user?.companyId || '2');
+        const companyCondition = (compId === '2' || compId === 'default') ? ['2', 'default', '1'] : [compId];
 
-        const active = [];
-        for (const [k, v] of reg.items.entries()) {
-            if (now - (v.timestamp || 0) > 12 * 3600 * 1000) {
-                reg.items.delete(k);
-                continue;
-            }
-            const saleCompany = String(v.companyId || '1');
-            if (saleCompany === userCompany || (defaultCompanies.has(saleCompany) && defaultCompanies.has(userCompany))) {
-                active.push(v);
-            }
+        let dbDrafts = [];
+        try {
+            dbDrafts = await RegisterDraft.findAll({
+                where: {
+                    companyId: { [Op.in]: companyCondition },
+                    type: { [Op.in]: ['presale', 'manual_held', 'auto_draft'] },
+                    status: 'active'
+                },
+                order: [['updatedAt', 'DESC']],
+                limit: 50
+            });
+        } catch (dbErr) {
+            console.warn('[Sales] Aviso consultando RegisterDrafts en PostgreSQL:', dbErr.message);
         }
-        active.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+        const active = dbDrafts.map(d => ({
+            id: d.id,
+            code: d.code || d.id.slice(-6).toUpperCase(),
+            registerId: d.registerId,
+            userName: d.userName,
+            customer: d.customer,
+            items: d.items,
+            totals: d.totals,
+            notes: d.notes,
+            itemCount: d.itemCount,
+            total: parseFloat(d.totalUSD || 0),
+            totalUSD: parseFloat(d.totalUSD || 0),
+            totalVES: parseFloat(d.totalVES || 0),
+            type: d.type,
+            timestamp: new Date(d.updatedAt).getTime(),
+            createdAt: d.createdAt
+        }));
+
         return res.json({ success: true, sales: active });
     } catch (error) {
         return res.status(500).json({ success: false, error: error.message });
@@ -472,31 +600,45 @@ router.get('/remote-held-sales', async (req, res) => {
 });
 
 /**
- * DELETE /remote-held-sale/:codeOrId - Reclama o elimina una preventa móvil de la cola activa
+ * DELETE /remote-held-sale/:codeOrId - Reclama o elimina una preventa móvil o borrador
  */
 router.delete('/remote-held-sale/:codeOrId', async (req, res) => {
     try {
-        const reg = global.__remoteHeldSalesRegistry || (global.__remoteHeldSalesRegistry = { items: new Map(), recentBroadcasts: new Map() });
-        const target = String(req.params.codeOrId || '').trim().toUpperCase();
-        let removed = null;
+        const target = String(req.params.codeOrId || '').trim();
+        let targetId = target;
 
+        // Actualizar en PostgreSQL de forma persistente
+        try {
+            await RegisterDraft.update({ status: 'claimed' }, {
+                where: {
+                    [Op.or]: [
+                        { id: target },
+                        { code: target.toUpperCase() }
+                    ]
+                }
+            });
+        } catch (_) {}
+
+        // Mantener consistencia en caché de memoria y avisar por Sockets
+        const reg = global.__remoteHeldSalesRegistry || (global.__remoteHeldSalesRegistry = { items: new Map(), recentBroadcasts: new Map() });
+        let removed = null;
         for (const [k, v] of reg.items.entries()) {
-            if (String(k).toUpperCase() === target || String(v.id || '').toUpperCase() === target || String(v.code || '').toUpperCase() === target) {
+            if (String(k).toUpperCase() === target.toUpperCase() || String(v.id || '').toUpperCase() === target.toUpperCase() || String(v.code || '').toUpperCase() === target.toUpperCase()) {
                 removed = v;
                 reg.items.delete(k);
             }
         }
 
         const io = req.app.get('io') || global.io;
-        if (io && removed) {
+        if (io) {
             io.emit('remote_held_sale_claimed', {
-                id: removed.id,
-                code: removed.code,
+                id: removed?.id || target,
+                code: removed?.code || target,
                 claimedBy: req.user?.name || req.user?.username || 'Caja PC'
             });
         }
 
-        return res.json({ success: true, removed: Boolean(removed) });
+        return res.json({ success: true, removed: true });
     } catch (error) {
         return res.status(500).json({ success: false, error: error.message });
     }
@@ -796,10 +938,34 @@ router.post('/remote-held-sale', async (req, res) => {
         const enriched = {
             ...payload,
             id: saleId,
-            companyId: String(payload.companyId || req.user?.companyId || '1'),
+            companyId: String(payload.companyId || req.user?.companyId || '2'),
             timestamp: payload.timestamp || now
         };
         reg.items.set(saleId, enriched);
+
+        // Persistir en PostgreSQL para que sobreviva a apagones o reinicios del servidor
+        try {
+            await RegisterDraft.upsert({
+                id: saleId,
+                registerId: payload.registerId || 'mobile_order',
+                companyId: enriched.companyId,
+                userId: req.user?.id || payload.userId || null,
+                userName: payload.waiterName || payload.userName || req.user?.name || 'Comanda Móvil',
+                code: payload.code || saleId.slice(-6).toUpperCase(),
+                type: 'presale',
+                customer: payload.customer || null,
+                items: payload.items,
+                totals: payload.totals || null,
+                notes: payload.notes || (payload.table ? `Mesa: ${payload.table}` : null),
+                itemCount: payload.items.length,
+                totalUSD: parseFloat(payload.totalUSD || payload.total || 0),
+                totalVES: parseFloat(payload.totalVES || 0),
+                status: 'active',
+                updatedAt: new Date()
+            });
+        } catch (dbErr) {
+            console.warn('[Presale] Aviso guardando comanda en PostgreSQL:', dbErr.message);
+        }
 
         for (const [k, v] of reg.items.entries()) {
             if (now - (v.timestamp || 0) > 12 * 3600 * 1000) reg.items.delete(k);

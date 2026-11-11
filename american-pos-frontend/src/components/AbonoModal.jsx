@@ -162,17 +162,23 @@ export default function AbonoModal({ isOpen, onClose, onSave, customer = null, p
         }
     };
 
-    // Helper para obtener el importe real y seguro de una venta
+    // Helper ultra-resiliente para obtener el importe real y seguro de una venta
     const getSaleAmount = (sale) => {
         if (!sale) return 0;
         const t = parseFloat(sale.total);
         if (!isNaN(t) && t > 0) return t;
         const s = parseFloat(sale.subtotal);
         if (!isNaN(s) && s > 0) return s;
-        if (Array.isArray(sale.paymentMethods)) {
-            const pmSum = sale.paymentMethods.reduce((acc, p) => acc + (parseFloat(p?.amount) || 0), 0);
+        let pms = sale.paymentMethods;
+        if (typeof pms === 'string') {
+            try { pms = JSON.parse(pms); } catch (_) {}
+        }
+        if (Array.isArray(pms) && pms.length > 0) {
+            const pmSum = pms.reduce((acc, p) => acc + (parseFloat(p?.amount) || 0), 0);
             if (pmSum > 0) return pmSum;
         }
+        const alt = parseFloat(sale.amount || sale.totalAmount);
+        if (!isNaN(alt) && alt > 0) return alt;
         return 0;
     };
 
@@ -548,6 +554,11 @@ export default function AbonoModal({ isOpen, onClose, onSave, customer = null, p
                                                             <span className="text-xs font-bold text-slate-900 dark:text-white font-mono">
                                                                 Factura #{sale.taxInfo?.dailyTicketNumber || sale.id.slice(0, 8)}
                                                             </span>
+                                                            {sale.paymentStatus === 'partial' && (
+                                                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-100 dark:bg-blue-950/50 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                                                    Parcial
+                                                                </span>
+                                                            )}
                                                             {daysOld > 7 && (
                                                                 <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
                                                                     {daysOld}d
