@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Resumen Comercial - Isaac POS</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #090d16;
+      color: #f1f5f9;
+      width: 1240px;
+      padding: 36px 40px;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+
+    ::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Header Banner */
+    .header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #064e3b 100%);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 24px;
+      padding: 48px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    .header-glow {
+      position: absolute;
+      top: -100px;
+      right: -100px;
+      width: 380px;
+      height: 380px;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.25) 0%, rgba(6, 182, 212, 0.1) 70%, transparent 100%);
+      filter: blur(40px);
+    }
+
+    .badge-top {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      padding: 6px 16px;
+      border-radius: 100px;
+      margin-bottom: 20px;
+    }
+
+    .title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 30px;
+    }
+
+    .title-area h1 {
+      font-size: 50px;
+      font-weight: 800;
+      line-height: 1.1;
+      background: linear-gradient(to right, #ffffff, #93c5fd, #6ee7b7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+    }
+
+    .title-area p {
+      font-size: 20px;
+      color: #94a3b8;
+      max-width: 720px;
+      line-height: 1.5;
+    }
+
+    .badge-rating {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      padding: 20px 24px;
+      text-align: right;
+      min-width: 250px;
+    }
+
+    .rating-val {
+      font-size: 32px;
+      font-weight: 800;
+      color: #10b981;
+    }
+
+    .rating-sub {
+      font-size: 13px;
+      color: #64748b;
+      margin-top: 4px;
+    }
+
+    /* Key Value Highlights */
+    .highlights-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-top: 28px;
+    }
+
+    .highlight-card {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 18px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .hl-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      flex-shrink: 0;
+    }
+
+    .hl-green { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+    .hl-blue  { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+    .hl-purple { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
+    .hl-amber { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+
+    .hl-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 2px;
+    }
+
+    .hl-desc {
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    /* Core Modules Grid */
+    .section-title {
+      margin: 40px 0 20px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .section-title h2 {
+      font-size: 26px;
+      font-weight: 800;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .section-title h2 span {
+      background: #10b981;
+      width: 8px;
+      height: 24px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    .modules-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .mod-card {
+      background: #0f172a;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      padding: 24px;
+      position: relative;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .mod-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .mod-icon-box {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+    }
+
+    .mod-header h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #f1f5f9;
+    }
+
+    .mod-bullets {
+      list-style: none;
+      margin-bottom: 16px;
+    }
+
+    .mod-bullets li {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-bottom: 8px;
+      position: relative;
+      padding-left: 20px;
+      line-height: 1.4;
+    }
+
+    .mod-bullets li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #10b981;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .mod-tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 6px;
+      align-self: flex-start;
+      letter-spacing: 0.5px;
+    }
+
+    .tag-green  { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+    .tag-blue   { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+    .tag-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+    .tag-amber  { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+    .tag-cyan   { background: rgba(6, 182, 212, 0.15); color: #22d3ee; }
+    .tag-rose   { background: rgba(244, 63, 94, 0.15); color: #fb7185; }
+
+    /* Bottom Architecture & Competitive Edge */
+    .bottom-section {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 20px;
+      margin-top: 24px;
+    }
+
+    .infra-box {
+      background: linear-gradient(145deg, #0f172a 0%, #131d33 100%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      padding: 28px;
+    }
+
+    .infra-box h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .infra-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+    }
+
+    .infra-item {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 12px 16px;
+    }
+
+    .infra-item strong {
+      display: block;
+      font-size: 14px;
+      color: #38bdf8;
+      margin-bottom: 2px;
+    }
+
+    .infra-item span {
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    .business-fit-box {
+      background: linear-gradient(145deg, #064e3b 0%, #0f172a 100%);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 20px;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .business-fit-box h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #34d399;
+      margin-bottom: 12px;
+    }
+
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 20px 0;
+    }
+
+    .pill-badge {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #e2e8f0;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 8px;
+    }
+
+    .cta-banner {
+      background: rgba(16, 185, 129, 0.2);
+      border: 1px solid #10b981;
+      border-radius: 12px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .cta-text {
+      font-size: 13px;
+      color: #f1f5f9;
+      font-weight: 600;
+    }
+
+    .cta-action {
+      background: #10b981;
+      color: #064e3b;
+      font-weight: 800;
+      font-size: 12px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Footer */
+    .footer {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #64748b;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-glow"></div>
+    <div class="badge-top">🚀 Software Comercial y ERP de Alto Rendimiento</div>
+    
+    <div class="title-row">
+      <div class="title-area">
+        <h1>ISAAC POS V24.04 ULTRA</h1>
+        <p>Ecosistema integral de Punto de Venta, Inventario Multialmacén, Preventa Móvil, Finanzas, Facturación Fiscal y Auditoría en Tiempo Real.</p>
+      </div>
+      <div class="badge-rating">
+        <div class="rating-val">100% OFFLINE</div>
+        <div class="rating-sub">Motor PostgreSQL 16 &bull; 99.6% RAM Cache</div>
+      </div>
+    </div>
+
+    <!-- Highlights -->
+    <div class="highlights-bar">
+      <div class="highlight-card">
+        <div class="hl-icon hl-green">⚡</div>
+        <div>
+          <div class="hl-title">Cobro Ultrarrápido</div>
+          <div class="hl-desc">Menos de 3 segundos por ticket</div>
+        </div>
+      </div>
+      <div class="highlight-card">
+        <div class="hl-icon hl-blue">📱</div>
+        <div>
+          <div class="hl-title">Móvil & Multi-Caja</div>
+          <div class="hl-desc">Terminales PC + App Android</div>
+        </div>
+      </div>
+      <div class="highlight-card">
+        <div class="hl-icon hl-purple">🛡️</div>
+        <div>
+          <div class="hl-title">Auditoría Antifraude</div>
+          <div class="hl-desc">Control total de anulaciones</div>
+        </div>
+      </div>
+      <div class="highlight-card">
+        <div class="hl-icon hl-amber">💬</div>
+        <div>
+          <div class="hl-title">WhatsApp Integrado</div>
+          <div class="hl-desc">Envío de recibos y reportes</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modules Section -->
+  <div class="section-title">
+    <h2><span></span> Módulos Principales del Sistema</h2>
+    <div style="font-size: 13px; color: #94a3b8;">Plataforma integral modular escalable</div>
+  </div>
+
+  <div class="modules-grid">
+    <!-- Card 1: Punto de Venta -->
+    <div class="mod-card">
+      <div>
+        <div class="mod-header">
+          <div class="mod-icon-box">💳</div>
+          <h3>Punto de Venta Multi-Vertical</h3>
+        </div>
+        <ul class="mod-bullets">
+          <li>3 vistas dedicadas: General, Farmacia y Boutique (Tallas/Colores).</li>
+          <li>Pantalla de cliente interactiva (Customer Display en vivo).</li>
+          <li>Cola FIFO de impresión térmica (&lt;15 ms) sin colisiones USB.</li>
+          <li>Multimoneda con tasa automática BCV/Paralelo (USD / Bs / EUR / COP).</li>
+          <li>Apertura, arqueo ciego y cierre de caja con firma de supervisor.</li>
+        </ul>
+      </div>
+      <span class="mod-tag tag-green">Ventas & Caja</span>
+    </div>
+
+    <!-- Card 2: Farmacias & Trazabilidad -->
+    <div class="mod-card">
+      <div>
+        <div class="mod-header">
+          <div class="mod-icon-box">💊</div>
+          <h3>Especial Farmacia & Boutique</h3>
+        </div>
+        <ul class="mod-bullets">
+          <li>Búsqueda instantánea por principio activo, laboratorio o síntoma.</li>
+          <li>Trazabilidad FEFO estricta de lotes y fechas de vencimiento.</li>
+          <li>Control legal de récipe y medicamentos psicotrópicos/controlados.</li>
+          <li>Modo Ropa y Calzado con matriz visual de tallas, colores y etiquetas.</li>
+          <li>Alertas preventivas automáticas de caducidad y revocación de lotes.</li>
+        </ul>
+      </div>
+      <span class="mod-tag tag-cyan">Verticales Especializadas</span>
+    </div>
+
+    <!-- Card 3: Inventario & Almacenes -->
+    <div class="mod-card">
+      <div>
+        <div class="mod-header">
+          <div class="mod-icon-box">📦</div>
+          <h3>Inventario & Producción</h3>
+        </div>
+        <ul class="mod-bullets">
+          <li>Control multialmacén, multi-sucursal y órdenes de transferencia.</li>
+          <li>Recetas de producción, combos, kits y despiece de productos.</li>
+          <li>Importación y exportación masiva en Excel con validación inteligente.</li>
+          <li>Kardex inmutable con triggers de integridad en PostgreSQL 16.</li>
+          <li>Generación e impresión de habladores y etiquetas de código de barras.</li>
+        </ul>
+      </div>
+      <span class="mod-tag tag-blue">Stock & Almacén</span>
+    </div>
+
+    <!-- Card 4: Créditos & Finanzas -->
+    <div class="mod-card">
+      <div>
+        <div class="mod-header">
+          <div class="mod-icon-box">📊</div>
+          <h3>Finanzas, Créditos & Contabilidad</h3>
+        </div>
+        <ul class="mod-bullets">
+          <li>Candado financiero anti-mora automático por monto y días de vencimiento.</li>
+          <li>Historial de abonos multimoneda y estados de cuenta detallados en PDF.</li>
+          <li>Cuentas por pagar a proveedores, retenciones IVA/ISLR y libros fiscales.</li>
+          <li>Contabilidad general (Libro Diario, Mayor, Balance y Estado de Resultados).</li>
+          <li>Conciliación bancaria, Pago Móvil QR y verificación antifraude Binance.</li>
+        </ul>
+      </div>
+      <span class="mod-tag tag-amber">Finanzas & Cobranzas</span>
+    </div>
+
+    <!-- Card 5: Business Intelligence & Auditoría -->
+    <div class="mod-card">
+      <div>
+        <div class="mod-header">
+          <div class="mod-icon-box">📈</div>
+          <h3>BI Ejecutivo & Seguridad</h3>
+        </div>
+        <ul class="mod-bullets">
+          <li>Dashboard gerencial en vivo con métricas de utilidad neta y margen real.</li>
+          <li>Centro de auditoría forense de cajeros y bitácora inmutable de eventos.</li>
+          <li>Autenticación biométrica WebAuthn y autorización por PIN de supervisor.</li>
+          <li>Alertas en tiempo real al propietario vía WhatsApp ante aperturas o mermas.</li>
+          <li>Mantenimiento nocturno autónomo (VACUUM, índices y rotación de logs).</li>
+        </ul>
+      </div>
+      <span class="mod-tag tag-purple">Control Gerencial</span>
+    </div>
+
+    <!-- Card 6: Movilidad & Nómina -->
+    <div class="mod-card">
+      <div>
+        <div class="mod-header">
+          <div class="mod-icon-box">📱</div>
+          <h3>App Móvil, Comandera & Nómina</h3>
+        </div>
+        <ul class="mod-bullets">
+          <li>App Android nativa (APK) para Preventa de Pasillo y Comandera de Mesas.</li>
+          <li>Envío instantáneo de pedidos desde el móvil directo a la Caja Principal.</li>
+          <li>Catálogo web público interactivo para recepción de pedidos online.</li>
+          <li>Gestión integral de RRHH, nómina, préstamos y comisiones de vendedores.</li>
+          <li>Respaldos DR cifrados (.zip) con base de datos, imágenes y configuración.</li>
+        </ul>
+      </div>
+      <span class="mod-tag tag-rose">Ecosistema Completo</span>
+    </div>
+  </div>
+
+  <!-- Bottom Section: Infrastructure & Target Markets -->
+  <div class="bottom-section">
+    <div class="infra-box">
+      <h3>🖥️ Arquitectura Robusta & Periféricos Compatibles</h3>
+      <div class="infra-grid">
+        <div class="infra-item">
+          <strong>Base de Datos PostgreSQL</strong>
+          <span>Motor relacional de grado empresarial, ultraveloz y seguro.</span>
+        </div>
+        <div class="infra-item">
+          <strong>Arquitectura Red Local (LAN)</strong>
+          <span>1 Servidor Principal + Terminales de Caja ilimitadas sin internet.</span>
+        </div>
+        <div class="infra-item">
+          <strong>Periféricos Estándar</strong>
+          <span>Lector de barras, gaveta de dinero, balanzas e impresoras térmicas/fiscales.</span>
+        </div>
+        <div class="infra-item">
+          <strong>Amplia Compatibilidad</strong>
+          <span>Windows 7, 8, 8.1, 10, 11 (32/64 bit) y dispositivos Android.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="business-fit-box">
+      <div>
+        <h3>🏢 Ideal para Todo Tipo de Comercio</h3>
+        <p style="font-size: 13px; color: #94a3b8; line-height: 1.4;">Diseñado específicamente para adaptarse a la dinámica comercial real:</p>
+        <div class="pill-list">
+          <span class="pill-badge">Supermercados & Minimarkets</span>
+          <span class="pill-badge">Farmacias & Droguerías</span>
+          <span class="pill-badge">Ferreterías & Repuestos</span>
+          <span class="pill-badge">Tiendas de Ropa & Calzado</span>
+          <span class="pill-badge">Mayoristas & Distribuidoras</span>
+          <span class="pill-badge">Restaurantes & Cafés</span>
+        </div>
+      </div>
+
+      <div class="cta-banner">
+        <div class="cta-text">¡Solicite hoy mismo su demostración en vivo!</div>
+        <div class="cta-action">DEMO DISPONIBLE</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div><strong>Isaac POS V24 / American POS</strong> &bull; La plataforma comercial definitiva para su negocio</div>
+    <div>Multi-caja &bull; Multi-almacén &bull; Facturación Rápida &bull; 100% Offline</div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "appId": "com.isaacpos.app",
+  "appName": "Isaac POS Mobile",
+  "webDir": "dist-mobile",
+  "backgroundColor": "#080e1e",
+  "android": {
+    "backgroundColor": "#080e1e",
+    "allowMixedContent": true,
+    "captureInput": false
+  },
+  "server": {
+    "cleartext": true,
+    "androidScheme": "http"
+  },
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": false
+    }
+  }
+}

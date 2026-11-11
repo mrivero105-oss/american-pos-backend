@@ -1,0 +1,155 @@
+{
+  "name": "isaac-pos",
+  "version": "24.04.0",
+  "author": {
+    "name": "Isaac POS Team",
+    "email": "support@isaacpos.com"
+  },
+  "description": "Sistema de Punto de Venta Isaac POS V24.04",
+  "main": "main.js",
+  "scripts": {
+    "start": "node index.js",
+    "electron:start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "test:stress": "node test_stress_offline_sync.js",
+    "test:math": "node test_vortex_engine.js",
+    "test:zerotrust": "node test_zero_trust_sale.js",
+    "test:cache": "node test_auth_cache_latency.js",
+    "test": "node --test tests/pos-integrity.test.mjs"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.18.1",
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "duck-duck-scrape": "^2.2.7",
+    "electron-squirrel-startup": "^1.0.1",
+    "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.1.1",
+    "nodemailer": "^7.0.10",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.20.0",
+    "pg-hstore": "^2.3.4",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "sequelize": "^6.37.7",
+    "socket.io": "^4.8.3",
+    "whatsapp-web.js": "^1.34.7",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "xlsx": "^0.18.5",
+    "zod": "^4.3.6"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.2",
+    "electron": "22.3.27",
+    "electron-builder": "^24.13.3",
+    "googleapis": "^171.4.0"
+  },
+  "build": {
+    "appId": "com.isaacpos.frontend",
+    "productName": "Isaac POS",
+    "compression": "normal",
+    "npmRebuild": false,
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/**/*.node",
+      "**/bin/**/*",
+      "**/scripts/**/*"
+    ],
+    "directories": {
+      "output": "dist_final_installer"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "mrivero105-oss",
+        "repo": "american-pos-backend"
+      }
+    ],
+    "files": [
+      "**/*",
+      "!**/*.sqlite",
+      "!**/*.sqlite*",
+      "!**/*.bak",
+      "!**/*.dev_backup",
+      "!**/serviceAccountKey.json",
+      "!**/.env*",
+      "!env_backup.txt",
+      "!app_fixed.asar",
+      "!test_backup.zip",
+      "!.wwebjs_auth/**",
+      "!.wwebjs_cache/**",
+      "!dist*/**",
+      "!backups/**",
+      "!build_temp/**",
+      "!auto-backups/**",
+      "!scratch/**",
+      "!uploads/**",
+      "!product_images/**",
+      "!supplier_logos/**",
+      "!invoices/**",
+      "!logs/**",
+      "!**/*.log",
+      "!**/*.log.gz",
+      "!db.json",
+      "!.git/**",
+      "!**/*.md",
+      "!LICENSE",
+      "!*.ps1",
+      "!public/*.exe",
+      "!public/*.apk",
+      "!public/*.zip",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!node_modules/@electron/rebuild/**",
+      "!node_modules/builder-util/**",
+      "!node_modules/typescript/**",
+      "!tests/**",
+      "!*.apk",
+      "!**/*.apk",
+      "!test_*.js",
+      "!check_*.js",
+      "!fix_*.js",
+      "!inspect_*.js",
+      "!find_*.js",
+      "!scratch*.js",
+      "!*.bat",
+      "!tailwind.config.js",
+      "!backup_debug.log"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/favicon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "artifactName": "3_IsaacPOS_Windows7_8_8.1_Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "shortcutName": "Isaac POS",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "3_IsaacPOS_Windows7_8_8.1_Setup.${ext}"
+    }
+  }
+}

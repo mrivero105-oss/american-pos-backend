@@ -1,0 +1,12 @@
+﻿<html>
+<body>
+<script>
+fetch('http://localhost:5005/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({username: 'admin', password: 'password123'}),
+  credentials: 'include'
+}).then(r => r.json()).then(console.log);
+</script>
+</body>
+</html>

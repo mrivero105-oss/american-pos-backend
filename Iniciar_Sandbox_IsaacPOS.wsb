@@ -1,0 +1,14 @@
+<Configuration>
+  <VGpu>Enable</VGpu>
+  <Networking>Default</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\AndroidStudioProjects\American POS PC\dist_installers</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\dist_installers</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>cmd.exe /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f &amp;&amp; citool.exe -r</Command>
+  </LogonCommand>
+</Configuration>

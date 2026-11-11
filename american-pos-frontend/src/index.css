@@ -1,0 +1,2971 @@
+@import "tailwindcss";
+
+/* BLINDAJE CRÍTICO MOTOR CHROMIUM / WEBVIEW / EDGE: Metadatos y estilos jamás visibles en pantalla */
+html > head, head, title, style, script, link, meta, noscript {
+  display: none !important;
+  position: absolute !important;
+  top: -99999px !important;
+  left: -99999px !important;
+  width: 0 !important;
+  height: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+/* BLINDAJE ANTI-CARET BROWSING: Elimina el cursor de escritura (|) en áreas estáticas y previene selección accidental */
+*:not(input):not(textarea):not([contenteditable="true"]) {
+  caret-color: transparent !important;
+}
+
+input, textarea, [contenteditable="true"] {
+  caret-color: auto !important;
+}
+
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+input, textarea, [contenteditable="true"], .selectable-text {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+/* LOCAL OFFLINE FONTS FOR ELECTRON & WEB */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-400.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/Inter-500.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/Inter-600.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/Inter-700.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/fonts/Inter-800.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url('/fonts/Inter-900.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Outfit-400.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/Outfit-500.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/Outfit-600.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/Outfit-700.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/fonts/Outfit-800.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url('/fonts/Outfit-900.ttf') format('truetype');
+}
+
+/* DESACTIVAR ICONO NATIVO DE REVELAR CONTRASEÑA EN EDGE / CHROMIUM / WINDOWS (EVITA DUPLICAR EL OJITO) */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  pointer-events: none !important;
+}
+
+input::-webkit-contacts-auto-fill-button,
+input::-webkit-credentials-auto-fill-button {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  position: absolute !important;
+  right: 0 !important;
+}
+
+/* MOBILE PERFORMANCE & INSTANT TOUCH OPTIMIZATION (0ms TAP LATENCY) */
+*, *::before, *::after {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  touch-action: manipulation;
+  overscroll-behavior-y: contain;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Force hardware-accelerated touch scrolling */
+.custom-scrollbar, [data-scroll-container] {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Eliminate 300ms mobile tap delay on all interactive elements */
+button, a, input, select, textarea, [role="button"], .card-tactical, .touch-manipulation {
+  touch-action: manipulation;
+}
+
+:root {
+  --app-primary-50: #f0f9ff;
+  --app-primary-50-rgb: 240, 249, 255;
+  --app-primary-100: #e0f2fe;
+  --app-primary-100-rgb: 224, 242, 254;
+  --app-primary-200: #bae6fd;
+  --app-primary-200-rgb: 186, 230, 253;
+  --app-primary-300: #7dd3fc;
+  --app-primary-300-rgb: 125, 211, 252;
+  --app-primary-400: #38bdf8;
+  --app-primary-400-rgb: 56, 189, 248;
+  --app-primary-500: #0ea5e9;
+  --app-primary-500-rgb: 14, 165, 233;
+  --app-primary-600: #0284c7;
+  --app-primary-600-rgb: 2, 132, 199;
+  --app-primary-700: #0369a1;
+  --app-primary-700-rgb: 3, 105, 161;
+  --app-primary-800: #075985;
+  --app-primary-800-rgb: 7, 89, 133;
+  --app-primary-900: #0c4a6e;
+  --app-primary-900-rgb: 12, 74, 110;
+  --app-primary-950: #082f49;
+  --app-primary-950-rgb: 8, 47, 73;
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-primary-50: var(--app-primary-50);
+  --color-primary-100: var(--app-primary-100);
+  --color-primary-200: var(--app-primary-200);
+  --color-primary-300: var(--app-primary-300);
+  --color-primary-400: var(--app-primary-400);
+  --color-primary-500: var(--app-primary-500);
+  --color-primary-600: var(--app-primary-600);
+  --color-primary-700: var(--app-primary-700);
+  --color-primary-800: var(--app-primary-800);
+  --color-primary-900: var(--app-primary-900);
+  --color-primary-950: var(--app-primary-950);
+
+  --color-midnight-50: #f8fafc;
+  --color-midnight-100: #f1f5f9;
+  --color-midnight-200: #e2e8f0;
+  --color-midnight-300: #cbd5e1;
+  --color-midnight-400: #94a3b8;
+  --color-midnight-500: #64748b;
+  --color-midnight-600: #475569;
+  --color-midnight-700: #334155;
+  --color-midnight-800: #1e293b;
+  --color-midnight-900: #0f172a;
+  --color-midnight-950: #020617;
+
+  /* Professional Light Mode Tokens - Enhanced Vibrancy */
+  --glass-bg: rgba(255, 255, 255, 0.4); 
+  --glass-bg-dark: rgba(15, 23, 42, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-border-dark: rgba(255, 255, 255, 0.05);
+  
+  --shadow-premium: 
+    0 10px 30px -10px rgba(0, 0, 0, 0.04), 
+    0 20px 40px -20px rgba(0, 0, 0, 0.03);
+  --shadow-premium-dark: 0 20px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+html, body, button, a, input, select, textarea, [role="button"], .card-tactical {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 640px) {
+  .card-tactical {
+    contain: content;
+  }
+}
+
+/* Color Themes - HIOPOS Petroleum Corporate Blue */
+[data-color-theme="blue"] {
+  --app-primary-50: #f0f9ff;
+  --app-primary-50-rgb: 240, 249, 255;
+  --app-primary-100: #e0f2fe;
+  --app-primary-100-rgb: 224, 242, 254;
+  --app-primary-200: #bae6fd;
+  --app-primary-200-rgb: 186, 230, 253;
+  --app-primary-300: #7dd3fc;
+  --app-primary-300-rgb: 125, 211, 252;
+  --app-primary-400: #38bdf8;
+  --app-primary-400-rgb: 56, 189, 248;
+  --app-primary-500: #0ea5e9;
+  --app-primary-500-rgb: 14, 165, 233;
+  --app-primary-600: #0284c7;
+  --app-primary-600-rgb: 2, 132, 199;
+  --app-primary-700: #0369a1;
+  --app-primary-700-rgb: 3, 105, 161;
+  --app-primary-800: #075985;
+  --app-primary-800-rgb: 7, 89, 133;
+  --app-primary-900: #0c4a6e;
+  --app-primary-900-rgb: 12, 74, 110;
+  --app-primary-950: #082f49;
+  --app-primary-950-rgb: 8, 47, 73;
+}
+[data-color-theme="purple"] {
+  --app-primary-50: #faf5ff;
+  --app-primary-50-rgb: 250, 245, 255;
+  --app-primary-100: #f3e8ff;
+  --app-primary-100-rgb: 243, 232, 255;
+  --app-primary-200: #e9d5ff;
+  --app-primary-200-rgb: 233, 213, 255;
+  --app-primary-300: #d8b4fe;
+  --app-primary-300-rgb: 216, 180, 254;
+  --app-primary-400: #c084fc;
+  --app-primary-400-rgb: 192, 132, 252;
+  --app-primary-500: #a855f7;
+  --app-primary-500-rgb: 168, 85, 247;
+  --app-primary-600: #9333ea;
+  --app-primary-600-rgb: 147, 51, 234;
+  --app-primary-700: #7e22ce;
+  --app-primary-700-rgb: 126, 34, 206;
+  --app-primary-800: #6b21a8;
+  --app-primary-800-rgb: 107, 33, 168;
+  --app-primary-900: #581c87;
+  --app-primary-900-rgb: 88, 28, 135;
+  --app-primary-950: #3b0764;
+  --app-primary-950-rgb: 59, 7, 100;
+}
+
+[data-color-theme="emerald"] {
+  --app-primary-50: #ecfdf5;
+  --app-primary-50-rgb: 236, 253, 245;
+  --app-primary-100: #d1fae5;
+  --app-primary-100-rgb: 209, 250, 229;
+  --app-primary-200: #a7f3d0;
+  --app-primary-200-rgb: 167, 243, 208;
+  --app-primary-300: #6ee7b7;
+  --app-primary-300-rgb: 110, 231, 183;
+  --app-primary-400: #34d399;
+  --app-primary-400-rgb: 52, 211, 153;
+  --app-primary-500: #10b981;
+  --app-primary-500-rgb: 16, 185, 129;
+  --app-primary-600: #059669;
+  --app-primary-600-rgb: 5, 150, 105;
+  --app-primary-700: #047857;
+  --app-primary-700-rgb: 4, 120, 87;
+  --app-primary-800: #065f46;
+  --app-primary-800-rgb: 6, 95, 70;
+  --app-primary-900: #064e3b;
+  --app-primary-900-rgb: 6, 78, 59;
+  --app-primary-950: #022c22;
+  --app-primary-950-rgb: 2, 44, 34;
+}
+
+[data-color-theme="crimson"] {
+  --app-primary-50: #fff1f2;
+  --app-primary-50-rgb: 255, 241, 242;
+  --app-primary-100: #ffe4e6;
+  --app-primary-100-rgb: 255, 228, 230;
+  --app-primary-200: #fecdd3;
+  --app-primary-200-rgb: 254, 205, 211;
+  --app-primary-300: #fda4af;
+  --app-primary-300-rgb: 253, 164, 175;
+  --app-primary-400: #fb7185;
+  --app-primary-400-rgb: 251, 113, 133;
+  --app-primary-500: #f43f5e;
+  --app-primary-500-rgb: 244, 63, 94;
+  --app-primary-600: #e11d48;
+  --app-primary-600-rgb: 225, 29, 72;
+  --app-primary-700: #be123c;
+  --app-primary-700-rgb: 190, 18, 60;
+  --app-primary-800: #9f1239;
+  --app-primary-800-rgb: 159, 18, 57;
+  --app-primary-900: #881337;
+  --app-primary-900-rgb: 136, 19, 55;
+  --app-primary-950: #4c0519;
+  --app-primary-950-rgb: 76, 5, 25;
+}
+
+[data-color-theme="amber"] {
+  --app-primary-50: #fffbeb;
+  --app-primary-50-rgb: 255, 251, 235;
+  --app-primary-100: #fef3c7;
+  --app-primary-100-rgb: 254, 243, 199;
+  --app-primary-200: #fde68a;
+  --app-primary-200-rgb: 253, 230, 138;
+  --app-primary-300: #fcd34d;
+  --app-primary-300-rgb: 252, 211, 77;
+  --app-primary-400: #fbbf24;
+  --app-primary-400-rgb: 251, 191, 36;
+  --app-primary-500: #f59e0b;
+  --app-primary-500-rgb: 245, 158, 11;
+  --app-primary-600: #d97706;
+  --app-primary-600-rgb: 217, 119, 6;
+  --app-primary-700: #b45309;
+  --app-primary-700-rgb: 180, 83, 9;
+  --app-primary-800: #92400e;
+  --app-primary-800-rgb: 146, 64, 14;
+  --app-primary-900: #78350f;
+  --app-primary-900-rgb: 120, 53, 15;
+  --app-primary-950: #451a03;
+  --app-primary-950-rgb: 69, 26, 3;
+}
+
+[data-color-theme="cyan"] {
+  --app-primary-50: #ecfeff;
+  --app-primary-50-rgb: 236, 254, 255;
+  --app-primary-100: #cffafe;
+  --app-primary-100-rgb: 207, 250, 254;
+  --app-primary-200: #a5f3fc;
+  --app-primary-200-rgb: 165, 243, 252;
+  --app-primary-300: #67e8f9;
+  --app-primary-300-rgb: 103, 232, 249;
+  --app-primary-400: #22d3ee;
+  --app-primary-400-rgb: 34, 211, 238;
+  --app-primary-500: #06b6d4;
+  --app-primary-500-rgb: 6, 182, 212;
+  --app-primary-600: #0891b2;
+  --app-primary-600-rgb: 8, 145, 178;
+  --app-primary-700: #0e7490;
+  --app-primary-700-rgb: 14, 116, 144;
+  --app-primary-800: #155e75;
+  --app-primary-800-rgb: 21, 94, 117;
+  --app-primary-900: #164e63;
+  --app-primary-900-rgb: 22, 78, 99;
+  --app-primary-950: #083344;
+  --app-primary-950-rgb: 8, 51, 68;
+}
+
+[data-color-theme="orange"] {
+  --app-primary-50: #fff7ed;
+  --app-primary-50-rgb: 255, 247, 237;
+  --app-primary-100: #ffedd5;
+  --app-primary-100-rgb: 255, 237, 213;
+  --app-primary-200: #fed7aa;
+  --app-primary-200-rgb: 254, 215, 170;
+  --app-primary-300: #fdba74;
+  --app-primary-300-rgb: 253, 186, 116;
+  --app-primary-400: #fb923c;
+  --app-primary-400-rgb: 251, 146, 60;
+  --app-primary-500: #f97316;
+  --app-primary-500-rgb: 249, 115, 22;
+  --app-primary-600: #ea580c;
+  --app-primary-600-rgb: 234, 88, 12;
+  --app-primary-700: #c2410c;
+  --app-primary-700-rgb: 194, 65, 12;
+  --app-primary-800: #9a3412;
+  --app-primary-800-rgb: 154, 52, 18;
+  --app-primary-900: #7c2d12;
+  --app-primary-900-rgb: 124, 45, 18;
+  --app-primary-950: #431407;
+  --app-primary-950-rgb: 67, 20, 7;
+}
+
+[data-color-theme="pink"] {
+  --app-primary-50: #fdf2f8;
+  --app-primary-50-rgb: 253, 242, 248;
+  --app-primary-100: #fce7f3;
+  --app-primary-100-rgb: 252, 231, 243;
+  --app-primary-200: #fbcfe8;
+  --app-primary-200-rgb: 251, 207, 232;
+  --app-primary-300: #f9a8d4;
+  --app-primary-300-rgb: 249, 168, 212;
+  --app-primary-400: #f472b6;
+  --app-primary-400-rgb: 244, 114, 182;
+  --app-primary-500: #ec4899;
+  --app-primary-500-rgb: 236, 72, 153;
+  --app-primary-600: #db2777;
+  --app-primary-600-rgb: 219, 39, 119;
+  --app-primary-700: #be185d;
+  --app-primary-700-rgb: 190, 24, 93;
+  --app-primary-800: #9d174d;
+  --app-primary-800-rgb: 157, 23, 77;
+  --app-primary-900: #831843;
+  --app-primary-900-rgb: 131, 24, 67;
+  --app-primary-950: #500724;
+  --app-primary-950-rgb: 80, 7, 36;
+}
+
+[data-color-theme="teal"] {
+  --app-primary-50: #f0fdf4;
+  --app-primary-50-rgb: 240, 253, 244;
+  --app-primary-100: #ccfbf1;
+  --app-primary-100-rgb: 204, 251, 241;
+  --app-primary-200: #99f6e4;
+  --app-primary-200-rgb: 153, 246, 228;
+  --app-primary-300: #5eead4;
+  --app-primary-300-rgb: 94, 234, 212;
+  --app-primary-400: #2dd4bf;
+  --app-primary-400-rgb: 45, 212, 191;
+  --app-primary-500: #14b8a6;
+  --app-primary-500-rgb: 20, 184, 166;
+  --app-primary-600: #0d9488;
+  --app-primary-600-rgb: 13, 148, 136;
+  --app-primary-700: #0f766e;
+  --app-primary-700-rgb: 15, 118, 110;
+  --app-primary-800: #115e59;
+  --app-primary-800-rgb: 17, 94, 89;
+  --app-primary-900: #134e4a;
+  --app-primary-900-rgb: 19, 78, 74;
+  --app-primary-950: #042f2e;
+  --app-primary-950-rgb: 4, 47, 46;
+}
+
+[data-color-theme="indigo"] {
+  --app-primary-50: #eef2ff;
+  --app-primary-50-rgb: 238, 242, 255;
+  --app-primary-100: #e0e7ff;
+  --app-primary-100-rgb: 224, 231, 255;
+  --app-primary-200: #c7d2fe;
+  --app-primary-200-rgb: 199, 210, 254;
+  --app-primary-300: #a5b4fc;
+  --app-primary-300-rgb: 165, 180, 252;
+  --app-primary-400: #818cf8;
+  --app-primary-400-rgb: 129, 140, 248;
+  --app-primary-500: #6366f1;
+  --app-primary-500-rgb: 99, 102, 241;
+  --app-primary-600: #4f46e5;
+  --app-primary-600-rgb: 79, 70, 229;
+  --app-primary-700: #4338ca;
+  --app-primary-700-rgb: 67, 56, 202;
+  --app-primary-800: #3730a3;
+  --app-primary-800-rgb: 55, 48, 163;
+  --app-primary-900: #312e81;
+  --app-primary-900-rgb: 49, 46, 129;
+  --app-primary-950: #1e1b4b;
+  --app-primary-950-rgb: 30, 27, 75;
+}
+
+/* System Typography Customization */
+[data-font-family="inter"], body[data-font-family="inter"] { font-family: 'Inter', system-ui, -apple-system, sans-serif !important; }
+[data-font-family="outfit"], body[data-font-family="outfit"] { font-family: 'Outfit', sans-serif !important; }
+[data-font-family="roboto"], body[data-font-family="roboto"] { font-family: 'Roboto', sans-serif !important; }
+[data-font-family="poppins"], body[data-font-family="poppins"] { font-family: 'Poppins', sans-serif !important; }
+[data-font-family="system"], body[data-font-family="system"] { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important; }
+[data-font-family="monospace"], body[data-font-family="monospace"] { font-family: 'Fira Code', 'Cascadia Code', 'Courier New', monospace !important; }
+
+@layer base {
+  body {
+    @apply text-slate-800 transition-colors duration-200;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #e6ebf1;
+    background-image: none;
+  }
+
+  html.light body,
+  html:not(.dark) body {
+    @apply text-slate-800;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #e6ebf1 !important;
+    background-image: none !important;
+    background-attachment: fixed !important;
+    color: #1e293b !important;
+  }
+
+  html.dark body {
+    @apply text-slate-100 transition-colors duration-200;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #0f172a !important;
+    background-image: none !important;
+    background-attachment: fixed !important;
+    color: #f8fafc !important;
+  }
+}
+
+html:not(.dark) {
+  color-scheme: light;
+}
+
+@layer utilities {
+  .text-gradient-hero {
+    color: #0f172a !important;
+    -webkit-text-fill-color: initial !important;
+    display: inline-block;
+  }
+  .dark .text-gradient-hero {
+    color: #f8fafc !important;
+  }
+
+  .btn-gradient-primary {
+    background: var(--app-primary-600, #0284c7) !important;
+    color: #ffffff !important;
+  }
+  .btn-gradient-primary:hover {
+    background: var(--app-primary-700, #0369a1) !important;
+  }
+
+  .btn-gradient-tab-active {
+    background: var(--app-primary-600, #0284c7) !important;
+    color: #ffffff !important;
+    border: 1px solid var(--app-primary-700, #0369a1) !important;
+    box-shadow: 0 1px 2px rgba(2, 132, 199, 0.2) !important;
+  }
+
+  .bg-clip-text {
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+  }
+
+  .glass {
+    @apply bg-[#fafbfd] dark:bg-slate-900/90 border border-slate-300/90 dark:border-white/10 shadow-sm dark:shadow-2xl transition-all duration-300;
+  }
+
+  .glass-dark {
+    @apply bg-slate-900/90 border border-white/10 backdrop-blur-xl;
+  }
+
+  .italic-font {
+    font-style: italic;
+  }
+
+  .glass-premium {
+    @apply border transition-all duration-300 shadow-sm dark:shadow-premium-dark;
+    background: linear-gradient(180deg, #fafbfd 0%, #f2f5f9 100%);
+    border-color: #cbd5e1;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05), 0 4px 12px rgba(15, 23, 42, 0.03);
+  }
+
+  .dark .glass-premium {
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(23, 37, 68, 0.88) 100%);
+    border-color: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(24px);
+  }
+
+  .magical-shadow {
+    @apply shadow-2xl dark:shadow-primary-900/20;
+  }
+
+  .glow-button {
+    @apply relative overflow-hidden transition-all duration-300 active:scale-95;
+    background: linear-gradient(135deg, var(--color-primary-600) 0%, var(--color-primary-700) 100%);
+  }
+
+  .glow-button::after {
+    content: '';
+    @apply absolute inset-0 opacity-0 transition-opacity duration-300;
+    background: radial-gradient(circle at center, rgba(255, 255, 255, 0.2) 0%, transparent 70%);
+  }
+
+  .glow-button:hover::after {
+    @apply opacity-100;
+  }
+
+  /* Mesh Gradient Background System */
+  .bg-mesh-premium {
+    @apply relative overflow-hidden;
+    background-color: var(--color-midnight-950);
+  }
+
+  .bg-mesh-premium::before,
+  .bg-mesh-premium::after {
+    content: '';
+    @apply absolute w-[60%] h-[60%] rounded-full blur-[20px] opacity-10 pointer-events-none;
+  }
+
+  .bg-mesh-premium::before {
+    @apply top-[-10%] left-[-10%] bg-primary-500/30;
+  }
+
+  .bg-mesh-premium::after {
+    @apply bottom-[-10%] right-[-10%] bg-indigo-600/30;
+  }
+
+  /* NEW: Executive Dashboard Utilities */
+  .bg-gradient-premium {
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+  }
+
+  .text-glow-primary {
+    text-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
+  }
+
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 2rem;
+  }
+
+  @keyframes gradient-border {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+
+  .animate-gradient-slow {
+    background-size: 200% 200%;
+    animation: gradient-border 15s ease infinite;
+  }
+
+
+  /* Nav Link Premium Styles - Elevated Button Look */
+  /* HIOPOS Nav Link Premium Styles - Anti-Fatigue Corporate Design */
+  .nav-link-premium {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 8px;
+    transition: all 150ms ease;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: -0.01em;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 0.125rem;
+    border: 1px solid transparent;
+    user-select: none;
+    color: #334155;
+    background-color: transparent;
+  }
+
+  .nav-link-premium:hover {
+    color: #0f172a;
+    background: #dde4ee;
+    border-color: #cbd5e1;
+  }
+
+  .dark .nav-link-premium {
+    border-color: transparent;
+    color: #94a3b8;
+    background-color: transparent;
+  }
+
+  .dark .nav-link-premium:hover {
+    color: #f8fafc;
+    border-color: #334155;
+    background-color: #1e293b;
+  }
+
+  .nav-link-premium.active {
+    background-color: #334155 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    border-color: #1e293b !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1) !important;
+  }
+
+  .dark .nav-link-premium.active {
+    background-color: #1e293b !important;
+    background-image: none !important;
+    border-color: #334155 !important;
+    color: #ffffff !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3) !important;
+  }
+
+  /* Collapsed Sidebar Item - Native Icon Elevation */
+  .nav-collapsed-active {
+    background-color: transparent !important;
+  }
+
+  /* Table Customizations - Aggressive Spacing with Responsive Adjustments */
+  .table-premium {
+    @apply w-full border-separate border-spacing-y-4 lg:border-spacing-y-8;
+  }
+
+  .table-premium tr {
+    @apply transition-all duration-300;
+  }
+
+  .table-premium tbody tr {
+    @apply transition-all duration-500 shadow-premium dark:shadow-premium-dark rounded-2xl lg:rounded-[2.5rem] hover:translate-y-[-6px] hover:shadow-2xl cursor-default;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.9) 100%);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+  }
+
+  .dark .table-premium tbody tr {
+    background: rgba(15, 23, 42, 0.95);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .table-premium td {
+    @apply py-4 px-4 sm:py-6 sm:px-6 lg:py-10 lg:px-12 first:rounded-l-2xl lg:first:rounded-l-[2.5rem] last:rounded-r-2xl lg:last:rounded-r-[2.5rem] border-y border-white/5;
+  }
+
+  .table-premium th {
+    @apply px-4 sm:px-6 lg:px-14 py-4 lg:py-8 text-[11px] lg:text-[13px] font-black uppercase tracking-[0.2em] lg:tracking-[0.4em] text-slate-500/50;
+  }
+
+  /* Next-Gen Immersive Components */
+  .glass-nextgen {
+    @apply bg-slate-900/90 border border-white/5 shadow-2xl;
+    background-image: linear-gradient(135deg, rgba(255,255,255,0.02) 0%, transparent 100%);
+  }
+
+  .card-nextgen {
+    @apply relative overflow-hidden transition-all duration-500;
+    perspective: 1000px;
+  }
+
+  .card-nextgen:hover {
+    @apply translate-y-[-6px] shadow-lg;
+    transform: rotateX(2deg) rotateY(-2deg);
+  }
+
+  .neon-border {
+    @apply absolute inset-0 rounded-[inherit] border border-primary-500/20 transition-all duration-500 opacity-0 group-hover:opacity-100;
+  }
+
+  .floating-action-tab {
+    @apply bg-slate-800/95 px-4 py-2 rounded-2xl flex items-center gap-3 border border-white/10 translate-y-10 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-500;
+  }
+
+  /* Status Pulse Animations */
+  .status-pulse-emerald {
+    @apply w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)] animate-pulse;
+  }
+
+  .status-pulse-amber {
+    @apply w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.8)] animate-pulse;
+  }
+
+  .status-pulse-red {
+    @apply w-2 h-2 rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-pulse;
+  }
+
+  /* HIOPOS Standard Tactical Card Styles */
+  .card-tactical {
+    @apply relative transition-colors duration-100 overflow-hidden select-none;
+    border-radius: 10px;
+    background: #fafbfd;
+    border: 1px solid #cbd5e1;
+    box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.05);
+  }
+
+  .dark .card-tactical {
+    background: #1e293b;
+    border: 1px solid #334155;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .card-tactical:hover {
+    border-color: #94a3b8;
+    background: #ffffff;
+    box-shadow: 0 2px 4px 0 rgba(15, 23, 42, 0.06);
+  }
+
+  .dark .card-tactical:hover {
+    background: #1e293b;
+    border-color: #475569;
+    box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.3);
+  }
+
+  .card-tactical:active,
+  .card-tactical.active-press {
+    background-color: #f8fafc;
+    border-color: #64748b;
+  }
+
+  .dark .card-tactical:active,
+  .dark .card-tactical.active-press {
+    background-color: #172033;
+    border-color: #94a3b8;
+  }
+
+  .card-tactical.selected-gold {
+    @apply border-primary-400 ring-2 ring-primary-500/40 z-20;
+    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.3);
+  }
+
+  .price-uhd {
+    @apply text-primary-600 dark:text-primary-400 font-black tracking-tighter;
+    text-shadow: none;
+  }
+
+  .dark .price-uhd {
+    text-shadow: none;
+  }
+
+  .text-glow-emerald {
+    text-shadow: none;
+  }
+
+  .text-glow-cyan {
+    text-shadow: none;
+  }
+
+  .badge-neon {
+    box-shadow: none;
+  }
+
+  .btn-vivid-emerald {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    box-shadow: 0 4px 20px -2px rgba(16, 185, 129, 0.4);
+  }
+
+  .btn-vivid-emerald:hover {
+    background: linear-gradient(135deg, #34d399 0%, #10b981 100%);
+    box-shadow: 0 6px 25px 0 rgba(16, 185, 129, 0.6);
+  }
+
+  /* UHD Atmospheric Animations */
+  @keyframes bloom-uhd {
+    0% { transform: scale(0.5); opacity: 0; filter: blur(10px); }
+    30% { opacity: 0.8; filter: blur(0px); }
+    100% { transform: scale(1.5); opacity: 0; filter: blur(20px); }
+  }
+
+  .effect-flare {
+    @apply absolute inset-0 pointer-events-none overflow-hidden rounded-[inherit];
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.8) 0%, transparent 70%);
+    animation: bloom-uhd 0.4s ease-out forwards;
+  }
+
+  @keyframes heartbeat-uhd {
+    0% { transform: scale(1); box-shadow: 0 0 20px rgba(37, 99, 235, 0.1); }
+    50% { transform: scale(1.02); box-shadow: 0 0 40px rgba(37, 99, 235, 0.3); }
+    100% { transform: scale(1); box-shadow: 0 0 20px rgba(37, 99, 235, 0.1); }
+  }
+
+  .pulse-tactical {
+    animation: heartbeat-uhd 2s infinite ease-in-out;
+  }
+
+  /* Light Mode Enhanced Surface System - Anti-Fatigue Calibration */
+  html:not(.dark) .surface-elevated {
+    background: linear-gradient(180deg, #fafbfd 0%, #f1f5f9 100%);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05), 0 4px 12px rgba(15, 23, 42, 0.03);
+  }
+
+  html:not(.dark) .surface-sunken {
+    background: linear-gradient(145deg, #e4e9f0 0%, #eaeef4 50%, #f1f5f9 100%);
+  }
+
+  html:not(.dark) .border-enhanced {
+    border-color: #cbd5e1;
+  }
+
+  /* Calibración óptica anti-fatiga en Modo Claro para jornadas largas (8-12h) */
+  html:not(.dark):not(.retro):not(.theme-2005):not(.theme-2015):not(.theme-2025):not(.glass) .text-slate-400:not(:disabled) {
+    color: #5b6b82;
+  }
+
+  html:not(.dark):not(.retro):not(.theme-2005):not(.theme-2015):not(.theme-2025):not(.glass) .text-slate-500:not(:disabled) {
+    color: #475569;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none !important; }
+  .no-scrollbar { -ms-overflow-style: none !important; scrollbar-width: none !important; }
+
+  /* Universal elegant scrollbars across Windows 7, 8, 10 & 11 */
+  ::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.4);
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(148, 163, 184, 0.8);
+  }
+
+  /* Elegant visible scrollbar for PC users */
+  .custom-scrollbar::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.4);
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(148, 163, 184, 0.8);
+  }
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+  }
+
+  .perspective-1000 {
+    perspective: 1000px;
+  }
+
+  .table-responsive-container {
+    @apply w-full overflow-x-auto relative rounded-xl sm:rounded-2xl;
+    -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(to right, black 95%, transparent 100%);
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  .table-responsive-container::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  /* Responsive Visibility Helpers - Enhanced */
+  .responsive-hide-sm { @apply hidden sm:table-cell md:table-cell lg:table-cell xl:table-cell; }
+  .responsive-hide-md { @apply hidden md:table-cell lg:table-cell xl:table-cell; }
+  .responsive-hide-lg { @apply hidden lg:table-cell xl:table-cell; }
+
+  .mobile-only { @apply flex md:hidden; }
+
+  /* Modal Responsiveness Overrides */
+  .modal-container-responsive {
+    @apply w-full max-w-[98%] sm:max-w-2xl lg:max-w-4xl max-h-[92vh] overflow-y-auto rounded-2xl sm:rounded-3xl shadow-2xl;
+  }
+
+  /* Automatic zoom out for dense data screens on lower resolutions */
+  .responsive-zoom {
+    zoom: 1;
+  }
+  @media (max-width: 1280px) {
+    .responsive-zoom {
+      zoom: 0.9;
+    }
+  }
+  @media (max-width: 1024px) {
+    .responsive-zoom {
+      zoom: 0.8;
+    }
+  }
+  @media (max-width: 768px) {
+    .responsive-zoom {
+      zoom: 0.75;
+    }
+  }
+}
+
+/* Animations update */
+.animate-delay-1000 { animation-delay: 1s; }
+/* Mobile Touch Optimizations */
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px !important; } /* Prevents iOS zoom */
+  .glass-premium { @apply rounded-2xl; }
+  .table-premium td { @apply py-4 px-3; }
+}
+
+/* -------------------------------------
+   WINDOWS 95 / RETRO THEME OVERRIDES 
+-------------------------------------- */
+.retro body {
+  background: #008080 !important;
+  font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif !important;
+  color: #000 !important;
+}
+
+.retro * {
+  border-radius: 0 !important;
+  backdrop-filter: none !important;
+  transition: none !important;
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+/* Standard UI elements become gray with 3D borders */
+.retro .card-tactical, 
+.retro .glass-premium, 
+.retro .glass, 
+.retro .bg-white,
+.retro .bg-slate-50,
+.retro .dark\:bg-slate-900,
+.retro .dark\:bg-slate-950,
+.retro button, 
+.retro [role="button"],
+.retro select {
+  background: #c0c0c0 !important;
+  color: #000 !important;
+  border: 2px solid !important;
+  border-top-color: #ffffff !important;
+  border-left-color: #ffffff !important;
+  border-right-color: #808080 !important;
+  border-bottom-color: #808080 !important;
+}
+
+/* Depress effect on click */
+.retro button:active, .retro [role="button"]:active {
+  border-top-color: #808080 !important;
+  border-left-color: #808080 !important;
+  border-right-color: #ffffff !important;
+  border-bottom-color: #ffffff !important;
+  padding-top: 2px !important;
+  padding-left: 2px !important;
+}
+
+/* Accent Buttons (Primary) */
+.retro .bg-primary-500, 
+.retro .bg-primary-600,
+.retro .bg-amber-500,
+.retro .bg-emerald-500,
+.retro .bg-rose-500 {
+  background: #000080 !important; /* Classic Navy */
+  color: #ffffff !important;
+}
+
+/* Inputs and Textareas */
+.retro input, .retro textarea {
+  background: #ffffff !important;
+  color: #000 !important;
+  border: 2px solid !important;
+  border-top-color: #808080 !important;
+  border-left-color: #808080 !important;
+  border-right-color: #ffffff !important;
+  border-bottom-color: #ffffff !important;
+}
+
+/* Tables */
+.retro .table-premium, .retro table {
+  border: 2px solid #808080 !important;
+  border-spacing: 0 !important;
+  background: #ffffff !important;
+}
+.retro .table-premium tr {
+  background: #ffffff !important;
+  border: none !important;
+}
+.retro .table-premium td, .retro .table-premium th {
+  border: 1px solid #c0c0c0 !important;
+  background: #ffffff !important;
+  color: #000 !important;
+}
+.retro .table-premium th {
+  background: #c0c0c0 !important;
+  border-top-color: #ffffff !important;
+  border-left-color: #ffffff !important;
+  border-right-color: #808080 !important;
+  border-bottom-color: #808080 !important;
+}
+
+/* Modals and Overlays */
+.retro .fixed.inset-0 > div:first-child {
+  background: transparent !important; /* No backdrop blur overlay */
+}
+
+/* Typography fix */
+.retro h1, .retro h2, .retro h3, .retro h4, .retro h5, .retro h6 {
+  font-weight: bold !important;
+  font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif !important;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+
+.retro .text-slate-400, .retro .text-slate-500, .retro .text-slate-600, .retro .text-slate-800,
+.retro .dark\:text-white, .retro .dark\:text-slate-300 {
+  color: #000 !important;
+}
+
+/* Lucide icons in buttons */
+.retro svg {
+  color: inherit !important;
+}
+
+/* Title bars for modals (simulated) */
+.retro .border-b.border-slate-100 {
+  background: #000080 !important;
+  color: #ffffff !important;
+}
+.retro .border-b.border-slate-100 h2 {
+  color: #ffffff !important;
+}
+.retro .border-b.border-slate-100 button {
+  background: #c0c0c0 !important;
+  color: #000 !important;
+}
+/* -------------------------------------
+   2005 THEME (Frutiger Aero / Web 2.0)
+-------------------------------------- */
+.theme-2005 body {
+  background: radial-gradient(circle at top, #e0f2fe, #bae6fd);
+  font-family: 'Trebuchet MS', 'Lucida Grande', sans-serif !important;
+}
+
+.theme-2005 * {
+  backdrop-filter: none !important;
+}
+
+.theme-2005 button, .theme-2005 .card-tactical, .theme-2005 .glass-premium, .theme-2005 .glass {
+  background: linear-gradient(180deg, #ffffff 0%, #f0f0f0 49%, #e0e0e0 50%, #f9f9f9 100%) !important;
+  border: 1px solid #a0a0a0 !important;
+  border-radius: 8px !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 2px 4px rgba(0,0,0,0.1) !important;
+  color: #333 !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.8);
+}
+
+.theme-2005 button:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #e8f4ff 49%, #d0e8ff 50%, #eef6ff 100%) !important;
+  border-color: #7ab8f5 !important;
+}
+
+.theme-2005 .bg-primary-500, .theme-2005 .bg-primary-600 {
+  background: linear-gradient(180deg, #60a5fa 0%, #3b82f6 49%, #2563eb 50%, #60a5fa 100%) !important;
+  color: white !important;
+  border-color: #1d4ed8 !important;
+  text-shadow: 0 -1px 0 rgba(0,0,0,0.3);
+}
+
+/* -------------------------------------
+   2015 THEME (Flat / Material Design)
+-------------------------------------- */
+.theme-2015 body {
+  background: #f5f5f5 !important;
+  font-family: 'Roboto', sans-serif !important;
+}
+
+.theme-2015 * {
+  backdrop-filter: none !important;
+  border-radius: 2px !important;
+}
+
+.theme-2015 .card-tactical, .theme-2015 .glass-premium, .theme-2015 .glass {
+  background: #ffffff !important;
+  border: none !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24) !important;
+}
+
+.theme-2015 button {
+  text-transform: uppercase !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.5px !important;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+  background: #ffffff !important;
+  border: none !important;
+}
+
+.theme-2015 button:active {
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3) !important;
+}
+
+.theme-2015 .bg-primary-500, .theme-2015 .bg-primary-600 {
+  background: #2196f3 !important; /* Material Blue */
+  color: white !important;
+}
+
+/* -------------------------------------
+   2025 THEME (Ultra Hyper-Glass / Neon)
+-------------------------------------- */
+.theme-2025 body {
+  background: radial-gradient(circle at 50% 0%, #0f172a, #020617);
+  color: #fff !important;
+}
+
+.theme-2025 .card-tactical, .theme-2025 .glass-premium, .theme-2025 .glass,
+.theme-2025 .bg-white, .theme-2025 .bg-slate-50 {
+  background: rgba(15, 23, 42, 0.92) !important;
+  backdrop-filter: blur(40px) saturate(200%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 30px !important;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+  color: #fff !important;
+}
+
+.theme-2025 button, .theme-2025 input, .theme-2025 select {
+  border-radius: 30px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #fff !important;
+}
+
+.theme-2025 .bg-primary-500, .theme-2025 .bg-primary-600 {
+  background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%) !important;
+  color: #000 !important;
+  font-weight: 900 !important;
+  box-shadow: 0 0 20px rgba(0, 242, 254, 0.4) !important;
+  border: none !important;
+}
+
+.theme-2025 .text-slate-400, .theme-2025 .text-slate-500, .theme-2025 .text-slate-600, .theme-2025 .text-slate-800 {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* -------------------------------------
+   CRISTAL PREMIUM THEME (Global Glass)
+   Refined for readability + premium feel
+-------------------------------------- */
+.glass body {
+  background: radial-gradient(circle at 50% 0%, #0f172a, #020617);
+  background-image: 
+    radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.15) 0%, transparent 40%),
+    radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.15) 0%, transparent 40%);
+  background-attachment: fixed;
+  color: #f8fafc !important;
+}
+
+.glass * {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Modales y Diálogos: 100% Sólidos y Opacos (Garantiza cero sangrado de fondo en cualquier tema) */
+.modal-solid,
+.glass .modal-solid,
+[role="dialog"],
+.glass [role="dialog"] {
+  background: #ffffff !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  opacity: 1 !important;
+}
+
+.dark .modal-solid,
+.dark .glass .modal-solid,
+.dark [role="dialog"],
+.dark .glass [role="dialog"] {
+  background: #0f172a !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  opacity: 1 !important;
+}
+
+/* Cards, Panels, Containers — translucent but readable */
+.glass .card-tactical, .glass .bg-white:not(.modal-solid), .glass .bg-slate-50,
+.glass .dark\:bg-slate-900:not(.modal-solid), .glass .dark\:bg-slate-950:not(.modal-solid),
+.glass .bg-\[\#f5f5f5\]\/80 {
+  background: rgba(15, 23, 42, 0.75) !important;
+  backdrop-filter: blur(24px) saturate(150%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #fff !important;
+}
+
+/* Glass-premium panels inside glass theme */
+.glass .glass-premium {
+  background: rgba(15, 23, 42, 0.80) !important;
+  backdrop-filter: blur(30px) saturate(160%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+
+/* Inputs, Selects, Textareas — clearly visible with glass feel */
+.glass input, .glass select, .glass textarea {
+  background: rgba(255, 255, 255, 0.10) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: #fff !important;
+}
+
+.glass input:focus, .glass select:focus, .glass textarea:focus {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border-color: rgba(59, 130, 246, 0.5) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
+}
+
+.glass input::placeholder, .glass textarea::placeholder {
+  color: rgba(255, 255, 255, 0.40) !important;
+}
+
+/* Buttons — subtle glass with visible boundaries */
+.glass button {
+  background: rgba(255, 255, 255, 0.07) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  color: #fff !important;
+}
+
+.glass button:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* Primary/Accent Buttons — vibrant gradient */
+.glass .bg-primary-500, .glass .bg-primary-600 {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.85) 0%, rgba(139, 92, 246, 0.85) 100%) !important;
+  backdrop-filter: blur(8px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+  color: #fff !important;
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.3) !important;
+}
+
+/* Active nav links inside glass */
+.glass .nav-link-premium.active {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.8) 0%, rgba(99, 102, 241, 0.8) 100%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3) !important;
+}
+
+/* Table rows — glass panels for each row */
+.glass .table-premium tbody tr {
+  background: rgba(15, 23, 42, 0.65) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  backdrop-filter: blur(12px) !important;
+}
+
+.glass .table-premium tbody tr:hover {
+  background: rgba(30, 41, 59, 0.80) !important;
+  border-color: rgba(59, 130, 246, 0.25) !important;
+}
+
+.glass .table-premium th {
+  color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.glass .table-premium td {
+  color: #e2e8f0 !important;
+}
+
+/* Text Overrides — readable hierarchy */
+.glass .text-slate-400, .glass .text-slate-500 {
+  color: rgba(255, 255, 255, 0.55) !important;
+}
+
+.glass .text-slate-600, .glass .text-slate-700, .glass .text-slate-800 {
+  color: rgba(255, 255, 255, 0.75) !important;
+}
+
+.glass .text-slate-900, .glass .dark\:text-white {
+  color: #f1f5f9 !important;
+}
+
+/* White cards inside glass theme */
+.glass [class*="fcfcfc"] *,
+.glass .bg-white .text-slate-900,
+.glass .bg-white .text-slate-800,
+.glass .bg-white .text-slate-700 {
+  color: #0f172a !important;
+}
+
+.glass [class*="fcfcfc"] .text-slate-500,
+.glass [class*="fcfcfc"] .text-slate-400,
+.glass .bg-white .text-slate-500,
+.glass .bg-white .text-slate-400 {
+  color: #475569 !important;
+}
+
+/* Dropdown menus */
+.glass [role="listbox"], .glass [role="menu"],
+.glass .absolute.z-50, .glass .absolute[class*="z-[100]"] {
+  background: rgba(15, 23, 42, 0.92) !important;
+  backdrop-filter: blur(20px) saturate(150%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+
+/* -------------------------------------------------------------
+   MODO GRAFITO MATE (Tercer Modo: Descanso Visual en Jornadas Largas)
+   Evita el negro #000000 puro (que causa halación y fatiga ocular en
+   monitores LCD/LED) usando una escala de grises carbón/grafito neutros
+   (#181a1f -> #1e2127 -> #252932) con contraste equilibrado y cero brillo.
+-------------------------------------------------------------- */
+html.oled,
+html.oled body {
+  background-color: #181a1f !important;
+  background-image: none !important;
+  color: #e2e6ec !important;
+  color-scheme: dark;
+}
+
+/* Paneles estructurales, encabezados y barras laterales */
+html.oled aside,
+.oled aside.bg-\[\#e8edf3\] {
+  background-color: #15171c !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+  color: #e2e6ec !important;
+}
+
+.oled header,
+.oled nav.dashboard-nav {
+  background-color: #1e2127 !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+  color: #e2e6ec !important;
+}
+
+/* Fondos contenedores principales */
+.oled .bg-\[\#e4e9f0\],
+.oled .bg-slate-950,
+.oled .dark\:bg-slate-950,
+.oled .dark\:bg-slate-950\/70 {
+  background-color: #181a1f !important;
+  border-color: #2e333d !important;
+}
+
+.oled .bg-\[\#eef2f6\],
+.oled .dark\:bg-slate-900,
+.oled .dark\:bg-slate-900\/60,
+.oled .dark\:bg-\[\#070d1e\],
+.oled .dark\:bg-\[\#091126\] {
+  background-color: #1e2127 !important;
+  border-color: #2e333d !important;
+}
+
+.oled .dark\:bg-slate-800,
+.oled .dark\:bg-slate-800\/50,
+.oled .dark\:bg-slate-800\/80 {
+  background-color: #242830 !important;
+  border-color: #343a46 !important;
+}
+
+/* Modales y diálogos en Grafito Mate */
+.oled .modal-solid,
+.oled [role="dialog"],
+.oled .modal-container-responsive {
+  background-color: #21252c !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid #343a46 !important;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Tarjetas de Producto y Elementos del Catálogo */
+.oled [id^="product-"],
+.oled .card-tactical,
+.oled .glass,
+.oled .glass-premium {
+  background-color: #242830 !important;
+  background-image: none !important;
+  border: 1px solid #343a46 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+  color: #e2e6ec !important;
+}
+
+.oled [id^="product-"]:hover,
+.oled .card-tactical:hover {
+  border-color: #4b5364 !important;
+  background-color: #292e37 !important;
+}
+
+/* Contenedor de imagen dentro de las tarjetas en Grafito Mate */
+.oled [id^="product-"] > div:first-child {
+  background-color: #2b303a !important;
+  border-color: #343a46 !important;
+}
+
+/* Atenuación óptica suave para imágenes con fondo blanco puro en modos oscuros */
+.dark [id^="product-"] img,
+.oled [id^="product-"] img {
+  filter: brightness(0.92) contrast(0.98);
+}
+
+/* Líneas de producto en el Carrito y tarjeta de resumen */
+.oled .dark\:bg-\[\#0e1730\],
+.oled .cart-summary-card {
+  background-color: #242830 !important;
+  border-color: #343a46 !important;
+}
+
+/* Barra inferior de navegación móvil (Dock) */
+.oled .mobile-bottom-dock {
+  background-color: #1e2127 !important;
+  background: #1e2127 !important;
+  border-top: 1px solid #2e333d !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Inputs, Selects y Buscadores */
+.oled input:not(.bg-transparent):not([class*="bg-transparent"]):not(.border-none):not([class*="border-none"]):not([class*="border-0"]),
+.oled select,
+.oled textarea {
+  background-color: #242830 !important;
+  border-color: #363c48 !important;
+  color: #e2e6ec !important;
+  box-shadow: none !important;
+}
+
+.oled input:not(.bg-transparent):not([class*="bg-transparent"]):not(.border-none):not([class*="border-none"]):not([class*="border-0"]):focus,
+.oled select:focus,
+.oled textarea:focus {
+  background-color: #282d36 !important;
+  border-color: #525b6d !important;
+  box-shadow: none !important;
+}
+
+/* Inputs transparentes y buscadores integrados */
+.oled input.bg-transparent,
+.oled input[class*="bg-transparent"],
+.oled input.border-none,
+.oled input[class*="border-none"],
+.oled input[class*="border-0"],
+.oled .search-bar-container input,
+.oled .search-box input {
+  background-color: transparent !important;
+  background: transparent !important;
+  border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.oled .search-bar-container {
+  background-color: #242830 !important;
+  border: 1px solid #363c48 !important;
+}
+
+.oled .search-bar-container:focus-within {
+  background-color: #282d36 !important;
+  border-color: #525b6d !important;
+  box-shadow: none !important;
+}
+
+.oled input::placeholder,
+.oled textarea::placeholder {
+  color: #8b93a2 !important;
+}
+
+/* Tablas y Listados */
+.oled .table-premium tbody tr {
+  background-color: #242830 !important;
+  border-bottom: 1px solid #2e333d !important;
+}
+
+.oled .table-premium tbody tr:hover {
+  background-color: #2a2f38 !important;
+}
+
+.oled .table-premium th {
+  background-color: #1e2127 !important;
+  color: #9ba3b0 !important;
+  border-bottom: 1px solid #2e333d !important;
+}
+
+/* Supresión de sombras de texto y desenfoques pesados */
+.oled *,
+.oled *::before,
+.oled *::after {
+  text-shadow: none !important;
+}
+
+.oled .backdrop-blur-xl,
+.oled .backdrop-blur-2xl,
+.oled .backdrop-blur-3xl,
+.oled .backdrop-blur-md,
+.oled .backdrop-blur {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Botones secundarios con cuerpo real y contraste suave */
+.oled button:not(.bg-primary-500):not(.bg-primary-600):not(.bg-slate-800):not(.bg-emerald-600):not(.bg-rose-600):not(.bg-red-600):not(.bg-amber-600):not(.btn-gradient-primary):not(.btn-gradient-tab-active):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="hover:bg-transparent"]):not(.btn-icon):not(.btn-ghost) {
+  background-color: #2b303a !important;
+  border-color: #3b4250 !important;
+  color: #dcdfe4 !important;
+}
+
+.oled button:not(.bg-primary-500):not(.bg-primary-600):not(.bg-slate-800):not(.bg-emerald-600):not(.bg-rose-600):not(.bg-red-600):not(.bg-amber-600):not(.btn-gradient-primary):not(.btn-gradient-tab-active):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="hover:bg-transparent"]):not(.btn-icon):not(.btn-ghost):hover {
+  background-color: #343a46 !important;
+  border-color: #4b5364 !important;
+}
+
+/* Botones activos y principales en Grafito Mate (Categoría activa, Cobrar F2, Menú activo) */
+.oled button.bg-slate-800,
+.oled .nav-link-premium.active {
+  background-color: #3b4252 !important;
+  border-color: #4c566a !important;
+  color: #ffffff !important;
+}
+
+.oled button.bg-transparent,
+.oled button[class*="bg-transparent"],
+.oled button.btn-icon,
+.oled button.btn-ghost {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Jerarquía tipográfica descansada sin halación */
+.oled .text-slate-400,
+.oled .text-slate-500 {
+  color: #9ba3b0 !important;
+}
+
+.oled .text-slate-600,
+.oled .text-slate-700 {
+  color: #c4c9d4 !important;
+}
+
+.oled .text-slate-800,
+.oled .text-slate-900,
+.oled .dark\:text-white,
+.oled .dark\:text-slate-100 {
+  color: #e2e6ec !important;
+}
+
+/* ==========================================
+   WINDOWS 7 SUPER ULTRA LIGHT MODE (BOTH MODES)
+   Strips shadows, text shadows, linear gradients,
+   and forces system fonts & flat solid colors.
+   ========================================== */
+/* Compatibility legacy fallbacks cleaned to prevent breaking Windows 10/11 UI */
+
+.win7.dark input, .win7.dark select,
+.win7 .dark input, .win7 .dark select {
+  background-image: none !important;
+  background-color: #0f172a !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
+}
+
+.win7.dark button, .win7 .dark button {
+  background-image: none !important;
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.win7.dark .bg-primary-500, .win7.dark .bg-primary-600,
+.win7 .dark .bg-primary-500, .win7 .dark .bg-primary-600 {
+  background-image: none !important;
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+}
+
+/* High Contrast Typography for Windows 7 (100% Legible) */
+.win7 {
+  color: #0f172a;
+}
+.win7.dark, .win7 .dark {
+  color: #f8fafc !important;
+}
+
+.win7.dark h1, .win7.dark h2, .win7.dark h3, .win7.dark h4, .win7.dark h5, .win7.dark h6,
+.win7 .dark h1, .win7 .dark h2, .win7 .dark h3, .win7 .dark h4, .win7 .dark h5, .win7 .dark h6 {
+  color: #ffffff !important;
+}
+
+.win7.dark p, .win7.dark span, .win7.dark label, .win7.dark td, .win7.dark th,
+.win7 .dark p, .win7 .dark span, .win7 .dark label, .win7 .dark td, .win7 .dark th {
+  color: #f1f5f9;
+}
+
+/* Soft & Ergonomic Dark Mode Typography (No harsh white halation) */
+.dark:not(.oled) .text-slate-900,
+.dark:not(.oled) .text-slate-800,
+.dark:not(.oled) .text-slate-700 {
+  color: #e2e8f0 !important;
+}
+
+.dark:not(.oled) .text-slate-600,
+.dark:not(.oled) .text-slate-500 {
+  color: #94a3b8 !important;
+}
+
+.dark:not(.oled) .text-slate-400 {
+  color: #64748b !important;
+}
+
+/* Active Category and Action Buttons in Dark/Light Modes */
+.dark button.bg-primary-600,
+button.bg-primary-600,
+.dark button[class*="bg-primary-600"],
+button[class*="bg-primary-600"] {
+  color: #ffffff !important;
+  background-color: var(--color-primary-600, #2563eb) !important;
+  border-color: var(--color-primary-500, #3b82f6) !important;
+}
+
+/* Sidebar menu titles and category headers in Dark Mode */
+.dark aside .text-slate-500,
+.dark aside .text-slate-400,
+.dark nav .text-slate-500,
+.dark nav .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+/* High Contrast Prices and Ref Badges in Dark Mode */
+.dark .price-uhd,
+.dark .text-emerald-400 {
+  color: #34d399 !important;
+  text-shadow: none !important;
+}
+
+.dark span.bg-slate-100,
+.dark .badge.bg-slate-100,
+.dark .bg-white\/10 {
+  color: #f1f5f9 !important;
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* Right Panel ("MI COMPRA") customer labels and total prices in Dark Mode */
+.dark .text-slate-800,
+.dark .text-slate-900 {
+  color: #f8fafc !important;
+}
+
+/* ========================================================================= */
+/* 🧾 HIGH-DEFINITION THERMAL TICKET & RECEIPT STYLING                      */
+/* ========================================================================= */
+.ticket-preview,
+.dark .ticket-preview,
+.glass .ticket-preview {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  font-family: 'JetBrains Mono', 'Roboto Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  text-rendering: optimizeLegibility !important;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Ensure child elements maintain clear typographic hierarchy and contrast */
+.ticket-preview .text-slate-950,
+.dark .ticket-preview .text-slate-950,
+.glass .ticket-preview .text-slate-950 {
+  color: #020617 !important;
+}
+
+.ticket-preview .text-slate-900,
+.dark .ticket-preview .text-slate-900,
+.glass .ticket-preview .text-slate-900 {
+  color: #0f172a !important;
+}
+
+.ticket-preview .text-slate-800,
+.dark .ticket-preview .text-slate-800,
+.glass .ticket-preview .text-slate-800 {
+  color: #1e293b !important;
+}
+
+.ticket-preview .text-slate-700,
+.dark .ticket-preview .text-slate-700,
+.glass .ticket-preview .text-slate-700 {
+  color: #334155 !important;
+}
+
+.ticket-preview .text-slate-600,
+.dark .ticket-preview .text-slate-600,
+.glass .ticket-preview .text-slate-600 {
+  color: #475569 !important;
+}
+
+.ticket-preview .text-slate-500,
+.dark .ticket-preview .text-slate-500,
+.glass .ticket-preview .text-slate-500 {
+  color: #64748b !important;
+}
+
+.ticket-preview .text-slate-400,
+.dark .ticket-preview .text-slate-400,
+.glass .ticket-preview .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+.ticket-preview .text-emerald-700,
+.ticket-preview .text-emerald-600,
+.dark .ticket-preview .text-emerald-700,
+.dark .ticket-preview .text-emerald-600 {
+  color: #047857 !important;
+}
+
+.ticket-preview .bg-slate-50,
+.dark .ticket-preview .bg-slate-50,
+.glass .ticket-preview .bg-slate-50 {
+  background-color: #f8fafc !important;
+}
+
+.ticket-preview .bg-slate-100,
+.dark .ticket-preview .bg-slate-100,
+.glass .ticket-preview .bg-slate-100 {
+  background-color: #f1f5f9 !important;
+}
+
+.ticket-preview .border-slate-100 { border-color: #f1f5f9 !important; }
+.ticket-preview .border-slate-200 { border-color: #e2e8f0 !important; }
+.ticket-preview .border-slate-300 { border-color: #cbd5e1 !important; }
+.ticket-preview .border-slate-400 { border-color: #94a3b8 !important; }
+.ticket-preview .border-slate-900,
+.ticket-preview .border-slate-950 { border-color: #0f172a !important; }
+
+/* ========================================================================= */
+/* 📱 1000% MOBILE RESPONSIVENESS & TOUCH OPTIMIZATIONS                      */
+/* ========================================================================= */
+
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+}
+
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+}
+
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+
+.pl-safe {
+  padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+}
+
+.pr-safe {
+  padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+}
+
+.mb-safe {
+  margin-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+.h-dvh {
+  height: 100dvh;
+}
+
+.min-h-dvh {
+  min-height: 100dvh;
+}
+
+/* Touch optimization: smooth scrolling and remove blue flash on tap */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button, a, input, select, textarea {
+  touch-action: manipulation;
+}
+
+/* Mobile Bottom Navigation Dock Styling */
+.mobile-bottom-dock {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+}
+
+html:not(.dark) .mobile-bottom-dock {
+  background: rgba(255, 255, 255, 0.88);
+  border-top: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 -10px 25px rgba(0, 0, 0, 0.06);
+}
+
+/* Mobile Interactive Card Style */
+.mobile-card {
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 1.25rem;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dark .mobile-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mobile-card:active {
+  transform: scale(0.985);
+}
+
+/* MOBILE GPU HARDWARE ACCELERATION & SCROLL PERFORMANCE */
+@media (max-width: 768px) {
+  /* Fast native momentum scrolling */
+  .overflow-y-auto, .overflow-x-auto, .overflow-auto {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* Disable heavy GPU backdrop-filter blurs on mobile screens for silky smooth 60 FPS */
+  *, ::before, ::after {
+    --tw-backdrop-blur: none !important;
+  }
+  
+  .backdrop-blur-none,
+  .backdrop-blur-sm,
+  .backdrop-blur,
+  .backdrop-blur-md,
+  .backdrop-blur-lg,
+  .backdrop-blur-xl,
+  .backdrop-blur-2xl,
+  .backdrop-blur-3xl,
+  .glass,
+  .glass-dark,
+  .glass-premium,
+  .glass-nextgen {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .dark .glass,
+  .dark .glass-dark,
+  .dark .glass-premium,
+  .dark .glass-nextgen {
+    background: rgb(15 23 42 / 0.96) !important;
+  }
+
+  html:not(.dark) .glass,
+  html:not(.dark) .glass-dark,
+  html:not(.dark) .glass-premium,
+  html:not(.dark) .glass-nextgen {
+    background: rgb(255 255 255 / 0.98) !important;
+  }
+
+  .mobile-bottom-dock {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgb(15 23 42 / 0.98) !important;
+  }
+
+  html:not(.dark) .mobile-bottom-dock {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgb(255 255 255 / 0.98) !important;
+  }
+
+  /* GPU compositing & containment for 60 FPS scrolling without layout thrashing */
+  .card-tactical, .mobile-card, [id^="product-"] {
+    contain: content;
+    transform: translateZ(0);
+  }
+
+/* Zero-lag instant touch feedback on mobile screens (bypass 300ms hover transitions) */
+  @media (hover: none) and (pointer: coarse) {
+    .card-tactical, .mobile-card, button, a {
+      transition: transform 0.06s ease, opacity 0.06s ease !important;
+    }
+  }
+}
+
+
+/* NEXT-GEN DOM & GPU PERFORMANCE: content-visibility & touch optimization */
+.cv-auto-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+  contain: layout style;
+  transform: translateZ(0);
+}
+
+.cv-auto-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 70px;
+  contain: layout style;
+  transform: translateZ(0);
+}
+
+/* Eliminate 300ms tap delay on mobile touchscreens */
+button, input, select, textarea, a, [role="button"], .touch-fast {
+  touch-action: manipulation;
+}
+
+/* 120Hz Smooth Inertial Scrolling & GPU Layer Promotion */
+.no-scrollbar, .overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto !important;
+}
+
+/* Gestor de Ventas - Navegación de Pestañas Multi-Tema (Claro, Oscuro, OLED) */
+.oled .sales-nav-card {
+  background-color: #000000 !important;
+  border-color: #27272a !important;
+  box-shadow: none !important;
+}
+
+.oled .sales-tab-track {
+  background-color: #09090b !important;
+  border-color: #27272a !important;
+}
+
+.oled .sales-tab-active {
+  background-color: #18181b !important;
+  border-color: #3f3f46 !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.oled .sales-tab-inactive {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #71717a !important;
+}
+
+.oled .sales-tab-inactive:hover {
+  background-color: #121214 !important;
+  color: #e4e4e7 !important;
+}
+
+/* Inventario & Stock - Navegación y Controles Multi-Tema (Claro, Oscuro, OLED) */
+.oled .inv-tab-active,
+.oled .inv-toggle-active {
+  background-color: #18181b !important;
+  border-color: #3f3f46 !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.oled .inv-tab-inactive,
+.oled .inv-toggle-inactive {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #71717a !important;
+}
+
+.oled .inv-tab-inactive:hover,
+.oled .inv-toggle-inactive:hover {
+  background-color: #121214 !important;
+  color: #e4e4e7 !important;
+}
+
+/* ========================================================================= */
+/* 📱 AUTO-ADAPTIVE RULES FOR EMBEDDED DESKTOP MODULES ON MOBILE & TABLETS   */
+/* ========================================================================= */
+
+.mobile-embedded-module {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+@media (max-width: 768px) {
+  /* Scale down oversized desktop typography */
+  .mobile-embedded-module h1,
+  .mobile-embedded-module .text-3xl,
+  .mobile-embedded-module .text-4xl,
+  .mobile-embedded-module .text-5xl {
+    font-size: 1.25rem !important;
+    line-height: 1.3 !important;
+    letter-spacing: -0.02em !important;
+  }
+
+  .mobile-embedded-module h2,
+  .mobile-embedded-module .text-2xl {
+    font-size: 1.1rem !important;
+    line-height: 1.35 !important;
+  }
+
+  .mobile-embedded-module h3,
+  .mobile-embedded-module .text-xl {
+    font-size: 0.975rem !important;
+    line-height: 1.35 !important;
+  }
+
+  /* Compact oversized vertical spacings */
+  .mobile-embedded-module .space-y-8 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 1rem !important;
+  }
+
+  .mobile-embedded-module .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.75rem !important;
+  }
+
+  /* Compact oversized card paddings */
+  .mobile-embedded-module .p-8,
+  .mobile-embedded-module .p-7,
+  .mobile-embedded-module .p-6 {
+    padding: 0.875rem !important;
+  }
+
+  .mobile-embedded-module .px-8,
+  .mobile-embedded-module .px-6 {
+    padding-left: 0.875rem !important;
+    padding-right: 0.875rem !important;
+  }
+
+  .mobile-embedded-module .py-8,
+  .mobile-embedded-module .py-6 {
+    padding-top: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
+  }
+
+  .mobile-embedded-module .gap-8,
+  .mobile-embedded-module .gap-6,
+  .mobile-embedded-module .gap-5 {
+    gap: 0.625rem !important;
+  }
+
+  .mobile-embedded-module .rounded-3xl,
+  .mobile-embedded-module .rounded-\[2rem\],
+  .mobile-embedded-module .rounded-\[2\.5rem\] {
+    border-radius: 1rem !important;
+  }
+
+  /* Prevent button text wrapping into multiple ugly lines on phones */
+  .mobile-embedded-module button {
+    white-space: nowrap;
+  }
+
+  /* Tables inside embedded modules auto-scroll horizontally and never blow up width */
+  .mobile-embedded-module table {
+    display: table;
+    min-width: 100%;
+  }
+
+  .mobile-embedded-module table th,
+  .mobile-embedded-module table td {
+    font-size: 0.75rem !important;
+    padding: 0.5rem 0.625rem !important;
+  }
+
+  .mobile-embedded-module .overflow-x-auto {
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Compact excessive desktop bottom and horizontal paddings */
+  .mobile-embedded-module .pb-24,
+  .mobile-embedded-module .pb-20 {
+    padding-bottom: 2rem !important;
+  }
+
+  .mobile-embedded-module .max-w-7xl,
+  .mobile-embedded-module .max-w-6xl {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+}
+
+/* ========================================================================= */
+/* ARQUITECTURAS INDUSTRIALES PRO (100% AISLADAS: STUDIO, SWISS, TITANIUM)   */
+/* ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   1. STUDIO BIMODAL (Carbon & Porcelain Studio)
+   Tres planos físicos diferenciados por función:
+   - Plano 1: Chasis de navegación en Carbón Anodizado (#0A0D12)
+   - Plano 2: Mesa de catálogo en Piedra Neutra (#F3F4F6) + Tarjetas (#FFFFFF)
+   - Plano 3: Cinta financiera (#FFFFFF) + Totalizador en Carbón (#0A0D12)
+-------------------------------------------------------------------------- */
+html.studio,
+html.studio body {
+  background-color: #f3f4f6 !important;
+  background-image: none !important;
+  color: #0f172a !important;
+  color-scheme: light;
+}
+
+/* Plano 1: Chasis Lateral en Carbón Anodizado */
+html.studio aside.app-main-sidebar {
+  background-color: #0a0d12 !important;
+  background-image: none !important;
+  border-right: 1px solid #1e242e !important;
+  box-shadow: none !important;
+  color: #e2e8f0 !important;
+}
+
+/* En el chasis de la barra lateral, Studio y Titanium siempre usan el logo blanco de alto contraste */
+html.studio aside.app-main-sidebar .isaac-logo-light,
+html.titanium aside.app-main-sidebar .isaac-logo-light,
+html.dark aside.app-main-sidebar .isaac-logo-light,
+html.studio aside.app-main-sidebar .isaac-emblem-light,
+html.titanium aside.app-main-sidebar .isaac-emblem-light,
+html.dark aside.app-main-sidebar .isaac-emblem-light {
+  display: none !important;
+}
+
+html.studio aside.app-main-sidebar .isaac-logo-dark,
+html.titanium aside.app-main-sidebar .isaac-logo-dark,
+html.dark aside.app-main-sidebar .isaac-logo-dark,
+html.studio aside.app-main-sidebar .isaac-emblem-dark,
+html.titanium aside.app-main-sidebar .isaac-emblem-dark,
+html.dark aside.app-main-sidebar .isaac-emblem-dark {
+  display: block !important;
+}
+
+html.swiss aside.app-main-sidebar .isaac-logo-light,
+html.swiss aside.app-main-sidebar .isaac-emblem-light {
+  display: block !important;
+}
+
+html.swiss aside.app-main-sidebar .isaac-logo-dark,
+html.swiss aside.app-main-sidebar .isaac-emblem-dark {
+  display: none !important;
+}
+
+html.studio aside.app-main-sidebar .text-slate-900 {
+  color: #f8fafc !important;
+}
+
+html.studio aside.app-main-sidebar .text-slate-500,
+html.studio aside.app-main-sidebar .text-slate-400 {
+  color: #64748b !important;
+}
+
+html.studio aside.app-main-sidebar .bg-white {
+  background-color: #12161f !important;
+  border-color: #252d3b !important;
+}
+
+html.studio aside.app-main-sidebar .bg-slate-100 {
+  background-color: #161b24 !important;
+  color: #cbd5e1 !important;
+  border-color: #283140 !important;
+}
+
+html.studio aside.app-main-sidebar .nav-link-premium {
+  color: #94a3b8 !important;
+  background-color: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px !important;
+}
+
+/* Íconos monocromáticos ejecutivos en el chasis lateral (elimina ruido multicolor) */
+html.studio aside.app-main-sidebar .nav-link-premium > div:first-child {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #7c8799 !important;
+}
+
+html.studio aside.app-main-sidebar .nav-link-premium:hover {
+  background-color: #141922 !important;
+  border-color: #1f2633 !important;
+  color: #f1f5f9 !important;
+}
+
+html.studio aside.app-main-sidebar .nav-link-premium:hover > div:first-child {
+  color: #e2e8f0 !important;
+}
+
+html.studio aside.app-main-sidebar .nav-link-premium.active {
+  background-color: #161c26 !important;
+  border-color: #283242 !important;
+  color: #ffffff !important;
+  box-shadow: inset 2.5px 0 0 0 #ffffff !important;
+}
+
+html.studio aside.app-main-sidebar .nav-link-premium.active > div:first-child {
+  color: #ffffff !important;
+}
+
+/* Plano 2: Barra Superior, Toolbar de Catálogo y Lienzo Piedra Neutra */
+html.studio header.app-main-header {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #e2e5eb !important;
+  box-shadow: none !important;
+}
+
+html.studio header.app-main-header .bg-\[\#fafbfd\] {
+  background-color: #f8f9fb !important;
+  border-color: #e2e5eb !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+html.studio .pos-catalog-toolbar {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #e2e5eb !important;
+}
+
+html.studio .pos-catalog-shell,
+html.studio .pos-catalog-canvas,
+html.studio .bg-\[\#e4e9f0\] {
+  background-color: #f3f4f6 !important;
+}
+
+html.studio .search-bar-container {
+  background-color: #f4f5f7 !important;
+  border: 1px solid #d5dae2 !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+html.studio .search-bar-container:focus-within {
+  background-color: #ffffff !important;
+  border-color: #0a0d12 !important;
+  box-shadow: 0 0 0 1px #0a0d12 !important;
+}
+
+html.studio .pos-view-switcher {
+  background-color: #f4f5f7 !important;
+  border-color: #d5dae2 !important;
+  border-radius: 6px !important;
+}
+
+html.studio .pos-view-switcher button.bg-slate-800 {
+  background-color: #0a0d12 !important;
+  color: #ffffff !important;
+  border-radius: 4px !important;
+}
+
+html.studio .pos-category-strip {
+  background-color: #f8f9fb !important;
+  border: 1px solid #e2e5eb !important;
+  border-radius: 7px !important;
+  box-shadow: none !important;
+}
+
+html.studio .pos-category-strip button.bg-sky-600 {
+  background-color: #0a0d12 !important;
+  border-color: #0a0d12 !important;
+  color: #ffffff !important;
+  border-radius: 5px !important;
+  box-shadow: none !important;
+}
+
+/* Tarjetas de Producto y Paneles en Blanco Galería Puro */
+html.studio [id^="product-"],
+html.studio .card-tactical,
+html.studio .glass,
+html.studio .glass-premium {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border: 1px solid #e2e5eb !important;
+  border-radius: 6px !important;
+  box-shadow: 0 1px 2px rgba(10, 13, 18, 0.03) !important;
+}
+
+html.studio [id^="product-"]:hover,
+html.studio .card-tactical:hover {
+  border-color: #94a3b8 !important;
+  box-shadow: 0 4px 12px rgba(10, 13, 18, 0.06) !important;
+}
+
+html.studio [id^="product-"] > div.h-28:first-child {
+  background-color: #fafafb !important;
+  border-bottom: 1px solid #edf0f4 !important;
+}
+
+/* Plano 3: Cinta Financiera de Ticket + Módulo Totalizador en Carbón Anodizado */
+html.studio div:has(> .pos-ticket-panel) {
+  border-color: transparent !important;
+}
+
+html.studio .pos-ticket-panel {
+  background-color: #ffffff !important;
+  border-left: 1px solid #d5dae2 !important;
+  box-shadow: none !important;
+}
+
+html.studio .pos-ticket-header,
+html.studio .pos-ticket-identity,
+html.studio .pos-ticket-commands,
+html.studio .pos-ticket-customer {
+  background-color: #ffffff !important;
+  border-color: #e5e8ee !important;
+}
+
+html.studio .pos-ticket-commands button:not(:disabled),
+html.studio .pos-ticket-customer > button {
+  background-color: #f8f9fb !important;
+  border-color: #dde2ea !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+html.studio .pos-ticket-commands button:not(:disabled):hover,
+html.studio .pos-ticket-customer > button:hover {
+  background-color: #ffffff !important;
+  border-color: #94a3b8 !important;
+}
+
+html.studio .pos-ticket-feed {
+  background-color: #f6f7f9 !important;
+}
+
+html.studio .pos-ticket-item {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e5eb !important;
+  border-radius: 6px !important;
+  box-shadow: 0 1px 2px rgba(10, 13, 18, 0.02) !important;
+}
+
+html.studio .pos-ticket-footer {
+  background-color: #ffffff !important;
+  border-top: 1px solid #dde2ea !important;
+  box-shadow: none !important;
+}
+
+/* Módulo Totalizador Oscuro de Alto Contraste */
+html.studio .cart-summary-card {
+  background-color: #0a0d12 !important;
+  border: 1px solid #1e242e !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  color: #f8fafc !important;
+}
+
+html.studio .cart-summary-card .border-slate-200 {
+  border-color: #1f2633 !important;
+}
+
+html.studio .cart-summary-card .text-slate-500 {
+  color: #94a3b8 !important;
+}
+
+html.studio .cart-summary-card .text-slate-800,
+html.studio .cart-summary-card .text-slate-700 {
+  color: #e2e8f0 !important;
+}
+
+html.studio .cart-summary-card .text-slate-900 {
+  color: #ffffff !important;
+}
+
+html.studio .cart-summary-card .text-primary-600 {
+  color: #7dd3fc !important;
+}
+
+html.studio .cart-summary-card .text-emerald-700 {
+  color: #34d399 !important;
+}
+
+html.studio .cart-summary-card .text-amber-700 {
+  color: #fbbf24 !important;
+}
+
+html.studio .cart-summary-card .bg-slate-100 {
+  background-color: #151a24 !important;
+  border-color: #262f3f !important;
+}
+
+/* Tecla de Ejecución Bancaria F2 */
+html.studio .pos-checkout-btn:not(:disabled) {
+  background-color: #059669 !important;
+  border-color: #047857 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 1px 2px rgba(5, 150, 105, 0.2) !important;
+}
+
+html.studio .pos-checkout-btn:not(:disabled):hover {
+  background-color: #047857 !important;
+}
+
+html.studio .pos-checkout-btn:not(:disabled) span.bg-slate-700 {
+  background-color: rgba(0, 0, 0, 0.22) !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+  color: #ffffff !important;
+}
+
+html.studio .table-premium tbody tr {
+  background: #ffffff !important;
+  border: 1px solid #e2e5eb !important;
+  border-radius: 8px !important;
+  box-shadow: 0 1px 2px rgba(10, 13, 18, 0.03) !important;
+}
+
+
+/* -------------------------------------------------------------------------
+   2. SWISS ARCHITECTURAL GRID (Zero-Shadow Continuous Grid)
+   Retícula ortogonal continua de 1px sin sombras flotantes sobre papel
+   técnico antirreflejo (#F2F4F7 / #FFFFFF) e instrumentación editorial.
+-------------------------------------------------------------------------- */
+html.swiss,
+html.swiss body {
+  background-color: #f2f4f7 !important;
+  background-image: none !important;
+  color: #090d16 !important;
+  color-scheme: light;
+}
+
+html.swiss aside.app-main-sidebar,
+html.swiss header.app-main-header,
+html.swiss [id^="product-"],
+html.swiss .card-tactical,
+html.swiss .glass,
+html.swiss .glass-premium,
+html.swiss .pos-ticket-panel,
+html.swiss .pos-ticket-item,
+html.swiss .cart-summary-card,
+html.swiss .search-bar-container,
+html.swiss .pos-category-strip {
+  box-shadow: none !important;
+}
+
+html.swiss aside.app-main-sidebar {
+  background-color: #f7f8fa !important;
+  background-image: none !important;
+  border-right: 1px solid #cfd5df !important;
+}
+
+html.swiss aside.app-main-sidebar .nav-link-premium {
+  border-radius: 3px !important;
+  color: #334155 !important;
+  border: 1px solid transparent !important;
+}
+
+html.swiss aside.app-main-sidebar .nav-link-premium > div:first-child {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #475569 !important;
+  border-radius: 3px !important;
+}
+
+html.swiss aside.app-main-sidebar .nav-link-premium:hover {
+  background-color: #eaeef4 !important;
+  border-color: #cfd5df !important;
+  color: #090d16 !important;
+}
+
+html.swiss aside.app-main-sidebar .nav-link-premium.active {
+  background-color: #ffffff !important;
+  border: 1px solid #090d16 !important;
+  color: #090d16 !important;
+  box-shadow: inset 3px 0 0 0 #090d16 !important;
+}
+
+html.swiss aside.app-main-sidebar .nav-link-premium.active > div:first-child {
+  color: #090d16 !important;
+}
+
+html.swiss header.app-main-header {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #cfd5df !important;
+}
+
+html.swiss header.app-main-header .bg-\[\#fafbfd\] {
+  background-color: #ffffff !important;
+  border-color: #cfd5df !important;
+  border-radius: 3px !important;
+  box-shadow: none !important;
+}
+
+html.swiss .pos-catalog-toolbar {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #cfd5df !important;
+}
+
+html.swiss .pos-catalog-shell,
+html.swiss .pos-catalog-canvas,
+html.swiss .bg-\[\#e4e9f0\] {
+  background-color: #f2f4f7 !important;
+}
+
+html.swiss .search-bar-container {
+  background-color: #f7f8fa !important;
+  border: 1px solid #bfc7d4 !important;
+  border-radius: 3px !important;
+}
+
+html.swiss .search-bar-container:focus-within {
+  background-color: #ffffff !important;
+  border-color: #090d16 !important;
+}
+
+html.swiss .pos-view-switcher,
+html.swiss .pos-category-strip {
+  background-color: #f7f8fa !important;
+  border: 1px solid #cfd5df !important;
+  border-radius: 3px !important;
+}
+
+html.swiss .pos-view-switcher button.bg-slate-800,
+html.swiss .pos-category-strip button.bg-sky-600 {
+  background-color: #090d16 !important;
+  border-color: #090d16 !important;
+  color: #ffffff !important;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+}
+
+html.swiss .pos-category-strip button {
+  border-radius: 2px !important;
+}
+
+/* Tarjetas estilo Ficha Técnica Helvética */
+html.swiss [id^="product-"],
+html.swiss .card-tactical,
+html.swiss .glass,
+html.swiss .glass-premium {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border: 1px solid #cfd5df !important;
+  border-radius: 3px !important;
+}
+
+html.swiss [id^="product-"]:hover,
+html.swiss .card-tactical:hover {
+  border-color: #090d16 !important;
+  background-color: #ffffff !important;
+}
+
+html.swiss [id^="product-"] > div.h-28:first-child {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #e2e6ed !important;
+}
+
+html.swiss [id^="product-"] span.rounded-md {
+  border-radius: 2px !important;
+}
+
+/* Ticket Editorial Ortogonal */
+html.swiss div:has(> .pos-ticket-panel) {
+  border-color: transparent !important;
+}
+
+html.swiss .pos-ticket-panel {
+  background-color: #ffffff !important;
+  border-left: 1px solid #cfd5df !important;
+}
+
+html.swiss .pos-ticket-header,
+html.swiss .pos-ticket-identity,
+html.swiss .pos-ticket-commands,
+html.swiss .pos-ticket-customer,
+html.swiss .pos-ticket-footer {
+  background-color: #f7f8fa !important;
+  border-color: #cfd5df !important;
+}
+
+html.swiss .pos-ticket-commands button:not(:disabled),
+html.swiss .pos-ticket-customer > button {
+  background-color: #ffffff !important;
+  border-color: #cfd5df !important;
+  border-radius: 3px !important;
+  box-shadow: none !important;
+}
+
+html.swiss .pos-ticket-commands button:not(:disabled):hover,
+html.swiss .pos-ticket-customer > button:hover {
+  border-color: #090d16 !important;
+}
+
+html.swiss .pos-ticket-feed {
+  background-color: #ffffff !important;
+}
+
+html.swiss .pos-ticket-item {
+  background-color: #f8f9fb !important;
+  border: 1px solid #cfd5df !important;
+  border-radius: 3px !important;
+}
+
+html.swiss .cart-summary-card {
+  background-color: #ffffff !important;
+  border: 1px solid #cfd5df !important;
+  border-top: 2.5px solid #090d16 !important;
+  border-radius: 3px !important;
+}
+
+html.swiss .pos-ticket-footer button {
+  border-radius: 3px !important;
+  box-shadow: none !important;
+}
+
+html.swiss .pos-checkout-btn:not(:disabled) {
+  background-color: #090d16 !important;
+  border-color: #090d16 !important;
+  color: #ffffff !important;
+  border-radius: 3px !important;
+}
+
+html.swiss .pos-checkout-btn:not(:disabled):hover {
+  background-color: #1e293b !important;
+}
+
+html.swiss .table-premium {
+  border-spacing: 0 4px !important;
+}
+
+html.swiss .table-premium tbody tr {
+  background: #ffffff !important;
+  border: 1px solid #cfd5df !important;
+  border-radius: 3px !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+
+/* -------------------------------------------------------------------------
+   3. TITANIUM CONSOLE (Hardware Dark / Precision Instrument)
+   Capas de carbono, titanio y acero neutro (#08090C -> #0B0D10 -> #14181E)
+   con micro-biseles especulares de 1px e instrumentación monocromática.
+-------------------------------------------------------------------------- */
+html.titanium,
+html.titanium body {
+  background-color: #0b0d10 !important;
+  background-image: none !important;
+  color: #f1f3f5 !important;
+  color-scheme: dark;
+}
+
+html.titanium aside.app-main-sidebar {
+  background-color: #08090c !important;
+  background-image: none !important;
+  border-right: 1px solid #1e232b !important;
+  box-shadow: none !important;
+}
+
+html.titanium aside.app-main-sidebar .nav-link-premium {
+  color: #949dab !important;
+  background-color: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px !important;
+}
+
+html.titanium aside.app-main-sidebar .nav-link-premium > div:first-child {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  color: #7d8694 !important;
+}
+
+html.titanium aside.app-main-sidebar .nav-link-premium:hover {
+  background-color: #12151b !important;
+  border-color: #222832 !important;
+  color: #f1f3f5 !important;
+}
+
+html.titanium aside.app-main-sidebar .nav-link-premium:hover > div:first-child {
+  color: #d8dee9 !important;
+}
+
+html.titanium aside.app-main-sidebar .nav-link-premium.active {
+  background-color: #161a21 !important;
+  border-color: #2c3340 !important;
+  color: #ffffff !important;
+  box-shadow: inset 2px 0 0 0 #e2e8f0, inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+html.titanium aside.app-main-sidebar .nav-link-premium.active > div:first-child {
+  color: #ffffff !important;
+}
+
+html.titanium header.app-main-header {
+  background-color: #0f1216 !important;
+  border-bottom: 1px solid #1e232b !important;
+  box-shadow: none !important;
+}
+
+html.titanium .pos-catalog-toolbar {
+  background-color: #0f1216 !important;
+  border-bottom: 1px solid #1e232b !important;
+}
+
+html.titanium .pos-catalog-shell,
+html.titanium .pos-catalog-canvas,
+html.titanium .dark\:bg-slate-950,
+html.titanium .dark\:bg-slate-950\/70 {
+  background-color: #0b0d10 !important;
+  border-color: #1e232b !important;
+}
+
+html.titanium .dark\:bg-slate-900,
+html.titanium .dark\:bg-slate-900\/60,
+html.titanium .dark\:bg-\[\#070d1e\],
+html.titanium .dark\:bg-\[\#091126\] {
+  background-color: #0f1216 !important;
+  border-color: #1e232b !important;
+}
+
+html.titanium .dark\:bg-slate-800,
+html.titanium .dark\:bg-slate-800\/80,
+html.titanium .dark\:bg-slate-800\/90 {
+  background-color: #151920 !important;
+  border-color: #252c37 !important;
+}
+
+html.titanium .search-bar-container,
+html.titanium input:not(.bg-transparent):not([class*="bg-transparent"]):not(.border-none):not([class*="border-none"]):not([class*="border-0"]),
+html.titanium select,
+html.titanium textarea {
+  background-color: #090b0e !important;
+  border-color: #242a35 !important;
+  border-radius: 6px !important;
+  color: #f1f3f5 !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+html.titanium .search-bar-container input {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+html.titanium .search-bar-container:focus-within,
+html.titanium input:not(.bg-transparent):not([class*="bg-transparent"]):not(.border-none):not([class*="border-none"]):not([class*="border-0"]):focus,
+html.titanium select:focus,
+html.titanium textarea:focus {
+  background-color: #0d1015 !important;
+  border-color: #4b5668 !important;
+}
+
+html.titanium .pos-category-strip {
+  background-color: #0b0d10 !important;
+  border: 1px solid #1e232b !important;
+  border-radius: 7px !important;
+}
+
+/* Categoría activa en Acero Titanio Iluminado (contraste táctil de aviónica) */
+html.titanium .pos-category-strip button.bg-sky-600,
+html.titanium .pos-category-strip button.dark\:bg-sky-500 {
+  background-color: #e2e8f0 !important;
+  border-color: #f8fafc !important;
+  color: #090b0e !important;
+  border-radius: 5px !important;
+  box-shadow: none !important;
+}
+
+html.titanium .pos-category-strip button.bg-sky-600 span,
+html.titanium .pos-category-strip button.dark\:bg-sky-500 span {
+  color: #090b0e !important;
+}
+
+html.titanium .pos-category-strip button.bg-sky-600 span:last-child {
+  background-color: rgba(9, 11, 14, 0.14) !important;
+}
+
+/* Tarjetas Mecanizadas con Micro-Bisel Especular Superior */
+html.titanium [id^="product-"],
+html.titanium .card-tactical,
+html.titanium .glass,
+html.titanium .glass-premium {
+  background-color: #14181e !important;
+  background-image: none !important;
+  border: 1px solid #232933 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.35) !important;
+  color: #f1f3f5 !important;
+}
+
+html.titanium [id^="product-"]:hover,
+html.titanium .card-tactical:hover {
+  background-color: #181d25 !important;
+  border-color: #3a4352 !important;
+}
+
+html.titanium [id^="product-"] > div.h-28:first-child {
+  background-color: #101318 !important;
+  border-bottom: 1px solid #1e232b !important;
+}
+
+/* Consola Financiera de Ticket en Titanio */
+html.titanium div:has(> .pos-ticket-panel) {
+  border-color: transparent !important;
+}
+
+html.titanium .pos-ticket-panel {
+  background-color: #0f1216 !important;
+  border-left: 1px solid #1e232b !important;
+  box-shadow: none !important;
+}
+
+html.titanium .pos-ticket-header,
+html.titanium .pos-ticket-identity,
+html.titanium .pos-ticket-commands,
+html.titanium .pos-ticket-customer,
+html.titanium .pos-ticket-footer {
+  background-color: #0f1216 !important;
+  border-color: #1e232b !important;
+}
+
+html.titanium .pos-ticket-commands button:not(:disabled),
+html.titanium .pos-ticket-customer > button {
+  background-color: #151920 !important;
+  border-color: #252c37 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+html.titanium .pos-ticket-commands button:not(:disabled):hover,
+html.titanium .pos-ticket-customer > button:hover {
+  background-color: #1b2029 !important;
+  border-color: #3a4352 !important;
+}
+
+html.titanium .pos-ticket-feed {
+  background-color: #0b0d10 !important;
+}
+
+html.titanium .pos-ticket-item {
+  background-color: #14181e !important;
+  border: 1px solid #232933 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+html.titanium .cart-summary-card {
+  background-color: #090b0e !important;
+  border: 1px solid #252c37 !important;
+  border-radius: 8px !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45) !important;
+}
+
+html.titanium .pos-checkout-btn:not(:disabled) {
+  background-color: #059669 !important;
+  border-color: #10b981 !important;
+  border-radius: 8px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+}
+
+html.titanium .pos-checkout-btn:not(:disabled):hover {
+  background-color: #047857 !important;
+}
+
+html.titanium .pos-checkout-btn:not(:disabled) span.bg-slate-700 {
+  background-color: rgba(0, 0, 0, 0.28) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+html.titanium .modal-solid,
+html.titanium [role="dialog"],
+html.titanium .modal-container-responsive {
+  background-color: #12161c !important;
+  border: 1px solid #282f3b !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6) !important;
+}
+
+html.titanium .table-premium tbody tr {
+  background: #14181e !important;
+  border: 1px solid #232933 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+html.titanium .mobile-bottom-dock {
+  background: #0f1216 !important;
+  border-top: 1px solid #1e232b !important;
+}
+
+
+
+

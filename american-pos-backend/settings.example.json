@@ -1,0 +1,62 @@
+{
+  "default": {
+    "exchangeRate": 45.0,
+    "businessInfo": {
+      "name": "Mi Comercio POS",
+      "rif": "J-00000000-0",
+      "address": "Calle Principal #123",
+      "phone": "04140000000",
+      "email": "contacto@micomercio.com",
+      "pagoMovilBank": "0102",
+      "pagoMovilPhone": "04140000000",
+      "pagoMovilId": "V00000000",
+      "pagoMovilQrMode": "AUTO"
+    },
+    "currencyMode": "BOTH",
+    "cashDifferenceToleranceUsd": 1,
+    "maxCashDrawerThresholdUsd": 100,
+    "autoLockTimeoutMinutes": 5,
+    "printerSettings": {
+      "type": "THERMAL_80MM",
+      "paperWidth": "80mm",
+      "autoCut": true,
+      "openDrawer": true,
+      "printSilent": true
+    },
+    "paymentMethods": [
+      {
+        "id": "cash",
+        "name": "Efectivo $",
+        "icon": "DollarSign",
+        "type": "CASH"
+      },
+      {
+        "id": "cash_bs",
+        "name": "Efectivo Bs",
+        "icon": "Banknote",
+        "type": "CASH",
+        "defaultCurrency": "VES"
+      },
+      {
+        "id": "debit",
+        "name": "Débito",
+        "icon": "CreditCard",
+        "type": "DIGITAL",
+        "defaultCurrency": "VES"
+      },
+      {
+        "id": "transfer",
+        "name": "Transferencia",
+        "icon": "Send",
+        "type": "DIGITAL",
+        "defaultCurrency": "VES"
+      },
+      {
+        "id": "fiado",
+        "name": "Fiado",
+        "icon": "User",
+        "type": "CREDIT"
+      }
+    ]
+  }
+}

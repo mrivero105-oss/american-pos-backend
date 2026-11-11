@@ -1,0 +1,191 @@
+const { Sequelize } = require('sequelize');
+const { Client: PgClient } = require('pg');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+const { BASE_PATH } = require('../config/paths');
+try {
+    if (!fs.existsSync(BASE_PATH)) {
+        fs.mkdirSync(BASE_PATH, { recursive: true });
+    }
+} catch (e) {
+    console.warn('[DB] Warning ensuring BASE_PATH directory:', e.message);
+}
+
+const DbConfigManager = require('../config/dbConfigManager');
+const activeDbConfig = DbConfigManager.getConfig();
+
+try {
+    console.log('\n--- DATABASE CONNECTION DEBUG ---');
+    console.log('Dialect: postgres');
+    console.log('Host/DB:', `${activeDbConfig.host || '127.0.0.1'}/${activeDbConfig.database || 'americanpos'}`);
+    console.log('---------------------------------\n');
+} catch (e) { /* ignore console errors in packaged app */ }
+
+console.log(`[DB] Current Mode: ${!!process.env.USER_DATA_PATH ? 'Packaged/Production' : 'Development'}`);
+console.log('[DB] Database Connection Dialect: postgres');
+console.log(`[DB] Database Target Host: ${activeDbConfig.host}:${activeDbConfig.port} (${activeDbConfig.mode === 'client' ? 'Caja Secundaria / Terminal' : 'Servidor Local'})`);
+
+function initSequelize(customConfig = null) {
+    const cfg = customConfig ? { ...customConfig } : DbConfigManager.getConfig();
+    const resolvedHost = (cfg.host && (cfg.host.toLowerCase() === os.hostname().toLowerCase() || cfg.host.toLowerCase() === 'localhost'))
+        ? '127.0.0.1'
+        : (cfg.host || '127.0.0.1');
+
+    return new Sequelize(
+        cfg.database || 'americanpos',
+        cfg.user || 'postgres',
+        cfg.password || 'postgres',
+        {
+            host: resolvedHost,
+            port: parseInt(cfg.port || 5432, 10),
+            dialect: 'postgres',
+            logging: false,
+            isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED,
+            pool: {
+                max: 30,           // Optimizado para operaciones concurrentes multi-caja y comanderas móviles
+                min: 3,            // Mantiene conexiones calientes listas
+                acquire: 30000,    // 30s timeout para reportes e importaciones masivas
+                idle: 10000,
+                evict: 5000        // Purga conexiones obsoletas cada 5s
+            },
+            dialectOptions: {
+                connectTimeout: 10000,
+                keepAlive: true,
+                statement_timeout: 30000,
+                lock_timeout: 15000,
+                idle_in_transaction_session_timeout: 60000
+            },
+            retry: {
+                match: [
+                    /SequelizeConnectionError/,
+                    /SequelizeConnectionRefusedError/,
+                    /SequelizeHostNotFoundError/,
+                    /SequelizeHostNotReachableError/,
+                    /SequelizeInvalidConnectionError/,
+                    /SequelizeConnectionTimedOutError/,
+                    /Connection terminated unexpectedly/,
+                    /timeout/
+                ],
+                max: 3
+            }
+        }
+    );
+}
+
+let sequelize = initSequelize(activeDbConfig);
+
+const {
+    TARGET_SCHEMA_VERSION,
+    repairSchema,
+    migratePlaintextPasswords,
+    runPostConnectMigrations
+} = require('./schemaMigrator');
+
+async function ensurePostgresDatabaseExists() {
+    const cfg = DbConfigManager.getConfig();
+    const dbName = cfg.database || process.env.DB_NAME || 'americanpos';
+    let host = cfg.host || process.env.DB_HOST || '127.0.0.1';
+    if (host.toLowerCase() === os.hostname().toLowerCase() || host.toLowerCase() === 'localhost') {
+        host = '127.0.0.1';
+    }
+    const port = parseInt(cfg.port || process.env.DB_PORT || '5432', 10);
+    const user = cfg.user || process.env.DB_USER || 'postgres';
+    const password = cfg.password || process.env.DB_PASSWORD || '';
+
+    try {
+        const client = new PgClient({
+            host,
+            port,
+            user,
+            password,
+            database: 'postgres',
+            connectionTimeoutMillis: 5000
+        });
+
+        await client.connect();
+        const checkRes = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName]);
+        if (checkRes.rowCount === 0) {
+            console.log(`[DB] Base de datos '${dbName}' no existe en PostgreSQL. Creándola automáticamente...`);
+            await client.query(`CREATE DATABASE "${dbName}" ENCODING 'UTF8';`);
+            console.log(`[DB] ✅ Base de datos '${dbName}' creada exitosamente.`);
+        }
+        await client.end();
+    } catch (err) {
+        console.warn(`[DB] Verificación de base de datos '${dbName}': ${err.message}`);
+    }
+}
+
+const connectDB = async () => {
+    try {
+        try {
+            const { ensurePostgresRunning } = require('../utils/postgresLauncher');
+            await ensurePostgresRunning();
+        } catch (launcherErr) {
+            console.warn('[DB] Warning checking PostgreSQL launcher:', launcherErr.message);
+        }
+
+        try {
+            await ensurePostgresDatabaseExists();
+        } catch (dbExistErr) {
+            console.warn('[DB] Warning ensuring database exists:', dbExistErr.message);
+        }
+
+        // Autenticación resiliente con reintentos durante el arranque de PostgreSQL (código 57P03)
+        let authenticated = false;
+        let authAttempts = 0;
+        const maxAuthAttempts = 30;
+        while (!authenticated && authAttempts < maxAuthAttempts) {
+            try {
+                await sequelize.authenticate();
+                authenticated = true;
+            } catch (authErr) {
+                authAttempts++;
+                const isStartingUp = authErr.original?.code === '57P03' ||
+                    (authErr.message && (authErr.message.includes('iniciándose') || authErr.message.includes('starting up') || authErr.message.includes('ECONNREFUSED')));
+                if (authAttempts < maxAuthAttempts && isStartingUp) {
+                    console.log(`[DB] Esperando inicialización del motor PostgreSQL (${authAttempts}/${maxAuthAttempts})...`);
+                    await new Promise(r => setTimeout(r, 1000));
+                } else if (authAttempts < maxAuthAttempts) {
+                    await new Promise(r => setTimeout(r, 1000));
+                } else {
+                    const targetHost = process.env.DB_HOST || '127.0.0.1';
+                    const targetPort = process.env.DB_PORT || 5432;
+                    const cleanErr = new Error(`No se pudo conectar con el motor PostgreSQL en ${targetHost}:${targetPort}. ${authErr.message}`);
+                    cleanErr.code = 'ERR_DB_UNREACHABLE';
+                    cleanErr.host = targetHost;
+                    cleanErr.port = targetPort;
+                    cleanErr.originalError = authErr;
+                    throw cleanErr;
+                }
+            }
+        }
+
+        console.log('[DB] Connection to postgres has been established successfully.');
+
+        // Registrar modelos y asociaciones antes de sincronizar esquema
+        require('./models');
+
+        await runPostConnectMigrations(sequelize, 'postgres');
+    } catch (error) {
+        console.error('❌ DATABASE CONNECTION ERROR:', error.message);
+        throw error;
+    }
+};
+
+function reconfigureDB(customConfig) {
+    sequelize = initSequelize(customConfig);
+    module.exports.sequelize = sequelize;
+    return sequelize;
+}
+
+module.exports = {
+    sequelize,
+    connectDB,
+    initSequelize,
+    reconfigureDB,
+    repairSchema,
+    TARGET_SCHEMA_VERSION
+};

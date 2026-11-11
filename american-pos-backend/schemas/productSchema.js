@@ -1,0 +1,47 @@
+const { z } = require('zod');
+
+const numeric = z.coerce.number().nonnegative().default(0);
+
+const productSchema = z.object({
+    body: z.object({
+        name: z.string().min(1, 'El nombre es obligatorio'),
+        price: numeric,
+        priceBs: numeric.optional(),
+        cost: numeric,
+        stockQuantity: numeric,
+        minStock: numeric,
+        category: z.string().optional(),
+        barcode: z.string().optional(),
+        taxStatus: z.enum(['gravable', 'exento']).optional(),
+        isSoldByWeight: z.boolean().optional(),
+        stockUnit: z.string().optional(),
+        supplierId: z.string().nullable().optional(),
+        bulkUnitName: z.string().optional(),
+        unitsPerBulk: numeric,
+        margin: numeric,
+        bulkCost: numeric,
+        bulkPrice: numeric.optional(),
+        bulkPriceBs: numeric.optional(),
+        bulkBarcode: z.string().nullable().optional(),
+        midBulkUnitName: z.string().optional(),
+        unitsPerMidBulk: numeric.optional(),
+        midBulkCost: numeric.optional(),
+        midBulkPrice: numeric.optional(),
+        midBulkPriceBs: numeric.optional(),
+        midBulkBarcode: z.string().nullable().optional(),
+        imageUri: z.string().optional(),
+        presentations: z.array(z.object({
+            id: z.string().optional(),
+            name: z.string(),
+            factorConversion: z.coerce.number().positive(),
+            price: numeric,
+            cost: numeric.optional(),
+            barcode: z.string().nullable().optional(),
+            isDefaultPurchase: z.boolean().optional(),
+            isDefaultSale: z.boolean().optional(),
+            orderIndex: z.number().optional()
+        })).optional()
+    }).passthrough()
+});
+
+module.exports = { productSchema };

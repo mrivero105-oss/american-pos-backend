@@ -1,0 +1,96 @@
+{
+  "appId": "com.isaacpos.frontend",
+  "productName": "Isaac POS Modern",
+  "electronVersion": "31.4.0",
+  "compression": "normal",
+  "npmRebuild": false,
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/**/*.node",
+    "**/bin/**/*",
+    "**/scripts/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "scripts",
+      "to": "scripts"
+    }
+  ],
+  "directories": {
+    "output": "dist_modern"
+  },
+  "files": [
+    "**/*",
+    "!**/*.sqlite",
+    "!**/*.sqlite*",
+    "!**/*.bak",
+    "!**/*.dev_backup",
+    "!**/serviceAccountKey.json",
+    "!**/.env*",
+    "!env_backup.txt",
+    "!app_fixed.asar",
+    "!test_backup.zip",
+    "!.wwebjs_auth/**",
+    "!.wwebjs_cache/**",
+    "!dist*/**",
+    "!backups/**",
+    "!build_temp/**",
+    "!auto-backups/**",
+    "!scratch/**",
+    "!uploads/**",
+    "!product_images/**",
+    "!supplier_logos/**",
+    "!invoices/**",
+    "!logs/**",
+    "!**/*.log",
+    "!**/*.log.gz",
+    "!db.json",
+    "!.git/**",
+    "!**/*.md",
+    "!LICENSE",
+    "!*.ps1",
+    "!public/*.exe",
+    "!public/*.apk",
+    "!public/*.zip",
+    "!node_modules/electron/**",
+    "!node_modules/electron-builder/**",
+    "!node_modules/@electron/rebuild/**",
+    "!node_modules/builder-util/**",
+    "!node_modules/typescript/**",
+    "!tests/**",
+    "!*.apk",
+    "!**/*.apk",
+    "!test_*.js",
+    "!check_*.js",
+    "!fix_*.js",
+    "!inspect_*.js",
+    "!find_*.js",
+    "!scratch*.js",
+    "!*.bat",
+    "!tailwind.config.js",
+    "!backup_debug.log"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "icon": "public/favicon.ico",
+    "requestedExecutionLevel": "highestAvailable",
+    "artifactName": "4_IsaacPOS_Windows10_11_Modern_Setup.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false,
+    "shortcutName": "Isaac POS Modern",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "artifactName": "4_IsaacPOS_Windows10_11_Modern_Setup.${ext}",
+    "include": "build/installer_modern.nsh"
+  }
+}

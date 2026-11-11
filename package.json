@@ -1,0 +1,28 @@
+{
+  "name": "isaac-pos-monorepo",
+  "version": "24.04.0",
+  "private": true,
+  "description": "Monorepo de Isaac POS (Frontend React + Backend Express / Electron)",
+  "workspaces": [
+    "american-pos-frontend",
+    "american-pos-backend"
+  ],
+  "scripts": {
+    "dev:frontend": "npm --prefix american-pos-frontend run dev",
+    "build:frontend": "npm --prefix american-pos-frontend run build",
+    "dev:backend": "npm --prefix american-pos-backend run start",
+    "dev:desktop": "npm --prefix american-pos-frontend run build && npx electron ./american-pos-backend",
+    "deploy:installed": "node scripts/sync_installed_desktop.cjs",
+    "test:math": "node american-pos-backend/test_vortex_engine.js",
+    "test:postgres": "node american-pos-backend/test_certify_postgres.js"
+  },
+  "keywords": [
+    "pos",
+    "facturacion",
+    "electron",
+    "react",
+    "postgresql"
+  ],
+  "author": "Isaac POS Team",
+  "license": "UNLICENSED"
+}

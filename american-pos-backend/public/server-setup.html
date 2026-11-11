@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="es" style="background-color: #030712;">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Isaac POS - Asistente de Conexión de Servidor</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    body {
+      background-color: #030712;
+      color: #f3f4f6;
+      min-height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow-x: hidden;
+      overflow-y: auto;
+      position: relative;
+      padding: 1.5rem;
+    }
+    .ambient-glow-1 {
+      position: absolute;
+      top: -10%;
+      left: -10%;
+      width: 50vw;
+      height: 50vw;
+      background: radial-gradient(circle, rgba(37, 99, 235, 0.18) 0%, transparent 70%);
+      border-radius: 50%;
+      filter: blur(90px);
+      pointer-events: none;
+    }
+    .ambient-glow-2 {
+      position: absolute;
+      bottom: -10%;
+      right: -10%;
+      width: 50vw;
+      height: 50vw;
+      background: radial-gradient(circle, rgba(147, 51, 234, 0.18) 0%, transparent 70%);
+      border-radius: 50%;
+      filter: blur(90px);
+      pointer-events: none;
+    }
+    .card {
+      background: rgba(15, 23, 42, 0.82);
+      backdrop-filter: blur(28px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 2.25rem 2.5rem;
+      border-radius: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7);
+      z-index: 10;
+      max-width: 560px;
+      width: 100%;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 1.25rem;
+    }
+    .brand-icon {
+      width: 52px;
+      height: 52px;
+      min-width: 52px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      border-radius: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 1.5rem;
+      color: #ffffff;
+      box-shadow: 0 8px 20px rgba(37, 99, 235, 0.4);
+    }
+    .header-text h1 {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: #ffffff;
+      letter-spacing: -0.02em;
+    }
+    .header-text p {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      margin-top: 0.2rem;
+    }
+    .notice-box {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: #fcd34d;
+      padding: 0.85rem 1rem;
+      border-radius: 0.75rem;
+      font-size: 0.82rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.65rem;
+      line-height: 1.4;
+    }
+    .roles-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    .role-btn {
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 0.9rem 1rem;
+      border-radius: 0.85rem;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+      text-align: center;
+      transition: all 0.2s ease;
+      color: #94a3b8;
+    }
+    .role-btn:hover {
+      background: rgba(51, 65, 85, 0.6);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .role-btn.active {
+      background: rgba(37, 99, 235, 0.2);
+      border-color: #3b82f6;
+      color: #ffffff;
+      box-shadow: 0 0 20px rgba(37, 99, 235, 0.25);
+    }
+    .role-btn .role-icon {
+      font-size: 1.5rem;
+    }
+    .role-btn .role-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+    .role-btn .role-desc {
+      font-size: 0.7rem;
+      opacity: 0.75;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .form-group label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #cbd5e1;
+      display: flex;
+      justify-content: space-between;
+    }
+    .input-row {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 0.75rem;
+    }
+    input {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 0.65rem;
+      padding: 0.7rem 0.9rem;
+      color: #ffffff;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+      width: 100%;
+    }
+    input:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+    }
+    .status-badge {
+      padding: 0.75rem 1rem;
+      border-radius: 0.75rem;
+      font-size: 0.82rem;
+      display: none;
+      align-items: center;
+      gap: 0.65rem;
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .status-badge.success {
+      display: flex;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+    .status-badge.error {
+      display: flex;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #f87171;
+    }
+    .status-badge.loading {
+      display: flex;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #60a5fa;
+    }
+    .btn-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .btn {
+      flex: 1;
+      padding: 0.85rem 1.25rem;
+      border-radius: 0.75rem;
+      font-size: 0.88rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+      border: none;
+    }
+    .btn-secondary {
+      background: rgba(30, 41, 59, 0.8);
+      color: #e2e8f0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(51, 65, 85, 0.9);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #ffffff;
+      box-shadow: 0 10px 20px -5px rgba(37, 99, 235, 0.4);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, #1d4ed8, #1e40af);
+      box-shadow: 0 12px 24px -5px rgba(37, 99, 235, 0.6);
+      transform: translateY(-1px);
+    }
+    .btn-primary.verified {
+      background: linear-gradient(135deg, #10b981, #059669);
+      box-shadow: 0 10px 20px -5px rgba(16, 185, 129, 0.4);
+    }
+    .btn-primary.verified:hover:not(:disabled) {
+      background: linear-gradient(135deg, #059669, #047857);
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+    .footer-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 0.25rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 0.78rem;
+    }
+    .footer-btn {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      text-decoration: underline;
+      font-size: 0.78rem;
+    }
+    .footer-btn:hover {
+      color: #f1f5f9;
+    }
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-glow-1"></div>
+  <div class="ambient-glow-2"></div>
+
+  <div class="card">
+    <div class="header">
+      <div class="brand-icon">⚡</div>
+      <div class="header-text">
+        <h1>Asistente de Conexión de Servidor</h1>
+        <p>Isaac POS V24.04 &bull; Configuración de Red y Base de Datos</p>
+      </div>
+    </div>
+
+    <div class="notice-box" id="noticeBox">
+      <span style="font-size: 1.1rem; line-height: 1;">⚠️</span>
+      <span id="noticeText">No se pudo establecer conexión con el motor de base de datos PostgreSQL. Seleccione la función de este equipo y verifique los parámetros de red.</span>
+    </div>
+
+    <div class="roles-container">
+      <div class="role-btn" id="btnRoleServer" onclick="selectRole('server')">
+        <span class="role-icon">🖥️</span>
+        <span class="role-title">Servidor Principal</span>
+        <span class="role-desc">Caja 1 / Master (Base de datos local)</span>
+      </div>
+      <div class="role-btn active" id="btnRoleClient" onclick="selectRole('client')">
+        <span class="role-icon">🛒</span>
+        <span class="role-title">Caja Secundaria</span>
+        <span class="role-desc">Terminal de Ventas (Conexión LAN)</span>
+      </div>
+    </div>
+
+    <div class="form-group" id="ipGroup">
+      <label>
+        <span>Dirección IP del Servidor Central (Caja 1):</span>
+        <button type="button" class="footer-btn" onclick="autoDiscoverServer()" id="btnAutoDetect" style="color: #60a5fa; text-decoration: none;">🔍 Auto-detectar en Red</button>
+      </label>
+      <input type="text" id="inputHost" placeholder="Ej: 192.168.1.100 o 10.0.0.5" value="" />
+    </div>
+
+    <div class="input-row">
+      <div class="form-group">
+        <label>Base de Datos:</label>
+        <input type="text" id="inputDatabase" value="americanpos" />
+      </div>
+      <div class="form-group">
+        <label>Puerto:</label>
+        <input type="number" id="inputPort" value="5432" />
+      </div>
+    </div>
+
+    <div class="input-row">
+      <div class="form-group">
+        <label>Usuario:</label>
+        <input type="text" id="inputUser" value="postgres" />
+      </div>
+      <div class="form-group">
+        <label>Contraseña:</label>
+        <input type="password" id="inputPassword" value="postgres" />
+      </div>
+    </div>
+
+    <div class="status-badge" id="statusBadge">
+      <span id="statusIcon"></span>
+      <span id="statusMessage"></span>
+    </div>
+
+    <div class="btn-row">
+      <button type="button" class="btn btn-secondary" id="btnTest" onclick="testConnection()">
+        <span id="testIcon">⚡</span>
+        <span>Probar Conexión</span>
+      </button>
+      <button type="button" class="btn btn-primary" id="btnSave" onclick="saveAndConnect()">
+        <span>💾 Guardar y Conectar</span>
+      </button>
+    </div>
+
+    <div class="footer-actions">
+      <span id="cfgLocationText" style="color: #64748b;">Guardado en: AppData\isaac-pos</span>
+      <button type="button" class="footer-btn" onclick="exitApp()">Cerrar Aplicación</button>
+    </div>
+  </div>
+
+  <script>
+    let currentRole = 'client';
+    let isTesting = false;
+    let isDetecting = false;
+    let lastTestOk = false;
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        if (window.electronAPI && window.electronAPI.getDbConfig) {
+          const cfg = await window.electronAPI.getDbConfig();
+          if (cfg) {
+            document.getElementById('inputHost').value = cfg.host || '';
+            document.getElementById('inputPort').value = cfg.port || 5432;
+            document.getElementById('inputDatabase').value = cfg.database || 'americanpos';
+            document.getElementById('inputUser').value = cfg.user || 'postgres';
+            document.getElementById('inputPassword').value = cfg.password || 'postgres';
+            selectRole(cfg.mode || (cfg.host === '127.0.0.1' || cfg.host === 'localhost' ? 'server' : 'client'));
+          }
+        }
+      } catch (e) {
+        console.warn('Could not load initial config:', e);
+      }
+    });
+
+    function selectRole(role) {
+      currentRole = role;
+      const btnServer = document.getElementById('btnRoleServer');
+      const btnClient = document.getElementById('btnRoleClient');
+      const inputHost = document.getElementById('inputHost');
+
+      if (role === 'server') {
+        btnServer.classList.add('active');
+        btnClient.classList.remove('active');
+        inputHost.value = '127.0.0.1';
+        document.getElementById('btnAutoDetect').style.display = 'none';
+      } else {
+        btnClient.classList.add('active');
+        btnServer.classList.remove('active');
+        if (inputHost.value === '127.0.0.1' || inputHost.value === 'localhost') {
+          inputHost.value = '';
+        }
+        document.getElementById('btnAutoDetect').style.display = 'inline';
+      }
+      resetTestState();
+    }
+
+    function resetTestState() {
+      lastTestOk = false;
+      const badge = document.getElementById('statusBadge');
+      badge.className = 'status-badge';
+      badge.style.display = 'none';
+      document.getElementById('btnSave').classList.remove('verified');
+      document.getElementById('btnSave').innerHTML = '<span>💾 Guardar y Conectar</span>';
+    }
+
+    function getFormData() {
+      return {
+        mode: currentRole,
+        dialect: 'postgres',
+        host: document.getElementById('inputHost').value.trim() || '127.0.0.1',
+        port: parseInt(document.getElementById('inputPort').value.trim() || '5432', 10),
+        database: document.getElementById('inputDatabase').value.trim() || 'americanpos',
+        user: document.getElementById('inputUser').value.trim() || 'postgres',
+        password: document.getElementById('inputPassword').value
+      };
+    }
+
+    async function testConnection() {
+      if (isTesting) return;
+      isTesting = true;
+
+      const btnTest = document.getElementById('btnTest');
+      btnTest.disabled = true;
+      btnTest.innerHTML = '<div class="spinner"></div><span>Probando...</span>';
+
+      const badge = document.getElementById('statusBadge');
+      badge.className = 'status-badge loading';
+      document.getElementById('statusIcon').innerHTML = '<div class="spinner"></div>';
+      document.getElementById('statusMessage').innerText = 'Intentando conectar al servidor PostgreSQL...';
+
+      try {
+        const formData = getFormData();
+        let res = null;
+
+        if (window.electronAPI && window.electronAPI.testDbConnection) {
+          res = await window.electronAPI.testDbConnection(formData);
+        } else {
+          // Fallback mock en navegador directo
+          res = { success: false, error: 'API Electron no disponible' };
+        }
+
+        if (res && res.success) {
+          lastTestOk = true;
+          badge.className = 'status-badge success';
+          document.getElementById('statusIcon').innerText = '✅';
+          document.getElementById('statusMessage').innerText = res.message || '¡Conexión verificada exitosamente!';
+          
+          const btnSave = document.getElementById('btnSave');
+          btnSave.classList.add('verified');
+          btnSave.innerHTML = '<span>🚀 ¡Conexión Verificada! Guardar y Entrar</span>';
+        } else {
+          lastTestOk = false;
+          badge.className = 'status-badge error';
+          document.getElementById('statusIcon').innerText = '❌';
+          document.getElementById('statusMessage').innerText = `Error (${res?.code || 'FALLO'}): ${res?.error || 'No se pudo contactar al servidor. Verifica la IP y que la máquina esté encendida.'}`;
+        }
+      } catch (err) {
+        lastTestOk = false;
+        badge.className = 'status-badge error';
+        document.getElementById('statusIcon').innerText = '❌';
+        document.getElementById('statusMessage').innerText = `Error: ${err.message}`;
+      } finally {
+        isTesting = false;
+        btnTest.disabled = false;
+        btnTest.innerHTML = '<span>⚡</span><span>Probar Conexión</span>';
+      }
+    }
+
+    async function autoDiscoverServer() {
+      if (isDetecting) return;
+      isDetecting = true;
+
+      const btn = document.getElementById('btnAutoDetect');
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '<span class="spinner" style="display:inline-block; vertical-align:middle; width:10px; height:10px;"></span> Buscando...';
+
+      const badge = document.getElementById('statusBadge');
+      badge.className = 'status-badge loading';
+      document.getElementById('statusIcon').innerHTML = '<div class="spinner"></div>';
+      document.getElementById('statusMessage').innerText = 'Escaneando la red local en busca de la Caja Principal...';
+
+      try {
+        if (window.electronAPI && window.electronAPI.discoverLanServer) {
+          const res = await window.electronAPI.discoverLanServer(3500);
+          if (res && res.found && res.serverIp) {
+            document.getElementById('inputHost').value = res.serverIp;
+            badge.className = 'status-badge success';
+            document.getElementById('statusIcon').innerText = '🎯';
+            document.getElementById('statusMessage').innerText = `¡Servidor detectado en ${res.serverIp} (${res.serverName || 'Caja Principal'})!`;
+            testConnection();
+          } else {
+            badge.className = 'status-badge error';
+            document.getElementById('statusIcon').innerText = '🔍';
+            document.getElementById('statusMessage').innerText = res?.message || 'No se detectó ningún servidor transmitiendo en la red. Ingrese la IP manualmente.';
+          }
+        }
+      } catch (e) {
+        badge.className = 'status-badge error';
+        document.getElementById('statusIcon').innerText = '⚠️';
+        document.getElementById('statusMessage').innerText = `Error en auto-detección: ${e.message}`;
+      } finally {
+        isDetecting = false;
+        btn.innerHTML = originalText;
+      }
+    }
+
+    async function saveAndConnect() {
+      const formData = getFormData();
+      const btnSave = document.getElementById('btnSave');
+      btnSave.disabled = true;
+      btnSave.innerHTML = '<div class="spinner"></div><span>Guardando y arrancando...</span>';
+
+      try {
+        if (window.electronAPI && window.electronAPI.saveDbConfigAndRestart) {
+          const res = await window.electronAPI.saveDbConfigAndRestart(formData);
+          if (!res || !res.success) {
+            alert('Error guardando configuración: ' + (res?.error || 'Desconocido'));
+            btnSave.disabled = false;
+            btnSave.innerHTML = '<span>💾 Guardar y Conectar</span>';
+          }
+        }
+      } catch (e) {
+        alert('Excepción al guardar: ' + e.message);
+        btnSave.disabled = false;
+        btnSave.innerHTML = '<span>💾 Guardar y Conectar</span>';
+      }
+    }
+
+    function exitApp() {
+      if (window.electronAPI && window.electronAPI.closeApp) {
+        window.electronAPI.closeApp();
+      } else {
+        window.close();
+      }
+    }
+  </script>
+</body>
+</html>

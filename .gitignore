@@ -1,0 +1,84 @@
+# ==============================================================================
+# ISAAC POS MONOREPO - .gitignore QUIRÚRGICO DE ALTO RENDIMIENTO
+# ==============================================================================
+
+# Dependencias Node
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Compilados y Bundles Web / Desktop
+dist/
+dist-mobile/
+dist_installers/
+dist_modern/
+build/
+build_temp/
+build_ultra/
+archive/
+*.asar
+*.asar.new
+*.asar.bak*
+*.asar.unpacked/
+*.exe
+*.apk
+*.zip
+*.tar.gz
+
+# Archivos de Datos, Backups y Bases de Datos Locales
+backups/
+*.sqlite
+*.sqlite-*
+*.sqlite9873*
+*.sqlite.dev_backup
+*.dump
+*.sql.gz
+
+# Perfiles de Sesión, Caché Pesada y WhatsApp
+.wwebjs_auth/
+**/.test_wwebjs_auth/
+**/.wwebjs_auth/
+.wwebjs_cache/
+**/.wwebjs_cache/
+scratch/
+logs/
+*.log
+
+# Gradle y Android builds
+.gradle/
+**/.gradle/
+**/buildOutputCleanup/
+*.bin
+*.lock
+
+# Entorno y Secretos
+.env
+.env.*
+!.env.example
+settings.json
+**/settings.json
+cloud_mirror_config.json
+**/cloud_mirror_config.json
+
+# Sistema Operativo y Editores
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.suo
+*.user
+*.timestamp-*.mjs
+local.properties
+**/local.properties
+
+# Archivos de Pruebas y Prerrequisitos
+prerequisites/
+*.tmp
+*.temp
+dom_output.html
+electron_err.txt

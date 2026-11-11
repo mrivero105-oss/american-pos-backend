@@ -1,0 +1,689 @@
+/**
+ * Motor Unificado de Persistencia para Isaac POS (SQLite Nativo Android WAL + Fallback Web Zero-Lock)
+ * - En Android Nativo (Capacitor): Opera directamente sobre SQLite C++ nativo (IsaacPosNativeStorage.db en modo WAL)
+ *   mediante PosNativeHardwarePlugin, eliminando las limitaciones y bloqueos de IndexedDB.
+ * - En Navegador Web / Desktop: Opera sobre una única base unificada (IsaacPosUnifiedDB) con caché en memoria
+ *   y autocuración garantizada para todas las colecciones.
+ * - Al iniciar, rescata cualquier venta pendiente de las antiguas bases de datos (IsaacPosDB / IsaacPOSPharmacyDB)
+ *   y elimina las bases antiguas duplicadas.
+ */
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { ensureStoragePersistence } from './storagePersistence';
+
+const UNIFIED_DB_NAME = 'IsaacPosUnifiedDB';
+const UNIFIED_DB_VERSION = 1;
+const LEGACY_DB_NAMES = ['IsaacPosDB', 'IsaacPOSPharmacyDB'];
+const LEGACY_CLEANUP_FLAG = 'isaac_pos_legacy_idb_purged_v1';
+
+const STORE_KEY_PATHS = {
+    products: 'id',
+    variants: 'id',
+    customers: 'id',
+    suppliers: 'id',
+    categories: 'name',
+    metadata: 'key',
+    sales: 'id',
+    syncQueue: 'id',
+    imageCache: 'uri',
+    promotions: 'id',
+    expenses: 'id',
+    cashShifts: 'id'
+};
+
+const ALL_STORES = Object.keys(STORE_KEY_PATHS);
+
+// Espejo en memoria para lecturas instantáneas y tolerancia total a bloqueos entre pestañas
+const memoryMirror = new Map();
+ALL_STORES.forEach((storeName) => {
+    memoryMirror.set(storeName, new Map());
+});
+
+const getMirrorMap = (storeName) => {
+    if (!memoryMirror.has(storeName)) {
+        memoryMirror.set(storeName, new Map());
+    }
+    return memoryMirror.get(storeName);
+};
+
+const getKeyPath = (storeName) => STORE_KEY_PATHS[storeName] || 'id';
+
+const extractRecordKey = (storeName, item) => {
+    if (!item || typeof item !== 'object') return null;
+    const keyField = getKeyPath(storeName);
+    let rawKey = item[keyField];
+    if (rawKey === undefined || rawKey === null || rawKey === '') {
+        if (storeName === 'sales' || storeName === 'syncQueue' || storeName === 'variants') {
+            rawKey = `${storeName}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+            item[keyField] = rawKey;
+        } else {
+            return null;
+        }
+    }
+    return String(rawKey);
+};
+
+const buildSearchText = (storeName, item) => {
+    if (!item || typeof item !== 'object') return '';
+    if (storeName === 'products') {
+        return `${item.name || item.nombre || ''} ${item.barcode || item.codigo_barras || ''} ${item.category || item.categoria || ''}`.trim();
+    }
+    if (storeName === 'customers') {
+        return `${item.name || ''} ${item.idDocument || item.cedula || ''}`.trim();
+    }
+    if (storeName === 'suppliers') {
+        return `${item.name || ''} ${item.rif || ''}`.trim();
+    }
+    return String(item.name || item.key || item.id || '');
+};
+
+const getNativePlugin = () => {
+    try {
+        if (typeof window === 'undefined') return null;
+        if (!Capacitor?.isNativePlatform || !Capacitor.isNativePlatform()) return null;
+        if (window.__posNativeHardwarePlugin) return window.__posNativeHardwarePlugin;
+        const plugin = registerPlugin('PosNativeHardware');
+        window.__posNativeHardwarePlugin = plugin;
+        return plugin;
+    } catch (_) {
+        return null;
+    }
+};
+
+let nativeSqliteVerified = null; // null = unknown, true = active, false = unavailable
+
+const isNativeSqliteAvailable = async () => {
+    if (nativeSqliteVerified !== null) return nativeSqliteVerified;
+    const plugin = getNativePlugin();
+    if (!plugin || typeof plugin.sqliteGetStats !== 'function') {
+        nativeSqliteVerified = false;
+        return false;
+    }
+    try {
+        const stats = await plugin.sqliteGetStats();
+        nativeSqliteVerified = Boolean(stats && stats.engine === 'ANDROID_NATIVE_SQLITE_WAL');
+        if (nativeSqliteVerified) {
+            console.log('⚡ [SQLite Nativo] Motor Android SQLite WAL conectado exitosamente.');
+        }
+        return nativeSqliteVerified;
+    } catch (_) {
+        nativeSqliteVerified = false;
+        return false;
+    }
+};
+
+// ============================================================================
+// MOTOR INDEXEDDB UNIFICADO (RESPALDO PARA SIMULADOR WEB / ESCRITORIO)
+// ============================================================================
+let dbInstance = null;
+let initPromise = null;
+
+const createAllStores = (db) => {
+    if (!db.objectStoreNames.contains('products')) {
+        const productStore = db.createObjectStore('products', { keyPath: 'id' });
+        productStore.createIndex('name', 'name', { unique: false });
+        productStore.createIndex('barcode', 'barcode', { unique: false });
+        productStore.createIndex('category', 'category', { unique: false });
+    }
+    if (!db.objectStoreNames.contains('variants')) {
+        const variantStore = db.createObjectStore('variants', { keyPath: 'id', autoIncrement: true });
+        variantStore.createIndex('producto_id', 'producto_id', { unique: false });
+    }
+    if (!db.objectStoreNames.contains('customers')) {
+        const customerStore = db.createObjectStore('customers', { keyPath: 'id' });
+        customerStore.createIndex('name', 'name', { unique: false });
+        customerStore.createIndex('idDocument', 'idDocument', { unique: false });
+        customerStore.createIndex('status', 'status', { unique: false });
+    }
+    if (!db.objectStoreNames.contains('suppliers')) {
+        const supplierStore = db.createObjectStore('suppliers', { keyPath: 'id' });
+        supplierStore.createIndex('name', 'name', { unique: false });
+        supplierStore.createIndex('status', 'status', { unique: false });
+    }
+    if (!db.objectStoreNames.contains('categories')) {
+        db.createObjectStore('categories', { keyPath: 'name' });
+    }
+    if (!db.objectStoreNames.contains('metadata')) {
+        db.createObjectStore('metadata', { keyPath: 'key' });
+    }
+    if (!db.objectStoreNames.contains('sales')) {
+        const salesStore = db.createObjectStore('sales', { keyPath: 'id', autoIncrement: true });
+        salesStore.createIndex('status', 'status', { unique: false });
+        salesStore.createIndex('timestamp', 'timestamp', { unique: false });
+    }
+    if (!db.objectStoreNames.contains('syncQueue')) {
+        db.createObjectStore('syncQueue', { keyPath: 'id', autoIncrement: true });
+    }
+    if (!db.objectStoreNames.contains('imageCache')) {
+        db.createObjectStore('imageCache', { keyPath: 'uri' });
+    }
+    if (!db.objectStoreNames.contains('promotions')) {
+        const promoStore = db.createObjectStore('promotions', { keyPath: 'id' });
+        promoStore.createIndex('type', 'type', { unique: false });
+        promoStore.createIndex('isActive', 'isActive', { unique: false });
+    }
+    if (!db.objectStoreNames.contains('expenses')) {
+        const expenseStore = db.createObjectStore('expenses', { keyPath: 'id' });
+        expenseStore.createIndex('status', 'status', { unique: false });
+    }
+    if (!db.objectStoreNames.contains('cashShifts')) {
+        const shiftStore = db.createObjectStore('cashShifts', { keyPath: 'id' });
+        shiftStore.createIndex('status', 'status', { unique: false });
+    }
+};
+
+/**
+ * Rescata cualquier venta o cola pendiente de las bases antiguas (IsaacPosDB / IsaacPOSPharmacyDB)
+ * y luego elimina definitivamente ambas bases de datos heredadas.
+ */
+const migrateAndPurgeLegacyDatabases = async () => {
+    if (typeof window === 'undefined' || typeof indexedDB === 'undefined') return;
+    if (localStorage.getItem(LEGACY_CLEANUP_FLAG) === 'true') return;
+
+    const readLegacyStore = (dbName, storeName) => new Promise((resolve) => {
+        try {
+            const req = indexedDB.open(dbName);
+            const timer = setTimeout(() => resolve([]), 800);
+            req.onsuccess = (ev) => {
+                clearTimeout(timer);
+                const legacyDb = ev.target.result;
+                if (!legacyDb.objectStoreNames.contains(storeName)) {
+                    try { legacyDb.close(); } catch (_) {}
+                    resolve([]);
+                    return;
+                }
+                try {
+                    const tx = legacyDb.transaction(storeName, 'readonly');
+                    const getAllReq = tx.objectStore(storeName).getAll();
+                    getAllReq.onsuccess = () => {
+                        const res = Array.isArray(getAllReq.result) ? getAllReq.result : [];
+                        try { legacyDb.close(); } catch (_) {}
+                        resolve(res);
+                    };
+                    getAllReq.onerror = () => {
+                        try { legacyDb.close(); } catch (_) {}
+                        resolve([]);
+                    };
+                } catch (_) {
+                    try { legacyDb.close(); } catch (_) {}
+                    resolve([]);
+                }
+            };
+            req.onerror = () => {
+                clearTimeout(timer);
+                resolve([]);
+            };
+        } catch (_) {
+            resolve([]);
+        }
+    });
+
+    try {
+        for (const legacyName of LEGACY_DB_NAMES) {
+            const legacySales = await readLegacyStore(legacyName, 'sales');
+            const pendingSales = legacySales.filter(s => s && (s.status === 'pending_sync' || s.isOffline));
+            for (const sale of pendingSales) {
+                await db.put('sales', sale).catch(() => {});
+            }
+
+            const legacyQueue = await readLegacyStore(legacyName, 'syncQueue');
+            for (const qItem of legacyQueue) {
+                await db.put('syncQueue', qItem).catch(() => {});
+            }
+
+            try {
+                indexedDB.deleteDatabase(legacyName);
+            } catch (_) {}
+        }
+        localStorage.setItem(LEGACY_CLEANUP_FLAG, 'true');
+        console.log('🧹 [Storage Migration] Bases de datos antiguas de IndexedDB eliminadas tras verificar migración.');
+    } catch (_) {}
+};
+
+export const initDB = () => {
+    if (dbInstance) return Promise.resolve(dbInstance);
+    if (initPromise) return initPromise;
+
+    initPromise = new Promise((resolve) => {
+        if (typeof indexedDB === 'undefined') {
+            initPromise = null;
+            resolve(null);
+            return;
+        }
+
+        const request = indexedDB.open(UNIFIED_DB_NAME, UNIFIED_DB_VERSION);
+
+        request.onupgradeneeded = (event) => {
+            const database = event.target.result;
+            createAllStores(database);
+        };
+
+        request.onsuccess = (event) => {
+            dbInstance = event.target.result;
+            dbInstance.onclose = () => {
+                dbInstance = null;
+                initPromise = null;
+            };
+            dbInstance.onversionchange = () => {
+                try { dbInstance.close(); } catch (_) {}
+                dbInstance = null;
+                initPromise = null;
+            };
+            ensureStoragePersistence().catch(() => {});
+            initPromise = null;
+            // Ejecutar limpieza asíncrona de bases antiguas sin bloquear el arranque
+            setTimeout(() => {
+                migrateAndPurgeLegacyDatabases().catch(() => {});
+            }, 300);
+            resolve(dbInstance);
+        };
+
+        request.onerror = () => {
+            initPromise = null;
+            resolve(null);
+        };
+    });
+
+    return initPromise;
+};
+
+const getStore = async (storeName, mode = 'readonly') => {
+    const database = await initDB();
+    if (!database || !database.objectStoreNames.contains(storeName)) {
+        return null;
+    }
+    try {
+        const transaction = database.transaction(storeName, mode);
+        return transaction.objectStore(storeName);
+    } catch (_) {
+        return null;
+    }
+};
+
+const notifyQueueUpdated = (storeName, action) => {
+    if (typeof window !== 'undefined' && (storeName === 'syncQueue' || storeName === 'sales')) {
+        window.dispatchEvent(new CustomEvent('sync-queue-updated', { detail: { storeName, action } }));
+    }
+};
+
+export const db = {
+    isNativeSqlite: () => Boolean(nativeSqliteVerified),
+
+    get: async (storeName, id) => db.getById(storeName, id),
+
+    put: async (storeName, data) => {
+        if (!data || typeof data !== 'object') return null;
+        const recordKey = extractRecordKey(storeName, data);
+        const mirror = getMirrorMap(storeName);
+        if (recordKey) {
+            mirror.set(recordKey, data);
+        }
+
+        if (await isNativeSqliteAvailable()) {
+            const plugin = getNativePlugin();
+            await plugin.sqlitePut({
+                storeName,
+                recordId: recordKey || String(Date.now()),
+                jsonPayload: JSON.stringify(data),
+                status: String(data.status || ''),
+                searchText: buildSearchText(storeName, data)
+            });
+            notifyQueueUpdated(storeName, 'put');
+            return data[getKeyPath(storeName)] ?? recordKey;
+        }
+
+        const store = await getStore(storeName, 'readwrite');
+        if (!store) {
+            notifyQueueUpdated(storeName, 'put');
+            return recordKey;
+        }
+        return new Promise((resolve) => {
+            try {
+                const request = store.put(data);
+                request.onsuccess = () => {
+                    notifyQueueUpdated(storeName, 'put');
+                    resolve(request.result);
+                };
+                request.onerror = () => resolve(recordKey);
+            } catch (_) {
+                resolve(recordKey);
+            }
+        });
+    },
+
+    putAll: async (storeName, items = []) => {
+        const safeItems = Array.isArray(items) ? items : [];
+        if (safeItems.length === 0) return;
+
+        const mirror = getMirrorMap(storeName);
+        const preparedRecords = [];
+
+        for (let i = 0; i < safeItems.length; i++) {
+            const item = safeItems[i];
+            if (!item || typeof item !== 'object') continue;
+            const k = extractRecordKey(storeName, item);
+            if (!k) continue;
+            mirror.set(k, item);
+            preparedRecords.push({
+                k,
+                v: JSON.stringify(item),
+                s: String(item.status || ''),
+                q: buildSearchText(storeName, item)
+            });
+        }
+
+        if (await isNativeSqliteAvailable()) {
+            const plugin = getNativePlugin();
+            await plugin.sqlitePutBatch({
+                storeName,
+                records: preparedRecords
+            });
+            notifyQueueUpdated(storeName, 'putAll');
+            return;
+        }
+
+        const database = await initDB();
+        if (!database || !database.objectStoreNames.contains(storeName)) return;
+
+        return new Promise((resolve) => {
+            try {
+                const transaction = database.transaction(storeName, 'readwrite');
+                const store = transaction.objectStore(storeName);
+                for (let i = 0; i < safeItems.length; i++) {
+                    if (safeItems[i] && typeof safeItems[i] === 'object') {
+                        store.put(safeItems[i]);
+                    }
+                }
+                transaction.oncomplete = () => {
+                    notifyQueueUpdated(storeName, 'putAll');
+                    resolve();
+                };
+                transaction.onerror = () => resolve();
+            } catch (_) {
+                resolve();
+            }
+        });
+    },
+
+    /**
+     * Reemplaza o actualiza el contenido de una tabla en una ÚNICA transacción ACID
+     * (tanto en SQLite Nativo Android como en el motor unificado web).
+     */
+    replaceAllAtomic: async (storeName, items = [], keyPath = null) => {
+        const safeItems = Array.isArray(items) ? items : [];
+        const resolvedKeyPath = keyPath || getKeyPath(storeName);
+        const mirror = getMirrorMap(storeName);
+        mirror.clear();
+
+        const preparedRecords = [];
+        const incomingKeys = new Set();
+
+        for (let i = 0; i < safeItems.length; i++) {
+            const item = safeItems[i];
+            if (!item || typeof item !== 'object') continue;
+            const rawKey = item[resolvedKeyPath] ?? extractRecordKey(storeName, item);
+            if (rawKey === undefined || rawKey === null) continue;
+            const k = String(rawKey);
+            incomingKeys.add(rawKey);
+            incomingKeys.add(k);
+            mirror.set(k, item);
+            preparedRecords.push({
+                k,
+                v: JSON.stringify(item),
+                s: String(item.status || ''),
+                q: buildSearchText(storeName, item)
+            });
+        }
+
+        if (await isNativeSqliteAvailable()) {
+            const plugin = getNativePlugin();
+            await plugin.sqliteReplaceAllAtomic({
+                storeName,
+                records: preparedRecords
+            });
+            return;
+        }
+
+        const database = await initDB();
+        if (!database || !database.objectStoreNames.contains(storeName)) return;
+
+        return new Promise((resolve) => {
+            try {
+                const transaction = database.transaction(storeName, 'readwrite');
+                const store = transaction.objectStore(storeName);
+
+                if (safeItems.length === 0) {
+                    store.clear();
+                } else {
+                    const keysReq = store.getAllKeys();
+                    keysReq.onsuccess = () => {
+                        const existingKeys = keysReq.result || [];
+                        for (let i = 0; i < existingKeys.length; i++) {
+                            const existingKey = existingKeys[i];
+                            if (!incomingKeys.has(existingKey) && !incomingKeys.has(String(existingKey))) {
+                                store.delete(existingKey);
+                            }
+                        }
+                        for (let i = 0; i < safeItems.length; i++) {
+                            store.put(safeItems[i]);
+                        }
+                    };
+                    keysReq.onerror = () => {
+                        store.clear();
+                        for (let i = 0; i < safeItems.length; i++) {
+                            store.put(safeItems[i]);
+                        }
+                    };
+                }
+
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => resolve();
+            } catch (_) {
+                resolve();
+            }
+        });
+    },
+
+    getAll: async (storeName) => {
+        const mirror = getMirrorMap(storeName);
+
+        if (await isNativeSqliteAvailable()) {
+            try {
+                const plugin = getNativePlugin();
+                const res = await plugin.sqliteGetAll({ storeName });
+                if (res && typeof res.jsonArray === 'string') {
+                    const parsed = JSON.parse(res.jsonArray);
+                    if (Array.isArray(parsed)) {
+                        mirror.clear();
+                        for (let i = 0; i < parsed.length; i++) {
+                            const k = extractRecordKey(storeName, parsed[i]);
+                            if (k) mirror.set(k, parsed[i]);
+                        }
+                        return parsed;
+                    }
+                }
+            } catch (_) {}
+            return Array.from(mirror.values());
+        }
+
+        const store = await getStore(storeName, 'readonly');
+        if (!store) {
+            return Array.from(mirror.values());
+        }
+        return new Promise((resolve) => {
+            try {
+                const request = store.getAll();
+                request.onsuccess = () => {
+                    const list = Array.isArray(request.result) ? request.result : [];
+                    if (list.length > 0) {
+                        mirror.clear();
+                        for (let i = 0; i < list.length; i++) {
+                            const k = extractRecordKey(storeName, list[i]);
+                            if (k) mirror.set(k, list[i]);
+                        }
+                        resolve(list);
+                    } else {
+                        resolve(Array.from(mirror.values()));
+                    }
+                };
+                request.onerror = () => resolve(Array.from(mirror.values()));
+            } catch (_) {
+                resolve(Array.from(mirror.values()));
+            }
+        });
+    },
+
+    getById: async (storeName, id) => {
+        if (id === undefined || id === null) return null;
+        const keyStr = String(id);
+        const mirror = getMirrorMap(storeName);
+        if (mirror.has(keyStr)) {
+            return mirror.get(keyStr);
+        }
+
+        if (await isNativeSqliteAvailable()) {
+            try {
+                const plugin = getNativePlugin();
+                const res = await plugin.sqliteGetById({ storeName, recordId: keyStr });
+                if (res && res.jsonPayload) {
+                    const parsed = JSON.parse(res.jsonPayload);
+                    mirror.set(keyStr, parsed);
+                    return parsed;
+                }
+            } catch (_) {}
+            return null;
+        }
+
+        const store = await getStore(storeName, 'readonly');
+        if (!store) return null;
+        return new Promise((resolve) => {
+            try {
+                const request = store.get(id);
+                request.onsuccess = () => {
+                    if (request.result) {
+                        mirror.set(keyStr, request.result);
+                        resolve(request.result);
+                        return;
+                    }
+                    // Intentar búsqueda por clave numérica o string alternativo
+                    const altId = typeof id === 'string' && !isNaN(Number(id)) ? Number(id) : String(id);
+                    const altReq = store.get(altId);
+                    altReq.onsuccess = () => {
+                        if (altReq.result) mirror.set(keyStr, altReq.result);
+                        resolve(altReq.result || null);
+                    };
+                    altReq.onerror = () => resolve(null);
+                };
+                request.onerror = () => resolve(null);
+            } catch (_) {
+                resolve(null);
+            }
+        });
+    },
+
+    clear: async (storeName) => {
+        getMirrorMap(storeName).clear();
+
+        if (await isNativeSqliteAvailable()) {
+            try {
+                const plugin = getNativePlugin();
+                await plugin.sqliteClear({ storeName });
+            } catch (_) {}
+            notifyQueueUpdated(storeName, 'clear');
+            return;
+        }
+
+        const store = await getStore(storeName, 'readwrite');
+        if (!store) return;
+        return new Promise((resolve) => {
+            try {
+                const request = store.clear();
+                request.onsuccess = () => {
+                    notifyQueueUpdated(storeName, 'clear');
+                    resolve();
+                };
+                request.onerror = () => resolve();
+            } catch (_) {
+                resolve();
+            }
+        });
+    },
+
+    delete: async (storeName, id) => {
+        if (id === undefined || id === null) return;
+        const keyStr = String(id);
+        getMirrorMap(storeName).delete(keyStr);
+
+        if (await isNativeSqliteAvailable()) {
+            try {
+                const plugin = getNativePlugin();
+                await plugin.sqliteDelete({ storeName, recordId: keyStr });
+            } catch (_) {}
+            notifyQueueUpdated(storeName, 'delete');
+            return;
+        }
+
+        const store = await getStore(storeName, 'readwrite');
+        if (!store) {
+            notifyQueueUpdated(storeName, 'delete');
+            return;
+        }
+        return new Promise((resolve) => {
+            try {
+                const request = store.delete(id);
+                request.onsuccess = () => {
+                    if (typeof id === 'string' && !isNaN(Number(id))) {
+                        try { store.delete(Number(id)); } catch (_) {}
+                    }
+                    notifyQueueUpdated(storeName, 'delete');
+                    resolve();
+                };
+                request.onerror = () => resolve();
+            } catch (_) {
+                resolve();
+            }
+        });
+    },
+
+    search: async (storeName, indexName, value) => {
+        const needle = String(value || '').toLowerCase();
+        const all = await db.getAll(storeName);
+        return all.filter((item) => {
+            const fieldVal = String(item?.[indexName] || '').toLowerCase();
+            return fieldVal.startsWith(needle) || fieldVal.includes(needle);
+        });
+    },
+
+    getByIndex: async (storeName, indexName, value) => {
+        if (indexName === 'status' && (await isNativeSqliteAvailable())) {
+            try {
+                const plugin = getNativePlugin();
+                const res = await plugin.sqliteGetByStatus({ storeName, status: String(value) });
+                if (res && typeof res.jsonArray === 'string') {
+                    return JSON.parse(res.jsonArray);
+                }
+            } catch (_) {}
+        }
+
+        const store = await getStore(storeName, 'readonly');
+        if (store && store.indexNames && store.indexNames.contains(indexName)) {
+            return new Promise((resolve) => {
+                try {
+                    const index = store.index(indexName);
+                    const request = index.getAll(value);
+                    request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+                    request.onerror = async () => {
+                        const all = await db.getAll(storeName);
+                        resolve(all.filter(item => item?.[indexName] === value));
+                    };
+                } catch (_) {
+                    resolve([]);
+                }
+            });
+        }
+
+        const all = await db.getAll(storeName);
+        return all.filter(item => item?.[indexName] === value);
+    }
+};
+
+export default db;

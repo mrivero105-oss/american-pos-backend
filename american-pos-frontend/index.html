@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <style>
+      html > head, head, title, style, link, script, meta, noscript {
+        display: none !important;
+        position: absolute !important;
+        top: -99999px !important;
+        left: -99999px !important;
+        width: 0 !important;
+        height: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        visibility: hidden !important;
+      }
+    </style>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>Isaac POS V24.04</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      window.addEventListener('error', (event) => {
+        const t = event && event.target;
+        if (t && (t.tagName === 'SCRIPT' || t.tagName === 'LINK')) {
+          const src = t.src || t.href || '';
+          if (src.includes('/assets/')) {
+            const lastRetry = Number(sessionStorage.getItem('__pos_asset_retry__') || 0);
+            if (Date.now() - lastRetry > 4000) {
+              sessionStorage.setItem('__pos_asset_retry__', String(Date.now()));
+              if ('caches' in window) {
+                caches.keys().then((names) => Promise.all(names.map((n) => caches.delete(n)))).finally(() => {
+                  setTimeout(() => window.location.reload(), 1200);
+                });
+              } else {
+                setTimeout(() => window.location.reload(), 1200);
+              }
+            }
+          }
+        }
+      }, true);
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+    <script>
+      if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+        const isElectron = /Electron/i.test(navigator.userAgent) || !!window.process;
+        const isDev = window.location.hostname === 'localhost' || 
+                      window.location.hostname === '127.0.0.1' || 
+                      ['5173', '5174', '5175', '3000', '3001', '3005'].includes(window.location.port);
+        if (isElectron || isDev) {
+          // ENTORNO DESKTOP (Electron) O LOCALHOST: Desregistrar activamente Service Workers y purgar stale cache
+          navigator.serviceWorker.getRegistrations().then((registrations) => {
+            for (const reg of registrations) {
+              reg.unregister();
+            }
+          }).catch(() => {});
+          if ('caches' in window) {
+            caches.keys().then((names) => {
+              for (const name of names) {
+                if (!name.includes('isaac-pos-img')) caches.delete(name);
+              }
+            }).catch(() => {});
+          }
+        } else {
+          // ENTORNO PWA MÓVIL EXTERNO: Registrar Service Worker para soporte offline PWA
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').then((reg) => {
+              if (reg) reg.update();
+            }).catch((err) => {
+              console.warn('SW registration skipped:', err);
+            });
+          });
+        }
+      }
+    </script>
+  </body>
+</html>

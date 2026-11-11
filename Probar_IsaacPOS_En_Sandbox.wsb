@@ -1,0 +1,14 @@
+<Configuration>
+  <VGpu>Enable</VGpu>
+  <Networking>Enable</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>c:\AndroidStudioProjects\American POS PC</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\IsaacPOS_Setup</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>cmd.exe /c "reg add \"HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f &amp;&amp; CiTool.exe --refresh &amp;&amp; start explorer.exe C:\Users\WDAGUtilityAccount\Desktop\IsaacPOS_Setup &amp;&amp; start cmd.exe /c C:\Users\WDAGUtilityAccount\Desktop\IsaacPOS_Setup\Ejecutar_en_Sandbox.bat"</Command>
+  </LogonCommand>
+</Configuration>

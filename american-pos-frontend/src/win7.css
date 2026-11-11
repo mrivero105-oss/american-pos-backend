@@ -1,0 +1,33 @@
+/* ==========================================================================
+   ESTILOS COMPATIBILIDAD WINDOWS - SIN DESTRUCCION DE COLORES NI GRADIENTES
+   ========================================================================== */
+
+html.win7 {
+    font-family: 'Outfit', 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* Permitir aceleración suave sin anular gradientes ni estilos cromáticos */
+html.win7 .fixed {
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+}
+
+/* Scrollbars limpios para la interfaz */
+html.win7 ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+html.win7 ::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+html.win7 ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.3);
+    border-radius: 9999px;
+}
+
+html.win7.dark ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 9999px;
+}

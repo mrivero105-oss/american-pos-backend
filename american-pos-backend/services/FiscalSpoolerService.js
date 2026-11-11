@@ -1,0 +1,315 @@
+const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const LocalPrinterService = require('./LocalPrinterService');
+const { Sale, SaleItem, Customer, FiscalBookRecord, AuditLog } = require('../database/models');
+const { generateRobustId } = require('../utils/helpers');
+
+/**
+ * FiscalSpoolerService
+ * Driver de alto rendimiento para comunicación directa con máquinas e impresoras fiscales
+ * Homologadas (The Factory HKA, Bixolon SRP-350 / 812, Custom, BMC, Dascom, Aclas)
+ * Vía puertos COM (Serial RS232 / USB Virtual COM) y WinSpool RAW.
+ */
+class FiscalSpoolerService {
+
+    /**
+     * Detecta todos los puertos seriales/COM y las impresoras de Windows instaladas
+     */
+    static async getAvailableFiscalDevices() {
+        const ports = await this.getComPorts();
+        const printers = await LocalPrinterService.getSystemPrinters();
+        return {
+            comPorts: ports,
+            printers: printers || [],
+            spoolerPresets: [
+                { name: 'The Factory HKA Direct Spooler', defaultFolder: 'C:\\IntTFHKA\\Factura.txt' },
+                { name: 'Bixolon Fiscal Spooler', defaultFolder: 'C:\\BixolonFiscal\\Spooler.txt' },
+                { name: 'Direct COM / RS232 / USB', defaultFolder: '' }
+            ]
+        };
+    }
+
+    /**
+     * Obtiene la lista de puertos COM disponibles en Windows mediante .NET / PowerShell
+     */
+    static async getComPorts() {
+        if (process.platform !== 'win32') {
+            return ['COM1', 'COM2', 'COM3'];
+        }
+
+        return new Promise((resolve) => {
+            const psCmd = `[System.IO.Ports.SerialPort]::GetPortNames() | ConvertTo-Json -Compress`;
+            exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, { timeout: 4000 }, (err, stdout) => {
+                if (err || !stdout) {
+                    return resolve(['COM1', 'COM2', 'COM3', 'COM4']);
+                }
+                try {
+                    let parsed = JSON.parse(stdout.trim());
+                    if (!Array.isArray(parsed)) parsed = [parsed];
+                    const portList = parsed.filter(Boolean);
+                    if (portList.length === 0) {
+                        return resolve(['COM1', 'COM2', 'COM3', 'COM4']);
+                    }
+                    resolve(portList);
+                } catch (e) {
+                    resolve(['COM1', 'COM2', 'COM3', 'COM4']);
+                }
+            });
+        });
+    }
+
+    /**
+     * Construye comando para Reporte X (Lectura sin cierre)
+     */
+    static buildReporteXCommand(protocol = 'HKA_BIXOLON') {
+        // En protocolo estándar HKA / Bixolon: I0X
+        return 'I0X\n';
+    }
+
+    /**
+     * Construye comando para Reporte Z (Cierre fiscal diario definitivo)
+     */
+    static buildReporteZCommand(protocol = 'HKA_BIXOLON') {
+        // En protocolo estándar HKA / Bixolon: I0Z
+        return 'I0Z\n';
+    }
+
+    /**
+     * Construye comando para Cancelar Documento Fiscal en curso
+     */
+    static buildCancelCommand(protocol = 'HKA_BIXOLON') {
+        return '7\n';
+    }
+
+    /**
+     * Construye comando para Factura Fiscal completa homologada
+     */
+    static buildInvoiceCommands(sale, options = {}) {
+        const {
+            customerRif = 'V-00000000',
+            customerName = 'Consumidor Final',
+            customerAddress = 'Ciudad',
+            customerPhone = ''
+        } = options;
+
+        const lines = [];
+
+        // 1. Cabecera del cliente
+        // Formato HKA / Bixolon:
+        // iR*RIF
+        // iS*Nombre
+        // i00Direccion
+        // i01Telefono
+        lines.push(`iR*${customerRif.substring(0, 18)}`);
+        lines.push(`iS*${customerName.substring(0, 38)}`);
+        if (customerAddress) {
+            lines.push(`i00${customerAddress.substring(0, 38)}`);
+        }
+        if (customerPhone) {
+            lines.push(`i01Tel: ${customerPhone.substring(0, 30)}`);
+        }
+
+        // 2. Renglones de venta (Items)
+        // Formato HKA / Bixolon para ítem:
+        // Codigo de Tasa:
+        //   ' ' (espacio) = Tasa General (16%)
+        //   '!' = Tasa Reducida (8%)
+        //   '"' = Tasa Adicional / Lujo (31%)
+        //   'd0' o '1' = Exento (0%)
+        const items = sale.items || sale.SaleItems || [];
+        for (const item of items) {
+            const rawQty = Math.max(0.001, Number(item.quantity || 1));
+            const rawPrice = Number(item.price || item.unitPrice || 0);
+            const isExempt = item.taxRate === 0 || item.isExempt || (sale.tax === 0 && !item.tax);
+
+            // Formatear cantidad a 5 enteros y 3 decimales sin punto: 00001000 = 1.000
+            const qtyInt = Math.round(rawQty * 1000);
+            const qtyStr = qtyInt.toString().padStart(8, '0').slice(-8);
+
+            // Formatear precio a 8 enteros y 2 decimales sin punto: 0000050000 = 500.00
+            const priceInt = Math.round(rawPrice * 100);
+            const priceStr = priceInt.toString().padStart(10, '0').slice(-10);
+
+            // Limpiar nombre del producto
+            const cleanName = (item.name || item.productName || 'Producto')
+                .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-zA-Z0-9\s.-]/g, '')
+                .substring(0, 38);
+
+            if (isExempt) {
+                // Renglón Exento: d0 (o 'd0' + precio + cantidad + descripción)
+                lines.push(`d0${priceStr}${qtyStr}${cleanName}`);
+            } else {
+                // Renglón Tasa General 16%: espacio o ' '
+                lines.push(` ${priceStr}${qtyStr}${cleanName}`);
+            }
+        }
+
+        // 3. Descuento general si existe (ej. Promociones o Descuentos)
+        const promoDiscount = Number(sale.promoDiscount || sale.discount || 0);
+        if (promoDiscount > 0) {
+            const discInt = Math.round(promoDiscount * 100);
+            const discStr = discInt.toString().padStart(10, '0').slice(-10);
+            lines.push(`p-${discStr}`); // Descuento porcentual o monto directo
+        }
+
+        // 4. Medios de pago y totalización (TheFactoryHKA / Bixolon TFHKA)
+        // 101 = Efectivo Bs | 105 = Divisas USD (sujeto a IGTF) | 109 = Punto de Venta / Débito | 110 = Transferencia / Pago Móvil | 120 = Cierre IGTF 3%
+        const pm = String(sale.paymentMethod || 'efectivo_bs').toLowerCase();
+        const igtfAmount = Number(sale.igtfAmount || 0);
+        let paymentCode = '101';
+        if (pm.includes('usd') || pm === 'cash' || pm.includes('zelle') || pm.includes('divisa') || igtfAmount > 0) {
+            paymentCode = '105';
+        } else if (pm.includes('punto') || pm.includes('tarjeta') || pm.includes('biopago') || pm.includes('card')) {
+            paymentCode = '109';
+        } else if (pm.includes('pago_movil') || pm.includes('transfer')) {
+            paymentCode = '110';
+        }
+        lines.push(paymentCode);
+        if (igtfAmount > 0) {
+            lines.push('120'); // Cálculo y cobro fiscal de IGTF 3% (Providencia SENIAT SNAT/2022/000013)
+        }
+        lines.push('199'); // Fin de documento fiscal
+
+        return lines.join('\n') + '\n';
+    }
+
+    /**
+     * Envía comandos directamente al puerto serial COM vía PowerShell .NET
+     */
+    static async sendToComPort(portName, baudRate = 9600, rawCommands) {
+        return new Promise((resolve, reject) => {
+            const base64Data = Buffer.from(rawCommands, 'utf8').toString('base64');
+            const cleanPort = portName.replace(/[^a-zA-Z0-9_]/g, '');
+
+            const psScript = `
+                $port = New-Object System.IO.Ports.SerialPort("${cleanPort}", ${baudRate}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One);
+                $port.ReadTimeout = 3000;
+                $port.WriteTimeout = 3000;
+                $port.Open();
+                $bytes = [System.Convert]::FromBase64String("${base64Data}");
+                $port.Write($bytes, 0, $bytes.Length);
+                Start-Sleep -Milliseconds 600;
+                $response = "";
+                while ($port.BytesToRead -gt 0) {
+                    $response += [char]$port.ReadByte();
+                }
+                $port.Close();
+                Write-Output $response;
+            `;
+
+            exec(`powershell -NoProfile -NonInteractive -Command "${psScript.replace(/\r?\n/g, ' ')}"`, { timeout: 10000 }, (err, stdout, stderr) => {
+                if (err) {
+                    console.error(`[FiscalSpooler] Error writing to ${cleanPort}:`, stderr || err.message);
+                    return reject(new Error(`Fallo de comunicación con puerto ${cleanPort}: ${err.message}`));
+                }
+                resolve({ success: true, port: cleanPort, response: stdout.trim() });
+            });
+        });
+    }
+
+    /**
+     * Envía comandos a través del servicio de impresión de Windows (WinSpool RAW)
+     */
+    static async sendToWindowsPrinter(printerName, rawCommands) {
+        await LocalPrinterService.printRaw(rawCommands, printerName);
+        return { success: true, printerName };
+    }
+
+    /**
+     * Envía comandos a un archivo de spooler (The Factory HKA o Bixolon Spooler)
+     */
+    static async sendToSpoolerFile(filePath, rawCommands) {
+        const targetDir = path.dirname(filePath);
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+        }
+        await fs.promises.writeFile(filePath, rawCommands, { encoding: 'utf8' });
+        return { success: true, filePath };
+    }
+
+    /**
+     * Despacha una acción fiscal (Reporte X, Reporte Z, Factura Fiscal, Cancelar)
+     */
+    static async executeFiscalAction({
+        action,
+        saleId = null,
+        targetType = 'com', // 'com', 'printer', 'spooler_file'
+        targetPort = 'COM1',
+        baudRate = 9600,
+        targetPrinter = '',
+        spoolerPath = 'C:\\IntTFHKA\\Factura.txt',
+        companyId,
+        userId = null
+    }) {
+        let rawCommands = '';
+        let documentLabel = '';
+
+        if (action === 'REPORTE_X') {
+            rawCommands = this.buildReporteXCommand();
+            documentLabel = 'Reporte X (Lectura Diaria)';
+        } else if (action === 'REPORTE_Z') {
+            rawCommands = this.buildReporteZCommand();
+            documentLabel = 'Reporte Z (Cierre Diario Definitivo)';
+        } else if (action === 'CANCELAR') {
+            rawCommands = this.buildCancelCommand();
+            documentLabel = 'Cancelación de Documento Fiscal';
+        } else if (action === 'FACTURA') {
+            if (!saleId) throw new Error('Se requiere saleId para emitir factura fiscal');
+            const sale = await Sale.findOne({
+                where: { id: saleId, companyId },
+                include: [{ model: SaleItem, as: 'items' }]
+            });
+            if (!sale) throw new Error(`Venta #${saleId} no encontrada`);
+
+            rawCommands = this.buildInvoiceCommands(sale, {
+                customerRif: sale.customerRif || 'V-00000000',
+                customerName: sale.customerName || 'Consumidor Final',
+                customerAddress: sale.customerAddress || '',
+                customerPhone: sale.customerPhone || ''
+            });
+            documentLabel = `Factura Fiscal Venta #${sale.saleNumber || sale.id.slice(-6)}`;
+        } else {
+            throw new Error(`Acción fiscal desconocida: ${action}`);
+        }
+
+        // Ejecutar transmisión según tipo de destino
+        let result = {};
+        if (targetType === 'com') {
+            result = await this.sendToComPort(targetPort, baudRate, rawCommands);
+        } else if (targetType === 'printer') {
+            result = await this.sendToWindowsPrinter(targetPrinter, rawCommands);
+        } else if (targetType === 'spooler_file') {
+            result = await this.sendToSpoolerFile(spoolerPath, rawCommands);
+        } else {
+            throw new Error(`Tipo de conexión fiscal inválido: ${targetType}`);
+        }
+
+        // Registrar en Auditoría del Sistema
+        try {
+            await AuditLog.create({
+                id: generateRobustId(),
+                companyId,
+                userId: userId || 'system',
+                action: `FISCAL_${action}`,
+                details: `Comando fiscal ${documentLabel} emitido exitosamente hacia [${targetType.toUpperCase()}: ${targetPort || targetPrinter || spoolerPath}]`,
+                createdAt: new Date()
+            });
+        } catch (auditErr) {
+            console.warn('[FiscalSpooler] Warning: No se pudo registrar log de auditoría:', auditErr.message);
+        }
+
+        return {
+            success: true,
+            action,
+            documentLabel,
+            connection: { targetType, targetPort, targetPrinter, spoolerPath },
+            executedAt: new Date().toISOString(),
+            rawCommandLength: rawCommands.length,
+            result
+        };
+    }
+}
+
+module.exports = FiscalSpoolerService;
