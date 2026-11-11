@@ -5,30 +5,22 @@
  * e índice HNSW, con conmutación por error a pg_trgm difuso sin fricción.
  */
 
+const https = require('https');
 const { sequelize } = require('../database/connection');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 class SemanticSearchService {
     constructor() {
-        this.genAI = null;
-        this.embeddingModel = null;
+        this.apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || null;
+        this.modelName = 'models/gemini-embedding-001';
         this.isPgVectorAvailable = false;
         this.checkedAvailability = false;
     }
 
     /**
-     * Inicializa el cliente de Gemini para generación de embeddings
+     * Inicializa la configuración de API Key de Gemini
      */
     initAI() {
-        const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-        if (apiKey && apiKey.trim() !== '') {
-            try {
-                this.genAI = new GoogleGenerativeAI(apiKey);
-                this.embeddingModel = this.genAI.getGenerativeModel({ model: 'text-embedding-004' });
-            } catch (err) {
-                console.warn('[SemanticSearch] Error inicializando modelo de embeddings:', err.message);
-            }
-        }
+        this.apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || null;
     }
 
     /**
@@ -48,21 +40,73 @@ class SemanticSearchService {
     }
 
     /**
-     * Genera el vector embedding (dimensión 768) de un texto usando Gemini
+     * Genera el vector embedding (dimensión 768) de un texto usando la API de Gemini (IPv4 forzado para estabilidad)
      */
     async generateEmbedding(text) {
         if (!text || typeof text !== 'string' || text.trim() === '') return null;
-        if (!this.embeddingModel) this.initAI();
-        if (!this.embeddingModel) return null;
+        if (!this.apiKey) this.initAI();
+        if (!this.apiKey) return null;
 
-        try {
-            const cleanText = text.trim().slice(0, 500);
-            const result = await this.embeddingModel.embedContent(cleanText);
-            return result?.embedding?.values || null;
-        } catch (err) {
-            console.warn('[SemanticSearch] Error generando embedding:', err.message);
-            return null;
-        }
+        return new Promise((resolve) => {
+            try {
+                const cleanText = text.trim().slice(0, 500);
+                const payload = JSON.stringify({
+                    model: this.modelName,
+                    content: {
+                        parts: [{ text: cleanText }]
+                    },
+                    outputDimensionality: 768
+                });
+
+                const url = `https://generativelanguage.googleapis.com/v1beta/${this.modelName}:embedContent?key=${this.apiKey}`;
+                const u = new URL(url);
+
+                const req = https.request({
+                    hostname: u.hostname,
+                    path: u.pathname + u.search,
+                    method: 'POST',
+                    family: 4, // Obligatorio en Windows para evitar cuelgues DNS/IPv6
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(payload)
+                    },
+                    timeout: 4000
+                }, (res) => {
+                    let data = '';
+                    res.on('data', chunk => data += chunk);
+                    res.on('end', () => {
+                        try {
+                            if (res.statusCode >= 200 && res.statusCode < 300) {
+                                const json = JSON.parse(data);
+                                resolve(json.embedding?.values || null);
+                            } else {
+                                console.warn(`[SemanticSearch] API embedding error (${res.statusCode}): ${data.slice(0, 100)}`);
+                                resolve(null);
+                            }
+                        } catch (_parseErr) {
+                            resolve(null);
+                        }
+                    });
+                });
+
+                req.on('error', (err) => {
+                    console.warn('[SemanticSearch] Error de red en embedding:', err.message);
+                    resolve(null);
+                });
+
+                req.on('timeout', () => {
+                    req.destroy();
+                    console.warn('[SemanticSearch] Timeout al contactar API de embeddings (usando fallback sintáctico)');
+                    resolve(null);
+                });
+
+                req.write(payload);
+                req.end();
+            } catch (err) {
+                console.warn('[SemanticSearch] Error inesperado generando embedding:', err.message);
+                resolve(null);
+            }
+        });
     }
 
     /**
