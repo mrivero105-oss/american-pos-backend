@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import api from '../services/api';
 
 // Helper to remove accents, lowercase and trim text for ultra-fast matching
 const normalizeText = (text) => {
@@ -12,9 +13,22 @@ const normalizeText = (text) => {
 
 export const useFuzzySearch = (data, searchTerm) => {
     const [workerResults, setWorkerResults] = useState(null);
+    const [semanticResults, setSemanticResults] = useState(null);
+    const semanticDebounceRef = useRef(null);
     const workerRef = useRef(null);
     const queryIdRef = useRef(0);
     const hasWorkerRef = useRef(false);
+
+    // Mapeo rápido de productos locales por ID para enriquecer respuestas del backend
+    const dataMap = useMemo(() => {
+        const map = new Map();
+        if (Array.isArray(data)) {
+            data.forEach(p => {
+                if (p && p.id) map.set(String(p.id), p);
+            });
+        }
+        return map;
+    }, [data]);
 
     // 1. Initialize Web Worker once in background thread
     useEffect(() => {
@@ -95,6 +109,43 @@ export const useFuzzySearch = (data, searchTerm) => {
             });
         }
     }, [searchTerm]);
+
+    // 3.1 Integración de Búsqueda Semántica Vectorial con IA (pgvector en PostgreSQL 16)
+    useEffect(() => {
+        if (semanticDebounceRef.current) {
+            clearTimeout(semanticDebounceRef.current);
+        }
+
+        const trimmed = (searchTerm || '').trim();
+        if (!trimmed || trimmed.length < 3) {
+            setSemanticResults(null);
+            return;
+        }
+
+        semanticDebounceRef.current = setTimeout(async () => {
+            try {
+                const res = await api.get('/products/semantic-search', {
+                    params: { q: trimmed, limit: 30 }
+                });
+
+                if (res.data?.success && Array.isArray(res.data.data) && res.data.data.length > 0) {
+                    const mapped = res.data.data.map(sp => {
+                        const local = dataMap.get(String(sp.id));
+                        return local ? { ...local, _semanticScore: sp.score, _matchType: sp.matchType } : sp;
+                    }).filter(Boolean);
+                    setSemanticResults(mapped);
+                }
+            } catch (_err) {
+                // Silencioso ante offline para no perturbar al cajero
+            }
+        }, 280);
+
+        return () => {
+            if (semanticDebounceRef.current) {
+                clearTimeout(semanticDebounceRef.current);
+            }
+        };
+    }, [searchTerm, dataMap]);
 
     // 4. Fallback Synchronous Search (used when Worker is unavailable or on initial frame)
     const indexedData = useMemo(() => {
@@ -247,5 +298,19 @@ export const useFuzzySearch = (data, searchTerm) => {
         return data || [];
     }
 
-    return workerResults !== null ? workerResults : fallbackResults;
+    const localMatches = workerResults !== null ? workerResults : fallbackResults;
+
+    // Si la búsqueda sintáctica local no encontró resultados pero la búsqueda semántica sí:
+    if ((!localMatches || localMatches.length === 0) && semanticResults && semanticResults.length > 0) {
+        return semanticResults;
+    }
+
+    // Si ambos tienen resultados y los locales son pocos, complementar con los semánticos sin duplicar
+    if (localMatches && localMatches.length > 0 && semanticResults && semanticResults.length > 0 && localMatches.length < 15) {
+        const seenIds = new Set(localMatches.map(p => String(p.id)));
+        const additional = semanticResults.filter(p => !seenIds.has(String(p.id)));
+        return [...localMatches, ...additional];
+    }
+
+    return localMatches;
 };

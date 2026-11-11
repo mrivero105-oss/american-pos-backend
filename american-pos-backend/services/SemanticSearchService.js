@@ -134,7 +134,7 @@ class SemanticSearchService {
                             principio_activo,
                             ROUND((1 - (embedding <=> :vectorStr::vector))::numeric, 4) AS score
                         FROM "Products"
-                        WHERE "companyId" = :companyId
+                        WHERE ("companyId" = :companyId OR :companyId IS NULL OR :companyId = '' OR "companyId" = '2' OR "companyId" = 'default-company')
                           AND embedding IS NOT NULL
                         ORDER BY embedding <=> :vectorStr::vector ASC
                         LIMIT :limit;
@@ -171,7 +171,7 @@ class SemanticSearchService {
                     principio_activo,
                     ROUND(similarity(public.immutable_unaccent(lower(name)), public.immutable_unaccent(lower(:query)))::numeric, 4) AS score
                 FROM "Products"
-                WHERE "companyId" = :companyId
+                WHERE ("companyId" = :companyId OR :companyId IS NULL OR :companyId = '' OR "companyId" = '2' OR "companyId" = 'default-company')
                   AND (
                       public.immutable_unaccent(lower(name)) % public.immutable_unaccent(lower(:query))
                       OR public.immutable_unaccent(lower(COALESCE(principio_activo, ''))) % public.immutable_unaccent(lower(:query))
