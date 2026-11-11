@@ -2621,16 +2621,16 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
     }
 
     /**
-     * Análisis Predictivo y Reportes Ejecutivos con IA (Estricto Modo SOLO LECTURA).
+     * Diagnóstico Financiero y Proyección Operativa de Inventario (Estricto Modo SOLO LECTURA).
      * Garantía de Cero Mutación: No realiza modificaciones, inserciones ni eliminaciones en BD.
-     * Protección de Cuota Gratuita: Incorpora caché con TTL prolongado (4h) para un consumo máximo de 1-3 llamadas/día.
+     * Protección de Recursos: Incorpora caché para un rendimiento instantáneo sin recargas innecesarias.
      */
     async getPredictiveAnalytics(companyId, reqUser, options = {}) {
         const range = options.range || 'today';
         const forceRefresh = !!options.forceRefresh;
-        const cacheKey = `predictive_ai_${companyId || '2'}_${range}`;
+        const cacheKey = `executive_diag_${companyId || '2'}_${range}`;
 
-        // 1. Protección de Cuota Gratuita: Entregar desde caché si ya fue generado
+        // 1. Entregar desde caché si ya fue generado recientemente
         if (!forceRefresh) {
             const cached = cacheService.get(cacheKey);
             if (cached) {
@@ -2645,6 +2645,12 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
         const profitability = await ReportService.getProfitability(reqUser, { range });
         const valuation = await ReportService.getInventoryValuation(companyId);
         const lowStock = await ReportService.getLowStock(companyId, 1, 10);
+        
+        // Obtener pronóstico de rotación real de stock (ventana de 14 días)
+        let stockPredictions = [];
+        try {
+            stockPredictions = await StockIntelligenceService.getStockPredictions(companyId, 14);
+        } catch (_e) {}
 
         const summary = profitability.summary || {};
         const topProducts = profitability.topProducts || [];
@@ -2658,6 +2664,16 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
             .slice(0, 3)
             .map(h => `${h.hourStr || h.hour}:00 ($${Number(h.total || 0).toFixed(2)})`)
             .join(', ');
+
+        const criticalStockList = (stockPredictions && stockPredictions.length > 0)
+            ? stockPredictions.filter(p => p.status === 'critical' || p.status === 'warning' || p.daysRemaining <= 7).slice(0, 6)
+            : lowStockItems.slice(0, 6).map(i => ({
+                name: i.name,
+                stock: i.stockQuantity,
+                minStock: i.minStock,
+                daysRemaining: Math.max(1, Math.round((Number(i.stockQuantity) || 1) / 2)),
+                velocity: 1
+            }));
 
         const dataPayload = {
             rango: range,
@@ -2676,61 +2692,69 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
             horasPico: peakHours || 'Sin transacciones en el rango',
             topVendidos: topProducts.slice(0, 5).map(p => `${p.name} (${p.quantity} un - $${Number(p.total).toFixed(2)})`),
             topRentables: topProfits.slice(0, 5).map(p => `${p.name} ($${Number(p.totalProfit).toFixed(2)} margen - ${p.margin}%)`),
-            articulosCriticosBajoStock: lowStockItems.slice(0, 5).map(i => `${i.name} (Stock: ${i.stockQuantity}, Mínimo: ${i.minStock})`)
+            articulosCriticosBajoStock: criticalStockList.map(i => `${i.name} (Stock: ${i.stock || i.stockQuantity || 0}, Días est: ${Math.round(i.daysRemaining || 0)})`)
         };
 
-        // 3. Generador Heurístico Local (Cero fallos garantizado y cero costo)
+        // 3. Generador Heurístico Local (Estilo Contable y Corporativo)
         const generateLocalFallback = (reason) => {
             const marginNum = Number(summary.margin || 0);
-            let healthScore = 80;
-            let healthStatus = 'Saludable';
-            if (marginNum >= 25 && (valuation?.outOfStockCount || 0) < 5) {
-                healthScore = 94;
-                healthStatus = 'Óptimo';
-            } else if (marginNum < 15 || (valuation?.outOfStockCount || 0) > 15) {
-                healthScore = 60;
-                healthStatus = 'Atención Requerida';
+            const numSales = Number(summary.numberOfSales || 0);
+            let efficiencyIndex = 86;
+            let statusLabel = 'Operación Regular';
+
+            if (numSales > 0 && marginNum >= 20 && (valuation?.outOfStockCount || 0) < 10) {
+                efficiencyIndex = 94;
+                statusLabel = 'Operación Óptima';
+            } else if ((valuation?.outOfStockCount || 0) > 30) {
+                efficiencyIndex = 76;
+                statusLabel = 'Riesgo de Desabastecimiento';
+            } else if (numSales === 0) {
+                efficiencyIndex = 82;
+                statusLabel = 'Jornada en Apertura';
             }
 
-            const predictions = lowStockItems.slice(0, 5).map(item => ({
+            const riskItems = criticalStockList.map(item => ({
                 product: item.name,
-                estimatedDaysLeft: Math.max(1, Math.round((Number(item.stockQuantity) || 1) / 2)),
-                runRate: 'Demanda continua',
-                action: `Reordenar ${Math.max(10, (item.minStock || 5) * 2)} unidades para reponer stock preventivo.`
+                currentStock: Number(item.stock || item.stockQuantity || 0),
+                daysLeft: Math.max(0, Math.round(item.daysRemaining || 0)),
+                runRate: `${Number(item.velocity || 1).toFixed(1)} un/día`,
+                suggestedOrder: `Solicitar ${Math.max(12, ((item.minStock || 6) * 2))} unidades de reposición.`
             }));
 
             const fallbackReport = {
-                healthScore,
-                healthStatus,
-                executiveSummary: `El negocio registró ${dataPayload.numeroTransacciones} ventas por un total de $${dataPayload.ventasTotales} con margen del ${dataPayload.margenPorcentual}. Se detectan ${dataPayload.productosBajoStock} productos bajo stock mínimo que deben atenderse preventivamente.`,
-                keyStrengths: [
-                    topProducts[0] ? `Alta rotación en ${topProducts[0].name}` : 'Flujo regular de ventas en caja',
-                    `Margen bruto consolidado del ${dataPayload.margenPorcentual}`,
-                    `Horarios pico detectados: ${dataPayload.horasPico || 'Horario diurno comercial'}`
+                efficiencyIndex,
+                statusLabel,
+                operationalSummary: numSales > 0
+                    ? `Durante el período analizado se consolidaron ${dataPayload.numeroTransacciones} transacciones de venta con una facturación bruta de $${dataPayload.ventasTotales} y margen bruto del ${dataPayload.margenPorcentual}. El inventario en almacén suma una valoración retail de $${dataPayload.valoracionRetail}, identificando ${dataPayload.productosBajoStock} referencias con requerimiento de reposición programada.`
+                    : `La jornada comercial actual se encuentra en curso sin cierres de caja registrados en este corte. La estructura de inventario registra una valoración retail de $${dataPayload.valoracionRetail} distribuida en ${dataPayload.totalProductosCatalogo} artículos, con ${dataPayload.productosBajoStock} referencias en umbral de reposición preventiva.`,
+                auditObservations: [
+                    topProducts[0] ? `Mayor volumen comercial concentrado en ${topProducts[0].name}.` : 'Operatividad comercial en curso regular.',
+                    `Margen bruto consolidado del catálogo situado en ${dataPayload.margenPorcentual}.`,
+                    `Inventario total valorado en $${dataPayload.valoracionCosto} a costo de adquisición.`
                 ],
-                demandPredictions: predictions.length > 0 ? predictions : [
-                    { product: 'Catálogo General', estimatedDaysLeft: 15, runRate: 'Estable', action: 'Inventario en niveles controlados.' }
+                stockRiskItems: riskItems.length > 0 ? riskItems : [
+                    { product: 'Catálogo General', currentStock: dataPayload.totalProductosCatalogo, daysLeft: 15, runRate: 'Estable', suggestedOrder: 'Mantener niveles regulares de inventario.' }
                 ],
-                profitOpportunities: [
+                marginOpportunities: [
                     {
-                        title: 'Impulso de Productos de Mayor Margen',
-                        description: topProfits[0] ? `Aumentar visibilidad de ${topProfits[0].name} (margen ${topProfits[0].margin}%) en el mostrador.` : 'Crear combos de venta cruzada en caja.'
+                        title: 'Impulso de Artículos de Alto Rendimiento',
+                        detail: topProfits[0] ? `Priorizar la exposición comercial de ${topProfits[0].name} (margen bruto ${topProfits[0].margin}%) en puntos focales de venta.` : 'Fomentar la venta complementaria en caja registradora.'
                     },
                     {
-                        title: 'Evitar Quiebres de Stock en Productos Clave',
-                        description: `Reponer preventivamente los ${dataPayload.productosBajoStock} artículos con stock mínimo para no perder ventas.`
+                        title: 'Gestión Preventiva de Quiebres de Stock',
+                        detail: `Programar órdenes de compra para las ${dataPayload.productosBajoStock} referencias bajo stock de seguridad a fin de proteger el flujo comercial.`
                     }
                 ],
-                anomalyAlerts: [
+                controlAlerts: [
                     (valuation?.outOfStockCount || 0) > 0 ? {
-                        type: 'warning',
-                        message: `Hay ${valuation.outOfStockCount} productos con stock en 0 en catálogo.`
+                        level: 'warning',
+                        message: `Se registran ${valuation.outOfStockCount} artículos con stock en cero en inventario activo.`
                     } : {
-                        type: 'success',
-                        message: 'Inventario sin quiebres críticos registrados.'
+                        level: 'success',
+                        message: 'Catálogo con cobertura completa sin quiebres de inventario registrados.'
                     }
                 ],
-                strategicAdvice: 'Revisar reposición antes del fin de semana y monitorear ventas en horas pico para maximizar la conversión.',
+                priorityDirective: 'Consolidar la reposición de mercancía crítica con proveedores clave y asegurar la rotación de los artículos con mayor margen bruto.',
                 isFallback: true,
                 fallbackReason: reason,
                 generatedAt: new Date().toISOString(),
@@ -2743,34 +2767,38 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
 
         if (!this.initialized) this.init();
         if (!this.genAI) {
-            return generateLocalFallback('API de IA no configurada localmente');
+            return generateLocalFallback('Motor analítico en modo local');
         }
 
-        // 4. Consulta a Gemini en Modo SOLO LECTURA
+        // 4. Generación Técnica Formal (Estilo Auditoría Financiera ERP)
         try {
-            const systemPrompt = `Eres el Asesor Senior de Inteligencia Financiera y Predictiva para Isaac POS.
-MODO ESTRICTO: SOLO LECTURA.
-Bajo ninguna circunstancia intentes o propongas modificar, alterar o eliminar registros de la base de datos. Tu único trabajo es analizar, diagnosticar y proyectar recomendaciones claras, profesionales y concisas para el dueño de la tienda.
+            const systemPrompt = `Eres el Motor Automatizado de Control de Gestión, Auditoría Financiera y Planificación de Inventarios para Isaac POS (ERP Empresarial).
+REGLAS ESTRICTAS DE ESTILO Y REDACCIÓN:
+- Redacta como un informe técnico de auditoría financiera (estilo SAP S/4HANA, Oracle NetSuite, KPMG Audit).
+- PROHIBIDO TERMINANTEMENTE usar las palabras: "IA", "inteligencia artificial", "Gemini", "algoritmo", "asistente", "robot", "cerebro", "prompt".
+- PROHIBIDO hablar en primera persona ("yo sugiero", "recomiendo", "he analizado"). Redacta siempre en voz impersonal o tercera persona formal: "Se evidencia", "Se proyecta", "Corresponde auditar", "La rotación indica".
+- PROHIBIDO usar comillas (" ") ni frases motivacionales o retóricas. Todo debe ser estrictamente factual, financiero, cuantitativo y accionable.
+- Si el período es "today" y las ventas son cero, redacta entendiendo que la jornada comercial acaba de abrir o está en curso, evaluando el inventario y catálogo disponible con ponderación equilibrada (Score entre 80 y 90).
 
-Debes responder ÚNICAMENTE en formato JSON válido con esta estructura exacta:
+Responde ÚNICAMENTE en formato JSON válido con esta estructura exacta:
 {
-  "healthScore": 88,
-  "healthStatus": "Óptimo" | "Saludable" | "Atención Requerida" | "Crítico",
-  "executiveSummary": "Resumen ejecutivo claro y directo de 2 a 3 oraciones...",
-  "keyStrengths": ["Fortaleza 1", "Fortaleza 2", "Fortaleza 3"],
-  "demandPredictions": [
-    { "product": "Nombre del producto", "estimatedDaysLeft": 3, "runRate": "X unid/día", "action": "Acción recomendada de compra o reposición" }
+  "efficiencyIndex": 88, // Número entero 0-100 representando el Índice de Eficiencia Operativa
+  "statusLabel": "Operación Óptima" | "Operación Regular" | "Riesgo de Desabastecimiento" | "Revisión Requerida",
+  "operationalSummary": "Resumen técnico formal de 2-3 oraciones sobre el balance de ingresos, márgenes y situación del inventario...",
+  "auditObservations": ["Observación 1", "Observación 2", "Observación 3"],
+  "stockRiskItems": [
+    { "product": "Nombre", "currentStock": 10, "daysLeft": 3, "runRate": "2.5 un/día", "suggestedOrder": "Solicitar 20 unidades" }
   ],
-  "profitOpportunities": [
-    { "title": "Título de la oportunidad", "description": "Descripción accionable y específica" }
+  "marginOpportunities": [
+    { "title": "Área de optimización", "detail": "Detalle analítico cuantitativo" }
   ],
-  "anomalyAlerts": [
-    { "type": "warning" | "info" | "success", "message": "Descripción de la alerta" }
+  "controlAlerts": [
+    { "level": "warning" | "info" | "success", "message": "Texto de alerta técnica" }
   ],
-  "strategicAdvice": "Consejo estratégico clave para la toma de decisiones esta semana."
+  "priorityDirective": "Directriz operativa de cumplimiento prioritario sin comillas."
 }`;
 
-            const userPrompt = `Analiza las siguientes métricas del negocio del período (${range}):
+            const userPrompt = `Analiza las siguientes métricas contables y de inventario del período (${range}):
 ${JSON.stringify(dataPayload, null, 2)}
 
 Genera el informe ejecutivo en JSON estricto:`;
@@ -2791,16 +2819,15 @@ Genera el informe ejecutivo en JSON estricto:`;
                     const response = await result.response;
                     jsonText = response.text();
                     if (jsonText) {
-                        console.log(`[ISAAC AI] Análisis predictivo generado con éxito vía ${modelName}`);
                         break;
                     }
                 } catch (mErr) {
-                    console.warn(`[ISAAC AI] Modelo ${modelName} no disponible para análisis predictivo:`, mErr.message);
+                    console.warn(`[ISAAC POS] Motor analítico no disponible en ${modelName}:`, mErr.message);
                 }
             }
 
             if (!jsonText) {
-                return generateLocalFallback('Modelos de Gemini temporalmente saturados');
+                return generateLocalFallback('Conexión externa no disponible');
             }
 
             const cleanJson = jsonText.trim().replace(/^```json/i, '').replace(/```$/i, '').trim();
@@ -2808,16 +2835,36 @@ Genera el informe ejecutivo en JSON estricto:`;
 
             const finalReport = {
                 ...parsed,
+                // Mapear compatibilidad si el frontend lee claves anteriores
+                healthScore: parsed.efficiencyIndex || parsed.healthScore || 85,
+                healthStatus: parsed.statusLabel || parsed.healthStatus || 'Operación Regular',
+                executiveSummary: parsed.operationalSummary || parsed.executiveSummary || '',
+                demandPredictions: (parsed.stockRiskItems || parsed.demandPredictions || []).map(item => ({
+                    product: item.product,
+                    estimatedDaysLeft: item.daysLeft !== undefined ? item.daysLeft : item.estimatedDaysLeft,
+                    runRate: item.runRate,
+                    action: item.suggestedOrder || item.action
+                })),
+                profitOpportunities: (parsed.marginOpportunities || parsed.profitOpportunities || []).map(op => ({
+                    title: op.title,
+                    description: op.detail || op.description
+                })),
+                anomalyAlerts: (parsed.controlAlerts || parsed.anomalyAlerts || []).map(al => ({
+                    type: al.level || al.type || 'info',
+                    message: al.message
+                })),
+                keyStrengths: parsed.auditObservations || parsed.keyStrengths || [],
+                strategicAdvice: (parsed.priorityDirective || parsed.strategicAdvice || '').replace(/^["']|["']$/g, ''),
                 isFallback: false,
                 generatedAt: new Date().toISOString(),
                 dataSnapshot: dataPayload
             };
 
-            // Guardar en caché por 4 horas (14400s) para asegurar máximo 1-3 llamadas al día
+            // Guardar en caché por 4 horas (14400s)
             cacheService.set(cacheKey, finalReport, 14400);
             return finalReport;
         } catch (error) {
-            console.error('[ISAAC AI] Error en generación de análisis predictivo:', error);
+            console.error('[ISAAC POS] Error generando informe de control:', error);
             return generateLocalFallback(error.message);
         }
     }
