@@ -19,12 +19,23 @@ async function main() {
     console.log('🚀 [DEPLOY] Iniciando despliegue atómico a Isaac POS Modern...');
     const startTime = Date.now();
 
+    // 0. Unificar y asegurar todos los activos de marca oficiales (emblemas, logotipos, .ico)
+    console.log('🎨 [0/4] Sincronizando y unificando activos visuales de marca oficiales...');
+    const brandScript = path.join(PROJECT_ROOT, 'scripts', 'unify_brand_assets.py');
+    if (fs.existsSync(brandScript)) {
+        try {
+            execSync(`python "${brandScript}"`, { stdio: 'inherit' });
+        } catch (brandErr) {
+            console.warn(`⚠ Aviso sincronizando activos de marca: ${brandErr.message}`);
+        }
+    }
+
     // 1. Compilar Frontend
     console.log('📦 [1/4] Compilando frontend (Vite)...');
     execSync('npm run build', { cwd: FRONTEND_DIR, stdio: 'inherit' });
 
     // 2. Sincronizar fuentes con la carpeta de staging
-    console.log('🔄 [2/4] Sincronizando bundle y backend en área de staging...');
+    console.log('🔄 [2/4] Sincronizando bundle, backend y splash en área de staging...');
     if (!fs.existsSync(TEMP_EXTRACTED)) {
         fs.mkdirSync(TEMP_EXTRACTED, { recursive: true });
     }
@@ -32,15 +43,55 @@ async function main() {
     // Copiar public desde dist
     const distDir = path.join(FRONTEND_DIR, 'dist');
     const stagingPublic = path.join(TEMP_EXTRACTED, 'public');
+    const stagingAssets = path.join(stagingPublic, 'assets');
+
+    // Limpiar imágenes obsoletas o con nombres antiguos en assets de staging
+    if (fs.existsSync(stagingAssets)) {
+        const obsoletePatterns = [
+            /RH5LqTe5/,
+            /Gi0wQ7b8/,
+            /CLAUhV0B/,
+            /DmyQGpc3/,
+            /logo-x_2IkhiP/,
+            /logo-Bq2dXes1/
+        ];
+        const existingFiles = fs.readdirSync(stagingAssets);
+        for (const f of existingFiles) {
+            if (obsoletePatterns.some(p => p.test(f))) {
+                try {
+                    fs.unlinkSync(path.join(stagingAssets, f));
+                    console.log(`  - Eliminado asset obsoleto en staging: ${f}`);
+                } catch (_) {}
+            }
+        }
+    }
+
+    // Copiar dist compilado a staging/public
     fs.cpSync(distDir, stagingPublic, { recursive: true, force: true });
 
+    // Copiar assets directos de backend/public (splash.html, etc.) a staging/public
+    const backendPublic = path.join(BACKEND_DIR, 'public');
+    if (fs.existsSync(backendPublic)) {
+        fs.cpSync(backendPublic, stagingPublic, { recursive: true, force: true });
+    }
+
     // Copiar carpetas clave del backend
-    const backendFiles = ['routes', 'services', 'database', 'utils', 'middleware', 'controllers'];
-    for (const folder of backendFiles) {
+    const backendFolders = ['routes', 'services', 'database', 'utils', 'middleware', 'controllers', 'config', 'build', 'schemas', 'static', 'migrations'];
+    for (const folder of backendFolders) {
         const srcFolder = path.join(BACKEND_DIR, folder);
         const destFolder = path.join(TEMP_EXTRACTED, folder);
         if (fs.existsSync(srcFolder)) {
             fs.cpSync(srcFolder, destFolder, { recursive: true, force: true });
+        }
+    }
+
+    // Copiar archivos raíz del backend esenciales (main.js, index.js, preload.js, paths.js, package.json, etc.)
+    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.json', '.env'];
+    for (const file of backendRootFiles) {
+        const srcFile = path.join(BACKEND_DIR, file);
+        const destFile = path.join(TEMP_EXTRACTED, file);
+        if (fs.existsSync(srcFile)) {
+            fs.copyFileSync(srcFile, destFile);
         }
     }
 
@@ -66,6 +117,15 @@ async function main() {
     }
 
     try {
+        if (fs.existsSync(targetAsar)) {
+            try {
+                fs.unlinkSync(targetAsar);
+            } catch (_) {
+                const tempOld = path.join(INSTALLED_DIR, `app.asar.old_${Date.now()}`);
+                fs.renameSync(targetAsar, tempOld);
+                try { fs.unlinkSync(tempOld); } catch (_) {}
+            }
+        }
         fs.renameSync(targetNewAsar, targetAsar);
     } catch (renameErr) {
         if (renameErr.code === 'EPERM' || renameErr.code === 'EBUSY') {
@@ -82,7 +142,7 @@ async function main() {
     const updateIconScript = path.join(PROJECT_ROOT, 'scripts', 'update_desktop_icon.ps1');
     if (fs.existsSync(updateIconScript)) {
         try {
-            execSync(`powershell -ExecutionPolicy Bypass -File "${updateIconScript}"`, { stdio: 'ignore' });
+            execSync(`powershell -ExecutionPolicy Bypass -File "${updateIconScript}"`, { stdio: 'inherit' });
         } catch (_e) {}
     }
 
