@@ -1490,7 +1490,10 @@ class ProductService {
                 const invRate = precision.parseNumericInput(invoiceOptions.exchangeRate) > 0
                     ? precision.round(precision.parseNumericInput(invoiceOptions.exchangeRate), 6)
                     : posRate;
-                const finalTotalVes = precision.round(precision.multiply(finalTotalUsd, invRate), 2);
+                const explicitTotalVes = precision.parseNumericInput(invoiceOptions.totalVes);
+                const finalTotalVes = explicitTotalVes > 0
+                    ? precision.round(explicitTotalVes, 2)
+                    : precision.round(precision.multiply(finalTotalUsd, invRate), 2);
 
                 const arrivalDate = invoiceOptions.invoiceDate || new Date().toISOString().split('T')[0];
                 const dueDate = paymentStatus === 'unpaid' ? (invoiceOptions.dueDate || null) : null;

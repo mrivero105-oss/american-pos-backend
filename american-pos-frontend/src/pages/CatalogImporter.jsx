@@ -1367,6 +1367,14 @@ export default function CatalogImporter() {
                 };
             });
 
+            // Total fiscal oficial verificado de la factura física
+            const officialDocTotalBs = docTotals.total > 0 && docCurrency === 'BS' ? roundExact(docTotals.total, 2) : null;
+            const officialDocTotalUsd = docTotals.total > 0
+                ? (docCurrency === 'BS' && systemRate > 0 ? roundExact(docTotals.total / systemRate, 2) : roundExact(docTotals.total, 2))
+                : null;
+            const finalInvoiceTotalUsd = officialDocTotalUsd || liveSummary.totalUsd;
+            const finalInvoiceTotalBs = officialDocTotalBs || (docCurrency === 'BS' ? liveSummary.totalBs : roundExact(liveSummary.totalUsd * systemRate, 2));
+
             const { data: resData } = await api.post('/products/apply-mapping', {
                 mappings,
                 importMode,
@@ -1381,7 +1389,8 @@ export default function CatalogImporter() {
                 invoiceDate: invoiceDate || null,
                 dueDate: finAction === 'CREDIT' ? (settlementOverride?.dueDate || dueDate || null) : null,
                 exchangeRate: systemRate > 0 ? systemRate : 1,
-                totalUsd: importMode === 'INVOICE' ? liveSummary.totalUsd : null,
+                totalUsd: importMode === 'INVOICE' ? finalInvoiceTotalUsd : null,
+                totalVes: importMode === 'INVOICE' ? finalInvoiceTotalBs : null,
                 notes: settlementOverride?.notes || null
             });
 
@@ -1389,7 +1398,7 @@ export default function CatalogImporter() {
                 toast.success(`¡Inventario actualizado! ${resData.updateCount || mappings.length} productos procesados (Sin alterar Cuentas por Pagar).`, { duration: 5000 });
             } else if (resData.creditCharged || finAction === 'CREDIT') {
                 toast.success(
-                    `¡Recepción completada! ${resData.updateCount} productos ingresados y $${liveSummary.totalUsd.toFixed(2)} registrados en Cuentas por Pagar.`,
+                    `¡Recepción completada! ${resData.updateCount} productos ingresados y $${finalInvoiceTotalUsd.toFixed(2)} registrados en Cuentas por Pagar.`,
                     { duration: 6000 }
                 );
             } else {
@@ -2591,8 +2600,12 @@ export default function CatalogImporter() {
                 onConfirm={(config) => applyUpdates(config)}
                 isSaving={isSaving}
                 summary={{
-                    totalUsd: liveSummary.totalUsd,
-                    totalBs: liveSummary.totalBs,
+                    totalUsd: (docTotals.total > 0 && docCurrency === 'BS' && systemRate > 0)
+                        ? roundExact(docTotals.total / systemRate, 2)
+                        : (docTotals.total > 0 && docCurrency === 'USD' ? roundExact(docTotals.total, 2) : liveSummary.totalUsd),
+                    totalBs: (docTotals.total > 0 && docCurrency === 'BS')
+                        ? roundExact(docTotals.total, 2)
+                        : (docTotals.total > 0 && docCurrency === 'USD' && systemRate > 0 ? roundExact(docTotals.total * systemRate, 2) : liveSummary.totalBs),
                     exchangeRate: systemRate,
                     itemCount: liveSummary.readyCount,
                     totalUnits: liveSummary.totalUnits,

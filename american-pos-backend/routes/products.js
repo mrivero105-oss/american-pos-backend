@@ -995,6 +995,7 @@ router.post('/apply-mapping', requirePermission('canCreateProducts'), async (req
             dueDate,
             exchangeRate,
             totalUsd,
+            totalVes,
             notes
         } = req.body || {};
 
@@ -1025,6 +1026,7 @@ router.post('/apply-mapping', requirePermission('canCreateProducts'), async (req
             dueDate: dueDate || null,
             exchangeRate: exchangeRate || null,
             totalUsd: totalUsd || null,
+            totalVes: totalVes || null,
             notes: notes || null
         });
 
