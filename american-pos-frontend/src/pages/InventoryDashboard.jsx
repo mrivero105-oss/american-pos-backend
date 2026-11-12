@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { Package, TrendingUp, PackageCheck, Layers } from 'lucide-react';
+import { Package, TrendingUp, PackageCheck, Layers, ClipboardCheck } from 'lucide-react';
 import { InventoryList } from './Inventory';
 import SmartStockEntry from './SmartStockEntry';
 import PurchaseReceipts from './PurchaseReceipts';
+import PhysicalInventoryAudit from './PhysicalInventoryAudit';
 
 export default function InventoryDashboard() {
-    const [activeTab, setActiveTab] = useState('list'); // 'list', 'smart-entry', 'receipts'
+    const [activeTab, setActiveTab] = useState('list'); // 'list', 'smart-entry', 'receipts', 'physical-audit'
 
     const tabs = [
         { id: 'list', label: 'Catálogo de Artículos', icon: Package },
         { id: 'smart-entry', label: 'Reposición & Entrada', icon: TrendingUp },
         { id: 'receipts', label: 'Albaranes de Entrada', icon: PackageCheck },
+        { id: 'physical-audit', label: 'Toma Física / Auditoría', icon: ClipboardCheck },
     ];
 
     return (
@@ -63,6 +65,7 @@ export default function InventoryDashboard() {
                 {activeTab === 'list' && <InventoryList />}
                 {activeTab === 'smart-entry' && <SmartStockEntry />}
                 {activeTab === 'receipts' && <PurchaseReceipts />}
+                {activeTab === 'physical-audit' && <PhysicalInventoryAudit />}
             </div>
         </div>
     );

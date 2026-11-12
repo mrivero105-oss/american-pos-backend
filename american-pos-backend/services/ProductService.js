@@ -2217,6 +2217,124 @@ class ProductService {
         });
     }
 
+    /**
+     * Ajuste masivo por Toma Física / Auditoría de Inventario
+     * Cuadra en una transacción atómica el stock físico de múltiples productos,
+     * generando sus respectivos asientos de Kardex (ADJUSTMENT_IN / ADJUSTMENT_OUT).
+     */
+    async bulkAuditAdjust(reqUser, body = {}) {
+        const { companyId, activeBranchId, id: userId } = reqUser;
+        const { auditSessionId, reason = 'toma_fisica', notes = '', adjustments = [] } = body;
+
+        if (!Array.isArray(adjustments) || adjustments.length === 0) {
+            throw new Error('No se recibieron ajustes para procesar.');
+        }
+
+        const sessionRef = auditSessionId || `AUD-${Date.now().toString().slice(-6)}`;
+
+        return await sequelize.transaction(async (t) => {
+            let updatedCount = 0;
+            let totalFaltantesQty = 0;
+            let totalSobrantesQty = 0;
+            let totalFaltantesUsd = 0;
+            let totalSobrantesUsd = 0;
+            const movementsToInsert = [];
+
+            let branchExists = null;
+            if (activeBranchId) {
+                branchExists = await Branch.findByPk(activeBranchId, { transaction: t });
+            }
+
+            for (const adj of adjustments) {
+                const { productId, countedStock } = adj;
+                if (!productId || countedStock === undefined || countedStock === null || isNaN(Number(countedStock))) {
+                    continue;
+                }
+
+                const product = await Product.findOne({
+                    where: { id: productId, companyId },
+                    transaction: t,
+                    lock: t.LOCK.UPDATE
+                });
+
+                if (!product) continue;
+
+                const currentStock = parseFloat(product.stockQuantity ?? product.stock ?? 0);
+                const targetStock = precision.round(Math.max(0, parseFloat(countedStock)), 4);
+                const delta = precision.round(precision.subtract(targetStock, currentStock), 4);
+
+                if (delta === 0) continue;
+
+                await product.update({
+                    stock: targetStock,
+                    stockQuantity: String(targetStock)
+                }, { transaction: t });
+
+                if (branchExists) {
+                    const [bStock] = await BranchStock.findOrCreate({
+                        where: { productId, branchId: activeBranchId, companyId },
+                        defaults: { productId, branchId: activeBranchId, companyId, quantity: targetStock },
+                        transaction: t
+                    });
+                    await bStock.update({ quantity: targetStock }, { transaction: t });
+                }
+
+                const unitCost = parseFloat(product.cost || 0);
+                const movementType = delta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT';
+                const movementQty = Math.abs(delta);
+                const impactUsd = precision.round(movementQty * unitCost, 2);
+
+                if (delta < 0) {
+                    totalFaltantesQty = precision.round(totalFaltantesQty + movementQty, 4);
+                    totalFaltantesUsd = precision.round(totalFaltantesUsd + impactUsd, 2);
+                } else {
+                    totalSobrantesQty = precision.round(totalSobrantesQty + movementQty, 4);
+                    totalSobrantesUsd = precision.round(totalSobrantesUsd + impactUsd, 2);
+                }
+
+                movementsToInsert.push({
+                    id: generateRobustId(),
+                    productId,
+                    userId,
+                    companyId,
+                    branchId: activeBranchId || null,
+                    type: movementType,
+                    category: reason,
+                    quantity: movementQty,
+                    stockBefore: currentStock,
+                    stockAfter: targetStock,
+                    costPrice: unitCost,
+                    totalCost: impactUsd,
+                    responsibleName: reqUser.name || reqUser.username || 'Admin',
+                    reason: `Toma Física (${sessionRef}): ${delta > 0 ? '+' : ''}${delta} unidades. ${notes}`.trim(),
+                    notes: notes || `Auditoría física de inventario: de ${currentStock} a ${targetStock}`,
+                    referenceId: sessionRef,
+                    date: new Date().toISOString()
+                });
+
+                updatedCount++;
+            }
+
+            if (movementsToInsert.length > 0) {
+                await StockMovement.bulkCreate(movementsToInsert, { transaction: t });
+            }
+
+            const netDiffUsd = precision.round(totalSobrantesUsd - totalFaltantesUsd, 2);
+
+            return {
+                success: true,
+                auditSessionId: sessionRef,
+                updatedCount,
+                totalFaltantesQty,
+                totalSobrantesQty,
+                totalFaltantesUsd,
+                totalSobrantesUsd,
+                netDiffUsd,
+                timestamp: new Date().toISOString()
+            };
+        });
+    }
+
 }
 
 module.exports = new ProductService();

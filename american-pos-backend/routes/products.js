@@ -752,6 +752,24 @@ router.get('/:id', async (req, res) => {
 });
 
 /**
+ * POST /bulk-audit-adjust - Ajuste masivo por Toma Física / Auditoría de Inventario
+ */
+router.post('/bulk-audit-adjust', requirePermission('canManageInventory'), async (req, res) => {
+    try {
+        const result = await ProductService.bulkAuditAdjust(req.user, req.body);
+        const io = req.app.get('io');
+        if (io) {
+            io.to(req.user.companyId).emit('inventory_changed');
+            io.to(req.user.companyId).emit('audit_completed', result);
+        }
+        res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('Bulk audit adjust error:', error);
+        res.status(400).json({ error: error.message || 'Error al procesar la auditoría física' });
+    }
+});
+
+/**
  * POST /:id/quick-stock-adjust - Fast 1-Click stock adjust with Kardex (Admin only)
  */
 router.post('/:id/quick-stock-adjust', requirePermission('canManageInventory'), async (req, res) => {
