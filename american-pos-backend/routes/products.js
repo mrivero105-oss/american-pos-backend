@@ -985,6 +985,9 @@ router.post('/apply-mapping', requirePermission('canCreateProducts'), async (req
             invoiceUrl,
             referenceNumber,
             supplierId,
+            newSupplier,
+            financialAction,
+            paymentMethod,
             createPurchaseOrder,
             importMode,
             paymentStatus,
@@ -999,9 +1002,14 @@ router.post('/apply-mapping', requirePermission('canCreateProducts'), async (req
             return res.status(400).json({ error: 'No se recibieron renglones aprobados para procesar' });
         }
 
-        const shouldCreateOrder = importMode === 'CATALOG'
+        const isInventoryOnly = financialAction === 'INVENTORY_ONLY';
+        const shouldCreateOrder = (importMode === 'CATALOG' || isInventoryOnly)
             ? false
             : Boolean(createPurchaseOrder || invoiceUrl);
+
+        const resolvedPaymentStatus = financialAction === 'CREDIT' 
+            ? 'unpaid' 
+            : (financialAction === 'PAID' ? 'paid' : (paymentStatus || 'paid'));
 
         const result = await ProductService.applySupplierMapping(req.user, mappings, {
             returnDetails: true,
@@ -1010,7 +1018,9 @@ router.post('/apply-mapping', requirePermission('canCreateProducts'), async (req
             invoiceUrl: invoiceUrl || null,
             referenceNumber: referenceNumber || null,
             supplierId: supplierId || null,
-            paymentStatus: paymentStatus || 'paid',
+            newSupplier: newSupplier || null,
+            paymentStatus: resolvedPaymentStatus,
+            paymentMethod: paymentMethod || null,
             invoiceDate: invoiceDate || null,
             dueDate: dueDate || null,
             exchangeRate: exchangeRate || null,

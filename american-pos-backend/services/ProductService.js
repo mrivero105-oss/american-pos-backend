@@ -1185,9 +1185,40 @@ class ProductService {
             const userSettings = getUserSettings(allSettings, companyId);
             const posRate = parseFloat(userSettings.exchangeRate || 1) || 1;
 
-            const headerSupplierId = (invoiceOptions?.supplierId && invoiceOptions.supplierId !== 'null' && invoiceOptions.supplierId !== '')
+            let headerSupplierId = (invoiceOptions?.supplierId && invoiceOptions.supplierId !== 'null' && invoiceOptions.supplierId !== '')
                 ? String(invoiceOptions.supplierId)
                 : null;
+
+            // Auto-crear proveedor si fue detectado por OCR y aprobado por el usuario
+            if (!headerSupplierId && invoiceOptions?.newSupplier?.name) {
+                const cleanName = String(invoiceOptions.newSupplier.name).trim();
+                const cleanRif = invoiceOptions.newSupplier.rif ? String(invoiceOptions.newSupplier.rif).trim() : null;
+
+                let existing = null;
+                if (cleanRif) {
+                    existing = await Supplier.findOne({ where: { companyId, rif: cleanRif }, transaction: t });
+                }
+                if (!existing && cleanName) {
+                    existing = await Supplier.findOne({ where: { companyId, name: cleanName }, transaction: t });
+                }
+
+                if (existing) {
+                    headerSupplierId = existing.id;
+                } else {
+                    const newSup = await Supplier.create({
+                        id: generateRobustId(),
+                        name: cleanName,
+                        rif: cleanRif,
+                        phone: invoiceOptions.newSupplier.phone ? String(invoiceOptions.newSupplier.phone).trim() : null,
+                        contact: invoiceOptions.newSupplier.contact ? String(invoiceOptions.newSupplier.contact).trim() : null,
+                        companyId,
+                        userId,
+                        creditBalance: 0,
+                        isActive: true
+                    }, { transaction: t });
+                    headerSupplierId = newSup.id;
+                }
+            }
             const isInvoiceMode = invoiceOptions?.importMode === 'INVOICE' || invoiceOptions?.createPurchaseOrder === true;
             const refLabel = invoiceOptions?.referenceNumber ? `Factura ${invoiceOptions.referenceNumber}` : 'Importador';
 
@@ -1523,6 +1554,53 @@ class ProductService {
                     }, { transaction: t });
 
                     creditCharged = true;
+                } else if (paymentStatus === 'paid' && headerSupplierId && finalTotalUsd > 0) {
+                    // Si la factura fue pagada de Contado, registrar en el historial de compras solventes del proveedor
+                    const supplier = await Supplier.findOne({
+                        where: { id: headerSupplierId, companyId },
+                        transaction: t
+                    });
+                    const currentBalance = Number(supplier?.creditBalance || 0);
+                    const payMethod = invoiceOptions.paymentMethod || 'cash';
+                    const chargeId = generateRobustId();
+
+                    await SupplierCreditHistory.create({
+                        id: chargeId,
+                        supplierId: headerSupplierId,
+                        userId,
+                        companyId,
+                        timestamp: new Date().toISOString(),
+                        type: 'charge',
+                        amount: finalTotalUsd,
+                        balanceAfter: currentBalance,
+                        description: `Factura ${refNo} (Contado / Tasa: ${invRate} Bs/$) - Recepción (${resolvedOrderItems.length} ítems)`,
+                        paymentMethod: payMethod,
+                        purchaseOrderId: orderId,
+                        referenceNumber: refNo,
+                        invoiceUrl: invoiceOptions.invoiceUrl || null,
+                        arrivalDate,
+                        dueDate: arrivalDate,
+                        exchangeRate: invRate
+                    }, { transaction: t });
+
+                    await SupplierCreditHistory.create({
+                        id: generateRobustId(),
+                        supplierId: headerSupplierId,
+                        userId,
+                        companyId,
+                        timestamp: new Date().toISOString(),
+                        type: 'payment',
+                        amount: finalTotalUsd,
+                        balanceAfter: currentBalance,
+                        description: `Liquidación Contado (${payMethod}) Factura ${refNo}`,
+                        paymentMethod: payMethod,
+                        purchaseOrderId: orderId,
+                        referenceNumber: refNo,
+                        invoiceUrl: invoiceOptions.invoiceUrl || null,
+                        arrivalDate,
+                        dueDate: arrivalDate,
+                        exchangeRate: invRate
+                    }, { transaction: t });
                 }
             }
 

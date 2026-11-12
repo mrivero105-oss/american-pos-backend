@@ -30,6 +30,7 @@ import api from '../services/api';
 import PrinterScanModal from '../components/PrinterScanModal';
 import CameraScanModal from '../components/CameraScanModal';
 import InvoiceViewerModal from '../components/InvoiceViewerModal';
+import InvoiceSettlementModal from '../components/InvoiceSettlementModal';
 import toast from 'react-hot-toast';
 import { normalizeProductImage } from '../utils/imageProcess';
 
@@ -458,6 +459,8 @@ export default function CatalogImporter() {
     const [suppliers, setSuppliers] = useState([]);
     const [selectedSupplierId, setSelectedSupplierId] = useState(urlSupplierId);
     const [detectedSupplierLabel, setDetectedSupplierLabel] = useState('');
+    const [detectedSupplierRif, setDetectedSupplierRif] = useState('');
+    const [isSettlementModalOpen, setIsSettlementModalOpen] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [filterQuery, setFilterQuery] = useState('');
 
@@ -694,6 +697,7 @@ export default function CatalogImporter() {
             setSelectedSupplierId(String(data.detectedSupplierId));
         }
         setDetectedSupplierLabel(data?.detectedSupplierName || '');
+        setDetectedSupplierRif(data?.detectedSupplierRif || data?.supplierRif || '');
 
         const nowSeed = Date.now();
         setItems(rawList.map((item, idx) => {
@@ -1317,20 +1321,26 @@ export default function CatalogImporter() {
         toast.success(`Margen del ${marginValue}% aplicado con precisión completa`);
     };
 
-    const applyUpdates = async () => {
+    const applyUpdates = async (settlementOverride = null) => {
         const readyItems = items.filter(isItemReadyToSave);
         if (!readyItems.length) {
             toast.error('No hay productos vinculados aprobados ni marcados como nuevos para guardar');
             return;
         }
 
-        if (importMode === 'INVOICE' && paymentStatus === 'unpaid' && !selectedSupplierId) {
-            toast.error('Selecciona un Proveedor en la barra superior para registrar esta factura en Cuentas por Pagar');
+        // Si estamos en modo Factura y no se ha especificado la condición de asentamiento, abrir el modal financiero
+        if (importMode === 'INVOICE' && !settlementOverride) {
+            setIsSettlementModalOpen(true);
             return;
         }
 
         setIsSaving(true);
         try {
+            const targetSupplierId = settlementOverride?.supplierId || selectedSupplierId || null;
+            const newSupplierObj = settlementOverride?.newSupplier || null;
+            const finAction = settlementOverride?.financialAction || (paymentStatus === 'unpaid' ? 'CREDIT' : 'PAID');
+            const targetPaymentStatus = finAction === 'CREDIT' ? 'unpaid' : 'paid';
+
             const mappings = readyItems.map(i => {
                 const safeBulkPrice = roundExact(Number(i.price || 0), 6);
                 const safeQuantity = Math.max(1, Number(i.quantity || 1));
@@ -1348,7 +1358,7 @@ export default function CatalogImporter() {
                     quantity: safeQuantity,
                     margin: safeMargin,
                     newPrice: salesPrice,
-                    supplierId: selectedSupplierId || null,
+                    supplierId: targetSupplierId,
                     initialStock: importMode === 'INVOICE' ? Math.max(0, Number(i.stock || 0)) : 0,
                     imageUri: i.image || null,
                     taxStatus: itemIsExempt ? 'exento' : 'gravable',
@@ -1362,26 +1372,37 @@ export default function CatalogImporter() {
                 importMode,
                 invoiceUrl: invoiceUrl || null,
                 referenceNumber: referenceNumber.trim() || null,
-                supplierId: selectedSupplierId || null,
-                createPurchaseOrder: importMode === 'INVOICE',
-                paymentStatus: importMode === 'INVOICE' ? paymentStatus : 'paid',
+                supplierId: targetSupplierId,
+                newSupplier: newSupplierObj,
+                financialAction: finAction,
+                createPurchaseOrder: importMode === 'INVOICE' && finAction !== 'INVENTORY_ONLY',
+                paymentStatus: targetPaymentStatus,
+                paymentMethod: settlementOverride?.paymentMethod || null,
                 invoiceDate: invoiceDate || null,
-                dueDate: (importMode === 'INVOICE' && paymentStatus === 'unpaid') ? (dueDate || null) : null,
+                dueDate: finAction === 'CREDIT' ? (settlementOverride?.dueDate || dueDate || null) : null,
                 exchangeRate: systemRate > 0 ? systemRate : 1,
-                totalUsd: importMode === 'INVOICE' ? liveSummary.totalUsd : null
+                totalUsd: importMode === 'INVOICE' ? liveSummary.totalUsd : null,
+                notes: settlementOverride?.notes || null
             });
 
-            if (importMode === 'CATALOG') {
-                toast.success(`¡Catálogo procesado! ${resData.updateCount || mappings.length} costos y precios actualizados (Stock sin alterar).`);
-            } else if (resData.creditCharged) {
+            if (importMode === 'CATALOG' || finAction === 'INVENTORY_ONLY') {
+                toast.success(`¡Inventario actualizado! ${resData.updateCount || mappings.length} productos procesados (Sin alterar Cuentas por Pagar).`, { duration: 5000 });
+            } else if (resData.creditCharged || finAction === 'CREDIT') {
                 toast.success(
-                    `¡Recepción completada! ${resData.updateCount} productos actualizados y $${liveSummary.totalUsd.toFixed(2)} cargados en Cuentas por Pagar.`,
+                    `¡Recepción completada! ${resData.updateCount} productos ingresados y $${liveSummary.totalUsd.toFixed(2)} registrados en Cuentas por Pagar.`,
                     { duration: 6000 }
                 );
             } else {
-                toast.success(`¡Factura procesada! ${resData.updateCount || mappings.length} productos actualizados y recepción archivada.`);
+                toast.success(`¡Factura procesada! ${resData.updateCount || mappings.length} productos ingresados y compra archivada como solvente de contado.`, { duration: 5000 });
             }
 
+            // Refrescar listado de proveedores en memoria
+            try {
+                const { data: freshSups } = await api.get('/suppliers');
+                if (Array.isArray(freshSups)) setSuppliers(freshSups);
+            } catch (_) {}
+
+            setIsSettlementModalOpen(false);
             setItems([]);
             setFile(null);
             setInvoiceUrl('');
@@ -2563,6 +2584,28 @@ export default function CatalogImporter() {
                     </div>
                 </div>
             )}
+            {/* Modal de Asentamiento Contable y Cuentas por Pagar */}
+            <InvoiceSettlementModal
+                isOpen={isSettlementModalOpen}
+                onClose={() => setIsSettlementModalOpen(false)}
+                onConfirm={(config) => applyUpdates(config)}
+                isSaving={isSaving}
+                summary={{
+                    totalUsd: liveSummary.totalUsd,
+                    totalBs: liveSummary.totalBs,
+                    exchangeRate: systemRate,
+                    itemCount: liveSummary.readyCount,
+                    totalUnits: liveSummary.totalUnits,
+                    referenceNumber: referenceNumber,
+                    invoiceDate: invoiceDate,
+                    invoiceUrl: invoiceUrl,
+                    detectedSupplierName: detectedSupplierLabel,
+                    detectedSupplierRif: detectedSupplierRif,
+                    detectedSupplierId: selectedSupplierId
+                }}
+                suppliers={suppliers}
+                initialSupplierId={selectedSupplierId}
+            />
         </div>
     );
 }
