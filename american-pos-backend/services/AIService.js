@@ -2803,7 +2803,7 @@ ${JSON.stringify(dataPayload, null, 2)}
 
 Genera el informe ejecutivo en JSON estricto:`;
 
-            const modelsToTry = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.5-flash"];
+            const modelsToTry = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"];
             let jsonText = null;
 
             for (const modelName of modelsToTry) {
@@ -2815,14 +2815,18 @@ Genera el informe ejecutivo en JSON estricto:`;
                             responseMimeType: "application/json"
                         }
                     });
-                    const result = await model.generateContent(userPrompt);
+                    
+                    // Límite de 4s por modelo para garantizar respuesta instantánea
+                    const generatePromise = model.generateContent(userPrompt);
+                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout 4s')), 4000));
+                    const result = await Promise.race([generatePromise, timeoutPromise]);
                     const response = await result.response;
                     jsonText = response.text();
                     if (jsonText) {
                         break;
                     }
                 } catch (mErr) {
-                    console.warn(`[ISAAC POS] Motor analítico no disponible en ${modelName}:`, mErr.message);
+                    console.warn(`[ISAAC POS] Motor analítico (${modelName}):`, mErr.message);
                 }
             }
 
