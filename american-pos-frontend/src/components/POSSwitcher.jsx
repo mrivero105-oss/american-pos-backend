@@ -1,9 +1,9 @@
 import { lazy, Suspense } from 'react';
 import { usePos } from '../hooks/PosContext';
 import { RefreshCw } from 'lucide-react';
+import POSOriginal from '../pages/POS_OriginalBackup';
 
 const PharmacyPOSView = lazy(() => import('../pages/PharmacyPOSView'));
-const POSOriginal = lazy(() => import('../pages/POS_OriginalBackup'));
 const ClothingPOSView = lazy(() => import('./clothing/ClothingPOSView'));
 
 const POSLoader = () => (
@@ -17,11 +17,21 @@ export default function POSSwitcher() {
   const { businessMode } = usePos();
   const mode = (businessMode || localStorage.getItem('pos_business_mode') || 'STANDARD').toUpperCase();
 
-  return (
-    <Suspense fallback={<POSLoader />}>
-      {mode === 'CLOTHING' && <ClothingPOSView />}
-      {mode === 'PHARMACY' && <PharmacyPOSView />}
-      {mode !== 'CLOTHING' && mode !== 'PHARMACY' && <POSOriginal />}
-    </Suspense>
-  );
+  if (mode === 'CLOTHING') {
+    return (
+      <Suspense fallback={<POSLoader />}>
+        <ClothingPOSView />
+      </Suspense>
+    );
+  }
+
+  if (mode === 'PHARMACY') {
+    return (
+      <Suspense fallback={<POSLoader />}>
+        <PharmacyPOSView />
+      </Suspense>
+    );
+  }
+
+  return <POSOriginal />;
 }
