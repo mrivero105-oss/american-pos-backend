@@ -17,6 +17,7 @@ dist_modern/
 dist_final_installer/
 dist_legacy_installer/
 product_images/
+/invoices/
 build/*
 !build/*.nsh
 !build/icon.ico

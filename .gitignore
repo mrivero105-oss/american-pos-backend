@@ -41,6 +41,7 @@ american-pos-backend/public/index.html
 
 # Archivos de Datos, Backups y Bases de Datos Locales
 backups/
+/american-pos-backend/invoices/
 *.sqlite
 *.sqlite-*
 *.sqlite9873*
