@@ -7,6 +7,7 @@ import { evaluateCartPromotions as evaluateFrontendPromos } from '../../american
 const require = createRequire(import.meta.url);
 const { evaluateCartPromotions: evaluateBackendPromos } = require('../utils/promotionsEngineCore.js');
 const ProductService = require('../services/ProductService.js');
+const SaleService = require('../services/SaleService.js');
 const schemaMigrator = require('../database/schemaMigrator.js');
 
 test('1. Familias de Productos y Calibres (Huevos Tipo A/B/C y Litrajes exactos 1.25L)', () => {
@@ -189,4 +190,50 @@ test('5. Escalado Automático a Empaque Mayorista y Descuento/Reversión Exacta 
     );
     const stockAfterVoid = stockAfterSale + restoredUnits;
     assert.equal(stockAfterVoid, initialStock);
+});
+
+test('6. Cálculo de Costo Efectivo en Presentaciones Dinámicas y Mayoristas (SaleService.resolveEffectiveItemCost)', () => {
+    const product = {
+        id: 'huevos-b',
+        cost: 0.169231,
+        bulkCost: 4.769231,
+        midBulkCost: 45.384615,
+        unitsPerBulk: 30,
+        unitsPerMidBulk: 360
+    };
+
+    const medioCarton = { id: 'pres-15', name: 'Medio Carton', factorConversion: 15, cost: 2.538462 };
+    const mediaCaja = { id: 'pres-180', name: 'Media Caja', factorConversion: 180, cost: 23.076923 };
+    const presSinCosto = { id: 'pres-sin-costo', name: 'Pack 10', factorConversion: 10, cost: 0 };
+
+    // Presentación dinámica usa su costo explícito (evita registrar costo de 1 unidad)
+    assert.equal(
+        SaleService.resolveEffectiveItemCost({ product, presentation: medioCarton, unitCost: product.cost }),
+        2.538462
+    );
+    assert.equal(
+        SaleService.resolveEffectiveItemCost({ product, presentation: mediaCaja, unitCost: product.cost }),
+        23.076923
+    );
+
+    // Fallback proporcional cuando la presentación dinámica no tiene costo propio (>0)
+    assert.equal(
+        SaleService.resolveEffectiveItemCost({ product, presentation: presSinCosto, unitCost: product.cost }),
+        1.69231
+    );
+
+    // Venta fraccionada mayorista por unidad base (isWeightedWholesale) prorratea por factorConversion
+    const weightedUnitCost = SaleService.resolveEffectiveItemCost({
+        product,
+        presentation: mediaCaja,
+        unitCost: product.cost,
+        isWeightedWholesale: true
+    });
+    assert.equal(Math.round(weightedUnitCost * 1e6) / 1e6, 0.128205);
+
+    // Formatos clásicos (__bulk / __mid / unitario) y servicios se preservan
+    assert.equal(SaleService.resolveEffectiveItemCost({ product, unitCost: product.cost, isBulkItem: true, bulkMultiplier: 30 }), 4.769231);
+    assert.equal(SaleService.resolveEffectiveItemCost({ product, unitCost: product.cost, isMidBulkItem: true, midBulkMultiplier: 360 }), 45.384615);
+    assert.equal(SaleService.resolveEffectiveItemCost({ product, unitCost: product.cost }), 0.169231);
+    assert.equal(SaleService.resolveEffectiveItemCost({ product: { cost: 0 }, unitCost: 12.5, isServiceItem: true }), 12.5);
 });

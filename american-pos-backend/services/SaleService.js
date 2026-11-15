@@ -27,6 +27,63 @@ class SaleService {
     }
 
     /**
+     * Resolve effective unit/package cost for a SaleItem, prioritizing explicit presentation costs
+     * so dynamic wholesale presentations (product_presentaciones) record accurate COGS and profit.
+     */
+    resolveEffectiveItemCost({
+        product = null,
+        presentation = null,
+        item = {},
+        unitCost = 0,
+        isBulkItem = false,
+        isMidBulkItem = false,
+        isWeightedWholesale = false,
+        isServiceItem = false,
+        bulkMultiplier = 1,
+        midBulkMultiplier = 1
+    }) {
+        const baseUnitCost = Number(unitCost) || 0;
+        if (isServiceItem) return baseUnitCost;
+
+        const resolveWholesaleUnitCost = (packageCost, factor) => {
+            if (packageCost <= 0) return baseUnitCost;
+            if (baseUnitCost > 0 && packageCost <= baseUnitCost) return packageCost;
+            return factor > 0 ? precision.divide(packageCost, factor) : baseUnitCost;
+        };
+
+        if (presentation) {
+            const presCost = Number(presentation.cost) || 0;
+            const presFactor = Number(presentation.factorConversion) || Number(item.factorConversion) || 1;
+            if (isWeightedWholesale) {
+                return resolveWholesaleUnitCost(presCost, presFactor);
+            }
+            return presCost > 0
+                ? presCost
+                : (baseUnitCost > 0 ? precision.multiply(baseUnitCost, presFactor) : 0);
+        }
+
+        if (isWeightedWholesale && product) {
+            const rawBulkCost = Number(product.bulkCost) || 0;
+            const bulkFactor = Number(product.unitsPerBulk) || Number(bulkMultiplier) || 1;
+            return resolveWholesaleUnitCost(rawBulkCost, bulkFactor);
+        }
+
+        if (isBulkItem) {
+            return Number(product?.bulkCost) > 0
+                ? Number(product.bulkCost)
+                : precision.multiply(baseUnitCost, Number(bulkMultiplier) || 1);
+        }
+
+        if (isMidBulkItem) {
+            return Number(product?.midBulkCost) > 0
+                ? Number(product.midBulkCost)
+                : precision.multiply(baseUnitCost, Number(midBulkMultiplier) || 1);
+        }
+
+        return baseUnitCost;
+    }
+
+    /**
      * Process a complete sale transaction with financial-grade integrity.
      */
     async processSale(reqUser, saleData, options = {}) {
@@ -941,11 +998,23 @@ class SaleService {
                 const itemQty = Number(item.quantity || 1);
                 const itemBulkMultiplier = isBulkItem ? (Number(product?.unitsPerBulk) || Number(item.unitsPerBulk) || 1) : 1;
                 const itemMidBulkMultiplier = isMidBulkItem ? (Number(product?.unitsPerMidBulk) || Number(item.unitsPerMidBulk) || 1) : 1;
-                const effectiveCost = isBulkItem 
-                    ? (Number(product?.bulkCost) > 0 ? Number(product.bulkCost) : precision.multiply(cost, itemBulkMultiplier))
-                    : (isMidBulkItem
-                        ? (Number(product?.midBulkCost) > 0 ? Number(product.midBulkCost) : precision.multiply(cost, itemMidBulkMultiplier))
-                        : cost);
+                const itemPresentationId = item.presentationId || (rawId.includes('__wpres_') ? rawId.split('__wpres_')[1] : (rawId.includes('__pres_') ? rawId.split('__pres_')[1] : null));
+                const dynamicPres = itemPresentationId
+                    ? (dbProductMap.get(pId)?.Presentations || []).find(p => String(p.id) === String(itemPresentationId))
+                    : null;
+                const isWeightedWholesale = Boolean(item.isWeightedWholesale || rawId.includes('__wpres_'));
+                const effectiveCost = this.resolveEffectiveItemCost({
+                    product,
+                    presentation: dynamicPres,
+                    item,
+                    unitCost: cost,
+                    isBulkItem,
+                    isMidBulkItem,
+                    isWeightedWholesale,
+                    isServiceItem,
+                    bulkMultiplier: itemBulkMultiplier,
+                    midBulkMultiplier: itemMidBulkMultiplier
+                });
 
                 const itemFactorConversion = Number(item.factorConversion) > 0
                     ? Number(item.factorConversion)
@@ -1246,7 +1315,9 @@ class SaleService {
                         const cleanId = rawId.replace(CLEAN_PRODUCT_ID_REGEX, '');
                         const isBulk = Boolean(it.isBulk || rawId.endsWith('__bulk'));
                         const isMidBulk = Boolean(it.isMidBulk || rawId.endsWith('__mid'));
-                        const mult = isBulk ? (Number(it.unitsPerBulk) || 1) : (isMidBulk ? (Number(it.unitsPerMidBulk) || 1) : 1);
+                        const mult = Number(it.factorConversion) > 0
+                            ? Number(it.factorConversion)
+                            : (isBulk ? (Number(it.unitsPerBulk) || 1) : (isMidBulk ? (Number(it.unitsPerMidBulk) || 1) : 1));
                         const qty = precision.multiply(Number(it.quantity) || 1, mult);
                         return { productId: cleanId, quantity: qty, name: it.name };
                     });
