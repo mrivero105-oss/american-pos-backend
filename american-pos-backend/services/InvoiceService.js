@@ -1,7 +1,94 @@
 const fs = require('fs');
 const path = require('path');
 
+const RECENT_INVOICE_OWNERS = new Map();
+
 class InvoiceService {
+    static _normalizeCompanyId(companyId) {
+        if (!companyId || companyId === 'default' || companyId === 'admin') return '2';
+        return String(companyId);
+    }
+
+    static recordInvoiceOwner(filename, explicitCompanyId = null) {
+        try {
+            let comp = explicitCompanyId;
+            if (!comp) {
+                const { getCurrentTenantContext } = require('../database/tenantContext');
+                comp = getCurrentTenantContext()?.companyId;
+            }
+            if (!filename || !comp) return;
+            const now = Date.now();
+            RECENT_INVOICE_OWNERS.set(path.basename(String(filename)), {
+                companyId: this._normalizeCompanyId(comp),
+                ts: now
+            });
+            if (RECENT_INVOICE_OWNERS.size > 2000) {
+                for (const [k, v] of RECENT_INVOICE_OWNERS.entries()) {
+                    if (now - v.ts > 24 * 3600 * 1000) RECENT_INVOICE_OWNERS.delete(k);
+                }
+            }
+        } catch (_) {}
+    }
+
+    /**
+     * Valida fail-closed (compatible con PostgreSQL RLS) que un usuario puede acceder a una factura.
+     */
+    static async assertInvoiceAccess(user, rawPath) {
+        const userRole = String(user?.role || '').toLowerCase();
+        const userCompanyId = this._normalizeCompanyId(user?.companyId);
+        const requestedRel = String(rawPath || '').trim().replace(/^\/+/, '').replace(/^api\//, '');
+        if (!requestedRel || requestedRel.includes('\0') || requestedRel.includes('..')) {
+            return { allowed: false, status: 400, error: 'Ruta de factura inválida' };
+        }
+        if (userRole === 'superadmin') {
+            return { allowed: true };
+        }
+
+        const relNoPrefix = requestedRel.startsWith('invoices/')
+            ? requestedRel.slice('invoices/'.length)
+            : (requestedRel.startsWith('uploads/') ? requestedRel.slice('uploads/'.length) : requestedRel);
+
+        if (relNoPrefix.includes('/')) {
+            const firstSegment = relNoPrefix.split('/')[0];
+            if (firstSegment && firstSegment !== userCompanyId) {
+                return { allowed: false, status: 403, error: 'Acceso denegado a factura de otra empresa' };
+            }
+            return { allowed: true };
+        }
+
+        const fileName = path.basename(relNoPrefix);
+        if (!fileName || fileName === '.' || fileName === '..') {
+            return { allowed: false, status: 400, error: 'Nombre de factura inválido' };
+        }
+
+        const recentOwner = RECENT_INVOICE_OWNERS.get(fileName);
+        if (recentOwner) {
+            if (recentOwner.companyId === userCompanyId) {
+                return { allowed: true };
+            }
+            return { allowed: false, status: 403, error: 'Acceso denegado a factura de otra empresa' };
+        }
+
+        const { PurchaseOrder, Expense } = require('../database/models');
+        const { Op } = require('sequelize');
+        const likePattern = `%${fileName}%`;
+        const [ownPo, ownExp] = await Promise.all([
+            PurchaseOrder.findOne({
+                where: { invoiceUrl: { [Op.like]: likePattern }, companyId: userCompanyId },
+                attributes: ['id']
+            }).catch(() => null),
+            Expense.findOne({
+                where: { receiptUrl: { [Op.like]: likePattern }, companyId: userCompanyId },
+                attributes: ['id']
+            }).catch(() => null)
+        ]);
+
+        if (ownPo || ownExp) {
+            return { allowed: true };
+        }
+        return { allowed: false, status: 403, error: 'Acceso denegado: la factura pertenece a otra empresa o no está autorizada' };
+    }
+
     /**
      * Devuelve la ruta absoluta del directorio persistente de facturas
      */
@@ -45,6 +132,7 @@ class InvoiceService {
         const destinationPath = path.join(targetDir, uniqueName);
 
         await fs.promises.copyFile(sourcePath, destinationPath);
+        this.recordInvoiceOwner(uniqueName);
         console.log(`[INVOICE SERVICE] Factura guardada permanentemente en: ${destinationPath}`);
         return `/invoices/${uniqueName}`;
     }
@@ -62,6 +150,7 @@ class InvoiceService {
         const destinationPath = path.join(targetDir, uniqueName);
 
         await fs.promises.writeFile(destinationPath, buffer);
+        this.recordInvoiceOwner(uniqueName);
         console.log(`[INVOICE SERVICE] Factura (Buffer) guardada permanentemente en: ${destinationPath}`);
         return `/invoices/${uniqueName}`;
     }

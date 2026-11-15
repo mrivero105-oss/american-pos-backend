@@ -1,11 +1,22 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const { User } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
 const auditController = require('../controllers/audit');
 const { verifyLicense } = require('../middleware/licenseMiddleware');
+const { invalidateUserAuthCache } = require('../middleware/auth');
+
+const quickUnlockLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Demasiados intentos de desbloqueo rápido. Espere 5 minutos.' }
+});
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -14,7 +25,7 @@ if (!JWT_SECRET) {
 
 // 🛡️ IP-Level Brute-Force Tracker (Sliding window para mitigar Password Spraying en LAN)
 const ipFailedAttempts = new Map(); // ip -> { count: number, lockUntil: number, lastAttempt: number }
-setInterval(() => {
+const ipCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [ip, data] of ipFailedAttempts.entries()) {
         if ((!data.lockUntil || data.lockUntil < now) && (now - (data.lastAttempt || 0) > 30 * 60 * 1000)) {
@@ -22,6 +33,7 @@ setInterval(() => {
         }
     }
 }, 5 * 60 * 1000);
+if (typeof ipCleanupTimer.unref === 'function') ipCleanupTimer.unref();
 
 router.post('/login', async (req, res) => {
     const { email, username, password } = req.body;
@@ -184,6 +196,7 @@ router.post('/login', async (req, res) => {
                         lockUntil: null,
                         currentSessionId: sessionId
                     });
+                    invalidateUserAuthCache(authenticatedUser.id);
                 } catch (resetErr) {
                     console.error('[LOGIN] Error resetting failed attempts:', resetErr.message);
                 }
@@ -193,7 +206,14 @@ router.post('/login', async (req, res) => {
                     try { userPermissions = JSON.parse(userPermissions); } catch (e) { userPermissions = {}; }
                 }
 
-                const { password: _, supervisorPin: __, ...userWithoutPassword } = authenticatedUser.toJSON();
+                const {
+                    password: _,
+                    supervisorPin: __,
+                    quickPin: ___,
+                    biometricTokenHash: ____,
+                    currentSessionId: _____,
+                    ...userWithoutPassword
+                } = authenticatedUser.toJSON();
                 userWithoutPassword.permissions = userPermissions;
                 userWithoutPassword.sessionId = sessionId;
 
@@ -330,8 +350,30 @@ router.post('/login', async (req, res) => {
     }
 });
 
-// POST /auth/logout - Limpiar la cookie HttpOnly
-router.post('/logout', (req, res) => {
+// POST /auth/logout - Revocar sesión activa en BD/caché y limpiar cookie HttpOnly
+router.post('/logout', async (req, res) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const cookieToken = req.cookies ? req.cookies.authToken : null;
+        const token = (authHeader && authHeader.startsWith('Bearer ')) ? authHeader.slice(7) : cookieToken;
+        if (token) {
+            let decoded = null;
+            for (const sec of [JWT_SECRET, process.env.LEGACY_HMAC_SECRET].filter(Boolean)) {
+                try {
+                    decoded = jwt.verify(token, sec, { algorithms: ['HS256'] });
+                    break;
+                } catch (_) {}
+            }
+            if (decoded && decoded.id) {
+                invalidateUserAuthCache(decoded.id);
+                await User.update(
+                    { currentSessionId: `REVOKED_${crypto.randomUUID()}` },
+                    { where: { id: decoded.id } }
+                ).catch(() => {});
+            }
+        }
+    } catch (_) {}
+
     res.clearCookie('authToken', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -349,21 +391,45 @@ router.get('/me', (req, res, next) => {
     if (!token) {
         return res.json({ authenticated: false, user: null });
     }
-    jwt.verify(token, JWT_SECRET, (err, decoded) => {
-        if (err) {
-            return res.json({ authenticated: false, user: null });
-        }
-        req.user = decoded;
-        next();
-    });
+    let decoded = null;
+    for (const sec of [JWT_SECRET, process.env.LEGACY_HMAC_SECRET].filter(Boolean)) {
+        try {
+            decoded = jwt.verify(token, sec, { algorithms: ['HS256'] });
+            break;
+        } catch (_) {}
+    }
+    if (!decoded) {
+        return res.json({ authenticated: false, user: null });
+    }
+    req.user = decoded;
+    next();
 }, async (req, res) => {
     if (!req.user || !req.user.id) {
         return res.json({ authenticated: false, user: null });
     }
     try {
         const user = await require('../database/models').User.findByPk(req.user.id);
-        if (!user) return res.json({ authenticated: false, user: null });
-        const { password: _, supervisorPin: __, ...userWithoutPassword } = user.toJSON();
+        if (!user || user.status !== 'active') {
+            return res.json({ authenticated: false, user: null });
+        }
+        const dbSession = user.currentSessionId ? String(user.currentSessionId) : '';
+        const tokenSession = req.user.sessionId ? String(req.user.sessionId) : '';
+        if (dbSession) {
+            if (dbSession.startsWith('REVOKED_') || tokenSession !== dbSession) {
+                return res.json({ authenticated: false, user: null });
+            }
+        } else if (tokenSession) {
+            return res.json({ authenticated: false, user: null });
+        }
+
+        const {
+            password: _,
+            supervisorPin: __,
+            quickPin: ___,
+            biometricTokenHash: ____,
+            currentSessionId: _____,
+            ...userWithoutPassword
+        } = user.toJSON();
         let userPermissions = userWithoutPassword.permissions || {};
         if (typeof userPermissions === 'string') {
             try { userPermissions = JSON.parse(userPermissions); } catch (e) { userPermissions = {}; }
@@ -468,18 +534,16 @@ router.get('/public-cashiers', verifyLicense, async (req, res) => {
         const { User } = require('../database/models');
         const { Op } = require('sequelize');
         
+        const targetCompanyId = String(req.user?.companyId || req.query.companyId || process.env.DEFAULT_COMPANY_ID || '2');
         const whereClause = {
             status: 'active',
-            role: { [Op.in]: ['cashier', 'seller', 'user'] }
+            role: { [Op.in]: ['cashier', 'seller', 'user', 'cajero', 'vendedor'] },
+            companyId: targetCompanyId
         };
-
-        if (req.query.companyId) {
-            whereClause.companyId = String(req.query.companyId);
-        }
 
         const users = await User.findAll({
             where: whereClause,
-            attributes: ['id', 'username', 'name', 'role', 'avatarColor', 'companyId', 'defaultCurrency'],
+            attributes: ['id', 'username', 'name', 'avatarColor', 'companyId'],
             raw: true
         });
         res.json(users);
@@ -490,7 +554,7 @@ router.get('/public-cashiers', verifyLicense, async (req, res) => {
 });
 
 // POST /quick-unlock - Desbloqueo rápido de sesión por PIN o contraseña tras inactividad
-router.post('/quick-unlock', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').verifyToken, async (req, res) => {
     try {
         const { pinOrPassword } = req.body;
         if (!pinOrPassword) {
@@ -500,6 +564,9 @@ router.post('/quick-unlock', require('../middleware/auth').verifyToken, async (r
         const user = await User.findByPk(req.user.id);
         if (!user || user.status !== 'active') {
             return res.status(401).json({ error: 'Usuario no disponible o inactivo' });
+        }
+        if (user.lockUntil && new Date(user.lockUntil) > new Date()) {
+            return res.status(423).json({ error: 'Cuenta bloqueada temporalmente por intentos fallidos' });
         }
 
         let isMatch = false;
@@ -516,14 +583,18 @@ router.post('/quick-unlock', require('../middleware/auth').verifyToken, async (r
             }
         }
 
-        // 2. Verificar supervisorPin
+        // 2. Verificar supervisorPin (soporta formato actual bcrypt(sha256(pin)) y legado bcrypt(pin))
         if (!isMatch && user.supervisorPin) {
             const currentPin = String(user.supervisorPin);
+            const shaInput = crypto.createHash('sha256').update(inputStr).digest('hex');
             if (currentPin.startsWith('$2')) {
-                isMatch = await bcrypt.compare(inputStr, currentPin);
+                isMatch = await bcrypt.compare(shaInput, currentPin);
+                if (!isMatch) {
+                    isMatch = await bcrypt.compare(inputStr, currentPin);
+                }
             } else if (inputStr === currentPin) {
                 isMatch = true;
-                user.supervisorPin = await bcrypt.hash(inputStr, 10);
+                user.supervisorPin = await bcrypt.hash(shaInput, 10);
                 await user.save().catch(() => {});
             }
         }
@@ -540,6 +611,9 @@ router.post('/quick-unlock', require('../middleware/auth').verifyToken, async (r
         }
 
         if (isMatch) {
+            if (user.failedLoginAttempts > 0 || user.lockUntil) {
+                await user.update({ failedLoginAttempts: 0, lockUntil: null }).catch(() => {});
+            }
             auditController.logAction(
                 user.id,
                 user.companyId,
@@ -549,6 +623,9 @@ router.post('/quick-unlock', require('../middleware/auth').verifyToken, async (r
             );
             return res.json({ success: true, message: 'Terminal desbloqueado exitosamente' });
         } else {
+            const attempts = (user.failedLoginAttempts || 0) + 1;
+            const lockUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null;
+            await user.update({ failedLoginAttempts: attempts, lockUntil }).catch(() => {});
             return res.status(401).json({ error: 'PIN o contraseña incorrecta' });
         }
     } catch (err) {
@@ -718,6 +795,9 @@ router.post('/biometrics/login', async (req, res) => {
         if (!user) {
             return res.status(404).json({ error: 'Usuario no encontrado' });
         }
+        if (user.status !== 'active') {
+            return res.status(401).json({ error: 'Cuenta desactivada o suspendida. Contacta al administrador.' });
+        }
 
         // 🛡️ Bloqueo Progresivo de cuenta
         if (user.lockUntil && new Date(user.lockUntil) > new Date()) {
@@ -785,13 +865,21 @@ router.post('/biometrics/login', async (req, res) => {
             lockUntil: null,
             currentSessionId: sessionId
         }).catch(() => {});
+        invalidateUserAuthCache(user.id);
 
         let userPermissions = user.permissions || {};
         if (typeof userPermissions === 'string') {
             try { userPermissions = JSON.parse(userPermissions); } catch (_) { userPermissions = {}; }
         }
 
-        const { password: _, supervisorPin: __, biometricTokenHash: ___, ...userWithoutPassword } = user.toJSON();
+        const {
+            password: _,
+            supervisorPin: __,
+            quickPin: ___,
+            biometricTokenHash: ____,
+            currentSessionId: _____,
+            ...userWithoutPassword
+        } = user.toJSON();
         userWithoutPassword.permissions = userPermissions;
         userWithoutPassword.sessionId = sessionId;
 

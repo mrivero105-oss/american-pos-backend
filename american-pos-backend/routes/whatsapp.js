@@ -43,7 +43,7 @@ router.post('/logout', requirePermission('canManageSettings'), async (req, res) 
 });
 
 // POST /api/whatsapp/send-order
-router.post('/send-order', async (req, res) => {
+router.post('/send-order', requirePermission(['canManagePurchases', 'canManageSuppliers']), async (req, res) => {
     try {
         const { supplierId, orderId, phone, items, notes, total, referenceNumber } = req.body || {};
         
@@ -52,7 +52,8 @@ router.post('/send-order', async (req, res) => {
         let supplierContact = req.body?.supplierContact || '';
 
         if (supplierId) {
-            const supplier = await Supplier.findByPk(supplierId);
+            const companyId = req.user?.companyId || 'default';
+            const supplier = await Supplier.findOne({ where: { id: supplierId, companyId } });
             if (supplier) {
                 targetPhone = targetPhone || supplier.phone;
                 supplierName = supplierName || supplier.name;
@@ -64,7 +65,7 @@ router.post('/send-order', async (req, res) => {
             return res.status(400).json({ error: 'El proveedor no tiene un número telefónico configurado para WhatsApp.' });
         }
 
-        const settings = getUserSettings();
+        const settings = getUserSettings(undefined, req.user?.companyId);
         const businessName = settings?.business?.name || 'Isaac POS';
 
         let parsedItems = items;
@@ -114,7 +115,7 @@ router.post('/send-direct', isAdmin, async (req, res) => {
 });
 
 // POST /api/whatsapp/send-media
-router.post('/send-media', express.json({ limit: '15mb' }), async (req, res) => {
+router.post('/send-media', requirePermission('canAccessPOS'), express.json({ limit: '15mb' }), async (req, res) => {
     try {
         const { phone, imageBase64, mimeType = 'image/png', caption = '', filename = 'factura.png' } = req.body || {};
         if (!phone || !imageBase64) {

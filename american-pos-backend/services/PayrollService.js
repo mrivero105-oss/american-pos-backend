@@ -1,5 +1,5 @@
 const { 
-    sequelize, Employee, PayrollPeriod, PayrollReceipt, SellerCommission, BankAccount, BankTransaction, Sale 
+    sequelize, Employee, PayrollPeriod, PayrollReceipt, SellerCommission, Sale 
 } = require('../database/models');
 const AccountingEngineService = require('./AccountingEngineService');
 const { generateRobustId } = require('../utils/helpers');
@@ -171,174 +171,142 @@ class PayrollService {
     }
 
     /**
-     * Cierra y desembolsa la nómina: afecta bancos y genera asiento contable
+     * Cierra y desembolsa la nómina: genera asiento contable automático
      */
-    static async closeAndDisbursePeriod(periodId, { bankAccountId, userId = 'admin', companyId = 'default' }) {
-        const period = await PayrollPeriod.findByPk(periodId, {
-            include: [{ model: PayrollReceipt, as: 'Receipts' }]
-        });
+    static async closeAndDisbursePeriod(periodId, { userId = 'admin', companyId = 'default' } = {}) {
+        return await sequelize.transaction(async (t) => {
+            const period = await PayrollPeriod.findOne({
+                where: { id: periodId },
+                lock: t.LOCK.UPDATE,
+                transaction: t
+            });
 
-        if (!period) throw new Error('Período de nómina no encontrado');
-        if (period.status === 'CLOSED') throw new Error('El período ya está cerrado.');
-        if (!period.Receipts || period.Receipts.length === 0) {
-            throw new Error('Debe calcular la nómina antes de cerrarla.');
-        }
+            if (!period) throw new Error('Período de nómina no encontrado');
+            if (period.status === 'CLOSED') throw new Error('El período ya está cerrado.');
 
-        const totalNet = parseFloat(period.totalNet) || 0;
-        const totalEarnings = parseFloat(period.totalEarnings) || 0;
-        const totalDeductions = parseFloat(period.totalDeductions) || 0;
-
-        // Sumatorias desglosadas para el asiento contable
-        let totalBase = 0;
-        let totalFood = 0;
-        let totalComm = 0;
-        let totalIvss = 0;
-        let totalFaov = 0;
-
-        for (const r of period.Receipts) {
-            totalBase += parseFloat(r.baseEarnings) || 0;
-            totalFood += parseFloat(r.foodAllowance) || 0;
-            totalComm += parseFloat(r.commissionsAmount) || 0;
-            totalIvss += (parseFloat(r.deductionIvss) || 0) + (parseFloat(r.deductionRpe) || 0);
-            totalFaov += parseFloat(r.deductionFaov) || 0;
-        }
-
-        // 1. Si se seleccionó cuenta bancaria, registrar egreso en Tesorería (convirtiendo a VES si la cuenta es en Bs)
-        let bankAccount = null;
-        const rate = parseFloat(period.exchangeRate) > 0 ? parseFloat(period.exchangeRate) : 1;
-        await sequelize.transaction(async (t) => {
-            if (bankAccountId) {
-                bankAccount = await BankAccount.findOne({
-                    where: { id: bankAccountId, companyId: period.companyId || companyId },
-                    lock: t.LOCK.UPDATE,
-                    transaction: t
-                });
-                if (bankAccount) {
-                    const currentBal = parseFloat(bankAccount.currentBalance) || 0;
-                    const accCurrency = (bankAccount.currency || 'USD').toUpperCase();
-                    const debitAmount = accCurrency === 'VES'
-                        ? Math.round(totalNet * rate * 100) / 100
-                        : totalNet;
-
-                    await bankAccount.update({
-                        currentBalance: Math.round((currentBal - debitAmount) * 100) / 100
-                    }, { transaction: t });
-
-                    await BankTransaction.create({
-                        id: generateRobustId(),
-                        companyId: period.companyId || companyId,
-                        bankAccountId: bankAccount.id,
-                        type: 'EGRESO',
-                        amount: debitAmount,
-                        exchangeRate: rate,
-                        currency: accCurrency,
-                        category: 'PAYROLL',
-                        description: `Pago de Nómina: ${period.periodName}${accCurrency === 'VES' ? ` ($${totalNet.toFixed(2)} USD @ ${rate})` : ''}`,
-                        referenceNumber: `NOM-${period.id.substring(0, 8)}`,
-                        status: 'CONCILIADO',
-                        date: period.paymentDate || new Date().toISOString().split('T')[0],
-                        userId: userId
-                    }, { transaction: t });
-                }
+            const receipts = await PayrollReceipt.findAll({
+                where: { payrollPeriodId: period.id },
+                transaction: t
+            });
+            if (!receipts || receipts.length === 0) {
+                throw new Error('Debe calcular la nómina antes de cerrarla.');
             }
-        });
 
-        // 2. Generar Asiento Contable Automático en AccountingEngineService
-        let journalEntry = null;
-        try {
-            const accSueldos = await AccountingEngineService.findAccountByCode('6.1.1.01.001', companyId);
-            const accCestaticket = await AccountingEngineService.findAccountByCode('6.1.1.02.001', companyId);
-            const accComisiones = await AccountingEngineService.findAccountByCode('6.1.1.03.001', companyId);
-            const accRetIvss = await AccountingEngineService.findAccountByCode('2.1.3.02.001', companyId);
-            const accRetFaov = await AccountingEngineService.findAccountByCode('2.1.3.03.001', companyId);
-            const accBanco = await AccountingEngineService.findAccountByCode('1.1.1.02.001', companyId) || await AccountingEngineService.findAccountByCode('1.1.1.01.001', companyId);
+            const totalNet = parseFloat(period.totalNet) || 0;
 
-            if (accSueldos && accBanco) {
-                const lines = [];
+            // Sumatorias desglosadas para el asiento contable
+            let totalBase = 0;
+            let totalFood = 0;
+            let totalComm = 0;
+            let totalIvss = 0;
+            let totalFaov = 0;
 
-                // Cargos (Gastos al Debe)
-                if (totalBase > 0) {
-                    lines.push({
-                        accountId: accSueldos.id,
-                        description: `Gasto de Sueldos y Salarios - ${period.periodName}`,
-                        debit: totalBase,
-                        credit: 0
-                    });
-                }
-                if (totalFood > 0 && accCestaticket) {
-                    lines.push({
-                        accountId: accCestaticket.id,
-                        description: `Gasto Beneficio de Alimentación - ${period.periodName}`,
-                        debit: totalFood,
-                        credit: 0
-                    });
-                }
-                if (totalComm > 0 && accComisiones) {
-                    lines.push({
-                        accountId: accComisiones.id,
-                        description: `Gasto Comisiones de Venta - ${period.periodName}`,
-                        debit: totalComm,
-                        credit: 0
-                    });
-                }
-
-                // Abonos (Retenciones al Haber)
-                if (totalIvss > 0 && accRetIvss) {
-                    lines.push({
-                        accountId: accRetIvss.id,
-                        description: `Retenciones IVSS / Paro Forzoso por Enterar - ${period.periodName}`,
-                        debit: 0,
-                        credit: totalIvss
-                    });
-                }
-                if (totalFaov > 0 && accRetFaov) {
-                    lines.push({
-                        accountId: accRetFaov.id,
-                        description: `Retenciones FAOV por Enterar - ${period.periodName}`,
-                        debit: 0,
-                        credit: totalFaov
-                    });
-                }
-
-                // Abono: Banco o Caja por el Neto Pagado
-                lines.push({
-                    accountId: accBanco.id,
-                    description: `Desembolso Neto de Nómina - ${period.periodName}`,
-                    debit: 0,
-                    credit: totalNet
-                });
-
-                journalEntry = await AccountingEngineService.createEntry({
-                    companyId,
-                    entryDate: period.paymentDate || new Date().toISOString().split('T')[0],
-                    description: `Contabilización de Nómina: ${period.periodName}`,
-                    entryType: 'AUTOMATIC',
-                    currency: 'USD',
-                    exchangeRate: period.exchangeRate || 1,
-                    referenceType: 'PAYROLL',
-                    referenceId: period.id,
-                    userId,
-                    lines
-                });
+            for (const r of receipts) {
+                totalBase += parseFloat(r.baseEarnings) || 0;
+                totalFood += parseFloat(r.foodAllowance) || 0;
+                totalComm += parseFloat(r.commissionsAmount) || 0;
+                totalIvss += (parseFloat(r.deductionIvss) || 0) + (parseFloat(r.deductionRpe) || 0);
+                totalFaov += parseFloat(r.deductionFaov) || 0;
             }
-        } catch (accErr) {
-            console.warn('[Payroll] Aviso al generar asiento contable de nómina:', accErr.message);
-        }
 
-        // 3. Cerrar el período
-        await period.update({
-            status: 'CLOSED',
-            closedAt: new Date(),
-            closedBy: userId,
-            journalEntryId: journalEntry?.id || null
+            // 1. Generar Asiento Contable Automático en AccountingEngineService
+            let journalEntry = null;
+            try {
+                const accSueldos = await AccountingEngineService.findAccountByCode('6.1.1.01.001', companyId);
+                const accCestaticket = await AccountingEngineService.findAccountByCode('6.1.1.02.001', companyId);
+                const accComisiones = await AccountingEngineService.findAccountByCode('6.1.1.03.001', companyId);
+                const accRetIvss = await AccountingEngineService.findAccountByCode('2.1.3.02.001', companyId);
+                const accRetFaov = await AccountingEngineService.findAccountByCode('2.1.3.03.001', companyId);
+                const accBanco = await AccountingEngineService.findAccountByCode('1.1.1.02.001', companyId) || await AccountingEngineService.findAccountByCode('1.1.1.01.001', companyId);
+
+                if (accSueldos && accBanco) {
+                    const lines = [];
+
+                    // Cargos (Gastos al Debe)
+                    if (totalBase > 0) {
+                        lines.push({
+                            accountId: accSueldos.id,
+                            description: `Gasto de Sueldos y Salarios - ${period.periodName}`,
+                            debit: totalBase,
+                            credit: 0
+                        });
+                    }
+                    if (totalFood > 0 && accCestaticket) {
+                        lines.push({
+                            accountId: accCestaticket.id,
+                            description: `Gasto Beneficio de Alimentación - ${period.periodName}`,
+                            debit: totalFood,
+                            credit: 0
+                        });
+                    }
+                    if (totalComm > 0 && accComisiones) {
+                        lines.push({
+                            accountId: accComisiones.id,
+                            description: `Gasto Comisiones de Venta - ${period.periodName}`,
+                            debit: totalComm,
+                            credit: 0
+                        });
+                    }
+
+                    // Abonos (Retenciones al Haber)
+                    if (totalIvss > 0 && accRetIvss) {
+                        lines.push({
+                            accountId: accRetIvss.id,
+                            description: `Retenciones IVSS / Paro Forzoso por Enterar - ${period.periodName}`,
+                            debit: 0,
+                            credit: totalIvss
+                        });
+                    }
+                    if (totalFaov > 0 && accRetFaov) {
+                        lines.push({
+                            accountId: accRetFaov.id,
+                            description: `Retenciones FAOV por Enterar - ${period.periodName}`,
+                            debit: 0,
+                            credit: totalFaov
+                        });
+                    }
+
+                    // Abono: Banco o Caja por el Neto Pagado
+                    lines.push({
+                        accountId: accBanco.id,
+                        description: `Desembolso Neto de Nómina - ${period.periodName}`,
+                        debit: 0,
+                        credit: totalNet
+                    });
+
+                    journalEntry = await AccountingEngineService.createEntry({
+                        companyId,
+                        entryDate: period.paymentDate || new Date().toISOString().split('T')[0],
+                        description: `Contabilización de Nómina: ${period.periodName}`,
+                        entryType: 'AUTOMATIC',
+                        currency: 'USD',
+                        exchangeRate: period.exchangeRate || 1,
+                        referenceType: 'PAYROLL',
+                        referenceId: period.id,
+                        userId,
+                        lines,
+                        transaction: t
+                    });
+                }
+            } catch (accErr) {
+                console.warn('[Payroll] Aviso al generar asiento contable de nómina:', accErr.message);
+            }
+
+            // 3. Cerrar el período dentro de la misma transacción
+            await period.update({
+                status: 'CLOSED',
+                closedAt: new Date(),
+                closedBy: userId,
+                journalEntryId: journalEntry?.id || null
+            }, { transaction: t });
+
+            return {
+                success: true,
+                message: `Nómina ${period.periodName} cerrada y desembolsada exitosamente.`,
+                totalDisbursed: totalNet,
+                journalEntryNumber: journalEntry?.entryNumber || null
+            };
         });
-
-        return {
-            success: true,
-            message: `Nómina ${period.periodName} cerrada y desembolsada exitosamente.`,
-            totalDisbursed: totalNet,
-            journalEntryNumber: journalEntry?.entryNumber || null
-        };
     }
 
     /**

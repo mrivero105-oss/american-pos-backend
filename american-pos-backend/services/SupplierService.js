@@ -13,7 +13,9 @@ class SupplierService {
      */
     async getAllSuppliers(companyId = 'default', role) {
         const finalCompanyId = companyId || 'default';
-        console.log(`[SUPPLIER-DEBUG] Fetching for Company: ${finalCompanyId}, Role: ${role}`);
+        if (process.env.DEBUG_VERBOSE === 'true') {
+            console.log(`[SUPPLIER-DEBUG] Fetching for Company: ${finalCompanyId}, Role: ${role}`);
+        }
         const companyCondition = (finalCompanyId === '2' || finalCompanyId === 'default')
             ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }, { companyId: null }] }
             : { companyId: finalCompanyId };

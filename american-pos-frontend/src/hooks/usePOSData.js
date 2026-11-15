@@ -154,9 +154,8 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
                     try {
                         sessionStorage.setItem('pos_products_l1', JSON.stringify(sortedServer));
                     } catch (_e) {}
-                    // MASTER SYNC: Persist everything to IndexedDB for offline access
-                    await db.clear('products');
-                    await db.putAll('products', sortedServer);
+                    // MASTER SYNC: Persist everything to IndexedDB in a single atomic transaction
+                    await db.replaceAllAtomic('products', sortedServer);
                     db.put('metadata', { key: 'last_product_sync', value: new Date().toISOString() });
                 }
             }

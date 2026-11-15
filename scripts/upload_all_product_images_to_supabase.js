@@ -3,8 +3,12 @@ const path = require('path');
 const dns = require('dns');
 if (dns.setDefaultResultOrder) dns.setDefaultResultOrder('ipv4first');
 
-const SUPABASE_URL = 'https://puvqiipussyktfmgafgv.supabase.co';
-const SECRET_KEY = '';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SECRET_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
+if (!SUPABASE_URL || !SECRET_KEY) {
+    console.error('❌ Define SUPABASE_URL y SUPABASE_SERVICE_KEY en el entorno.');
+    process.exit(1);
+}
 const BUCKET = 'product-images';
 const IMAGES_DIR = 'C:/Users/mrive/AppData/Roaming/isaac-pos/product_images';
 

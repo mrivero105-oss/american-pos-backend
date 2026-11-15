@@ -15,9 +15,11 @@ import {
 } from '../utils/clientLicenseValidator';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 export default function ActivationPortal({ machineId, onActivated }) {
     const { checkLicense } = useAuth();
+    const { prompt, confirmDialog } = useConfirmDialog();
     const [key, setKey] = useState('');
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState(false);
@@ -498,8 +500,14 @@ export default function ActivationPortal({ machineId, onActivated }) {
                                         </span>
                                         <button
                                             type="button"
-                                            onClick={() => {
-                                                const promptVal = window.prompt('Pega aquí tu clave completa (mantén presionado y selecciona Pegar):');
+                                            onClick={async () => {
+                                                const promptVal = await prompt({
+                                                    title: 'Pegar clave de licencia',
+                                                    message: 'Pega aquí tu clave completa de activación Isaac POS.',
+                                                    placeholder: 'Pega tu clave aquí...',
+                                                    confirmText: 'Aplicar clave',
+                                                    multiline: true
+                                                });
                                                 if (promptVal) {
                                                     const cleaned = extractAndCleanLicenseKey(promptVal);
                                                     setKey(cleaned);
@@ -568,6 +576,7 @@ export default function ActivationPortal({ machineId, onActivated }) {
                     if (typeof checkLicense === 'function') checkLicense();
                 }}
             />
+            {confirmDialog}
         </div>
     );
 }

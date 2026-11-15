@@ -216,9 +216,14 @@ export function evaluateCartPromotions(cartItems = [], promotions = [], selected
             // 4. REGLA PAYMENT_METHOD_DISCOUNT o COMBO
             else if (promo.type === 'PAYMENT_METHOD_DISCOUNT' || promo.type === 'COMBO') {
                 if (promo.type === 'COMBO' && Array.isArray(promo.targetProductIds) && promo.targetProductIds.length > 1) {
-                    const allComboItemsInCart = promo.targetProductIds.every(reqId =>
-                        cartItems.some(ci => String(ci.productId || ci.id || '') === reqId || String(ci.id || '').startsWith(reqId))
-                    );
+                    const allComboItemsInCart = promo.targetProductIds.every(reqId => {
+                        const reqStr = String(reqId);
+                        return cartItems.some(ci => {
+                            const ciProdId = String(ci.productId || ci.id || '');
+                            const ciRawId = String(ci.id || '');
+                            return ciProdId === reqStr || ciRawId === reqStr || ciRawId.startsWith(`${reqStr}_`) || ciRawId.startsWith(`${reqStr}-`);
+                        });
+                    });
                     if (!allComboItemsInCart) continue;
                 }
                 let discount = 0;

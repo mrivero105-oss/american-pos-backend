@@ -27,6 +27,7 @@ import api from '../services/api';
 import { useAuth } from '../hooks/AuthContext';
 import { useSocket } from '../hooks/SocketContext';
 import { formatMoney, fetchGlobalSettings } from '../utils/format';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 const formatSmartUsd = (val) => {
     const num = Number(val || 0);
@@ -43,6 +44,7 @@ const formatBs = (val) => {
 export default function PhysicalInventoryAudit() {
     const { user } = useAuth();
     const { socket } = useSocket();
+    const { confirm, confirmDialog } = useConfirmDialog();
 
     // Catálogo completo de productos para búsqueda y carga rápida
     const [catalog, setCatalog] = useState([]);
@@ -200,8 +202,14 @@ export default function PhysicalInventoryAudit() {
     };
 
     // Cargar todo el catálogo
-    const handleLoadAllCatalog = () => {
-        if (!window.confirm(`¿Deseas cargar los ${catalog.length} productos del catálogo para auditoría completa?`)) {
+    const handleLoadAllCatalog = async () => {
+        const confirmed = await confirm({
+            title: 'Cargar catálogo completo',
+            message: `¿Deseas cargar los ${catalog.length} productos del catálogo para auditoría completa?`,
+            confirmText: 'Cargar catálogo',
+            variant: 'primary'
+        });
+        if (!confirmed) {
             return;
         }
         const existingMap = new Map(auditItems.map(i => [i.id, i.countedStock]));
@@ -242,8 +250,14 @@ export default function PhysicalInventoryAudit() {
     };
 
     // Reiniciar sesión de auditoría
-    const handleResetSession = () => {
-        if (!window.confirm('¿Seguro que deseas vaciar toda la sesión de toma física actual? Se perderán los conteos no aplicados.')) {
+    const handleResetSession = async () => {
+        const confirmed = await confirm({
+            title: 'Reiniciar auditoría física',
+            message: '¿Seguro que deseas vaciar toda la sesión de toma física actual? Se perderán los conteos no aplicados.',
+            confirmText: 'Vaciar sesión',
+            variant: 'danger'
+        });
+        if (!confirmed) {
             return;
         }
         setAuditItems([]);
@@ -850,6 +864,7 @@ export default function PhysicalInventoryAudit() {
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </div>
     );
 }

@@ -6,38 +6,58 @@
  * que la PC Servidor esté encendida o alcanzable en la red en ese instante.
  */
 
-const _d = (arr) => arr.map((c) => String.fromCharCode(c ^ 0x5A)).join('');
-const KNOWN_SECRETS = [
-    _d([23, 59, 41, 46, 63, 40, 21, 45, 52, 63, 40, 9, 63, 57, 40, 63, 46, 104, 106, 104, 108]),
-    '4d0e0ed5b2e25fb26c0ce829cd8135a9e04c4eefdc881a2bb258d4aa98747ffe',
-    'ISAAC_POS_DEFAULT_LEGACY_SECRET',
-    'AMERICAN_POS_DEFAULT_LEGACY_SECRET'
-];
+import PUBLIC_RSA_KEY_PEM from '../config/licensePublicKey.pem?raw';
 
-/**
- * Genera HMAC-SHA256 usando WebCrypto nativo del navegador / Android WebView
- */
-async function hmacSha256(secret, message) {
+let cachedRsaPublicKey = null;
+
+function base64ToUint8Array(base64Str) {
+    const clean = String(base64Str || '').replace(/\s+/g, '');
+    const binary = atob(clean);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+}
+
+async function getRsaPublicKey() {
+    if (cachedRsaPublicKey) return cachedRsaPublicKey;
     if (typeof window === 'undefined' || !window.crypto?.subtle) {
         throw new Error('WebCrypto API no disponible en este entorno.');
     }
-    const encoder = new TextEncoder();
-    const keyData = encoder.encode(secret);
-    const cryptoKey = await window.crypto.subtle.importKey(
-        'raw',
-        keyData,
-        { name: 'HMAC', hash: 'SHA-256' },
+    const pemBody = String(PUBLIC_RSA_KEY_PEM || '')
+        .replace(/-----BEGIN PUBLIC KEY-----/g, '')
+        .replace(/-----END PUBLIC KEY-----/g, '')
+        .replace(/\s+/g, '');
+    const spkiBytes = base64ToUint8Array(pemBody);
+    cachedRsaPublicKey = await window.crypto.subtle.importKey(
+        'spki',
+        spkiBytes.buffer,
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
         false,
-        ['sign']
+        ['verify']
     );
-    const signatureBuffer = await window.crypto.subtle.sign(
-        'HMAC',
-        cryptoKey,
-        encoder.encode(message)
-    );
-    return Array.from(new Uint8Array(signatureBuffer))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
+    return cachedRsaPublicKey;
+}
+
+/**
+ * Verifica firma digital RSA-SHA256 (licencias v2) usando únicamente clave pública SPKI.
+ */
+async function verifyRsaSha256Signature(payload, base64Signature) {
+    if (!base64Signature || typeof base64Signature !== 'string') return false;
+    try {
+        const publicKey = await getRsaPublicKey();
+        const sigBytes = base64ToUint8Array(base64Signature);
+        const payloadBytes = new TextEncoder().encode(payload);
+        return await window.crypto.subtle.verify(
+            { name: 'RSASSA-PKCS1-v1_5' },
+            publicKey,
+            sigBytes.buffer,
+            payloadBytes
+        );
+    } catch (_) {
+        return false;
+    }
 }
 
 /**
@@ -117,7 +137,7 @@ function safeBase64Decode(str) {
  * - Full Base64 (base64 de payload.firma)
  * - JWT style (base64(payload).firma)
  * - Raw token (payload.firma)
- * - MasterOwnerSecret2026 (bypass maestro)
+ * - Verificación asimétrica RSA-SHA256 (v2)
  * 
  * @param {string} licenseKeyString - Llave introducida por el usuario
  * @param {string} targetTerminalId - ID de la terminal actual (ej: TERM-3E1Z-7SGD-UEJS)
@@ -198,7 +218,8 @@ export async function validateLicenseKeyLocally(licenseKeyString, targetTerminal
         const normKeyMid = normalizeTerminalId(keyMid);
         const normTargetMid = normalizeTerminalId(targetTerminalId);
 
-        const isMasterKey = data.master === true || keyMid === 'MASTER-UNLOCK';
+        const licenseVersion = Number(data.v || 1);
+        const isMasterKey = (data.master === true || keyMid === 'MASTER-UNLOCK') && licenseVersion >= 2;
 
         if (!isMasterKey && normKeyMid !== normTargetMid) {
             return {
@@ -207,30 +228,34 @@ export async function validateLicenseKeyLocally(licenseKeyString, targetTerminal
             };
         }
 
-        // 5. Validar Firma Criptográfica contra los secretos reconocidos
+        // 5. Validar Firma Criptográfica:
+        //    - Licencias v2: verificación asimétrica offline RSA-SHA256 con clave pública SPKI.
+        //    - Licencias v1 (HMAC): no exponen secretos en el cliente; requieren validación en el servidor (/license/activate).
+        if (licenseVersion < 2) {
+            return {
+                valid: false,
+                requiresServerValidation: true,
+                message: 'Llave de licencia heredada (v1): requiere validación directa con el servidor.'
+            };
+        }
+
         let isSignatureValid = false;
         const candidates = [payloadStr, JSON.stringify(data)];
         if (cleanKey.includes('.')) {
             candidates.push(cleanKey.substring(0, cleanKey.lastIndexOf('.')));
         }
 
-        for (const secret of KNOWN_SECRETS) {
-            for (const cand of candidates) {
-                try {
-                    const expectedSig = await hmacSha256(secret, cand);
-                    if (expectedSig.toLowerCase() === signature.toLowerCase()) {
-                        isSignatureValid = true;
-                        break;
-                    }
-                } catch (_) {}
+        for (const cand of candidates) {
+            if (await verifyRsaSha256Signature(cand, signature)) {
+                isSignatureValid = true;
+                break;
             }
-            if (isSignatureValid) break;
         }
 
         if (!isSignatureValid) {
-            return { 
-                valid: false, 
-                message: 'Firma criptográfica inválida (La clave de dueño en el generador no coincide)' 
+            return {
+                valid: false,
+                message: 'Firma criptográfica RSA inválida.'
             };
         }
 

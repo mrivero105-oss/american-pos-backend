@@ -39,8 +39,6 @@ export default function InvoiceSettlementModal({
     suppliers = [],
     initialSupplierId = null
 }) {
-    if (!isOpen) return null;
-
     // Destino financiero: 'CREDIT' (Por Pagar) | 'PAID' (Contado) | 'INVENTORY_ONLY' (Solo Almacén)
     const [financialAction, setFinancialAction] = useState('CREDIT');
 
@@ -94,6 +92,8 @@ export default function InvoiceSettlementModal({
             }
         }
     }, [initialSupplierId, summary.detectedSupplierId, summary.detectedSupplierName, summary.detectedSupplierRif, suppliers]);
+
+    if (!isOpen) return null;
 
     const handleQuickDays = (days) => {
         setCreditDays(days);

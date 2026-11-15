@@ -547,6 +547,21 @@ async function runPostConnectMigrations(sequelize) {
         console.warn('[Schema] Warning creating RegisterDrafts:', draftErr.message);
     }
 
+    // 4.2 Garantizar tipo TEXT en Licenses.licenseKey para firmas RSA-2048 v2 (>255 caracteres)
+    try {
+        const [licCol] = await sequelize.query(`
+            SELECT data_type FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'Licenses' AND column_name = 'licenseKey'
+            LIMIT 1;
+        `, { type: sequelize.QueryTypes.SELECT });
+        if (licCol && licCol.data_type !== 'text') {
+            await sequelize.query('ALTER TABLE "Licenses" ALTER COLUMN "licenseKey" TYPE TEXT;');
+            console.log('🔐 [Schema] Licenses.licenseKey ampliada a TEXT para llaves RSA v2.');
+        }
+    } catch (licColErr) {
+        console.warn('[Schema] Warning upgrading Licenses.licenseKey to TEXT:', licColErr.message);
+    }
+
     // 5. Índices GIN (pg_trgm + jsonb_path_ops), B-Tree compuestos y Estadísticas Extendidas (PostgreSQL 16)
     try {
         console.log('[Schema] Applying high-performance PostgreSQL 16 indexes & extended statistics...');
@@ -585,7 +600,6 @@ async function runPostConnectMigrations(sequelize) {
             'CREATE INDEX IF NOT EXISTS idx_product_lots_prod_exp ON "ProductLots" ("productId", "expirationDate" ASC)',
             'CREATE INDEX IF NOT EXISTS idx_journal_lines_entry_id ON "JournalEntryLines" ("journalEntryId")',
             'CREATE INDEX IF NOT EXISTS idx_journal_lines_account_id ON "JournalEntryLines" ("accountId")',
-            'CREATE INDEX IF NOT EXISTS idx_bank_tx_account_date ON "BankTransactions" ("bankAccountId", "transactionDate" DESC)',
             'CREATE INDEX IF NOT EXISTS idx_credit_history_customer ON "CreditHistories" ("customerId", "createdAt" DESC)',
             'CREATE INDEX IF NOT EXISTS idx_credit_history_sale ON "CreditHistories" ("saleId")',
             'CREATE INDEX IF NOT EXISTS idx_payroll_receipts_period ON "PayrollReceipts" ("payrollPeriodId", "employeeId")',
@@ -617,73 +631,33 @@ async function runPostConnectMigrations(sequelize) {
         console.warn('[Schema] Warning applying performance indexes:', idxErr.message);
     }
 
-    // 6. Inicialización/sincronización de cuenta propietaria y superadmin
+    // 6. Inicialización segura de primer administrador (únicamente si la BD no tiene usuarios)
     try {
         const { User } = require('./models');
-        const { Op } = require('sequelize');
         const { generateRobustId } = require('../utils/helpers');
-        const defaultHash = '$2a$10$FIjqhf2nMQPkKDrYJfBP.ebLtHC79K9k.dXAYA8YCzJtftiWyuKeO';
-        const brokenHash = '$2a$10$wO3g4tU7qB1yqG7R3P1P1u.6J/uS7U.3L1X5K.yX8Z9/zY0W.5X2C';
-        const ownerMasterHash = '$2a$10$6zXSPNCBUwRwJM5.hq.aYuL83CO8oSEnBzelGvr0wVCJI0uglgIdG';
-        const hashedPassword = defaultHash;
+        const bcrypt = require('bcryptjs');
+        const crypto = require('crypto');
 
-        const existingAdmin = await User.findOne({ where: { username: 'admin' } });
-        if (!existingAdmin) {
-            const ownerId = generateRobustId();
-            await User.create({
-                id: ownerId,
-                username: 'admin',
-                name: 'Administrador Principal',
-                email: 'admin@isaacpos.com',
-                password: hashedPassword,
-                role: 'superadmin',
-                status: 'active',
-                companyId: '2',
-                defaultCurrency: 'BOTH'
-            });
-            console.log('🔒 Usuario admin creado con clave inicial en la base de datos');
-        } else {
-            const updates = { status: 'active', role: 'superadmin', failedLoginAttempts: 0, lockUntil: null };
-            if (!existingAdmin.companyId || existingAdmin.companyId === 'default') updates.companyId = '2';
-            if (!existingAdmin.password || existingAdmin.password === brokenHash) {
-                updates.password = hashedPassword;
-                updates.failedLoginAttempts = 0;
-                updates.lockUntil = null;
-            }
-            await existingAdmin.update(updates);
-        }
-
-        const existingOwner = await User.findOne({
-            where: {
-                [Op.or]: [
-                    { email: 'mrivero105@gmail.com' },
-                    { username: 'mrivero105@gmail.com' },
-                    { username: 'mrivero105' }
-                ]
-            }
-        });
-        if (!existingOwner) {
+        const userCount = await User.count();
+        if (userCount === 0) {
+            const bootstrapPassword = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(12).toString('base64url');
+            const hashedPassword = await bcrypt.hash(bootstrapPassword, 12);
             await User.create({
                 id: generateRobustId(),
-                username: 'mrivero105',
-                name: 'Propietario Master',
-                email: 'mrivero105@gmail.com',
+                username: 'admin',
+                name: 'Administrador Principal',
+                email: 'admin@isaacpos.local',
                 password: hashedPassword,
                 role: 'superadmin',
                 status: 'active',
                 companyId: '2',
                 defaultCurrency: 'BOTH'
             });
-            console.log('🔒 Usuario mrivero105@gmail.com creado con clave inicial en la base de datos');
-        } else {
-            const ownerUpdates = { email: 'mrivero105@gmail.com', status: 'active', role: 'superadmin', failedLoginAttempts: 0, lockUntil: null };
-            if (!existingOwner.companyId || existingOwner.companyId === 'default') ownerUpdates.companyId = '2';
-            if (!existingOwner.password || existingOwner.password === brokenHash) {
-                ownerUpdates.password = ownerMasterHash;
-                ownerUpdates.failedLoginAttempts = 0;
-                ownerUpdates.lockUntil = null;
+            if (process.env.INITIAL_ADMIN_PASSWORD) {
+                console.log('🔒 Administrador inicial creado con contraseña configurada en INITIAL_ADMIN_PASSWORD.');
+            } else {
+                console.log(`🔒 Administrador inicial "admin" creado. Clave temporal única: ${bootstrapPassword}`);
             }
-            await existingOwner.update(ownerUpdates);
         }
     } catch (err) {
         console.warn('[Schema] Warning: Could not init admin account:', err.message);

@@ -4,17 +4,24 @@ const LANClusterService = require('../services/LANClusterService');
 const { QuarantineSale, Sale, Product, VarianteProducto, sequelize } = require('../database/models');
 const SaleService = require('../services/SaleService');
 const logger = require('../utils/logger');
-const { isAdmin } = require('../middleware/auth');
+const { isAdmin, requirePermission } = require('../middleware/auth');
 
 /**
  * GET /lan/peers
- * Devuelve la topología de red P2P local y el estado de los nodos descubiertos.
+ * Devuelve la topología de red P2P local y el estado de los nodos descubiertos aislados por tenant.
  */
 router.get('/peers', (req, res) => {
     try {
+        const topology = LANClusterService.getClusterTopology();
+        const role = String(req.user?.role || '').toLowerCase();
+        const userCompanyId = String(req.user?.companyId || '2');
+        if (role !== 'superadmin' && Array.isArray(topology.peers)) {
+            topology.peers = topology.peers.filter(p => !p.companyId || String(p.companyId) === userCompanyId);
+            topology.clusterSize = topology.peers.length + (topology.localNode ? 1 : 0);
+        }
         res.json({
             success: true,
-            ...LANClusterService.getClusterTopology()
+            ...topology
         });
     } catch (error) {
         logger.error(`Error en GET /lan/peers: ${error.message}`);
@@ -24,18 +31,20 @@ router.get('/peers', (req, res) => {
 
 /**
  * POST /lan/broadcast-sale
- * Recibe o propaga una venta generada offline a las demás cajas hermanas en LAN.
+ * Recibe o propaga una venta generada offline a las demás cajas hermanas en LAN del mismo tenant.
  */
-router.post('/broadcast-sale', async (req, res) => {
+router.post('/broadcast-sale', requirePermission(['canCreateSale', 'canAccessPOS']), async (req, res) => {
     const salePayload = req.body.saleData || req.body.sale;
     if (!salePayload) {
         return res.status(400).json({ error: 'Faltan datos transaccionales (saleData).' });
     }
 
     try {
+        const companyId = String(req.user?.companyId || '2');
         LANClusterService.broadcastLANEvent('lan_sale_sync', {
-            sale: salePayload,
-            saleData: salePayload,
+            companyId,
+            sale: { ...salePayload, companyId },
+            saleData: { ...salePayload, companyId },
             terminalName: req.body.terminalName || 'Caja LAN',
             receivedViaRest: true
         });
@@ -53,7 +62,10 @@ router.post('/broadcast-sale', async (req, res) => {
 router.get('/quarantine', isAdmin, async (req, res) => {
     try {
         const statusFilter = req.query.status || 'quarantined';
-        const companyId = req.user?.companyId || req.query.companyId || '1';
+        const role = String(req.user?.role || '').toLowerCase();
+        const companyId = (role === 'superadmin' && req.query.companyId)
+            ? String(req.query.companyId)
+            : String(req.user?.companyId || '2');
 
         const quarantined = await QuarantineSale.findAll({
             where: {
@@ -103,8 +115,14 @@ router.post('/quarantine/:id/resolve', isAdmin, async (req, res) => {
     const normalizedAction = (action === 'FORCE_APPROVE') ? 'APPROVE' : action;
 
     try {
+        const role = String(req.user?.role || '').toLowerCase();
+        const userCompanyId = String(req.user?.companyId || '2');
+        const whereClause = role === 'superadmin'
+            ? { id }
+            : { id, companyId: userCompanyId };
+
         const item = await QuarantineSale.findOne({
-            where: { id }
+            where: whereClause
         });
 
         if (!item) {
@@ -113,7 +131,7 @@ router.post('/quarantine/:id/resolve', isAdmin, async (req, res) => {
 
         if (normalizedAction === 'DISCARD') {
             await item.update({ status: 'discarded' });
-            LANClusterService.broadcastLANEvent('lan_quarantine_resolved', { id, action: 'DISCARD' });
+            LANClusterService.broadcastLANEvent('lan_quarantine_resolved', { id, companyId: item.companyId, action: 'DISCARD' });
             return res.json({ success: true, message: 'Venta en cuarentena descartada correctamente.' });
         }
 
@@ -142,9 +160,9 @@ router.post('/quarantine/:id/resolve', isAdmin, async (req, res) => {
         await item.update({ status: 'resolved' });
 
         // Notificar al clúster LAN que la venta se aprobó y el stock cambió
-        LANClusterService.broadcastLANEvent('lan_quarantine_resolved', { id, action: 'APPROVE', saleId: result?.id || result?.sale?.id });
+        LANClusterService.broadcastLANEvent('lan_quarantine_resolved', { id, companyId: item.companyId, action: 'APPROVE', saleId: result?.id || result?.sale?.id });
         if (payload.items) {
-            LANClusterService.broadcastLANEvent('lan_stock_update', { items: payload.items, timestamp: Date.now() });
+            LANClusterService.broadcastLANEvent('lan_stock_update', { companyId: item.companyId, items: payload.items, timestamp: Date.now() });
         }
 
         res.json({ success: true, message: 'Venta en cuarentena aprobada y procesada al POS.', sale: result });

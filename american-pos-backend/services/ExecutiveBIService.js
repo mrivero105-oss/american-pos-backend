@@ -208,7 +208,7 @@ class ExecutiveBIService {
             if (sellerIds.length > 0) {
                 try {
                     const dbUsers = await User.findAll({
-                        where: { id: sellerIds },
+                        where: { id: sellerIds, companyId: companyId || 'default' },
                         attributes: ['id', 'name', 'username']
                     });
                     for (const u of dbUsers) {

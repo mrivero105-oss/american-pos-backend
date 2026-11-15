@@ -8,6 +8,7 @@ const cache = require('../utils/cacheService');
 const LANClusterService = require('./LANClusterService');
 
 const inFlightTransactions = new Set();
+const CLEAN_PRODUCT_ID_REGEX = /__bulk$|__mid$|__w?pres_.*$|__srv_.*$/;
 
 class SaleService {
     async getSaleDetails(companyId, saleId, role, requestingUserId = null) {
@@ -60,7 +61,29 @@ class SaleService {
             throw new Error(`TRANSACCION_DUPLICADA: La venta ${clientTransactionId} ya está en curso.`);
         }
         inFlightTransactions.add(clientTransactionId);
-        setTimeout(() => inFlightTransactions.delete(clientTransactionId), 10000);
+        const idempotencyTimer = setTimeout(() => inFlightTransactions.delete(clientTransactionId), 10000);
+        if (typeof idempotencyTimer.unref === 'function') idempotencyTimer.unref();
+
+        try {
+            return await this._processSaleCore(reqUser, saleData, options, {
+                clientTransactionId,
+                companyId,
+                userId,
+                userBranchId
+            });
+        } finally {
+            clearTimeout(idempotencyTimer);
+            inFlightTransactions.delete(clientTransactionId);
+        }
+    }
+
+    async _processSaleCore(reqUser, saleData, options = {}, ctx = {}) {
+        const {
+            clientTransactionId,
+            companyId = String(reqUser.companyId),
+            userId = String(reqUser.id),
+            userBranchId = String(reqUser.activeBranchId || '1')
+        } = ctx;
 
         // 1C. VERIFICACIÓN DE CAJA ABIERTA (Resiliente y Multi-Caja)
         let openShift = null;
@@ -129,12 +152,12 @@ class SaleService {
         if (hasCatFilter || hasProdFilter) {
             const normalizeStationText = (str) => String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
             const allowedNorm = hasCatFilter ? stationCategories.map(normalizeStationText) : [];
-            const allowedProdSet = new Set(hasProdFilter ? stationProducts.map(id => String(id).replace(/__bulk$|__mid$|__pres_.*$/, '')) : []);
+            const allowedProdSet = new Set(hasProdFilter ? stationProducts.map(id => String(id).replace(CLEAN_PRODUCT_ID_REGEX, '')) : []);
 
             // Consultar categorías reales de los productos desde la base de datos (Zero-Trust)
             const cleanProductIds = [...new Set(
                 (saleData.items || [])
-                    .map(it => String(it.productId || it.id || '').replace(/__bulk$|__mid$|__pres_.*$/, ''))
+                    .map(it => String(it.productId || it.id || '').replace(CLEAN_PRODUCT_ID_REGEX, ''))
                     .filter(Boolean)
             )];
             const { Product } = require('../database/models');
@@ -146,7 +169,7 @@ class SaleService {
             const dbNameMap = new Map(dbProducts.map(p => [String(p.id), p.name]));
 
             for (const item of (saleData.items || [])) {
-                const pId = String(item.productId || item.id || '').replace(/__bulk$|__mid$|__pres_.*$/, '');
+                const pId = String(item.productId || item.id || '').replace(CLEAN_PRODUCT_ID_REGEX, '');
                 let isPermitted = false;
 
                 if (hasProdFilter && allowedProdSet.has(pId)) {
@@ -217,7 +240,7 @@ class SaleService {
         // 2. INTEGRITY CHECK & ZERO-TRUST PRICE RECALCULATION
         const resolveCleanProductId = (it) => {
             const raw = String(it.productId || it.id || '').trim();
-            return raw.replace(/__bulk$|__mid$|__w?pres_.*$|__srv_.*$/, '');
+            return raw.replace(CLEAN_PRODUCT_ID_REGEX, '');
         };
         const itemIds = items.map(resolveCleanProductId).filter(Boolean);
         const companyCondition = (companyId === '2' || companyId === 'default')
@@ -227,6 +250,8 @@ class SaleService {
         const dbProductMap = new Map(dbProducts.map(p => [String(p.id), p]));
 
         let serverCalculatedSubtotal = 0;
+        let taxableSubtotalAfterItemPromo = 0;
+        let exemptSubtotalAfterItemPromo = 0;
         for (const item of items) {
             const itemQty = Number(item.quantity) || 0;
             if (itemQty <= 0) throw new Error(`INTEGRITY_ERROR: Cantidad inválida para producto: ${item.name}`);
@@ -317,28 +342,68 @@ class SaleService {
             let itemPrice = officialPrice;
             const isServiceItem = Boolean(item.isService) || String(dbProd?.category || item.category || '').trim().toLowerCase() === 'servicios';
 
-            // Permiso canModifyPrices: si el precio enviado difiere del catálogo (los servicios tienen monto variable por naturaleza)
+            // Permiso canModifyPrices: si el precio enviado difiere del catálogo (incluyendo precio 0)
             const priceTolerance = isWeightedWholesale ? 0.015 : 0.001;
-            if (dbProd && Number(item.price) > 0 && Math.abs(Number(item.price) - officialPrice) > priceTolerance) {
-                const canModifyPrices = isServiceItem || ['superadmin', 'admin', 'owner', 'supervisor'].includes((reqUser.role || '').toLowerCase()) || reqUser.permissions?.canModifyPrices === true;
-                if (!canModifyPrices && !saleData.supervisorApprovalId) {
-                    throw new Error(`INTEGRITY_ERROR: No tienes permiso para modificar el precio del producto "${item.name}". El precio oficial ($${officialPrice.toFixed(2)}) no coincide con el recibido ($${Number(item.price).toFixed(2)}). Se requiere la aprobación de un supervisor.`);
-                }
-                itemPrice = Number(item.price);
-            } else if (isWeightedWholesale && Number(item.price) > 0) {
-                itemPrice = Number(item.price);
+            const hasExplicitPrice = item.price !== undefined && item.price !== null && item.price !== '';
+            const requestedPrice = hasExplicitPrice ? Number(item.price) : officialPrice;
+            if (hasExplicitPrice && (!Number.isFinite(requestedPrice) || requestedPrice < 0)) {
+                throw new Error(`INTEGRITY_ERROR: Precio inválido para el producto "${item.name}".`);
             }
+            if (dbProd && hasExplicitPrice && Math.abs(requestedPrice - officialPrice) > priceTolerance) {
+                const canModifyPrices = isServiceItem || ['superadmin', 'admin', 'owner', 'supervisor'].includes((reqUser.role || '').toLowerCase()) || reqUser.permissions?.canModifyPrices === true;
+                if (!canModifyPrices && !saleData.supervisorApprovalId && !options.forceOverridePrice) {
+                    throw new Error(`INTEGRITY_ERROR: No tienes permiso para modificar el precio del producto "${item.name}". El precio oficial ($${officialPrice.toFixed(2)}) no coincide con el recibido ($${requestedPrice.toFixed(2)}). Se requiere la aprobación de un supervisor.`);
+                }
+                itemPrice = requestedPrice;
+            } else if (isWeightedWholesale && hasExplicitPrice && requestedPrice > 0) {
+                itemPrice = requestedPrice;
+            }
+            item._validatedServerPrice = itemPrice;
             
             const itemSubtotal = precision.multiply(itemPrice, itemQty);
+            const itemPromo = Math.max(0, Number(item.promoDiscount) || 0);
+            const itemNetAfterPromo = Math.max(0, precision.subtract(itemSubtotal, itemPromo));
+            const isItemExempt = dbProd
+                ? String(dbProd.taxStatus || '').trim().toLowerCase() === 'exento'
+                : (String(item.taxStatus || '').trim().toLowerCase() === 'exento' || Boolean(item.isExempt) || Boolean(item.is_exempt) || Boolean(item.taxExempt));
+            if (isItemExempt) {
+                exemptSubtotalAfterItemPromo = precision.add([exemptSubtotalAfterItemPromo, itemNetAfterPromo]);
+            } else {
+                taxableSubtotalAfterItemPromo = precision.add([taxableSubtotalAfterItemPromo, itemNetAfterPromo]);
+            }
+
             console.log(`[ZERO-TRUST CALC] Item: ${item.name}${isBulkItem ? ' [PAQUETE]' : (isMidBulkItem ? ' [MEDIA]' : '')}, Price: ${itemPrice}, Qty: ${itemQty}, Subtotal: ${itemSubtotal}`);
             serverCalculatedSubtotal = precision.add([serverCalculatedSubtotal, itemSubtotal]);
         }
 
         const discountValue = Number(discount) || 0;
         const promoDiscountValue = Number(saleData.promoDiscount) || 0;
+        if (discountValue < 0 || promoDiscountValue < 0) {
+            throw new Error('INTEGRITY_ERROR: Los descuentos no pueden ser negativos.');
+        }
         const totalEffectiveDiscount = precision.add([discountValue, promoDiscountValue]);
+        if (totalEffectiveDiscount > precision.add([serverCalculatedSubtotal, 0.01]) && !options.forceOverridePrice) {
+            throw new Error(`INTEGRITY_ERROR: El descuento total ($${totalEffectiveDiscount.toFixed(2)}) no puede superar el subtotal de la venta ($${serverCalculatedSubtotal.toFixed(2)}).`);
+        }
         const settings = await this._getSettings(companyId);
         let recalculatedIgtf = 0;
+
+        // Recálculo Zero-Trust de IVA desde servidor (PVP incluye IVA para productos gravables)
+        const isIvaEnabled = settings.taxConfig?.ivaEnabled !== false && settings.ivaEnabled !== false;
+        const ivaRate = isIvaEnabled ? (Number(settings.taxConfig?.ivaRate ?? settings.ivaRate ?? 16) || 0) : 0;
+        const netSubtotalAfterItemPromo = precision.add([taxableSubtotalAfterItemPromo, exemptSubtotalAfterItemPromo]);
+        const netTotalAfterAllDiscounts = Math.max(0, precision.subtract(serverCalculatedSubtotal, totalEffectiveDiscount));
+        const globalDiscountRatio = netSubtotalAfterItemPromo > 0
+            ? precision.divide(netTotalAfterAllDiscounts, netSubtotalAfterItemPromo)
+            : 1;
+        const effectiveTaxableBase = precision.multiply(taxableSubtotalAfterItemPromo, globalDiscountRatio);
+        let serverCalculatedTax = 0;
+        if (isIvaEnabled && ivaRate > 0 && effectiveTaxableBase > 0) {
+            const rateFrac = precision.divide(ivaRate, 100);
+            const divisor = precision.add([1, rateFrac]);
+            const netBase = precision.divide(effectiveTaxableBase, divisor);
+            serverCalculatedTax = precision.round(precision.subtract(effectiveTaxableBase, netBase), 2);
+        }
         
         let supervisorApprovalRecord = null;
         const canApplyDiscounts = reqUser.role === 'superadmin' || reqUser.role === 'admin' || reqUser.permissions?.canApplyDiscounts === true;
@@ -348,6 +413,11 @@ class SaleService {
             if (!saleData.supervisorApprovalId) {
                 throw new Error('AUTH_REQUIRED: No tienes permiso para aplicar descuentos. Se requiere la aprobación de un supervisor.');
             }
+        }
+
+        const hasAppliedPromotions = Array.isArray(saleData.appliedPromotions) && saleData.appliedPromotions.length > 0;
+        if (promoDiscountValue > (serverCalculatedSubtotal * 0.10) && !hasAppliedPromotions && !canApplyDiscounts && !saleData.supervisorApprovalId) {
+            throw new Error('AUTH_REQUIRED: Descuento promocional sin promoción activa válida requiere autorización de supervisor.');
         }
 
         if (discountValue > (serverCalculatedSubtotal * 0.10) && reqUser.role !== 'superadmin') {
@@ -369,23 +439,57 @@ class SaleService {
             if (supervisorApprovalRecord.expiresAt && new Date(supervisorApprovalRecord.expiresAt) < new Date()) {
                 throw new Error('AUTH_REQUIRED: La aprobación de supervisor ha expirado.');
             }
+            const allowedSaleApprovalActions = new Set([
+                'HIGH_DISCOUNT',
+                'SALE_DISCOUNT',
+                'PRICE_OVERRIDE',
+                'MANUAL_PRICE',
+                'CREDIT_OVERRIDE',
+                'CREDIT_LIMIT',
+                'CREDIT_LIMIT_OVERRIDE',
+                'POS_OVERRIDE',
+                'MOBILE_AUTHORIZATION',
+                'GENERAL_ACTION'
+            ]);
+            const normalizedActionType = String(supervisorApprovalRecord.actionType || '').trim().toUpperCase();
+            if (!normalizedActionType || !allowedSaleApprovalActions.has(normalizedActionType)) {
+                throw new Error(`AUTH_REQUIRED: La aprobación proporcionada (${supervisorApprovalRecord.actionType || 'N/A'}) no corresponde a autorización de ventas o descuentos.`);
+            }
         }
 
         const exchangeRate = Number(settings.exchangeRate) || 1.0;
-        console.log(`[SALE-CALC] Subtotal: ${serverCalculatedSubtotal}, Discount: ${discountValue}, Rate: ${exchangeRate}`);
+        console.log(`[SALE-CALC] Subtotal: ${serverCalculatedSubtotal}, Discount: ${discountValue}, Tax(Server): ${serverCalculatedTax}, Rate: ${exchangeRate}`);
 
-        const foreignCurrencyPayments = (saleData.paymentMethods || []).filter(p => {
-            const pmCurrency = (p.currency || '').toUpperCase();
-            const isCrypto = p.method === 'binance_usdt' || pmCurrency === 'USDT';
+        const isBinanceIgtfEnabled = Boolean(
+            settings.binanceIgtfEnabled ??
+            settings.businessInfo?.binanceIgtfEnabled ??
+            settings.taxConfig?.binanceIgtfEnabled
+        );
+        const isIgtfEnabled = Boolean(
+            settings.taxConfig?.igtfEnabled !== undefined
+                ? settings.taxConfig.igtfEnabled
+                : settings.igtfEnabled
+        );
+        const effectiveIgtfRate = Number(settings.taxConfig?.igtfRate ?? settings.igtfRate ?? 3);
+
+        // 3. NORMALIZAR PAGOS ANTES DEL CÁLCULO DE IGTF (evita evasión por amountTenderedUsd o métodos sin normalizar)
+        const basePrincipalBeforeIgtf = precision.round(Math.max(0, precision.subtract(serverCalculatedSubtotal, totalEffectiveDiscount)), 2);
+        const normalizedPayments = this._normalizePayments(saleData, basePrincipalBeforeIgtf, exchangeRate, settings);
+
+        const foreignCurrencyPayments = normalizedPayments.filter(p => {
+            const pmMethod = String(p.method || p.id || '').toLowerCase().trim();
+            if (['zelle', 'fiado', 'credit', 'credit_usd'].includes(pmMethod)) return false;
+            const pmCurrency = String(p.currency || '').toUpperCase();
+            const isCrypto = pmMethod === 'binance_usdt' || pmCurrency === 'USDT';
             if (isCrypto) {
-                return !!settings.binanceIgtfEnabled;
+                return isBinanceIgtfEnabled;
             }
-            return (pmCurrency ? pmCurrency === 'USD' : !p.method.includes('_bs')) && p.method !== 'zelle' && p.method !== 'fiado';
+            return pmCurrency ? pmCurrency === 'USD' : (!pmMethod.includes('_bs') && !pmMethod.includes('_ves'));
         });
         const totalUsdTendered = foreignCurrencyPayments.reduce((sum, p) => precision.add([sum, Number(p.amount) || 0]), 0);
 
-        if (totalUsdTendered > 0 && settings.igtfEnabled) {
-            const igtfRate = Number(settings.igtfRate || 3);
+        if (totalUsdTendered > 0 && isIgtfEnabled) {
+            const igtfRate = effectiveIgtfRate;
             const requiredPrincipal = precision.subtract(serverCalculatedSubtotal, totalEffectiveDiscount);
             const maxUsableFromTendered = precision.divide(totalUsdTendered, 1 + (igtfRate / 100));
             const appliedPrincipal = Math.min(requiredPrincipal, maxUsableFromTendered);
@@ -401,13 +505,12 @@ class SaleService {
         console.log(`[SALE-CALC] Final Total Exact: ${serverCalculatedTotalExact}, Rounded: ${serverCalculatedTotalRounded}, Received: ${saleTotal}`);
 
         // Tolerancia Inteligente (Zero-Trust Integrity Check)
-        // Aceptamos coincidencia exacta de VortexMathEngine o coincidencia redondeada a 2 decimales, o diferencia menor a 0.05 por conversiones de divisas/IGTF.
         const diffExact = Math.abs(precision.subtract(serverCalculatedTotalExact, saleTotal));
         const diffRounded = Math.abs(precision.subtract(serverCalculatedTotalRounded, saleTotal));
         const minDiff = Math.min(diffExact, diffRounded);
 
         let effectiveTolerance = 0.01;
-        const hasBinancePayment = (saleData.paymentMethods || []).some(p => p.method === 'binance_usdt' || (p.currency || '').toUpperCase() === 'USDT');
+        const hasBinancePayment = normalizedPayments.some(p => p.method === 'binance_usdt' || (p.currency || '').toUpperCase() === 'USDT');
         if (hasBinancePayment) {
             const roundingToleranceBs = Number(settings.binanceRoundingToleranceBs ?? settings.businessInfo?.binanceRoundingToleranceBs ?? 0.50);
             const binRate = Number(settings.binanceRate ?? settings.businessInfo?.binanceRate ?? exchangeRate);
@@ -424,8 +527,13 @@ class SaleService {
         // La única fuente de verdad contable es el cálculo del servidor
         const serverCalculatedTotal = serverCalculatedTotalRounded;
 
-        // 3. NORMALIZE PAYMENTS & CREDIT CHECK
-        const normalizedPayments = this._normalizePayments(saleData, serverCalculatedTotal, exchangeRate, settings);
+        // Si el pago implícito se generó sin monto explícito, ajustarlo al total final con IGTF
+        if ((!saleData.paymentMethods || saleData.paymentMethods.length === 0)
+            && Number(saleData.amountTenderedUsd || 0) === 0
+            && Number(saleData.amountTenderedVes || 0) === 0
+            && normalizedPayments.length === 1) {
+            normalizedPayments[0].amount = serverCalculatedTotal;
+        }
 
         // 🛡️ CANDADO ANTI-FRAUDE PARA BINANCE USDT (Verificación de Referencia Única 7 Días cuando se suministra referencia)
         const binancePayments = normalizedPayments.filter(p => p.method === 'binance_usdt' || (p.currency || '').toUpperCase() === 'USDT');
@@ -457,17 +565,22 @@ class SaleService {
         }
         const creditTotal = precision.add(
             normalizedPayments
-                .filter(p => p.method === 'fiado')
-                .map(p => Number(p.amount) || 0)
+                .filter(p => p.method === 'fiado' || p.method === 'credit')
+                .map(p => {
+                    const amt = Number(p.amount) || 0;
+                    const cur = String(p.currency || 'USD').toUpperCase();
+                    return (cur === 'VES' || cur === 'BS') && exchangeRate > 0 ? precision.divide(amt, exchangeRate) : amt;
+                })
         );
 
         if (creditTotal > 0 && !customerId && !saleData.customerName) {
             throw new Error('INTEGRITY_ERROR: Debe seleccionar un cliente para procesar una venta a crédito (Fiado).');
         }
 
-        // 🛡️ BLINDAJE ANTI-FRAUDE: Validar que la suma de pagos recibidos + crédito fiado cubra el total de la factura (TRAMPA 4 RESUELTA)
+        // 🛡️ BLINDAJE ANTI-FRAUDE: Validar que la suma de pagos recibidos (excluyendo fiado para no duplicar) + crédito fiado cubra el total de la factura
         let totalCoveredUsd = 0;
         for (const p of normalizedPayments) {
+            if (p.method === 'fiado' || p.method === 'credit') continue;
             const amt = Number(p.amount) || 0;
             if (amt > 0) {
                 const cur = String(p.currency || 'USD').toUpperCase();
@@ -559,7 +672,7 @@ class SaleService {
                 paymentMethods: normalizedPayments,
                 total: serverCalculatedTotal,
                 subtotal: serverCalculatedSubtotal,
-                tax: Number(saleData.tax) || 0,
+                tax: serverCalculatedTax,
                 discount: discountValue,
                 receivedAmount: Number(receivedAmount) || 0,
                 changeAmount: Number(changeAmount) || 0,
@@ -593,14 +706,15 @@ class SaleService {
 
             // 5. PROCESAR INVENTARIO (CON ROW-LEVEL LOCKING EN ORDEN DETERMINÍSTICO ANTI-DEADLOCK)
             let totalCashAdvanceBs = 0;
+            const createdSaleItems = [];
             const sortedItems = [...items].sort((a, b) => {
-                const idA = String(a.productId || a.id || '').trim().replace(/__bulk$|__mid$|__w?pres_.*$|__srv_.*$/, '');
-                const idB = String(b.productId || b.id || '').trim().replace(/__bulk$|__mid$|__w?pres_.*$|__srv_.*$/, '');
+                const idA = String(a.productId || a.id || '').trim().replace(CLEAN_PRODUCT_ID_REGEX, '');
+                const idB = String(b.productId || b.id || '').trim().replace(CLEAN_PRODUCT_ID_REGEX, '');
                 return idA.localeCompare(idB);
             });
             for (const item of sortedItems) {
                 const rawId = String(item.productId || item.id || '').trim();
-                const pId = rawId.replace(/__bulk$|__mid$|__w?pres_.*$|__srv_.*$/, '');
+                const pId = rawId.replace(CLEAN_PRODUCT_ID_REGEX, '');
                 if (!pId || pId === 'undefined' || (pId === 'null' && !item.isCustom)) continue;
 
                 let cost = Number(item.cost) || 0;
@@ -649,15 +763,20 @@ class SaleService {
                                 ? (Number(product.unitsPerMidBulk) || Number(item.unitsPerMidBulk) || 1)
                                 : 1));
                     const unitsToDeduct = precision.multiply(itemQty, unitsMultiplier);
+                    const masterStock = Number(product.stockQuantity ?? product.stock ?? 0);
 
                     // DEDUCCIÓN EN SUCURSAL CON TRACKING DE STOCK (KARDEX)
                     let branchStock = null;
                     if (branchId) {
                         try {
+                            const existingBranchCount = await BranchStock.count({
+                                where: { productId: pId, companyId },
+                                transaction: t
+                            });
                             let created;
                             [branchStock, created] = await BranchStock.findOrCreate({
                                 where: { productId: pId, branchId, companyId },
-                                defaults: { quantity: 0 },
+                                defaults: { quantity: existingBranchCount === 0 ? masterStock : 0 },
                                 transaction: t,
                                 lock: t.LOCK.UPDATE
                             });
@@ -671,7 +790,6 @@ class SaleService {
                     }
 
                     // Determinar stock previo disponible (Priorizar sucursal activa, o stock global)
-                    const masterStock = Number(product.stockQuantity ?? product.stock ?? 0);
                     const stockBefore = branchStock ? Number(branchStock.quantity || 0) : masterStock;
                     const stockAfter = precision.subtract(stockBefore, unitsToDeduct);
 
@@ -705,7 +823,7 @@ class SaleService {
                             console.warn(`[STOCK-OVERDRAFT] Conflicto registrado para "${product.name}". Requerido: ${unitsToDeduct}, Prev: ${stockBefore}, Sobregiro: ${overdraft}`);
 
                             if (global.io) {
-                                global.io.emit('stock_conflict_alert', {
+                                global.io.to(String(companyId)).emit('stock_conflict_alert', {
                                     id: alertId,
                                     productName: product.name,
                                     saleId: clientTransactionId,
@@ -815,7 +933,11 @@ class SaleService {
                     }
                 }
 
-                const itemPrice = Number(item.price !== undefined ? item.price : (item.precio || 0));
+                const itemPrice = Number(
+                    item._validatedServerPrice !== undefined
+                        ? item._validatedServerPrice
+                        : (item.price !== undefined ? item.price : (item.precio || 0))
+                );
                 const itemQty = Number(item.quantity || 1);
                 const itemBulkMultiplier = isBulkItem ? (Number(product?.unitsPerBulk) || Number(item.unitsPerBulk) || 1) : 1;
                 const itemMidBulkMultiplier = isMidBulkItem ? (Number(product?.unitsPerMidBulk) || Number(item.unitsPerMidBulk) || 1) : 1;
@@ -853,13 +975,34 @@ class SaleService {
                     promoDiscount: Number(item.promoDiscount) || 0,
                     appliedPromoName: item.appliedPromoName || null
                 }, { transaction: t });
+                createdSaleItems.push(createdSaleItem);
 
                 // DEDUCCIÓN AUTOMÁTICA DE COMPONENTES DE RECETA / COMBO (BOM)
                 try {
                     const ProductionService = require('./ProductionService');
-                    await ProductionService.processKitSaleDeduction(createdSaleItem, t, companyId);
+                    await ProductionService.processKitSaleDeduction(createdSaleItem, t, companyId, {
+                        bypassStockCheck: Boolean(options.bypassStockCheck)
+                    });
                 } catch (kitErr) {
-                    console.warn('[SaleService] Error procesando descuento de receta combo:', kitErr.message);
+                    if (!options.bypassStockCheck) {
+                        throw kitErr;
+                    }
+                    console.warn('[SaleService] Déficit BOM en sincronización offline:', kitErr.message);
+                    try {
+                        await StockAlert.create({
+                            id: `ALERT-BOM-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                            productId: pId || createdSaleItem.productId,
+                            productName: `${item.name || 'Combo'} [BOM]`,
+                            saleId: clientTransactionId,
+                            companyId,
+                            cashierName: reqUser.name || reqUser.username || saleData.cashierName || 'Cajero',
+                            registerName: saleData.registerName || 'Caja Principal',
+                            expectedStock: 0,
+                            soldQuantity: itemQty,
+                            overdraftAmount: itemQty,
+                            resolved: false
+                        }, { transaction: t });
+                    } catch (_) {}
                 }
 
                 // DESCUENTO AUTOMÁTICO DE EFECTIVO EN GAVETA POR AVANCE DE EFECTIVO (Avance BS)
@@ -1038,13 +1181,23 @@ class SaleService {
 
             // 8. MARCAR COMO COMPLETED (ÉXITO TOTAL)
             await saleRecord.update({ status: 'completed' }, { transaction: t });
-            // Consumir aprobación de supervisor de descuento (anti-replay)
+            // Consumir aprobación de supervisor de descuento (anti-replay atómico dentro de la transacción)
             if (supervisorApprovalRecord) {
-                await supervisorApprovalRecord.update({
+                const [consumedCount] = await SupervisorApproval.update({
                     used: true,
                     usedAt: new Date(),
                     referenceId: saleRecord.id
-                }, { transaction: t });
+                }, {
+                    where: {
+                        id: supervisorApprovalRecord.id,
+                        companyId,
+                        used: false
+                    },
+                    transaction: t
+                });
+                if (consumedCount !== 1) {
+                    throw new Error('AUTH_REQUIRED: Esta aprobación de supervisor ya fue consumida en otra transacción.');
+                }
             }
 
             // 8B. ENCOLAR EN OUTBOX PARA SINCRONIZACION NUBE (SUPABASE 24/7)
@@ -1073,6 +1226,12 @@ class SaleService {
                 console.warn('[SyncOutbox] Advertencia encolando venta:', syncErr.message);
             }
 
+            // 8C. INTEGRACIÓN CONTABLE NIIF AUTOMÁTICA (SÍNCRONA Y ATÓMICA DENTRO DE LA TRANSACCIÓN)
+            const AccountingEngineService = require('./AccountingEngineService');
+            const saleForAccounting = typeof saleRecord.toJSON === 'function' ? saleRecord.toJSON() : { ...saleRecord };
+            saleForAccounting.SaleItems = createdSaleItems;
+            await AccountingEngineService.generateSaleEntry(saleForAccounting, companyId, t);
+
             // 9. COMMIT FINANCIERO FINAL
             await t.commit();
 
@@ -1084,7 +1243,7 @@ class SaleService {
                 if (Array.isArray(items) && items.length > 0) {
                     const broadcastItems = items.map(it => {
                         const rawId = String(it.productId || it.id || '').trim();
-                        const cleanId = rawId.replace(/__bulk$|__mid$/, '');
+                        const cleanId = rawId.replace(CLEAN_PRODUCT_ID_REGEX, '');
                         const isBulk = Boolean(it.isBulk || rawId.endsWith('__bulk'));
                         const isMidBulk = Boolean(it.isMidBulk || rawId.endsWith('__mid'));
                         const mult = isBulk ? (Number(it.unitsPerBulk) || 1) : (isMidBulk ? (Number(it.unitsPerMidBulk) || 1) : 1);
@@ -1116,22 +1275,9 @@ class SaleService {
                 finalSale.setDataValue('dailyTicketNumber', dailyTicketNumber);
             }
 
-            // INTEGRACIÓN CONTABLE NIIF AUTOMÁTICA (ASÍNCRONA NO BLOQUEANTE POST-COMMIT)
-            setImmediate(async () => {
-                try {
-                    const AccountingEngineService = require('./AccountingEngineService');
-                    await AccountingEngineService.generateSaleEntry(finalSale || saleRecord, companyId);
-                } catch (accErr) {
-                    console.warn('[SaleService] Aviso en asiento contable automático post-venta:', accErr.message);
-                }
-            });
-
             return finalSale;
 
         } catch (error) {
-            // Liberar lock de idempotencia inmediatamente en caso de fallo para permitir reintentos legítimos
-            inFlightTransactions.delete(clientTransactionId);
-
             // ROLLBACK GARANTIZADO
             try { 
                 if (t && !t.finished) await t.rollback(); 

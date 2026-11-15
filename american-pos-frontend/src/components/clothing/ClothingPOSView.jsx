@@ -213,8 +213,8 @@ export default function ClothingPOSView() {
       ...checkoutData,
       id: txId,
       clientTransactionId: txId,
-      total: totalUSD,
-      subtotal: totalUSD,
+      total: Number(checkoutData?.total ?? totalUSD),
+      subtotal: Number(checkoutData?.subtotal ?? totalUSD),
       items: cart.map(item => ({
         id: item.producto_id || item.id,
         productId: item.producto_id || item.id,
@@ -254,12 +254,13 @@ export default function ClothingPOSView() {
           setCart([]);
         } catch (_dbErr) {
           showNotification('Error al procesar la venta offline', 'error');
+          throw _dbErr;
         }
       } else {
         const serverError = _err.response?.data?.error || _err.response?.data?.message || _err.message || 'Error al procesar la venta en servidor';
         console.error('[POS-BOUTIQUE] Error de validación en servidor:', serverError);
         showNotification(`Error en venta: ${serverError}`, 'error');
-        return;
+        throw _err;
       }
     } finally {
       setProcessing(false);

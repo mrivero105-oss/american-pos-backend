@@ -18,7 +18,7 @@ const CACHE_TTL = 1000 * 60 * 5; // 5 minutos
  */
 const verifyLicense = async (req, res, next) => {
     // Exempt routes (activation, health check, business info and mobile sync)
-    const isExactExempt = ['/license/status', '/license/activate', '/license/force-activate', '/hello', '/settings/business', '/settings/is-setup', '/version.json', '/dist.zip', '/api/app-update-info', '/Isaac-POS-Mobile.apk', '/settings/rate'].includes(req.path);
+    const isExactExempt = ['/license/status', '/license/activate', '/hello', '/settings/business', '/settings/is-setup', '/version.json', '/dist.zip', '/api/app-update-info', '/Isaac-POS-Mobile.apk', '/settings/rate'].includes(req.path);
     const isAuthRoute = req.path.startsWith('/auth/') && !req.path.endsWith('/public-cashiers'); 
     // Strict regex to prevent spoofing with `/public-something` anywhere in the path
     const isPublicSync = /^\/[a-zA-Z0-9_-]+\/public-/.test(req.path);
@@ -40,11 +40,16 @@ const verifyLicense = async (req, res, next) => {
             terminalId = isLocalHost ? serverMachineId : `TERM-MOB-${ipSuffix}`;
         }
 
-        // Return immediately if cache is valid to save I/O and CPU
+        // Return immediately only if cache is fresh AND license has not passed expiresAt
         const cached = terminalLicenseCache.get(terminalId);
-        if (cached && (now - cached.cachedAt) < CACHE_TTL) {
+        const cachedExpiresMs = cached?.license?.expiresAt ? new Date(cached.license.expiresAt).getTime() : null;
+        if (cached && (now - cached.cachedAt) < CACHE_TTL && (!cachedExpiresMs || cachedExpiresMs > now)) {
             req.license = cached.license;
+            req.isInheritedLicense = Boolean(cached.isInherited);
             return next();
+        }
+        if (cached && cachedExpiresMs && cachedExpiresMs <= now) {
+            terminalLicenseCache.delete(terminalId);
         }
 
         const isServerHost = terminalId === serverMachineId;

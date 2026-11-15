@@ -221,8 +221,8 @@ export default function PharmacyPOSView() {
         ...checkoutData,
         id: txId,
         clientTransactionId: txId,
-        total: totalUSD,
-        subtotal: totalUSD,
+        total: Number(checkoutData?.total ?? totalUSD),
+        subtotal: Number(checkoutData?.subtotal ?? totalUSD),
         items: cartItems.map(item => ({
           id: String(item.id),
           productId: String(item.id),
@@ -255,16 +255,18 @@ export default function PharmacyPOSView() {
             setCartItems([]);
           } else {
             showNotification(`Error offline: ${result.error}`, 'error');
+            throw new Error(result.error || 'Error offline');
           }
         } else {
           const serverError = _netErr.response?.data?.error || _netErr.response?.data?.message || _netErr.message || 'Error al procesar la venta en servidor';
           console.error('[POS-FARMACIA] Error de validación en servidor:', serverError);
           showNotification(`Error en venta: ${serverError}`, 'error');
-          return;
+          throw _netErr;
         }
       }
     } catch (error) {
-      showNotification(error.message || 'Error al procesar la venta en POS Farmacéutico', 'error');
+      showNotification(error?.response?.data?.error || error.message || 'Error al procesar la venta en POS Farmacéutico', 'error');
+      throw error;
     } finally {
       setProcessing(false);
     }

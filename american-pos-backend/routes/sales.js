@@ -61,23 +61,41 @@ router.post('/public-sync', require('../middleware/auth').verifyToken, async (re
                         continue;
                     }
 
-                const processed = await SaleService.processSale(req.user, saleData, { 
-                    bypassCreditLimit: true, 
-                    bypassStockCheck: true,
-                    bypassShiftCheck: true 
-                });
-                console.log(`[SYNC] Éxito: Venta ${saleData.id} registrada en DB con ID ${processed.id}`);
-                results.success.push({ id: saleData.id, dbId: processed.id });
+                    const processed = await SaleService.processSale(req.user, saleData, { 
+                        bypassCreditLimit: false, 
+                        bypassStockCheck: true,
+                        bypassShiftCheck: true,
+                        isOfflineSync: true
+                    });
+                    console.log(`[SYNC] Éxito: Venta ${saleData.id} registrada en DB con ID ${processed.id}`);
+                    results.success.push({ id: saleData.id, dbId: processed.id });
 
-                const io = req.app.get('io');
-                if (io) {
-                    io.to(req.user.companyId).emit('sale_completed', processed);
-                    io.to(req.user.companyId).emit('inventory_changed');
+                    const io = req.app.get('io');
+                    if (io) {
+                        io.to(req.user.companyId).emit('sale_completed', processed);
+                        io.to(req.user.companyId).emit('inventory_changed');
+                    }
+                } catch (err) {
+                    const msg = String(err?.message || 'Error en sincronización de venta');
+                    const isQuarantineWorthy = /INTEGRITY_ERROR|FRAUDE_|ESTACION_RESTRINGIDA|AUTH_REQUIRED|CREDIT_ERROR/i.test(msg);
+                    if (isQuarantineWorthy) {
+                        try {
+                            const { QuarantineSale } = require('../database/models');
+                            await QuarantineSale.upsert({
+                                id: String(saleData.id || `Q-${Date.now()}`),
+                                companyId: String(req.user.companyId),
+                                userId: String(req.user.id),
+                                rawPayload: JSON.stringify(saleData),
+                                errorReason: msg.slice(0, 250),
+                                status: 'quarantined'
+                            });
+                        } catch (qErr) {
+                            console.warn('[SYNC] No se pudo registrar venta en quarantine_sales:', qErr.message);
+                        }
+                    }
+                    console.error(`[SYNC] !!! ERROR CRÍTICO en venta ${saleData.id}:`, msg);
+                    results.errors.push({ id: saleData.id, error: msg, quarantined: isQuarantineWorthy });
                 }
-            } catch (err) {
-                console.error(`[SYNC] !!! ERROR CRÍTICO en venta ${saleData.id}:`, err.message);
-                results.errors.push({ id: saleData.id, error: err.message });
-            }
         }
         }
         res.json({ success: true, synced: results.success.length, errors: results.errors.length, details: results });
@@ -379,7 +397,9 @@ router.get('/registers', async (req, res) => {
         try {
             const topology = LANClusterService.getClusterTopology();
             lanPeers = topology.peers || [];
-        } catch (e) {}
+        } catch (e) {
+            console.warn('[GET /sales/registers] Aviso consultando topología LAN:', e.message);
+        }
 
         const registerMap = new Map();
 
@@ -496,11 +516,13 @@ router.put('/register-draft/:registerId', async (req, res) => {
         const compId = String(req.user?.companyId || '2');
         const { items, customer, totals, notes, totalUSD, totalVES } = req.body;
 
-        // Si el carrito está vacío, limpiar el borrador activo de esa caja
+        // Si el carrito está vacío, limpiar el borrador activo de esa caja solo dentro de su empresa
         if (!Array.isArray(items) || items.length === 0) {
+            const companyCondition = (compId === '2' || compId === 'default') ? ['2', 'default', '1'] : [compId];
             await RegisterDraft.destroy({
                 where: {
                     registerId,
+                    companyId: { [Op.in]: companyCondition },
                     type: 'auto_draft'
                 }
             });
@@ -539,9 +561,12 @@ router.put('/register-draft/:registerId', async (req, res) => {
 router.delete('/register-draft/:registerId', async (req, res) => {
     try {
         const { registerId } = req.params;
+        const compId = String(req.user?.companyId || '2');
+        const companyCondition = (compId === '2' || compId === 'default') ? ['2', 'default', '1'] : [compId];
         await RegisterDraft.destroy({
             where: {
                 registerId,
+                companyId: { [Op.in]: companyCondition },
                 type: 'auto_draft'
             }
         });
@@ -605,24 +630,30 @@ router.get('/remote-held-sales', async (req, res) => {
 router.delete('/remote-held-sale/:codeOrId', async (req, res) => {
     try {
         const target = String(req.params.codeOrId || '').trim();
-        let targetId = target;
+        const compId = String(req.user?.companyId || '2');
+        const companyCondition = (compId === '2' || compId === 'default') ? ['2', 'default', '1'] : [compId];
 
-        // Actualizar en PostgreSQL de forma persistente
+        // Actualizar en PostgreSQL de forma persistente dentro del tenant
         try {
             await RegisterDraft.update({ status: 'claimed' }, {
                 where: {
+                    companyId: { [Op.in]: companyCondition },
                     [Op.or]: [
                         { id: target },
                         { code: target.toUpperCase() }
                     ]
                 }
             });
-        } catch (_) {}
+        } catch (draftErr) {
+            console.warn('[DELETE /sales/remote-held-sale] Error actualizando estado RegisterDraft:', draftErr.message);
+        }
 
-        // Mantener consistencia en caché de memoria y avisar por Sockets
+        // Mantener consistencia en caché de memoria del mismo tenant y avisar por Sockets
         const reg = global.__remoteHeldSalesRegistry || (global.__remoteHeldSalesRegistry = { items: new Map(), recentBroadcasts: new Map() });
         let removed = null;
         for (const [k, v] of reg.items.entries()) {
+            const vComp = String(v?.companyId || '2');
+            if (!companyCondition.includes(vComp) && String(req.user?.role || '').toLowerCase() !== 'superadmin') continue;
             if (String(k).toUpperCase() === target.toUpperCase() || String(v.id || '').toUpperCase() === target.toUpperCase() || String(v.code || '').toUpperCase() === target.toUpperCase()) {
                 removed = v;
                 reg.items.delete(k);
@@ -631,9 +662,10 @@ router.delete('/remote-held-sale/:codeOrId', async (req, res) => {
 
         const io = req.app.get('io') || global.io;
         if (io) {
-            io.emit('remote_held_sale_claimed', {
+            io.to(compId).emit('remote_held_sale_claimed', {
                 id: removed?.id || target,
                 code: removed?.code || target,
+                companyId: compId,
                 claimedBy: req.user?.name || req.user?.username || 'Caja PC'
             });
         }
@@ -788,12 +820,13 @@ router.post('/', validate(saleSchema), async (req, res) => {
 
                 // 1. Broadcast en Tiempo Real para Réplica Simultánea en Laptops (SOLO si está explícitamente habilitado)
                 if (io && bizInfo.broadcastPrintingEnabled === true) {
+                    const targetRoom = String(req.user?.companyId || '2');
                     const broadcastPayload = {
                         sale: safeSale,
                         originStationId: req.headers['x-station-id'] || req.body?.originStationId || req.body?.stationId || req.body?.registerId || req.user?.id,
-                        companyId: req.user?.companyId
+                        companyId: targetRoom
                     };
-                    io.emit('lan_print_sale', broadcastPayload);
+                    io.to(targetRoom).emit('lan_print_sale', broadcastPayload);
                 }
 
                 // 2. Impresión Automática en Impresora de Red (SOLO si está explícitamente habilitada)
@@ -981,7 +1014,7 @@ router.post('/remote-held-sale', async (req, res) => {
             const lastSent = reg.recentBroadcasts.get(saleId) || 0;
             if (now - lastSent > 6000) {
                 reg.recentBroadcasts.set(saleId, now);
-                io.emit('remote_held_sale', enriched);
+                io.to(String(req.user?.companyId || '2')).emit('remote_held_sale', enriched);
                 broadcasted = true;
             }
         }

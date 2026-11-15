@@ -69,7 +69,10 @@ class ReportService {
 
         const [summaryMetrics, expensesResult, itemMetrics, salesWindow, expensesWindow, refundsResult] = await Promise.all([
             Sale.findOne({
-                attributes: [[sequelize.fn('COUNT', sequelize.col('Sale.id')), 'numberOfSales']],
+                attributes: [
+                    [sequelize.fn('COUNT', sequelize.col('Sale.id')), 'numberOfSales'],
+                    [sequelize.fn('SUM', sequelize.literal('COALESCE("Sale"."discount", 0) + COALESCE("Sale"."promoDiscount", 0)')), 'totalDiscounts']
+                ],
                 where: saleWhere,
                 raw: true
             }),
@@ -80,16 +83,15 @@ class ReportService {
             SaleItem.findOne({
                 attributes: [
                     [sequelize.fn('SUM', sequelize.col('SaleItem.subtotal')), 'totalRevenue'],
-                    [sequelize.literal('SUM(("SaleItem"."price" - COALESCE("SaleItem"."cost", 0)) * "SaleItem"."quantity")'), 'grossProfit']
+                    [sequelize.fn('SUM', sequelize.literal('COALESCE("SaleItem"."quantity", 0) * COALESCE("SaleItem"."cost", 0)')), 'totalCost']
                 ],
-                include: [{ model: Sale, as: 'Sale', attributes: [], where: saleWhere }],
+                include: [{ model: Sale, attributes: [], where: saleWhere }],
                 raw: true
             }),
             Sale.findAll({
                 where: saleWhere,
                 include: [{ model: SaleItem, as: 'SaleItems' }],
-                order: [['date', 'DESC']],
-                limit: 500
+                order: [['date', 'DESC']]
             }),
             role !== 'user' ? Expense.findAll({
                 where: { companyId, date: { [Op.gte]: queryStart.toISOString(), [Op.lte]: queryEnd.toISOString() } }
@@ -100,19 +102,23 @@ class ReportService {
             })
         ]);
 
-        const totalExpenses = Number(expensesResult[0]?.dataValues?.total) || 0;
-        const totalRefunds = Number(refundsResult[0]?.dataValues?.total) || 0;
-        const rawRevenue = Number(itemMetrics.totalRevenue) || 0;
-        const rawGrossProfit = Number(itemMetrics.grossProfit) || 0;
-        
-        // Ventas Netas = Ventas Brutas - Devoluciones
-        const totalRevenue = Math.max(0, rawRevenue - totalRefunds);
-        // Aproximación del costo de las devoluciones (asumiendo margen uniforme)
-        const marginRatio = rawRevenue > 0 ? (rawGrossProfit / rawRevenue) : 0;
-        const grossProfit = Math.max(0, rawGrossProfit - (totalRefunds * marginRatio));
-        
-        const numberOfSales = Number(summaryMetrics.numberOfSales) || 0;
-        const netProfit = grossProfit - totalExpenses;
+        const totalExpenses = precision.parseNumericInput(expensesResult[0]?.dataValues?.total);
+        const totalRefunds = precision.parseNumericInput(refundsResult[0]?.dataValues?.total);
+        const totalDiscounts = precision.parseNumericInput(summaryMetrics?.totalDiscounts);
+        const grossItemsRevenue = precision.parseNumericInput(itemMetrics?.totalRevenue);
+        const rawCost = precision.parseNumericInput(itemMetrics?.totalCost);
+        const rawRevenue = Math.max(0, precision.subtract(grossItemsRevenue, totalDiscounts));
+        const rawGrossProfit = precision.subtract(rawRevenue, rawCost);
+
+        // Ventas Netas = Ventas Netas Post-Descuentos - Devoluciones
+        const totalRevenue = Math.max(0, precision.subtract(rawRevenue, totalRefunds));
+        // Aproximación proporcional de utilidad y costo devuelto sobre base neta
+        const refundRatio = rawRevenue > 0 ? Math.min(1, totalRefunds / rawRevenue) : 0;
+        const grossProfit = precision.subtract(rawGrossProfit, rawGrossProfit * refundRatio);
+        const netCostAfterRefunds = Math.max(0, precision.subtract(rawCost, rawCost * refundRatio));
+
+        const numberOfSales = Number(summaryMetrics?.numberOfSales) || 0;
+        const netProfit = precision.subtract(grossProfit, totalExpenses);
 
         const analytics = processSalesAnalysis(salesWindow, expensesWindow, queryStart.toISOString());
         analytics.summary = {
@@ -122,43 +128,50 @@ class ReportService {
             totalRefunds,
             grossProfit,
             netProfit,
-            margin: totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0,
-            avgTicket: numberOfSales > 0 ? (totalRevenue / numberOfSales) : 0
+            // Estandarizado a Markup sobre Costo ((Utilidad Bruta / Costo Neto) * 100)
+            margin: netCostAfterRefunds > 0 ? precision.round((grossProfit / netCostAfterRefunds) * 100, 2) : 0,
+            avgTicket: numberOfSales > 0 ? precision.round(totalRevenue / numberOfSales, 2) : 0
         };
 
         // Inventory Valuation & Alerts (Optimized for Large Inventories)
-        let inventoryValuation = 0, itemCount = 0, lowStockItems = [];
+        let inventoryValuation = 0, itemCount = 0, lowStockItems = [], lowStockCount = 0;
         if (role !== 'user') {
             const notServiceSql = "LOWER(TRIM(COALESCE(\"category\", ''))) <> 'servicios'";
             const valuationStats = await Product.findOne({
                 where: { companyId, isCustom: false },
                 attributes: [
-                    [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN "stockQuantity" * COALESCE(NULLIF("cost", 0), "price" * 0.7) ELSE 0 END`)), 'totalValue'],
+                    [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN "stockQuantity" * COALESCE("cost", 0) ELSE 0 END`)), 'totalValue'],
                     [sequelize.fn('COUNT', sequelize.literal('"id"')), 'count']
                 ],
                 raw: true
             });
             
-            inventoryValuation = Number(valuationStats.totalValue) || 0;
-            itemCount = Number(valuationStats.count) || 0;
+            inventoryValuation = precision.parseNumericInput(valuationStats?.totalValue);
+            itemCount = Number(valuationStats?.count) || 0;
 
             const stockCol = sequelize.col('stockQuantity');
             const minStockCol = sequelize.col('minStock');
             const orderCol = 'stockQuantity';
+            const lowStockWhere = {
+                companyId,
+                [Op.and]: [
+                    sequelize.where(stockCol, Op.lte, minStockCol),
+                    sequelize.literal(notServiceSql)
+                ]
+            };
 
-            lowStockItems = await Product.findAll({
-                where: {
-                    companyId,
-                    [Op.and]: [
-                        sequelize.where(stockCol, Op.lte, minStockCol),
-                        sequelize.literal(notServiceSql)
-                    ]
-                },
-                attributes: ['id', 'name', 'stockQuantity', 'minStock', 'stockUnit'],
-                order: [[orderCol, 'ASC']],
-                limit: 8,
-                raw: true
-            });
+            const [lowStockRows, totalLowCount] = await Promise.all([
+                Product.findAll({
+                    where: lowStockWhere,
+                    attributes: ['id', 'name', 'stockQuantity', 'minStock', 'stockUnit'],
+                    order: [[orderCol, 'ASC']],
+                    limit: 50,
+                    raw: true
+                }),
+                Product.count({ where: lowStockWhere })
+            ]);
+            lowStockItems = lowStockRows;
+            lowStockCount = Number(totalLowCount) || lowStockItems.length;
         }
 
         // Charts
@@ -196,7 +209,7 @@ class ReportService {
                 paymentMethods: analytics.paymentMethods
             },
             charts: { salesChart, hourlySales: analytics.hourlySales },
-            inventory: { lowStockItems, lowStockCount: lowStockItems.length, totalValueAtCost: inventoryValuation, itemCount },
+            inventory: { lowStockItems, lowStockCount, lowStockTotalCount: lowStockCount, totalValueAtCost: inventoryValuation, itemCount },
             activity: {
                 recentSales,
                 auditLogs: auditLogs.map(l => ({ id: l.id, action: l.action, userEmail: l.User ? (l.User.name || l.User.username) : 'Sistema', timestamp: l.timestamp }))
@@ -269,16 +282,22 @@ class ReportService {
         };
         if (role === 'user') expenseWhere.userId = userId;
 
-        // 1. Métricas Globales vía SQL (costo real de renglón sin inventar 70% ficticio)
-        const [stats, refundsResult, totalExpensesRaw] = await Promise.all([
+        const netFactorSql = '(CASE WHEN COALESCE("Sale"."subtotal", 0) > (COALESCE("Sale"."discount", 0) + COALESCE("Sale"."promoDiscount", 0)) THEN (COALESCE("Sale"."subtotal", 0) - COALESCE("Sale"."discount", 0) - COALESCE("Sale"."promoDiscount", 0)) / "Sale"."subtotal" WHEN COALESCE("Sale"."subtotal", 0) > 0 THEN 0 ELSE 1 END)';
+
+        // 1. Métricas Globales vía SQL (costo real de renglón y descuentos de factura reales)
+        const [stats, discountsResult, refundsResult, totalExpensesRaw] = await Promise.all([
             SaleItem.findOne({
                 attributes: [
                     [sequelize.fn('SUM', sequelize.literal('quantity * price')), 'totalSales'],
                     [sequelize.fn('SUM', sequelize.literal('quantity * COALESCE(cost, 0)')), 'totalCost'],
-                    [sequelize.fn('SUM', sequelize.literal('quantity * (price - COALESCE(cost, 0))')), 'grossProfit'],
                     [sequelize.fn('COUNT', sequelize.literal('DISTINCT "saleId"')), 'numberOfSales']
                 ],
-                include: [{ model: Sale, as: 'Sale', attributes: [], where: saleWhere }],
+                include: [{ model: Sale, attributes: [], where: saleWhere }],
+                raw: true
+            }),
+            Sale.findOne({
+                where: saleWhere,
+                attributes: [[sequelize.fn('SUM', sequelize.literal('COALESCE("discount", 0) + COALESCE("promoDiscount", 0)')), 'totalDiscounts']],
                 raw: true
             }),
             Refund.findAll({
@@ -293,15 +312,15 @@ class ReportService {
             ? sequelize.literal('SUBSTRING("Sale"."date", 1, 10)')
             : sequelize.fn('strftime', '%Y-%m-%d', sequelize.col('Sale.date'), 'localtime');
 
-        // 2. Tendencias Diarias vía SQL (incluye utilidad bruta por día)
+        // 2. Tendencias Diarias vía SQL (ingresos netos post-descuento y utilidad bruta real)
         const rawTrends = await SaleItem.findAll({
             attributes: [
                 [dateExpr, 'date'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * "SaleItem".price')), 'sales'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * ("SaleItem".price - COALESCE("SaleItem".cost, 0))')), 'profit'],
+                [sequelize.fn('SUM', sequelize.literal(`("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}`)), 'sales'],
+                [sequelize.fn('SUM', sequelize.literal(`(("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}) - ("SaleItem".quantity * COALESCE("SaleItem".cost, 0))`)), 'profit'],
                 [sequelize.fn('COUNT', sequelize.literal('DISTINCT "SaleItem"."saleId"')), 'count']
             ],
-            include: [{ model: Sale, as: 'Sale', attributes: [], where: saleWhere }],
+            include: [{ model: Sale, attributes: [], where: saleWhere }],
             group: [dateExpr],
             order: [[dateExpr, 'ASC']],
             raw: true
@@ -346,10 +365,11 @@ class ReportService {
             attributes: [
                 [sequelize.col('name'), 'name'],
                 [sequelize.fn('SUM', sequelize.col('quantity')), 'quantity'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * "SaleItem".price')), 'total'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * ("SaleItem".price - COALESCE("SaleItem".cost, 0))')), 'totalProfit']
+                [sequelize.fn('SUM', sequelize.literal(`("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}`)), 'total'],
+                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * COALESCE("SaleItem".cost, 0)')), 'totalCost'],
+                [sequelize.fn('SUM', sequelize.literal(`(("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}) - ("SaleItem".quantity * COALESCE("SaleItem".cost, 0))`)), 'totalProfit']
             ],
-            include: [{ model: Sale, as: 'Sale', attributes: [], where: saleWhere }],
+            include: [{ model: Sale, attributes: [], where: saleWhere }],
             group: ['name'],
             order: [[sequelize.literal('"quantity"'), 'DESC']],
             limit: 100,
@@ -361,10 +381,11 @@ class ReportService {
             attributes: [
                 [sequelize.col('name'), 'name'],
                 [sequelize.fn('SUM', sequelize.col('quantity')), 'quantity'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * "SaleItem".price')), 'total'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * ("SaleItem".price - COALESCE("SaleItem".cost, 0))')), 'totalProfit']
+                [sequelize.fn('SUM', sequelize.literal(`("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}`)), 'total'],
+                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * COALESCE("SaleItem".cost, 0)')), 'totalCost'],
+                [sequelize.fn('SUM', sequelize.literal(`(("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}) - ("SaleItem".quantity * COALESCE("SaleItem".cost, 0))`)), 'totalProfit']
             ],
-            include: [{ model: Sale, as: 'Sale', attributes: [], where: saleWhere }],
+            include: [{ model: Sale, attributes: [], where: saleWhere }],
             group: ['name'],
             order: [[sequelize.literal('"totalProfit"'), 'DESC']],
             limit: 100,
@@ -375,32 +396,39 @@ class ReportService {
         const byCategory = await SaleItem.findAll({
             attributes: [
                 [sequelize.literal("COALESCE(\"SaleItem\".category, 'General')"), 'category'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * "SaleItem".price')), 'total'],
-                [sequelize.fn('SUM', sequelize.literal('"SaleItem".quantity * ("SaleItem".price - COALESCE("SaleItem".cost, 0))')), 'profit']
+                [sequelize.fn('SUM', sequelize.literal(`("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}`)), 'total'],
+                [sequelize.fn('SUM', sequelize.literal(`(("SaleItem".quantity * "SaleItem".price) * ${netFactorSql}) - ("SaleItem".quantity * COALESCE("SaleItem".cost, 0))`)), 'profit']
             ],
-            include: [{ model: Sale, as: 'Sale', attributes: [], where: saleWhere }],
+            include: [{ model: Sale, attributes: [], where: saleWhere }],
             group: [sequelize.literal("COALESCE(\"SaleItem\".category, 'General')")],
             order: [[sequelize.literal('"total"'), 'DESC']],
             raw: true
         });
 
-        const rawTotalRevenue = Number(stats.totalSales) || 0;
-        const rawGrossProfit = Number(stats.grossProfit) || 0;
-        const totalRefunds = Number(refundsResult[0]?.dataValues?.total) || 0;
+        const totalDiscounts = precision.parseNumericInput(discountsResult?.totalDiscounts);
+        const grossItemsSales = precision.parseNumericInput(stats?.totalSales);
+        const rawTotalCost = precision.parseNumericInput(stats?.totalCost);
+        const rawTotalRevenue = Math.max(0, precision.subtract(grossItemsSales, totalDiscounts));
+        const rawGrossProfit = precision.subtract(rawTotalRevenue, rawTotalCost);
+        const totalRefunds = precision.parseNumericInput(refundsResult[0]?.dataValues?.total);
 
-        const totalRevenue = Math.max(0, rawTotalRevenue - totalRefunds);
-        const marginRatio = rawTotalRevenue > 0 ? (rawGrossProfit / rawTotalRevenue) : 0;
-        const grossProfit = Math.max(0, rawGrossProfit - (totalRefunds * marginRatio));
+        const totalRevenue = Math.max(0, precision.subtract(rawTotalRevenue, totalRefunds));
+        const refundRatio = rawTotalRevenue > 0 ? Math.min(1, totalRefunds / rawTotalRevenue) : 0;
+        const grossProfit = precision.subtract(rawGrossProfit, rawGrossProfit * refundRatio);
+        const netTotalCost = Math.max(0, precision.subtract(rawTotalCost, rawTotalCost * refundRatio));
 
         const formatProduct = (p) => {
-            const total = Number(p.total) || 0;
-            const totalProfit = Number(p.totalProfit) || 0;
-            const quantity = Number(p.quantity) || 0;
-            const margin = total > 0 ? precision.round((totalProfit / total) * 100) : 0;
+            const total = precision.round(precision.parseNumericInput(p.total), 2);
+            const totalCost = precision.round(precision.parseNumericInput(p.totalCost), 2);
+            const totalProfit = precision.round(precision.parseNumericInput(p.totalProfit), 2);
+            const quantity = precision.parseNumericInput(p.quantity);
+            // Estandarizado a Markup sobre Costo ((Utilidad / Costo) * 100)
+            const margin = totalCost > 0 ? precision.round((totalProfit / totalCost) * 100) : 0;
             return {
                 name: p.name,
                 quantity,
                 total,
+                totalCost,
                 totalProfit,
                 margin
             };
@@ -418,7 +446,7 @@ class ReportService {
             where: saleWhere,
             attributes: [
                 [hourExpr, 'hourStr'],
-                [sequelize.fn('SUM', sequelize.col('total')), 'totalSales'],
+                [sequelize.fn('SUM', sequelize.literal('(CASE WHEN COALESCE("subtotal", 0) > 0 THEN (CASE WHEN "subtotal" > (COALESCE("discount", 0) + COALESCE("promoDiscount", 0)) THEN "subtotal" - COALESCE("discount", 0) - COALESCE("promoDiscount", 0) ELSE 0 END) ELSE COALESCE("total", 0) END)')), 'totalSales'],
                 [sequelize.fn('COUNT', sequelize.col('id')), 'count']
             ],
             group: [hourExpr],
@@ -440,7 +468,7 @@ class ReportService {
             }
         });
 
-        const numberOfSales = Number(stats.numberOfSales) || 0;
+        const numberOfSales = Number(stats?.numberOfSales) || 0;
         const avgTicket = numberOfSales > 0 ? precision.round(totalRevenue / numberOfSales, 6) : 0;
         const totalExpenses = precision.round(Number(totalExpensesRaw) || 0, 2);
         const netProfit = precision.round(grossProfit - totalExpenses, 2);
@@ -450,11 +478,11 @@ class ReportService {
                 totalSales: totalRevenue,
                 numberOfSales,
                 totalRefunds,
-                totalCost: Number(stats.totalCost) || 0,
+                totalCost: precision.round(netTotalCost, 2),
                 totalExpenses,
-                grossProfit: grossProfit,
+                grossProfit: precision.round(grossProfit, 2),
                 netProfit,
-                margin: totalRevenue > 0 ? precision.round((grossProfit / totalRevenue) * 100) : 0,
+                margin: netTotalCost > 0 ? precision.round((grossProfit / netTotalCost) * 100) : 0,
                 avgTicket
             },
             topProducts: formattedTopProducts,
@@ -478,7 +506,7 @@ class ReportService {
             },
             attributes: [
                 [sequelize.literal("COALESCE(\"category\", 'General')"), 'category'],
-                [sequelize.fn('SUM', sequelize.literal('"stockQuantity" * COALESCE(NULLIF("cost", 0), "price" * 0.7)')), 'valueAtCost'],
+                [sequelize.fn('SUM', sequelize.literal('"stockQuantity" * COALESCE("cost", 0)')), 'valueAtCost'],
                 [sequelize.fn('SUM', sequelize.literal('"stockQuantity" * "price"')), 'valueAtPrice'],
                 [sequelize.fn('COUNT', sequelize.literal('CASE WHEN "stockQuantity" > 0 THEN 1 END')), 'items']
             ],
@@ -498,7 +526,7 @@ class ReportService {
                 totalValueAtCost: precision.round(totalCost),
                 totalValueAtPrice: precision.round(totalValue),
                 potentialProfit: precision.round(totalValue - totalCost),
-                margin: totalValue > 0 ? precision.round(((totalValue - totalCost) / totalValue) * 100) : 0,
+                margin: totalCost > 0 ? precision.round(((totalValue - totalCost) / totalCost) * 100) : 0,
                 itemCount
             },
             byCategory: byCategory.sort((a,b) => b.valueAtCost - a.valueAtCost)
@@ -861,12 +889,13 @@ class ReportService {
 
     /**
      * Get inventory valuation (total inventory value at cost, total retail value, margins and stock health).
+     * Soporta filtrado por sucursal (BranchStocks) o vista consolidada global.
      */
-    async getInventoryValuation(companyId) {
+    async getInventoryValuation(companyId, branchId = null) {
         if (!companyId || companyId === 'default' || companyId === 'admin') {
             companyId = '2';
         }
-        const { Product } = require('../database/models');
+        const { Product, Branch } = require('../database/models');
         if (companyId !== '2') {
             const prodCount = await Product.count({ where: { companyId } }).catch(() => 0);
             if (prodCount === 0) companyId = '2';
@@ -875,39 +904,80 @@ class ReportService {
             ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }] }
             : { companyId };
 
-        const notServiceSql = "LOWER(TRIM(COALESCE(\"category\", ''))) <> 'servicios'";
+        let activeBranch = null;
+        const rawBranch = branchId ? String(branchId).trim() : '';
+        if (rawBranch && !['1', 'null', 'undefined', 'global'].includes(rawBranch.toLowerCase())) {
+            const branchCompanyCond = (companyId === '2' || companyId === 'default')
+                ? { [Op.or]: ['2', 'default', null] }
+                : companyId;
+            activeBranch = await Branch.findOne({
+                where: { id: rawBranch, companyId: branchCompanyCond },
+                attributes: ['id', 'name'],
+                raw: true
+            }).catch(() => null);
+        }
+
+        const stockExpr = activeBranch
+            ? `COALESCE((SELECT bs."quantity" FROM "BranchStocks" bs WHERE bs."productId" = "Product"."id" AND bs."branchId" = ${sequelize.escape(activeBranch.id)} LIMIT 1), 0)`
+            : `COALESCE((SELECT SUM(bs."quantity") FROM "BranchStocks" bs WHERE bs."productId" = "Product"."id"), "Product"."stockQuantity", 0)`;
+
+        const safeStockExpr = `GREATEST(${stockExpr}, 0)`;
+        const notServiceSql = `LOWER(TRIM(COALESCE("Product"."category", ''))) <> 'servicios'`;
+        const isServiceSql = `LOWER(TRIM(COALESCE("Product"."category", ''))) = 'servicios'`;
+
         const valuationStats = await Product.findOne({
-            where: { 
-                ...companyCondition, 
-                isCustom: { [Op.or]: [false, null] }, 
-                status: 'active' 
+            where: {
+                ...companyCondition,
+                isCustom: { [Op.or]: [false, null] },
+                status: 'active'
             },
             attributes: [
-                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN "stockQuantity" * COALESCE(NULLIF("cost", 0), "price" * 0.7) ELSE 0 END`)), 'totalValueAtCost'],
-                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN "stockQuantity" * COALESCE("price", 0) ELSE 0 END`)), 'totalRetailValue'],
-                [sequelize.fn('COUNT', sequelize.literal('"id"')), 'itemCount'],
-                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND "stockQuantity" <= "minStock" AND "stockQuantity" > 0 THEN 1 ELSE 0 END`)), 'lowStockCount'],
-                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND "stockQuantity" <= 0 THEN 1 ELSE 0 END`)), 'outOfStockCount']
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN ${safeStockExpr} * COALESCE("Product"."cost", 0) ELSE 0 END`)), 'totalValueAtCost'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN ${safeStockExpr} * COALESCE("Product"."price", 0) ELSE 0 END`)), 'totalRetailValue'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND ${stockExpr} > 0 AND COALESCE("Product"."cost", 0) > 0 AND COALESCE("Product"."price", 0) > 0 THEN ${safeStockExpr} * "Product"."cost" ELSE 0 END`)), 'marginCostBase'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND ${stockExpr} > 0 AND COALESCE("Product"."cost", 0) > 0 AND COALESCE("Product"."price", 0) > 0 THEN ${safeStockExpr} * "Product"."price" ELSE 0 END`)), 'marginRetailBase'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND ${stockExpr} > 0 AND COALESCE("Product"."cost", 0) <= 0 THEN 1 ELSE 0 END`)), 'missingCostCount'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND ${stockExpr} > 0 AND COALESCE("Product"."cost", 0) <= 0 THEN ${safeStockExpr} * COALESCE("Product"."price", 0) ELSE 0 END`)), 'missingCostRetailValue'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND ${stockExpr} > 0 AND COALESCE("Product"."price", 0) <= 0 THEN 1 ELSE 0 END`)), 'zeroPriceCount'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN 1 ELSE 0 END`)), 'itemCount'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${isServiceSql} THEN 1 ELSE 0 END`)), 'serviceCount'],
+                [sequelize.fn('COUNT', sequelize.literal('"Product"."id"')), 'totalCatalogCount'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND ${stockExpr} <= COALESCE("Product"."minStock", 0) AND ${stockExpr} > 0 THEN 1 ELSE 0 END`)), 'lowStockCount'],
+                [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} AND ${stockExpr} <= 0 THEN 1 ELSE 0 END`)), 'outOfStockCount']
             ],
             raw: true
         });
 
         const totalValueAtCost = precision.round(Number(valuationStats?.totalValueAtCost) || 0, 2);
         const totalRetailValue = precision.round(Number(valuationStats?.totalRetailValue) || 0, 2);
-        const projectedMarginProfit = precision.round(Math.max(0, totalRetailValue - totalValueAtCost), 2);
-        const projectedMarginPercent = totalRetailValue > 0 ? precision.round((projectedMarginProfit / totalRetailValue) * 100, 1) : 0;
+        const marginCostBase = Number(valuationStats?.marginCostBase) || 0;
+        const marginRetailBase = Number(valuationStats?.marginRetailBase) || 0;
+        const projectedMarginProfit = precision.round(marginRetailBase - marginCostBase, 2);
+        const projectedMarginPercent = marginCostBase > 0 ? precision.round((projectedMarginProfit / marginCostBase) * 100, 1) : 0;
         const itemCount = Number(valuationStats?.itemCount) || 0;
+        const serviceCount = Number(valuationStats?.serviceCount) || 0;
+        const totalCatalogCount = Number(valuationStats?.totalCatalogCount) || 0;
         const lowStockCount = Number(valuationStats?.lowStockCount) || 0;
         const outOfStockCount = Number(valuationStats?.outOfStockCount) || 0;
+        const missingCostCount = Number(valuationStats?.missingCostCount) || 0;
+        const missingCostRetailValue = precision.round(Number(valuationStats?.missingCostRetailValue) || 0, 2);
+        const zeroPriceCount = Number(valuationStats?.zeroPriceCount) || 0;
 
         return {
             totalValueAtCost,
             totalRetailValue,
             itemCount,
+            serviceCount,
+            totalCatalogCount,
             lowStockCount,
             outOfStockCount,
             projectedMarginProfit,
             projectedMarginPercent,
+            missingCostCount,
+            missingCostRetailValue,
+            zeroPriceCount,
+            branchId: activeBranch?.id || null,
+            branchName: activeBranch?.name || null,
             summary: {
                 totalValueAtCost,
                 totalValueAtPrice: totalRetailValue,

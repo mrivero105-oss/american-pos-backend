@@ -15,10 +15,15 @@ router.get('/', async (req, res) => {
             ? { [Op.or]: ['2', 'default', null] }
             : compId;
 
-        const revealMaster = req.user.role === 'superadmin';
+        const OWNER_ROLES = ['owner', 'dueño', 'dueno'];
+        const normReqRole = String(req.user.role || '').trim().toLowerCase();
+        const revealMaster = normReqRole === 'superadmin';
+        const revealOwner = revealMaster || OWNER_ROLES.includes(normReqRole);
         const whereCondition = revealMaster
             ? { companyId: companyCondition }
-            : { companyId: companyCondition, role: { [Op.ne]: 'superadmin' } };
+            : revealOwner
+                ? { companyId: companyCondition, role: { [Op.ne]: 'superadmin' } }
+                : { companyId: companyCondition, role: { [Op.notIn]: ['superadmin', ...OWNER_ROLES] } };
         
         let users;
         try {
@@ -90,11 +95,18 @@ router.post('/', async (req, res) => {
         const newUserId = generateRobustId();
         const isNewCompany = (role === 'superadmin');
 
-        // Protección estricta: Solo un Superadmin/Propietario puede asignar el rol superadmin
-        if (role === 'superadmin' && req.user.role !== 'superadmin') {
+        const normNewRole = String(role || '').trim().toLowerCase();
+        const normActorRole = String(req.user.role || '').trim().toLowerCase();
+        if (normNewRole === 'superadmin' && normActorRole !== 'superadmin') {
             return res.status(403).json({
                 error: 'forbidden',
-                message: 'Solo el Superadministrador / Propietario principal puede asignar el rol de Superadmin.'
+                message: 'Solo el Superadministrador principal puede asignar el rol de Superadmin.'
+            });
+        }
+        if (['owner', 'dueño', 'dueno'].includes(normNewRole) && !['superadmin', 'owner', 'dueño', 'dueno'].includes(normActorRole)) {
+            return res.status(403).json({
+                error: 'forbidden',
+                message: 'Solo el Propietario o Superadministrador puede asignar el rol de Propietario.'
             });
         }
 
@@ -159,12 +171,22 @@ router.put('/:id', async (req, res) => {
             return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
-        // Protección de rol: Solo un superadmin puede promover a superadmin o modificar a un superadmin existente
-        if (req.user.role !== 'superadmin') {
-            if (req.body.role === 'superadmin' || targetUser.role === 'superadmin') {
+        const normActorPut = String(req.user.role || '').trim().toLowerCase();
+        const normBodyRolePut = String(req.body.role || '').trim().toLowerCase();
+        const normTargetPut = String(targetUser.role || '').trim().toLowerCase();
+        if (normActorPut !== 'superadmin') {
+            if (normBodyRolePut === 'superadmin' || normTargetPut === 'superadmin') {
                 return res.status(403).json({
                     error: 'forbidden',
-                    message: 'Solo el Superadministrador / Propietario principal puede asignar o modificar cuentas de Superadmin.'
+                    message: 'Solo el Superadministrador principal puede asignar o modificar cuentas de Superadmin.'
+                });
+            }
+        }
+        if (!['superadmin', 'owner', 'dueño', 'dueno'].includes(normActorPut)) {
+            if (['owner', 'dueño', 'dueno'].includes(normBodyRolePut) || ['owner', 'dueño', 'dueno'].includes(normTargetPut)) {
+                return res.status(403).json({
+                    error: 'forbidden',
+                    message: 'Solo el Propietario o Superadministrador puede asignar o modificar cuentas de Propietario.'
                 });
             }
         }
@@ -312,10 +334,18 @@ router.delete('/:id', async (req, res) => {
             return res.status(400).json({ message: 'No puedes eliminar tu propia cuenta' });
         }
 
-        if (targetUser.role === 'superadmin' && req.user.role !== 'superadmin') {
+        const normActorDel = String(req.user.role || '').trim().toLowerCase();
+        const normTargetDel = String(targetUser.role || '').trim().toLowerCase();
+        if (normTargetDel === 'superadmin' && normActorDel !== 'superadmin') {
             return res.status(403).json({
                 error: 'forbidden',
-                message: 'Solo el Superadministrador / Propietario principal puede alterar o eliminar cuentas de Superadmin.'
+                message: 'Solo el Superadministrador principal puede alterar o eliminar cuentas de Superadmin.'
+            });
+        }
+        if (['owner', 'dueño', 'dueno'].includes(normTargetDel) && !['superadmin', 'owner', 'dueño', 'dueno'].includes(normActorDel)) {
+            return res.status(403).json({
+                error: 'forbidden',
+                message: 'Solo el Propietario o Superadministrador puede alterar o eliminar cuentas de Propietario.'
             });
         }
 
@@ -352,6 +382,7 @@ router.delete('/:id', async (req, res) => {
             }
 
             await targetUser.destroy();
+            invalidateUserAuthCache(targetUser.id);
             return res.json({ message: 'Usuario eliminado definitivamente (historial reasignado al administrador)' });
         }
     } catch (error) {
@@ -375,7 +406,9 @@ router.post('/:id/supervisor-pin', async (req, res) => {
             ? { [Op.or]: ['2', 'default', null] }
             : compId;
         const user = await User.findOne({ where: { id, companyId: companyCondition } });
-        if (!user || (user.role === 'superadmin' && req.user.role !== 'superadmin')) {
+        const normActorPin = String(req.user.role || '').trim().toLowerCase();
+        const normTargetPin = String(user && user.role || '').trim().toLowerCase();
+        if (!user || (normTargetPin === 'superadmin' && normActorPin !== 'superadmin') || (['owner', 'dueño', 'dueno'].includes(normTargetPin) && !['superadmin', 'owner', 'dueño', 'dueno'].includes(normActorPin))) {
             return res.status(404).json({ message: 'Usuario no encontrado.' });
         }
 
@@ -442,7 +475,9 @@ router.patch('/:id/toggle-status', async (req, res) => {
         const { companyId } = req.user;
 
         const targetUser = await User.findOne({ where: { id, companyId } });
-        if (!targetUser || (targetUser.role === 'superadmin' && req.user.role !== 'superadmin')) {
+        const normActorToggle = String(req.user.role || '').trim().toLowerCase();
+        const normTargetToggle = String(targetUser && targetUser.role || '').trim().toLowerCase();
+        if (!targetUser || (normTargetToggle === 'superadmin' && normActorToggle !== 'superadmin') || (['owner', 'dueño', 'dueno'].includes(normTargetToggle) && !['superadmin', 'owner', 'dueño', 'dueno'].includes(normActorToggle))) {
             return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 

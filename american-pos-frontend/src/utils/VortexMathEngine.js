@@ -115,14 +115,21 @@ const VortexMathEngine = {
     },
 
     multiply: (a, b) => {
-        const resultBig = (toBigIntExact(a) * toBigIntExact(b)) / FACTOR;
+        const num = toBigIntExact(a) * toBigIntExact(b);
+        const sign = num < 0n ? -1n : 1n;
+        const absNum = num < 0n ? -num : num;
+        const resultBig = sign * ((absNum + FACTOR / 2n) / FACTOR);
         return fromBigIntExact(resultBig);
     },
 
     divide: (a, b) => {
         const bBig = toBigIntExact(b);
         if (bBig === 0n) return 0;
-        const resultBig = (toBigIntExact(a) * FACTOR) / bBig;
+        const num = toBigIntExact(a) * FACTOR;
+        const sign = (num < 0n) !== (bBig < 0n) ? -1n : 1n;
+        const absNum = num < 0n ? -num : num;
+        const absDen = bBig < 0n ? -bBig : bBig;
+        const resultBig = sign * ((absNum + absDen / 2n) / absDen);
         return fromBigIntExact(resultBig);
     },
 

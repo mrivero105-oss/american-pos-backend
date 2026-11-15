@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { readJson, writeJson, getUserSettings } = require('../utils/helpers');
-const { verifyToken, isAdmin, requirePermission } = require('../middleware/auth');
+const { verifyToken, isAdmin, requirePermission, computeDisplayPairingToken } = require('../middleware/auth');
 const { BASE_PATH, SETTINGS_FILE, PAYMENT_METHODS_FILE } = require('../config/paths');
 const cache = require('../utils/cacheService');
 const { User } = require('../database/models');
@@ -99,6 +99,18 @@ const COUNTRY_PRESETS = {
     }
 };
 
+router.get('/', verifyToken, async (req, res) => {
+    try {
+        const allSettings = getCachedSettings();
+        const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
+        const userSettings = getUserSettings(allSettings, companyId);
+        res.json(userSettings || {});
+    } catch (err) {
+        console.error('Error in GET /settings:', err);
+        res.status(500).json({ error: 'Error obteniendo configuración' });
+    }
+});
+
 router.get('/rate', async (req, res) => {
     try {
         const allSettings = getCachedSettings();
@@ -128,7 +140,9 @@ router.get('/rate', async (req, res) => {
             }
         }
 
-        console.log(`[RATE DEBUG] GET /rate - User: ${req.user?.id || 'guest'}, Company: ${companyId}, Rate: ${userSettings.exchangeRate}, Mode: ${currencyMode}`);
+        if (process.env.DEBUG_VERBOSE === 'true') {
+            console.log(`[RATE DEBUG] GET /rate - User: ${req.user?.id || 'guest'}, Company: ${companyId}, Rate: ${userSettings.exchangeRate}, Mode: ${currencyMode}`);
+        }
 
         // Si la auto-actualización está activa y hace más de 1 hora que no se sincroniza, refrescar en segundo plano
         if (!isUsdSingleCountry && userSettings.autoUpdateRate !== false) {
@@ -240,7 +254,6 @@ router.post('/binance/rate', async (req, res) => {
         if (io) {
             const payload = { type: 'binance_rate', binanceRate: parsedRate };
             io.to(companyId).emit('settings_changed', payload);
-            io.emit('settings_changed', payload);
         }
 
         res.json({ success: true, rate: parsedRate });
@@ -308,7 +321,6 @@ router.post('/rate', async (req, res) => {
                 autoUpdateRate: userSettings.autoUpdateRate
             };
             io.to(companyId).emit('settings_changed', payload);
-            io.emit('settings_changed', payload);
         }
 
         res.json({ success: true, rate, currencyMode: userSettings.currencyMode, autoUpdateRate: userSettings.autoUpdateRate });
@@ -442,7 +454,7 @@ router.post('/business', async (req, res) => {
         });
         const io = req.app.get('io') || global.io;
         if (io) {
-            io.emit('business_settings_updated', {
+            io.to(companyId).emit('business_settings_updated', {
                 broadcastPrintingEnabled: info?.broadcastPrintingEnabled === true,
                 networkPrinterEnabled: info?.networkPrinterEnabled === true,
                 receiptWidth: info?.receiptWidth,
@@ -733,8 +745,7 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
 router.post('/region', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const userRole = String(req.user?.role || '').toLowerCase();
-        const userEmail = String(req.user?.email || '').toLowerCase();
-        const isOwner = ['superadmin', 'owner'].includes(userRole) || ['mrivero105@gmail.com', 'mrivero1051@gmail.com'].includes(userEmail);
+        const isOwner = ['superadmin', 'owner', 'dueño', 'dueno'].includes(userRole);
         if (!isOwner) {
             return res.status(403).json({ error: 'Solo el propietario (Superadmin) puede modificar la región y moneda operativa del sistema.' });
         }
@@ -959,9 +970,9 @@ router.post('/test-cluster-printers', async (req, res) => {
             ]
         };
 
-        // 1. Emitir a las laptops conectadas en LAN
+        // 1. Emitir a las laptops conectadas en LAN del mismo tenant
         if (io) {
-            io.emit('lan_print_sale', {
+            io.to(String(companyId)).emit('lan_print_sale', {
                 sale: testPayload,
                 originStationId: 'cluster-test-trigger',
                 companyId
@@ -993,7 +1004,8 @@ router.post('/test-cluster-printers', async (req, res) => {
 router.get('/system-printers', async (req, res) => {
     try {
         const LocalPrinterService = require('../services/LocalPrinterService');
-        const printers = await LocalPrinterService.getSystemPrinters();
+        const forceRefresh = req.query.refresh !== 'false';
+        const printers = await LocalPrinterService.getSystemPrinters(forceRefresh);
         res.json({
             success: true,
             count: printers.length,
@@ -1011,10 +1023,18 @@ router.get('/system-printers', async (req, res) => {
  */
 router.post('/print-raw', verifyToken, async (req, res) => {
     try {
-        const { printerName, content, printMode } = req.body;
+        const { printerName, content, printMode, autoPrint = false } = req.body;
         const LocalPrinterService = require('../services/LocalPrinterService');
         const resolvedPrinter = await LocalPrinterService.resolvePrinterName(printerName);
         if (!resolvedPrinter) {
+            if (autoPrint === true) {
+                return res.json({
+                    success: false,
+                    skipped: true,
+                    code: 'NO_PRINTER_DETECTED',
+                    message: 'No se detectó una impresora térmica conectada'
+                });
+            }
             return res.status(400).json({ success: false, error: 'No se detectó una impresora térmica conectada' });
         }
         await LocalPrinterService.printRaw(content, resolvedPrinter, { printMode });
@@ -1031,10 +1051,18 @@ router.post('/print-raw', verifyToken, async (req, res) => {
  */
 router.post('/open-drawer', verifyToken, async (req, res) => {
     try {
-        const { printerName, sequence, supervisorApprovalId } = req.body;
+        const { printerName, sequence, supervisorApprovalId, autoPrint = false } = req.body;
         const LocalPrinterService = require('../services/LocalPrinterService');
         const resolvedPrinter = await LocalPrinterService.resolvePrinterName(printerName);
         if (!resolvedPrinter) {
+            if (autoPrint === true) {
+                return res.json({
+                    success: false,
+                    skipped: true,
+                    code: 'NO_PRINTER_DETECTED',
+                    message: 'No se detectó una impresora conectada para abrir la gaveta'
+                });
+            }
             return res.status(400).json({ success: false, error: 'No se detectó una impresora conectada para abrir la gaveta' });
         }
 
@@ -1048,14 +1076,42 @@ router.post('/open-drawer', verifyToken, async (req, res) => {
                 return res.status(403).json({ error: 'forbidden', message: 'Se requiere autorización de supervisor para abrir la gaveta de dinero.' });
             }
             try {
+                const { Op } = require('sequelize');
                 const { SupervisorApproval } = require('../database/models');
+                const companyId = req.user?.companyId || 'default';
+                const now = new Date();
                 const approval = await SupervisorApproval.findOne({
-                    where: { id: String(supervisorApprovalId), companyId: req.user?.companyId || 'default' }
+                    where: {
+                        id: String(supervisorApprovalId),
+                        companyId,
+                        used: false,
+                        [Op.or]: [{ expiresAt: null }, { expiresAt: { [Op.gte]: now } }]
+                    }
                 });
-                if (!approval || approval.used || (approval.expiresAt && new Date(approval.expiresAt) < new Date())) {
-                    return res.status(403).json({ error: 'forbidden', message: 'Aprobación de supervisor inválida, expirada o ya utilizada.' });
+                const normalizedAct = String(approval?.actionType || '').trim().toUpperCase();
+                const allowedDrawerActions = new Set([
+                    'APERTURA MANUAL DE GAVETA',
+                    'APERTURA DE GAVETA (CONFIGURACIÓN)',
+                    'APERTURA DE GAVETA (CONFIGURACION)',
+                    'OPEN_DRAWER'
+                ]);
+                if (!approval || !allowedDrawerActions.has(normalizedAct)) {
+                    return res.status(403).json({ error: 'forbidden', message: 'Aprobación de supervisor inválida, de ámbito incorrecto, expirada o ya utilizada.' });
                 }
-                await approval.update({ used: true });
+                const [consumedCount] = await SupervisorApproval.update(
+                    { used: true, usedAt: now },
+                    {
+                        where: {
+                            id: approval.id,
+                            companyId,
+                            used: false,
+                            [Op.or]: [{ expiresAt: null }, { expiresAt: { [Op.gte]: now } }]
+                        }
+                    }
+                );
+                if (consumedCount !== 1) {
+                    return res.status(403).json({ error: 'forbidden', message: 'La aprobación de supervisor ya fue utilizada.' });
+                }
             } catch (authErr) {
                 return res.status(403).json({ error: 'forbidden', message: 'Fallo al verificar autorización de supervisor.' });
             }
@@ -1083,7 +1139,9 @@ router.post('/open-drawer', verifyToken, async (req, res) => {
                 description,
                 printerName
             );
-        } catch (_auditErr) {}
+        } catch (_auditErr) {
+            console.warn('[Settings] Aviso registrando auditoría de apertura de gaveta:', _auditErr.message);
+        }
 
         res.json({ success: true, message: 'Pulso de apertura de gaveta enviado' });
     } catch (error) {
@@ -1177,7 +1235,7 @@ const isLocalLoopbackRequest = (req) => {
     return rawAddr === '127.0.0.1' || rawAddr === '::1' || rawAddr === '::ffff:127.0.0.1';
 };
 
-router.get('/db-config', (req, res) => {
+router.get('/db-config', requirePermission('canManageSettings'), (req, res) => {
     if (!isLocalLoopbackRequest(req)) {
         return res.status(403).json({
             success: false,
@@ -1208,7 +1266,7 @@ router.get('/db-config', (req, res) => {
  * POST /settings/db-config
  * Guarda la configuración físicamente en disco y prueba la conectividad si es servidor.
  */
-router.post('/db-config', async (req, res) => {
+router.post('/db-config', requirePermission('canManageSettings'), async (req, res) => {
     if (!isLocalLoopbackRequest(req)) {
         return res.status(403).json({
             success: false,
@@ -1249,7 +1307,7 @@ router.post('/db-config', async (req, res) => {
         res.json({
             success: true,
             message: 'Configuración guardada exitosamente en el disco.',
-            config: saveResult.config,
+            config: saveResult.publicConfig || DbConfigManager.getPublicConfig(),
             test: testResult
         });
     } catch (err) {
@@ -1360,13 +1418,25 @@ const canManageDisplayAds = (req) => {
         || req.user?.permissions?.canManagePromotions === true;
 };
 
+router.get('/customer-display/pairing', (req, res) => {
+    try {
+        const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : String(req.user.companyId);
+        const registerId = String(req.query.registerId || '1');
+        const displayToken = computeDisplayPairingToken(companyId, registerId);
+        res.json({ success: true, companyId, registerId, displayToken });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Error generando token de emparejamiento' });
+    }
+});
+
 router.get('/customer-display', (req, res) => {
     try {
         const allSettings = getCachedSettings();
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const userSettings = getUserSettings(allSettings, companyId);
         const config = normalizeCustomerDisplayConfig(userSettings?.customerDisplay);
-        res.json({ success: true, config });
+        const displayToken = computeDisplayPairingToken(companyId, String(req.query.registerId || '1'));
+        res.json({ success: true, config, companyId, displayToken });
     } catch (err) {
         console.error('[Settings] Error GET /customer-display:', err);
         res.status(500).json({ success: false, error: 'Error al obtener configuración del visor' });
@@ -1399,7 +1469,8 @@ router.post('/customer-display', (req, res) => {
 
         const io = req.app.get('io') || global.io;
         if (io) {
-            io.emit('customer_display_ads_updated', normalized);
+            io.to(companyId).emit('customer_display_ads_updated', normalized);
+            io.to(`customer_displays:${companyId}`).emit('customer_display_ads_updated', normalized);
         }
 
         res.json({ success: true, config: normalized });

@@ -12,8 +12,6 @@ import toast from 'react-hot-toast';
 import BaseModal from './BaseModal';
 
 export default function ZReportModal({ isOpen, onClose, shift, businessSettings = {}, exchangeRate = 1, paymentMethods = [], currencyMode = 'BOTH' }) {
-    if (!isOpen || !shift) return null;
-
     const isSingle = isSingleCurrencyMode({ currencyMode, ...businessSettings });
 
     const formatDateLocal = (dateString) => {
@@ -56,6 +54,7 @@ export default function ZReportModal({ isOpen, onClose, shift, businessSettings 
     const [loadingItems, setLoadingItems] = useState(false);
 
     useEffect(() => {
+        if (!isOpen || !shift) return;
         if (Array.isArray(salesSummary?.itemsSummary) && salesSummary.itemsSummary.length > 0) {
             setItemsSummary(salesSummary.itemsSummary);
             return;
@@ -71,7 +70,9 @@ export default function ZReportModal({ isOpen, onClose, shift, businessSettings 
                 .catch(err => console.warn('Could not fetch items summary for shift:', err))
                 .finally(() => setLoadingItems(false));
         }
-    }, [shift?.id]);
+    }, [isOpen, shift?.id]);
+
+    if (!isOpen || !shift) return null;
 
     const formatCurrencyUsd = (val) => formatMoney(Number(val) || 0, null, { currencyMode: 'USD', rate: 1 });
     const formatCurrencyVes = (val) => formatMoney((Number(val) || 0) * effRate, null, { currencyMode: 'VES', rate: effRate });

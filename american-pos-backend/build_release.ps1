@@ -1,15 +1,20 @@
-# ==============================================================================
+﻿# ==============================================================================
 # Script de Compilacion y Distribucion de Produccion - Isaac POS
 # ==============================================================================
-# Este script automatiza la compilacion del frontend de React, la transferencia 
-# de recursos al servidor de backend, la recompilacion de dependencias nativas 
-# de C++ (sqlite3) para Electron y el empaquetado del instalador EXE final.
+# Automatiza la compilacion del frontend React, sincronizacion hacia
+# american-pos-backend/public, verificacion de dependencias PostgreSQL-first
+# y empaquetado Electron dual (Electron 31 Modern Win10/11 o Electron 22 Win7/8.1).
 # ==============================================================================
+param(
+    [ValidateSet('modern', 'legacy')]
+    [string]$Engine = 'modern'
+)
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "             ISAAC POS - PRODUCTION BUILD & RELEASE PIPELINE          " -ForegroundColor Cyan
+Write-Host "             Perfil seleccionado: $Engine                             " -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 
 # Definicion de Directorios
@@ -91,51 +96,44 @@ try {
     exit 1
 }
 
-Write-Host "`n[4/6] Recompilando dependencias nativas de C++ (SQLite3) para Electron..." -ForegroundColor Yellow
+Write-Host "`n[4/6] Verificando dependencias backend (PostgreSQL 16 + Electron dual)..." -ForegroundColor Yellow
 Stop-Process -Name "*electron*" -Force -ErrorAction SilentlyContinue | Out-Null
 Stop-Process -Name "*Isaac POS*" -Force -ErrorAction SilentlyContinue | Out-Null
 Start-Sleep -Seconds 1
 Push-Location $BackendDir
 try {
-    Write-Host "-> Asegurando dependencias de backend (npm install)..." -ForegroundColor Gray
-    npm.cmd install --no-audit --no-fund
-    if ($LASTEXITCODE -ne 0) { throw "npm install falló con código $LASTEXITCODE" }
-    
-    Write-Host "-> Ejecutando @electron/rebuild para SQLite3..." -ForegroundColor Gray
-    npx.cmd @electron/rebuild -f -w sqlite3
-    if ($LASTEXITCODE -ne 0) { throw "electron-rebuild falló con código $LASTEXITCODE" }
-    
-    Write-Host "OK: Recompilacion nativa de SQLite3 completada con exito." -ForegroundColor Green
+    if (!(Test-Path (Join-Path $BackendDir "node_modules"))) {
+        Write-Host "-> Instalando dependencias de backend (npm ci)..." -ForegroundColor Gray
+        npm.cmd ci --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { throw "npm ci falló con código $LASTEXITCODE" }
+    } else {
+        Write-Host "-> Dependencias node_modules de backend presentes." -ForegroundColor Gray
+    }
+    Write-Host "OK: Backend verificado sin módulos nativos legacy de SQLite." -ForegroundColor Green
 } catch {
-    Write-Host "Error al recompilar dependencias nativas: $_" -ForegroundColor Red
+    Write-Host "Error al verificar dependencias de backend: $_" -ForegroundColor Red
     Pop-Location
     exit 1
 }
 
-Write-Host "`n[5/6] Preparando Firma de Codigo (Self-Signed Certificate)..." -ForegroundColor Yellow
-$BuildDir = Join-Path $BackendDir "build"
-if (!(Test-Path $BuildDir)) {
-    New-Item -Path $BuildDir -ItemType Directory | Out-Null
-}
-$CertPath = Join-Path $BuildDir "cert.pfx"
-if (!(Test-Path $CertPath)) {
-    Write-Host "-> Generando certificado autofirmado local..." -ForegroundColor Gray
-    $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Isaac POS Local" -KeyAlgorithm RSA -KeyLength 2048 -NotAfter (Get-Date).AddYears(5) -CertStoreLocation Cert:\CurrentUser\My
-    $pwd = ConvertTo-SecureString -String "isaacpos" -Force -AsPlainText
-    Export-PfxCertificate -Cert $cert -FilePath $CertPath -Password $pwd | Out-Null
-    Write-Host "OK: Certificado 'cert.pfx' generado en la carpeta build." -ForegroundColor Green
+Write-Host "`n[5/6] Verificando configuración de firma de código (opcional vía env)..." -ForegroundColor Yellow
+if ($env:CSC_LINK -and $env:CSC_KEY_PASSWORD) {
+    Write-Host "OK: Certificado de firma configurado mediante variables de entorno." -ForegroundColor Green
 } else {
-    Write-Host "-> Certificado 'cert.pfx' ya existe. Omitiendo generacion." -ForegroundColor Gray
+    $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
+    Write-Host "-> Sin certificado comercial en entorno; se empaquetará sin firma autofirmada embebida." -ForegroundColor Gray
 }
 
-Write-Host "`n[6/6] Empaquetando la aplicacion de escritorio final con Electron-Builder..." -ForegroundColor Yellow
+Write-Host "`n[6/6] Empaquetando la aplicacion de escritorio final con Electron-Builder ($Engine)..." -ForegroundColor Yellow
 try {
-    Write-Host "-> Generando instalador NSIS (.exe)..." -ForegroundColor Gray
-    npm.cmd run dist
-    if ($LASTEXITCODE -ne 0) { throw "npm run dist falló con código $LASTEXITCODE" }
-    
-    $InstallerDir = Join-Path $BackendDir "dist_final_installer"
-    $ScriptSrc = Join-Path $BackendDir "build\instalar_postgresql.ps1"
+    $builderConfig = if ($Engine -eq 'modern') { 'electron-builder.modern.json' } else { 'electron-builder.legacy.json' }
+    $InstallerDir = if ($Engine -eq 'modern') { Join-Path $BackendDir "dist_modern" } else { Join-Path $BackendDir "dist_final_installer" }
+
+    Write-Host "-> Generando instalador NSIS (.exe) con $builderConfig..." -ForegroundColor Gray
+    & npx.cmd electron-builder --config $builderConfig --win nsis
+    if ($LASTEXITCODE -ne 0) { throw "electron-builder falló con código $LASTEXITCODE" }
+
+    $ScriptSrc = Join-Path $BackendDir "scripts\instalar_postgresql.ps1"
     if (Test-Path $ScriptSrc) {
         Copy-Item -Path $ScriptSrc -Destination (Join-Path $InstallerDir "instalar_postgresql.ps1") -Force
     }

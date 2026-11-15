@@ -10,6 +10,7 @@ import api from '../services/api';
 import { usePos } from '../hooks/PosContext';
 import { useAuth } from '../hooks/AuthContext';
 import AbonoModal from '../components/AbonoModal';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 const showToast = (msg, type = 'info') => {
     if (type === 'success') toast.success(msg);
@@ -38,7 +39,7 @@ const ACTION_TYPE_LABELS = {
 export default function AssetsAndCollections() {
     const { exchangeRate } = usePos();
     const { hasPermission } = useAuth();
-    const confirm = async ({ title, message }) => window.confirm(`${title}\n\n${message}`);
+    const { confirm, confirmDialog } = useConfirmDialog();
     const location = useLocation();
     const bcvRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
 
@@ -1573,6 +1574,7 @@ export default function AssetsAndCollections() {
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </div>
     );
 }

@@ -3,6 +3,9 @@ const router = express.Router();
 const fiscalService = require('../services/FiscalService');
 const { FiscalBookRecord, TaxRetention, CreditNote } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
+const { requirePermission } = require('../middleware/auth');
+
+router.use(requirePermission('canManageFiscal'));
 
 // GET /sales-book - Libro de Ventas mensual
 router.get('/sales-book', async (req, res) => {

@@ -16,7 +16,11 @@ class BackupEncryptionService {
         if (customPassword && typeof customPassword === 'string' && customPassword.trim().length >= 6) {
             return customPassword.trim();
         }
-        return process.env.BACKUP_ENCRYPTION_KEY || process.env.JWT_SECRET || 'isaac_default_backup_master_key_2026';
+        const secret = process.env.BACKUP_ENCRYPTION_KEY ? String(process.env.BACKUP_ENCRYPTION_KEY).trim() : '';
+        if (!secret) {
+            throw new Error('BACKUP_ENCRYPTION_KEY debe estar configurado en .env para cifrar o descifrar respaldos (no se permite reutilizar JWT_SECRET).');
+        }
+        return secret;
     }
 
     /**

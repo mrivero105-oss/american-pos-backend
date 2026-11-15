@@ -632,12 +632,6 @@ export default function CloseShiftModal(props) {
                 shift: enrichedClosedShift
             });
             localStorage.removeItem(`closure_draft_${currentShift.id}`);
-            
-            if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('shift_status_changed', { 
-                    detail: { isOpen: false, shift: null } 
-                }));
-            }
 
             // Imprimir automáticamente el comprobante de cierre (Corte Z) en segundo plano y abrir gaveta
             try {
@@ -654,7 +648,8 @@ export default function CloseShiftModal(props) {
                     exchangeRate: rate,
                     currencyMode: singleCurrency ? 'SINGLE' : 'BOTH',
                     kickDrawer: businessSettings?.openDrawerOnPrint !== false,
-                    itemsSummary: shiftItems
+                    itemsSummary: shiftItems,
+                    autoPrint: true
                 });
 
                 if (businessSettings?.zReportItemsPrintMode === 'SEPARATE' && shiftItems.length > 0) {
@@ -662,7 +657,8 @@ export default function CloseShiftModal(props) {
                         shift: enrichedClosedShift,
                         itemsSummary: shiftItems,
                         settings: businessSettings,
-                        businessSettings
+                        businessSettings,
+                        autoPrint: true
                     });
                 }
             } catch (printErr) {
@@ -710,18 +706,31 @@ export default function CloseShiftModal(props) {
     };
 
     const handleFinish = () => {
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('shift_status_changed', {
+                detail: { isOpen: false, shift: null }
+            }));
+        }
         onClose();
         if (onSuccess) {
             onSuccess(closureResult?.shift || closureResult || currentShift);
         }
     };
 
-    if (!isOpen || !currentShift) return null;
+    const handleModalClose = () => {
+        if (closureResult) {
+            handleFinish();
+            return;
+        }
+        onClose();
+    };
+
+    if (!isOpen || (!currentShift && !closureResult)) return null;
 
     return (
         <BaseModal
             isOpen={isOpen}
-            onClose={onClose}
+            onClose={handleModalClose}
             title="Cierre Asistido & Arqueo de Caja"
             maxWidth="max-w-4xl"
             className="h-[92dvh] max-h-[92dvh] flex flex-col overflow-hidden"

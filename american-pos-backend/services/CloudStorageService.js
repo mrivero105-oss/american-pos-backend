@@ -4,7 +4,7 @@ if (dns.setDefaultResultOrder) {
     try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 }
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://puvqiipussyktfmgafgv.supabase.co';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SECRET_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || '';
 const PRODUCT_BUCKET = 'product-images';
 

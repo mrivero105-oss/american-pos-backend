@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { Branch, User, BranchStock, Product, Sale, CashShift } = require('../database/models');
-const { isAdmin } = require('../middleware/auth');
+const { isAdmin, invalidateUserAuthCache } = require('../middleware/auth');
 const { generateRobustId } = require('../utils/helpers');
 const { Op } = require('sequelize');
 
@@ -134,6 +134,7 @@ router.post('/switch', isAdmin, async (req, res) => {
         }
 
         await User.update({ activeBranchId: branchId || null }, { where: { id: req.user.id } });
+        invalidateUserAuthCache(req.user.id);
         res.json({ success: true, activeBranchId: branchId || null, branchName });
     } catch (error) {
         console.error('Switch branch error:', error);

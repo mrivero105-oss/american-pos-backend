@@ -93,12 +93,18 @@ const LockScreen = ({ user, onUnlock, onLogout }) => {
     setError('');
     try {
       setLoading(true);
+      const enrolledCred = biometricService.getEnrolledCredential();
+      if (!enrolledCred?.biometricToken || (user?.id && enrolledCred.userId && String(enrolledCred.userId) !== String(user.id))) {
+        setError('La huella almacenada no coincide con el usuario activo. Ingresa tu PIN o contraseña.');
+        return;
+      }
+
       const bioResult = await biometricService.authenticate({
         title: 'Desbloquear Isaac POS',
         subtitle: `Verificación para ${user?.name || 'Usuario'}`
       });
       if (bioResult?.success) {
-        const result = await onUnlock('', true);
+        const result = await onUnlock(enrolledCred.biometricToken, true);
         if (!result?.success) {
           setError(result?.message || 'Error al restaurar sesión');
         }

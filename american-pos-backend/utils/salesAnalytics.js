@@ -41,9 +41,10 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
         }
 
         let saleTotal = precision.round(Number(sale.total) || 0);
+        const saleDiscount = precision.add([Number(sale.discount) || 0, Number(sale.promoDiscount) || 0]);
+        const saleRate = Number(sale.exchangeRate) > 0 ? Number(sale.exchangeRate) : 1.0;
 
-        // Fallback: If total is zero but there are items, calculate it from items
-        // This is crucial for Postgres or migrations where the header total might be missing
+        // Fallback: If total is zero but there are items, calculate it net of discounts
         let itemsSum = 0;
         let itemsToProcess = [];
         if (sale.SaleItems && sale.SaleItems.length > 0) {
@@ -63,9 +64,9 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
             });
         }
 
-        // If saleTotal is zero but we have an itemsSum, use it
+        // If saleTotal is zero but we have an itemsSum, use itemsSum minus discounts
         if (saleTotal === 0 && itemsSum > 0) {
-            saleTotal = itemsSum;
+            saleTotal = Math.max(0, precision.round(precision.subtract(itemsSum, saleDiscount), 2));
         }
 
         totalSales = precision.round(precision.add([totalSales, saleTotal]), 2);
@@ -87,11 +88,35 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
             customerMap[cId].saleCount += 1;
         }
 
-        // Métodos de pago
-        const validMethods = ['cash', 'cash_bs', 'card', 'zelle', 'pago_movil', 'transfer'];
-        const method = validMethods.includes(sale.paymentMethod) ? sale.paymentMethod : 'Otros';
-        if (!paymentMap[method]) paymentMap[method] = 0;
-        paymentMap[method] = precision.round(precision.add([paymentMap[method], saleTotal]), 2);
+        // Métodos de pago: soportar pagos mixtos reales (paymentMethods) y todos los métodos válidos
+        let parsedPms = [];
+        if (Array.isArray(sale.paymentMethods)) {
+            parsedPms = sale.paymentMethods;
+        } else if (typeof sale.paymentMethods === 'string') {
+            try {
+                const p = JSON.parse(sale.paymentMethods);
+                if (Array.isArray(p)) parsedPms = p;
+            } catch (_) {}
+        }
+
+        if (parsedPms.length > 0) {
+            parsedPms.forEach(pm => {
+                if (!pm) return;
+                const mKey = String(pm.method || pm.id || sale.paymentMethod || 'Efectivo').trim() || 'Efectivo';
+                const pmCur = String(pm.currency || '').toUpperCase().trim();
+                const isVesPm = pmCur === 'VES' || pmCur === 'BS' || ['ves', '_bs', 'pago_movil', 'pagomovil', 'biopago', 'punto', 'debit'].some(t => mKey.toLowerCase().includes(t));
+                const rawAmt = Number(pm.amount) || 0;
+                const eqUsd = Number(pm.convertedAmountUsd) > 0
+                    ? Number(pm.convertedAmountUsd)
+                    : (isVesPm && saleRate > 0 ? precision.divide(rawAmt, saleRate) : rawAmt);
+                if (!paymentMap[mKey]) paymentMap[mKey] = 0;
+                paymentMap[mKey] = precision.round(precision.add([paymentMap[mKey], eqUsd]), 2);
+            });
+        } else {
+            const method = String(sale.paymentMethod || '').trim() || 'Efectivo';
+            if (!paymentMap[method]) paymentMap[method] = 0;
+            paymentMap[method] = precision.round(precision.add([paymentMap[method], saleTotal]), 2);
+        }
 
         // Horarios
         const timestamp = sale.createdAt || sale.date;
@@ -103,8 +128,11 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
             }
         }
 
-        // Items (Costo, Ganancia, Productos, Categorías)
+        // Items (Costo, Ganancia neta descontando descuentos de venta, Productos, Categorías)
         let saleCost = 0;
+        const discountRatio = (itemsSum > 0 && saleDiscount > 0)
+            ? Math.max(0, 1 - precision.divide(Math.min(saleDiscount, itemsSum), itemsSum))
+            : 1;
 
         if (itemsToProcess.length > 0) {
             itemsToProcess.forEach(item => {
@@ -114,7 +142,8 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
                 const cost = Number(item.cost) || 0;
                 const qty = Number(item.quantity) || 0;
 
-                const itemTotal = precision.round(precision.multiply(price, qty), 2);
+                const grossItemTotal = precision.multiply(price, qty);
+                const itemTotal = precision.round(precision.multiply(grossItemTotal, discountRatio), 2);
                 const itemCost = precision.round(precision.multiply(cost, qty), 2);
                 const itemProfit = precision.round(precision.subtract(itemTotal, itemCost), 2);
 
@@ -131,12 +160,14 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
                         name,
                         category,
                         totalProfit: 0,
+                        totalCost: 0,
                         quantity: 0,
                         totalRevenue: 0,
                         unit: item.stockUnit || (item.isSoldByWeight ? 'kg' : 'und')
                     };
                 }
                 productMap[name].totalProfit = precision.round(precision.add([productMap[name].totalProfit, itemProfit]), 2);
+                productMap[name].totalCost = precision.round(precision.add([productMap[name].totalCost, itemCost]), 2);
                 productMap[name].quantity = precision.round(precision.add([productMap[name].quantity, qty]), 4);
                 productMap[name].totalRevenue = precision.round(precision.add([productMap[name].totalRevenue, itemTotal]), 2);
 
@@ -173,13 +204,13 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
         }
     });
 
-    // Formatear salidas de objetos a arreglos ordenados
+    // Formatear salidas de objetos a arreglos ordenados (Estandarizado Markup sobre Costo)
 
     // Top Productos por Ganancia (Top 10)
     const topProductsByProfit = Object.values(productMap)
         .map(p => ({
             ...p,
-            margin: p.totalRevenue > 0 ? precision.round(precision.multiply(precision.divide(p.totalProfit, p.totalRevenue), 100), 2) : 0
+            margin: p.totalCost > 0 ? precision.round(precision.multiply(precision.divide(p.totalProfit, p.totalCost), 100), 2) : 0
         }))
         .sort((a, b) => b.totalProfit - a.totalProfit)
         .slice(0, 10);
@@ -236,7 +267,7 @@ function processSalesAnalysis(sales = [], expenses = [], startDate = null) {
             totalExpenses,
             grossProfit,
             netProfit,
-            margin: totalSales > 0 ? precision.round(precision.multiply(precision.divide(grossProfit, totalSales), 100), 2) : 0,
+            margin: totalCost > 0 ? precision.round(precision.multiply(precision.divide(grossProfit, totalCost), 100), 2) : 0,
             avgTicket: sales.length > 0 ? precision.round(precision.divide(totalSales, sales.length), 2) : 0,
             hasEstimations: sales.some(s => s.SaleItems?.some(i => !i.cost || Number(i.cost) === 0))
         },

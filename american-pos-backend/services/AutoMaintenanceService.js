@@ -184,11 +184,15 @@ class AutoMaintenanceService {
         try {
             const { initializeDatabaseSecurity } = require('../database/tenantContext');
             await initializeDatabaseSecurity(sequelize);
-        } catch (_secErr) {}
+        } catch (_secErr) {
+            console.warn('[AutoMaintenance] Aviso verificando seguridad/RLS de BD:', _secErr.message);
+        }
 
         try {
             await this.ensurePartitionTables();
-        } catch (_partErr) {}
+        } catch (_partErr) {
+            console.warn('[AutoMaintenance] Aviso verificando tablas particionadas:', _partErr.message);
+        }
 
         return { indexesChecked: indexStatements.length, createdCount };
     }
@@ -317,7 +321,7 @@ class AutoMaintenanceService {
             const t = await sequelize.transaction();
             try {
                 // 1. Enrutar ventas antiguas hacia SalesHistory particionada
-                const [salesCopy] = await sequelize.query(`
+                const [salesCopy, salesMeta] = await sequelize.query(`
                     INSERT INTO "SalesHistory" (
                         "id", "createdAt", "updatedAt", "date", "total", "companyId", 
                         "status", "subtotal", "tax", "discount", "paymentMethod", "paymentMethods"
@@ -331,10 +335,10 @@ class AutoMaintenanceService {
                     ON CONFLICT ("id", "createdAt") DO NOTHING;
                 `, { replacements: { cutoffDate }, transaction: t });
 
-                archivedSales = salesCopy?.rowCount || 0;
+                archivedSales = Number(salesMeta?.rowCount ?? salesCopy?.rowCount ?? 0);
 
                 // 2. Enrutar ítems antiguos hacia SaleItemsHistory particionada
-                const [itemsCopy] = await sequelize.query(`
+                const [itemsCopy, itemsMeta] = await sequelize.query(`
                     INSERT INTO "SaleItemsHistory" (
                         "id", "saleId", "productId", "name", "quantity", "price", 
                         "subtotal", "cost", "companyId", "createdAt", "updatedAt"
@@ -350,7 +354,7 @@ class AutoMaintenanceService {
                     ON CONFLICT ("id", "createdAt") DO NOTHING;
                 `, { replacements: { cutoffDate }, transaction: t });
 
-                archivedItems = itemsCopy?.rowCount || 0;
+                archivedItems = Number(itemsMeta?.rowCount ?? itemsCopy?.rowCount ?? 0);
 
                 // 3. Purgar ventas archivadas de las tablas activas operativas
                 if (archivedSales > 0) {
@@ -386,7 +390,7 @@ class AutoMaintenanceService {
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
 
-            const [result] = await sequelize.query(`
+            const [result, meta] = await sequelize.query(`
                 DELETE FROM "AuditLogs"
                 WHERE "createdAt" < :cutoffDate
                   AND "action" NOT IN ('SYSTEM_CRITICAL_EVENT', 'LICENSE_ACTIVATION', 'DATA_MIGRATION_COMPLETED');
@@ -394,7 +398,7 @@ class AutoMaintenanceService {
                 replacements: { cutoffDate }
             });
 
-            const purgedCount = result?.rowCount || 0;
+            const purgedCount = Number(meta?.rowCount ?? result?.rowCount ?? 0);
             if (purgedCount > 0) {
                 console.log(`[AutoMaintenance] 🧹 Purga de AuditLogs (> ${daysToKeep} días): ${purgedCount} registros eliminados.`);
             }

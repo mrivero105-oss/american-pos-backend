@@ -1,18 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  ShoppingCart, Search, QrCode, Settings, Cloud, 
-  Plus, Minus, Trash2, X, CheckCircle, Smartphone,
+  Settings, Plus, X, CheckCircle, Smartphone,
   Printer, RefreshCw, Tag, CreditCard, DollarSign, Wallet,
-  Lock, User, LogOut, Share2, Check, AlertCircle, Building,
-  ChevronRight, Phone, Receipt, FileText, ArrowRight, ArrowLeft,
-  Sun, Moon, Zap, Menu, Box, Users, BarChart2, Truck,
-  Landmark, Layers, ShieldCheck, Activity, Wifi, WifiOff,
-  Coins, TrendingUp, Scale, Shield, ShieldAlert, Store,
+  FileText, ArrowLeft, Zap, Box, Users, Truck,
+  ShieldCheck, Coins, TrendingUp, Scale, Shield, Store,
   FileSpreadsheet, Building2, PieChart, UserCog, Banknote,
-  Edit3, PauseCircle, PlayCircle, PlusCircle, Percent, Clock, AlertTriangle,
-  Maximize2, Camera, Upload, Copy, Sparkles, Globe, Scan, ScanBarcode, Volume2, VolumeX,
-  UserPlus, UserCheck, ChevronDown, Save, LayoutGrid, List, Fingerprint, Utensils
+  AlertTriangle, Copy
 } from 'lucide-react';
 import { playScanSound, playSuccessSound, playErrorSound, playDeleteSound, isSoundMuted, toggleSoundMute } from '../utils/sounds';
 import api, { updateApiBaseUrl, checkServerHealth, formatServerUrl, autoDiscoverServer } from '../services/api';
@@ -23,13 +17,11 @@ import syncManager from '../services/syncManager';
 import { useAuth } from '../hooks/AuthContext';
 import { useTheme } from '../hooks/ThemeContext';
 import { useSocket } from '../hooks/SocketContext';
-import IsaacWebLogo from '../components/IsaacWebLogo';
 import { isDollarOnlyCountry } from '../utils/format';
 import { evaluateCartPromotions } from '../utils/promotionsEngine';
 import { getImageUrl } from '../utils/imageUtils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { triggerHaptic } from '../utils/haptics';
-import { VoiceMicButton } from '../utils/voiceSearch';
 import BiometricEnrollModal from '../components/BiometricEnrollModal';
 import cloudRateSyncService from '../services/cloudRateSyncService';
 
@@ -42,7 +34,10 @@ const MobileCustomersView = lazy(() => import('../components/mobile/MobileCustom
 const MobileCashView = lazy(() => import('../components/mobile/MobileCashView'));
 const MobileExpensesView = lazy(() => import('../components/mobile/MobileExpensesView'));
 const MobileSyncCenterView = lazy(() => import('../components/mobile/MobileSyncCenterView'));
-import MobileProductCard from '../components/mobile/MobileProductCard';
+import MobilePOSHeader from '../components/mobile/MobilePOSHeader';
+import MobilePOSLoginScreen from '../components/mobile/MobilePOSLoginScreen';
+import MobilePOSCatalogSection from '../components/mobile/MobilePOSCatalogSection';
+import MobilePOSBottomDock from '../components/mobile/MobilePOSBottomDock';
 import SupervisorAuthModal from '../components/mobile/SupervisorAuthModal';
 import MobileTabletCartPanel from '../components/mobile/MobileTabletCartPanel';
 import MobileCartSheet from '../components/mobile/MobileCartSheet';
@@ -67,6 +62,7 @@ import { useMobileCheckout } from '../hooks/useMobileCheckout';
 import biometricService from '../services/biometricService';
 import mobilePrinterService from '../services/mobilePrinterService';
 import { useMobilePosStore } from '../store/useMobilePosStore';
+import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
 
 // Carga bajo demanda (Lazy) de todos los módulos del sistema principal para la versión móvil
 const AccountsReceivablePage = lazy(() => import('./AccountsReceivable'));
@@ -75,7 +71,6 @@ const AssetsAndCollectionsPage = lazy(() => import('./AssetsAndCollections'));
 const PromotionsManagerPage = lazy(() => import('./PromotionsManager'));
 const CatalogImporterPage = lazy(() => import('./CatalogImporter'));
 const SuppliersPage = lazy(() => import('./Suppliers'));
-const BankingPage = lazy(() => import('./Banking'));
 const FiscalManagerPage = lazy(() => import('./FiscalManager'));
 const ExecutiveBIPage = lazy(() => import('./ExecutiveBI'));
 const ReportsPage = lazy(() => import('./Reports'));
@@ -213,7 +208,6 @@ export default function MobilePOSSimulator() {
       suppliers: 'canManageSuppliers',
       payables: 'canManagePayables',
       expenses: 'canManageExpenses',
-      banking: 'canManageBanking',
       fiscal: 'canManageFiscal',
       bi: 'canAccessBI',
       reports: 'canViewReports',
@@ -299,7 +293,6 @@ export default function MobilePOSSimulator() {
         title: 'Tesorería',
         items: [
           { id: 'expenses', moduleId: 'expenses', label: 'Gastos', icon: Banknote, desc: 'Caja chica y egresos', permission: 'canManageExpenses' },
-          { id: 'banking', moduleId: 'banking', label: 'Bancos', icon: Landmark, desc: 'Cuentas y saldos', permission: 'canManageBanking' },
           { id: 'fiscal', moduleId: 'fiscal', label: 'Fiscal SENIAT', icon: FileText, desc: 'Libros e impuestos', permission: 'canManageFiscal' }
         ]
       },
@@ -1035,7 +1028,7 @@ export default function MobilePOSSimulator() {
       console.log('[ESPEJO] Producto modificado en PC en tiempo real:', updatedProduct.name || updatedProduct.nombre);
       setProducts(prev => prev.map(p => String(p.id) === String(updatedProduct.id) ? { ...p, ...updatedProduct } : p));
       if (localDb && localDb.products) {
-        localDb.products.put(updatedProduct).catch(() => {});
+        localDb.products.put(updatedProduct).catch((err) => console.warn('[MobilePOS] Error persistiendo producto remoto en IDB:', err?.message || err));
       }
     };
 
@@ -1227,9 +1220,25 @@ export default function MobilePOSSimulator() {
     let localItems = [];
     try {
       if (localDb && localDb.sales) {
-        localItems = await localDb.sales.reverse().limit(100).toArray();
+        const orderedLocal = await localDb.sales.orderBy('created_at').reverse().limit(100).toArray();
+        localItems = Array.isArray(orderedLocal) ? orderedLocal : [];
       }
-    } catch (_e) {}
+    } catch (localErr) {
+      console.warn('[MobilePOS] Error ordenando ventas locales, usando respaldo:', localErr?.message || localErr);
+      try {
+        const rawLocal = await localDb.sales.toArray();
+        const sortedFallback = Array.isArray(rawLocal)
+          ? [...rawLocal].sort((a, b) => {
+            const ta = new Date(a?.created_at || a?.createdAt || a?.date || 0).getTime() || 0;
+            const tb = new Date(b?.created_at || b?.createdAt || b?.date || 0).getTime() || 0;
+            return tb - ta;
+          })
+          : [];
+        localItems = sortedFallback.slice(0, 100);
+      } catch (fallbackErr) {
+        console.warn('[MobilePOS] Error leyendo ventas locales:', fallbackErr?.message || fallbackErr);
+      }
+    }
 
     let remoteItems = [];
     try {
@@ -1250,9 +1259,13 @@ export default function MobilePOSSimulator() {
       }
     });
 
-    const merged = Array.from(map.values()).sort((a, b) => {
-      return new Date(b.date || b.created_at || b.timestamp || 0) - new Date(a.date || a.created_at || a.timestamp || 0);
-    });
+    const getSortableTime = (saleObj) => {
+      const candidate = saleObj?.created_at || saleObj?.createdAt || saleObj?.timestamp || saleObj?.date;
+      const ms = candidate ? new Date(candidate).getTime() : 0;
+      return Number.isFinite(ms) ? ms : 0;
+    };
+
+    const merged = Array.from(map.values()).sort((a, b) => getSortableTime(b) - getSortableTime(a));
     setSalesHistory(merged);
 
     await countPendingOfflineSales();
@@ -1345,13 +1358,10 @@ export default function MobilePOSSimulator() {
       }
 
       // Si la PC local no respondió (Ej: fuera del local con datos móviles), consultar Supabase Cloud 24/7
-      if (!rateLoaded) {
+      if (!rateLoaded && hasSupabaseConfig()) {
         try {
-          const cloudRes = await fetch('https://puvqiipussyktfmgafgv.supabase.co/rest/v1/cloud_configuracion?id=eq.general&select=*', {
-            headers: {
-              'apikey': 'sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6',
-              'Authorization': 'Bearer sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6'
-            }
+          const cloudRes = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general&select=*'), {
+            headers: getSupabaseHeaders()
           });
           if (cloudRes.ok) {
             const rows = await cloudRes.json();
@@ -1395,7 +1405,7 @@ export default function MobilePOSSimulator() {
       const active = raw.filter(p => p.isActive);
       setPromotions(active);
       if (localDb && localDb.promotions) {
-        localDb.promotions.clear().then(() => localDb.promotions.bulkPut(active)).catch(() => {});
+        localDb.promotions.clear().then(() => localDb.promotions.bulkPut(active)).catch((err) => console.warn('[MobilePOS] Error actualizando promociones en IDB:', err?.message || err));
       }
     } catch (_e) {
       // Preservar promociones locales en modo offline
@@ -1510,7 +1520,7 @@ export default function MobilePOSSimulator() {
           setProducts(adjustedRaw);
           setTimeout(async () => {
             try {
-              await primaryDb.replaceAllAtomic('products', adjustedRaw, 'id').catch(() => {});
+              await primaryDb.replaceAllAtomic('products', adjustedRaw, 'id').catch((err) => console.warn('[MobilePOS] Error sincronizando catalogo en primaryDb:', err?.message || err));
               if (localDb && localDb.products) {
                 await localDb.transaction('rw', localDb.products, async () => {
                   const incomingIds = new Set(adjustedRaw.map(p => p.id).filter(Boolean));
@@ -1562,7 +1572,7 @@ export default function MobilePOSSimulator() {
       if (raw.length > 0) {
         setCustomers(raw);
         if (localDb && localDb.customers) {
-          localDb.customers.bulkPut(raw).catch(() => {});
+          localDb.customers.bulkPut(raw).catch((err) => console.warn('[MobilePOS] Error guardando clientes en IDB:', err?.message || err));
         }
       }
     } catch (_err) {
@@ -1670,7 +1680,7 @@ export default function MobilePOSSimulator() {
         };
 
         if (localDb && localDb.customers) {
-          await localDb.customers.put(mergedCust).catch(() => {});
+          await localDb.customers.put(mergedCust).catch((err) => console.warn('[MobilePOS] Error actualizando cliente en IDB:', err?.message || err));
         }
         if (!updatedCust) {
           try {
@@ -1720,7 +1730,7 @@ export default function MobilePOSSimulator() {
           };
 
           if (localDb && localDb.customers) {
-            await localDb.customers.put(createdCust).catch(() => {});
+            await localDb.customers.put(createdCust).catch((err) => console.warn('[MobilePOS] Error guardando nuevo cliente offline en IDB:', err?.message || err));
           }
           try {
             await primaryDb.put('syncQueue', {
@@ -2246,7 +2256,7 @@ export default function MobilePOSSimulator() {
       }
 
       if (localDb && localDb.products) {
-        await localDb.products.put(savedProd).catch(() => {});
+        await localDb.products.put(savedProd).catch((err) => console.warn('[MobilePOS] Error guardando producto en IDB:', err?.message || err));
       }
 
       try {
@@ -2269,7 +2279,7 @@ export default function MobilePOSSimulator() {
       }
 
       if (localDb && localDb.products) {
-        await localDb.products.put(fallbackProd).catch(() => {});
+        await localDb.products.put(fallbackProd).catch((err) => console.warn('[MobilePOS] Error guardando producto fallback en IDB:', err?.message || err));
       }
 
       try {
@@ -2856,6 +2866,7 @@ export default function MobilePOSSimulator() {
     let barcodeBuffer = '';
     let lastKeyTime = 0;
     let scanTimeout = null;
+    let hudTimeout = null;
 
     const handleKeyDown = (e) => {
       const activeTag = document.activeElement?.tagName?.toLowerCase();
@@ -2883,7 +2894,8 @@ export default function MobilePOSSimulator() {
             handleBarcodeScannedRef.current(scannedCode);
             // Mostrar HUD flotante de escaneo físico de pistola
             setLastHardwareScan({ code: scannedCode, time: Date.now() });
-            setTimeout(() => setLastHardwareScan(null), 2500);
+            if (hudTimeout) clearTimeout(hudTimeout);
+            hudTimeout = setTimeout(() => setLastHardwareScan(null), 2500);
           }
         } else {
           barcodeBuffer = '';
@@ -2917,6 +2929,8 @@ export default function MobilePOSSimulator() {
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      if (scanTimeout) clearTimeout(scanTimeout);
+      if (hudTimeout) clearTimeout(hudTimeout);
     };
   }, []);
 
@@ -3477,11 +3491,15 @@ export default function MobilePOSSimulator() {
       const createdSale = res.data?.sale || res.data || {};
       const invoiceNum = createdSale.invoiceNumber || (documentType === 'nota_entrega' ? `NE-${Math.floor(100000 + Math.random() * 900000)}` : `FAC-${Math.floor(100000 + Math.random() * 900000)}`);
 
+      const now = new Date();
+      const nowIso = now.toISOString();
       const completedSaleRecord = {
         ...salePayload,
         id: String(createdSale.id || Date.now().toString()),
         invoiceNumber: invoiceNum,
-        date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        date: nowIso,
+        displayTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        created_at: createdSale.createdAt || nowIso,
         items: [...enrichedCart],
         subtotalUSD,
         taxUSD,
@@ -3582,6 +3600,8 @@ export default function MobilePOSSimulator() {
         cryptoSig = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
       } catch (_) {}
 
+      const nowOffline = new Date();
+      const nowOfflineIso = nowOffline.toISOString();
       const offlineSaleRecord = {
         ...salePayload,
         id: String(offlineId),
@@ -3589,7 +3609,8 @@ export default function MobilePOSSimulator() {
         terminalId: getTerminalId(),
         invoiceNumber: offlineInvoiceNum,
         cryptographicSignature: cryptoSig,
-        date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        date: nowOfflineIso,
+        displayTime: nowOffline.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         items: [...enrichedCart],
         subtotalUSD,
         taxUSD,
@@ -3601,7 +3622,7 @@ export default function MobilePOSSimulator() {
         changeBS: finalChangeBS,
         status: 'pending_sync',
         isOffline: true,
-        created_at: new Date().toISOString()
+        created_at: nowOfflineIso
       };
 
       // Guardar en almacenamiento local (IndexedDB)
@@ -3688,6 +3709,13 @@ export default function MobilePOSSimulator() {
     const rif = businessInfo?.rif || localStorage.getItem('company_rif') || '';
     const address = businessInfo?.address || localStorage.getItem('company_address') || '';
 
+    const rawSaleDate = sale.created_at || sale.createdAt || sale.date || sale.timestamp;
+    const parsedSaleDate = rawSaleDate ? new Date(rawSaleDate) : null;
+    const formattedSaleDate = sale.displayTime
+      || (parsedSaleDate && !Number.isNaN(parsedSaleDate.getTime())
+        ? parsedSaleDate.toLocaleString('es-VE')
+        : (rawSaleDate || new Date().toLocaleString('es-VE')));
+
     const lines = [
       `🧾 *COMPROBANTE DIGITAL DE COMPRA*`,
       `🏢 *${company.toUpperCase()}*`,
@@ -3695,7 +3723,7 @@ export default function MobilePOSSimulator() {
       ...(address ? [`📍 ${address}`] : []),
       `--------------------------------`,
       `N° Documento: *${sale.invoiceNumber || sale.code || 'TICKET'}*`,
-      `Fecha: ${sale.date || new Date().toLocaleDateString()}`,
+      `Fecha: ${formattedSaleDate}`,
       `Cliente: *${sale.customerName || 'Consumidor Final'}* ${sale.customerDoc ? `(${sale.customerDoc})` : ''}`,
       `Atendido por: ${user?.name || user?.username || 'Cajero'}`,
       `--------------------------------`,
@@ -3907,408 +3935,56 @@ export default function MobilePOSSimulator() {
       
       {/* 1. CABECERA TÁCTICA UNIFICADA "ISAAC TACTICAL OS" (Solo visible cuando hay sesión activa de usuario) */}
       {user && (
-        <header className={`app-main-header ${T.headerBg} flex flex-col shrink-0 z-30 transition-colors w-full border-b ${T.border}`}>
-        
-        {/* Fila 1: Menú + Logo Oficial de Marca (Adaptado para Android) + Acciones Rápidas (Mesa / Precios) */}
-        <div 
-          className={`w-full pt-2.5 pb-2 px-3 flex items-center justify-between gap-2 ${
-            isLight ? 'bg-white' : 'bg-[#0b0e14]'
-          }`}
-          style={{ paddingTop: 'max(0.65rem, calc(env(safe-area-inset-top, 0px) + 0.35rem))' }}
-        >
-          {/* Izquierda: Botón de Menú + Logo Oficial Isaac POS */}
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic(10);
-                setIsSideNavOpen(true);
-              }}
-              className={`w-9 h-9 rounded-xl border transition-transform cursor-pointer flex items-center justify-center shrink-0 active:scale-95 ${
-                isLight
-                  ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                  : 'bg-[#131924] hover:bg-[#1a2230] text-slate-100 border-[#232d3f]'
-              }`}
-              title="Abrir centro de módulos"
-            >
-              <Menu size={17} />
-            </button>
-
-            <IsaacWebLogo 
-              isLight={isLight} 
-              height="h-[38px] sm:h-[44px]" 
-              imgClassName="max-w-[190px] sm:max-w-[225px] contrast-[1.05]" 
-            />
-          </div>
-
-          {/* Derecha: Selector de Mesa + Consultor de Precios */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {activeModule === 'pos' && (
-              <>
-                {isRestaurantBusiness && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic(12);
-                      setIsTableSelectModalOpen(true);
-                    }}
-                    className={`h-8 px-2.5 rounded-xl border flex items-center justify-center gap-1 shrink-0 active:scale-95 transition-transform cursor-pointer ${
-                      selectedTable
-                        ? 'bg-amber-500 text-slate-950 border-amber-500 font-black shadow-2xs'
-                        : (isLight
-                            ? 'bg-slate-100 text-slate-700 border-slate-200'
-                            : 'bg-[#131924] text-slate-300 border-[#232d3f]')
-                    }`}
-                    title="Asignar mesa o notas de comanda"
-                  >
-                    <Utensils size={13} className="shrink-0" />
-                    <span className="text-[10.5px] font-extrabold max-w-[58px] truncate">
-                      {selectedTable ? selectedTable.replace('Mesa ', 'M.') : 'Mesa'}
-                    </span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    triggerHaptic(15);
-                    setIsPriceCheckerModalOpen(true);
-                  }}
-                  className={`w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition-transform cursor-pointer ${
-                    posMode === 'PRICE_CHECKER'
-                      ? 'bg-amber-500 text-slate-950 border-amber-500'
-                      : (isLight
-                          ? 'bg-slate-100 text-slate-700 border-slate-200'
-                          : 'bg-[#131924] text-slate-300 border-[#232d3f]')
-                  }`}
-                  title="Verificador de Precios y Stock"
-                >
-                  <Tag size={14} />
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Fila 2 (Solo en POS): Buscador Táctico Curvo + Acciones Rápidas de Catálogo */}
-        {activeModule === 'pos' && user && (
-          <div className={`px-3 pb-2 flex items-center gap-1.5 w-full ${
-            isLight ? 'bg-white' : 'bg-[#0b0e14]'
-          }`}>
-            <div className="search-bar-container relative flex-1 min-w-0">
-              <Search size={14} className={`absolute left-3 top-1/2 -translate-y-1/2 ${T.textMuted} pointer-events-none`} />
-              <input 
-                ref={searchInputRef}
-                type="text"
-                autoComplete="on"
-                autoCorrect="on"
-                spellCheck={true}
-                value={searchQuery}
-                onChange={(e) => {
-                  if (activeModule !== 'pos') setActiveModule('pos');
-                  setSearchQuery(e.target.value);
-                }}
-                placeholder="Buscar producto, principio activo o código..."
-                className={`w-full h-9 rounded-xl pl-8 pr-14 text-xs font-semibold transition-colors outline-none select-text border ${
-                  isLight
-                    ? 'bg-[#f4f6f9] border-[#dce1e8] text-[#0a0d12] placeholder-[#64748b] focus:bg-white focus:border-emerald-600'
-                    : 'bg-[#131924] border-[#232d3f] text-[#f8fafc] placeholder-[#64748b] focus:bg-[#171f2e] focus:border-emerald-500/70'
-                }`}
-              />
-              <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
-                {searchQuery && (
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('');
-                      searchInputRef.current?.focus();
-                    }} 
-                    className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}
-                    title="Limpiar búsqueda"
-                  >
-                    <X size={13} />
-                  </button>
-                )}
-                <VoiceMicButton
-                  size={14}
-                  prompt="Di el nombre del producto que buscas..."
-                  onResult={(spokenText) => {
-                    if (activeModule !== 'pos') setActiveModule('pos');
-                    setSearchQuery(spokenText);
-                  }}
-                  onError={(errMsg) => showToast(`🎤 ${errMsg}`)}
-                />
-              </div>
-            </div>
-
-            {/* Botón Rápido: Ítem Libre / Manual */}
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic(10);
-                setIsManualItemModalOpen(true);
-              }}
-              className={`h-9 px-2.5 rounded-xl border flex items-center justify-center gap-1 shrink-0 text-[11px] font-extrabold active:scale-95 transition-transform cursor-pointer ${
-                isLight
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/35'
-              }`}
-              title="Agregar ítem manual o monto rápido al ticket"
-            >
-              <Plus size={14} className="stroke-[2.5]" />
-              <span className="hidden xs:inline">Libre</span>
-            </button>
-
-            {/* Botón Rápido: Nuevo Producto */}
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic(10);
-                openCreateProduct();
-              }}
-              className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition-transform cursor-pointer ${
-                isLight
-                  ? 'bg-slate-100 text-slate-700 border-slate-200'
-                  : 'bg-[#131924] text-emerald-400 border-[#232d3f]'
-              }`}
-              title="Crear nuevo producto en catálogo"
-            >
-              <PlusCircle size={15} />
-            </button>
-
-            {Array.isArray(heldSales) && heldSales.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHaptic(10);
-                  setIsHeldSalesModalOpen(true);
-                }}
-                className="relative w-9 h-9 rounded-xl border border-amber-500/40 bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0 active:scale-95 transition-transform cursor-pointer"
-                title={`Ventas en espera (${heldSales.length})`}
-              >
-                <PauseCircle size={15} />
-                <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-amber-500 text-slate-950 font-black text-[9px] flex items-center justify-center">
-                  {heldSales.length}
-                </span>
-              </button>
-            )}
-          </div>
-        )}
-      </header>
+        <MobilePOSHeader
+          T={T}
+          isLight={isLight}
+          activeModule={activeModule}
+          user={user}
+          setIsSideNavOpen={setIsSideNavOpen}
+          isRestaurantBusiness={isRestaurantBusiness}
+          selectedTable={selectedTable}
+          setIsTableSelectModalOpen={setIsTableSelectModalOpen}
+          posMode={posMode}
+          setIsPriceCheckerModalOpen={setIsPriceCheckerModalOpen}
+          searchInputRef={searchInputRef}
+          searchQuery={searchQuery}
+          setActiveModule={setActiveModule}
+          setSearchQuery={setSearchQuery}
+          showToast={showToast}
+          setIsManualItemModalOpen={setIsManualItemModalOpen}
+          openCreateProduct={openCreateProduct}
+          heldSales={heldSales}
+          setIsHeldSalesModalOpen={setIsHeldSalesModalOpen}
+        />
       )}
 
       {/* 2. PANTALLA DE LOGIN SI NO HAY SESIÓN ACTIVA */}
       {!user ? (
-        <div className={`flex-1 flex flex-col items-center justify-center p-4 ${T.appBg}`}>
-          <div className={`w-full max-w-sm ${T.modalCard} rounded-xl p-6 sm:p-7 shadow-2xl space-y-4`}>
-            <div className="text-center space-y-2">
-              <div className="flex justify-center py-2 sm:py-3">
-                <IsaacWebLogo 
-                  isLight={isLight} 
-                  height="h-16 sm:h-20" 
-                  imgClassName="max-w-[270px] sm:max-w-[310px] drop-shadow-xs" 
-                  className="justify-center" 
-                />
-              </div>
-              <h2 className={`text-sm font-extrabold ${T.textPrimary}`}>{businessInfo.name || 'Bodega Sigfrido y Familia'}</h2>
-              
-              {/* Indicador interactivo de estado de enlace al servidor PC */}
-              <div className="flex flex-col items-center gap-1">
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setShowServerModal(true);
-                    setServerFeedback(null);
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold cursor-pointer transition-all active:scale-95 ${
-                    serverHealth === true 
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' 
-                      : serverHealth === false
-                      ? 'bg-rose-500/15 border-rose-500/30 text-rose-400 hover:bg-rose-500/25 animate-pulse'
-                      : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                  }`}
-                  title="Tocar para cambiar la IP del Servidor PC"
-                >
-                  <span className={`w-2 h-2 rounded-full ${
-                    serverHealth === true ? 'bg-emerald-400' : serverHealth === false ? 'bg-rose-500' : 'bg-amber-400 animate-ping'
-                  }`}></span>
-                  <span>
-                    {serverHealth === true 
-                      ? `PC Conectada (${mobileServerIp.replace(/^https?:\/\//, '')})` 
-                      : serverHealth === false 
-                      ? 'Sin conexión a PC • Tocar para configurar' 
-                      : 'Verificando enlace...'}
-                  </span>
-                  <Settings size={12} className="opacity-70 ml-0.5" />
-                </button>
-              </div>
-            </div>
-
-            {loginError && (
-              <div className="bg-rose-500/15 border border-rose-500/30 p-2.5 rounded-xl text-rose-500 dark:text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle size={15} className="shrink-0" />
-                <span>{loginError}</span>
-              </div>
-            )}
-
-            {/* Acceso Ultrarrápido con Huella Dactilar Móvil (Zero-Trust) */}
-            {enrolledBioUser && (
-              <div className="space-y-3 pb-1">
-                <button
-                  type="button"
-                  onClick={handleMobileBiometricLogin}
-                  disabled={isBioLoggingIn || isLoggingIn}
-                  className="w-full min-h-[50px] px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 active:scale-[0.98] text-white font-extrabold text-xs uppercase tracking-wider shadow-lg flex items-center justify-between cursor-pointer transition-all disabled:opacity-50"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center shrink-0">
-                      <Fingerprint size={20} className={isBioLoggingIn ? 'animate-pulse text-sky-200' : 'text-white'} />
-                    </div>
-                    <div className="text-left min-w-0">
-                      <div className="text-[11px] font-extrabold truncate text-white">
-                        {isBioLoggingIn ? 'Leyendo huella dactilar...' : 'Entrar con Huella Dactilar'}
-                      </div>
-                      <div className="text-[10px] text-white/80 lowercase truncate font-semibold mt-0.5">
-                        Operador: {enrolledBioUser.name || enrolledBioUser.username}
-                      </div>
-                    </div>
-                  </div>
-                  <span className="text-[10px] bg-white/20 hover:bg-white/30 px-2 py-1 rounded font-black shrink-0 tracking-wider">
-                    Tocar
-                  </span>
-                </button>
-
-                <div className="relative text-center my-2">
-                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-700/40"></div></div>
-                  <span className={`relative ${T.modalCard} px-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400`}>
-                    o ingresa tus datos
-                  </span>
-                </div>
-              </div>
-            )}
-
-            <form onSubmit={handleMobileLogin} className="space-y-3">
-              <div>
-                <label className={`text-[11px] font-bold ${T.textSecondary} block mb-1`}>Usuario / Cajero</label>
-                <div className="relative">
-                  <User size={15} className={`absolute left-3 top-1/2 -translate-y-1/2 ${T.textMuted}`} />
-                  <input 
-                    type="text" 
-                    value={loginUsername}
-                    onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder="Ingresa tu usuario"
-                    className={`w-full ${T.inputBg} border rounded-xl pl-9 pr-3 py-2.5 text-xs font-bold outline-none`}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className={`text-[11px] font-bold ${T.textSecondary} block mb-1`}>Contraseña</label>
-                <div className="relative">
-                  <Lock size={15} className={`absolute left-3 top-1/2 -translate-y-1/2 ${T.textMuted}`} />
-                  <input 
-                    type="password" 
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className={`w-full ${T.inputBg} border rounded-xl pl-9 pr-3 py-2.5 text-xs font-bold outline-none`}
-                  />
-                </div>
-              </div>
-
-              <button 
-                type="submit"
-                disabled={isLoggingIn}
-                className="w-full min-h-[46px] bg-[#0a0d12] hover:bg-[#161c26] active:scale-[0.99] disabled:opacity-50 text-white border border-[#1e242e] font-extrabold py-2.5 rounded-[8px] text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer mt-2"
-              >
-                {isLoggingIn ? (
-                  <RefreshCw size={15} className="animate-spin" />
-                ) : (
-                  <span>Ingresar a Terminal Móvil</span>
-                )}
-              </button>
-
-              <div className="pt-1 text-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowServerModal(true);
-                    setServerFeedback(null);
-                  }}
-                  className={`text-[11px] font-bold ${T.textMuted} hover:${T.textPrimary} flex items-center justify-center gap-1.5 mx-auto cursor-pointer`}
-                >
-                  <Wifi size={13} />
-                  <span>Configurar IP de Servidor PC</span>
-                </button>
-              </div>
-            </form>
-          </div>
-
-          {/* Modal de Configuración Rápida de IP de Servidor en Móvil */}
-          {showServerModal && (
-            <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-              <div className={`w-full max-w-xs ${T.modalCard} rounded-2xl p-5 border ${T.border} shadow-2xl space-y-4`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Wifi className="text-blue-500" size={18} />
-                    <h3 className={`text-xs font-black uppercase tracking-wider ${T.textPrimary}`}>IP de la Computadora</h3>
-                  </div>
-                  <button 
-                    onClick={() => setShowServerModal(false)}
-                    className={`p-1 rounded-lg ${T.btnGhost} text-slate-400`}
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-
-                <p className={`text-[11px] ${T.textSecondary} leading-relaxed`}>
-                  Dirección IP de tu PC principal donde corre el sistema Isaac POS:
-                </p>
-
-                <div>
-                  <label className={`text-[10px] font-bold uppercase tracking-wider ${T.textMuted} block mb-1`}>IP / Puerto</label>
-                  <input 
-                    type="text"
-                    value={mobileServerIp}
-                    onChange={(e) => setMobileServerIp(e.target.value)}
-                    placeholder="192.168.1.30:3005"
-                    className={`w-full ${T.inputBg} border rounded-xl px-3 py-2.5 text-xs font-mono font-bold outline-none`}
-                  />
-                </div>
-
-                {serverFeedback && (
-                  <div className={`p-2 rounded-xl text-[11px] font-bold flex items-center gap-1.5 ${
-                    serverFeedback.ok ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                  }`}>
-                    {serverFeedback.ok ? <Check size={14} className="shrink-0" /> : <AlertCircle size={14} className="shrink-0" />}
-                    <span>{serverFeedback.msg}</span>
-                  </div>
-                )}
-
-                <div className="flex gap-2 pt-1">
-                  <button 
-                    type="button"
-                    disabled={isTestingServer}
-                    onClick={handleAutoDiscoverServer}
-                    className={`flex-1 py-2.5 rounded-xl border ${T.border} ${T.btnGhost} text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer`}
-                  >
-                    {isTestingServer ? <RefreshCw size={13} className="animate-spin" /> : <Zap size={13} />}
-                    <span>Auto-Buscar</span>
-                  </button>
-                  <button 
-                    type="button"
-                    disabled={isTestingServer}
-                    onClick={() => handleTestAndSaveServer(mobileServerIp)}
-                    className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase flex items-center justify-center gap-1 shadow-md shadow-blue-600/30 cursor-pointer"
-                  >
-                    {isTestingServer ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
-                    <span>Guardar</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <MobilePOSLoginScreen
+          T={T}
+          isLight={isLight}
+          businessInfo={businessInfo}
+          serverHealth={serverHealth}
+          mobileServerIp={mobileServerIp}
+          setMobileServerIp={setMobileServerIp}
+          showServerModal={showServerModal}
+          setShowServerModal={setShowServerModal}
+          serverFeedback={serverFeedback}
+          setServerFeedback={setServerFeedback}
+          loginError={loginError}
+          enrolledBioUser={enrolledBioUser}
+          handleMobileBiometricLogin={handleMobileBiometricLogin}
+          isBioLoggingIn={isBioLoggingIn}
+          isLoggingIn={isLoggingIn}
+          handleMobileLogin={handleMobileLogin}
+          loginUsername={loginUsername}
+          setLoginUsername={setLoginUsername}
+          loginPassword={loginPassword}
+          setLoginPassword={setLoginPassword}
+          isTestingServer={isTestingServer}
+          handleAutoDiscoverServer={handleAutoDiscoverServer}
+          handleTestAndSaveServer={handleTestAndSaveServer}
+        />
       ) : activeModule === 'inventory' ? (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden w-full">
           <Suspense fallback={
@@ -4368,9 +4044,9 @@ export default function MobilePOSSimulator() {
                       // Persistir en IndexedDB local
                       try {
                         if (localDb && localDb.products) {
-                          localDb.products.update(String(p.id), { stockQuantity: newStock, stock: newStock }).catch(() => {});
+                          localDb.products.update(String(p.id), { stockQuantity: newStock, stock: newStock }).catch((err) => console.warn('[MobilePOS] Error revirtiendo stock en IDB:', err?.message || err));
                         }
-                        primaryDb.put('products', { ...p, stockQuantity: newStock, stock: newStock }).catch(() => {});
+                        primaryDb.put('products', { ...p, stockQuantity: newStock, stock: newStock }).catch((err) => console.warn('[MobilePOS] Error revirtiendo stock en primaryDb:', err?.message || err));
                       } catch (_) {}
                       return { ...p, stockQuantity: newStock, stock: newStock };
                     }
@@ -4495,10 +4171,6 @@ export default function MobilePOSSimulator() {
         <MobileSubViewWrapper title="Por Pagar" subtitle="Facturas pendientes de pago" icon={CreditCard} onBack={() => setActiveModule('pos')} T={T}>
           <AccountsPayablePage />
         </MobileSubViewWrapper>
-      ) : activeModule === 'banking' ? (
-        <MobileSubViewWrapper title="Bancos" subtitle="Cuentas y conciliación" icon={Landmark} onBack={() => setActiveModule('pos')} T={T}>
-          <BankingPage />
-        </MobileSubViewWrapper>
       ) : activeModule === 'fiscal' ? (
         <MobileSubViewWrapper title="Fiscal SENIAT" subtitle="Libros de compra/venta e IGTF" icon={FileText} onBack={() => setActiveModule('pos')} T={T}>
           <FiscalManagerPage />
@@ -4550,352 +4222,58 @@ export default function MobilePOSSimulator() {
           {/* COLUMNA IZQUIERDA / PRINCIPAL: CATÁLOGO Y BÚSQUEDA */}
           <div className={`pos-catalog-canvas flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden ${T.catalogBg}`}>
             
-            {/* Riel de Categorías tipo Cápsula + Conmutador Rápido Lista / Fotos */}
-            <div className={`pos-catalog-toolbar px-3 py-1.5 shrink-0 border-b flex items-center gap-2 ${T.border} ${isLight ? 'bg-white' : 'bg-[#0b0e14]'}`}>
-              <div 
-                className="pos-category-strip flex-1 min-w-0 flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 touch-pan-x overscroll-contain select-none"
-                onWheel={(e) => {
-                  if (e.deltaY !== 0) {
-                    e.currentTarget.scrollLeft += e.deltaY;
-                  }
-                }}
-              >
-                {normalizedCategories.map(cat => {
-                  const isActive = selectedCategory === cat;
-                  const count = categoryCounts[cat] ?? 0;
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic(8);
-                        setSelectedCategory(cat);
-                      }}
-                      className={`px-3 py-1 rounded-full text-xs font-extrabold whitespace-nowrap transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 border ${
-                        isActive
-                          ? (isLight
-                              ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                              : 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-2xs')
-                          : (isLight
-                              ? 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
-                              : 'bg-[#131924] text-slate-300 border-[#232d3f] hover:border-slate-600')
-                      }`}
-                    >
-                      <span>{cat}</span>
-                      <span className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-black leading-none ${
-                        isActive
-                          ? (isLight ? 'bg-white/20 text-white' : 'bg-black/20 text-slate-950')
-                          : (isLight ? 'bg-white text-slate-600' : 'bg-[#0b0e14] text-slate-400')
-                      }`}>
-                        {count}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+            <MobilePOSCatalogSection
+              T={T}
+              isLight={isLight}
+              normalizedCategories={normalizedCategories}
+              selectedCategory={selectedCategory}
+              setSelectedCategory={setSelectedCategory}
+              categoryCounts={categoryCounts}
+              toggleCatalogLayout={toggleCatalogLayout}
+              catalogLayout={catalogLayout}
+              catalogScrollRef={catalogScrollRef}
+              handleCatalogScroll={handleCatalogScroll}
+              handleCatalogTouchStart={handleCatalogTouchStart}
+              handleCatalogTouchMove={handleCatalogTouchMove}
+              handleCatalogTouchEnd={handleCatalogTouchEnd}
+              pullIndicatorRef={pullIndicatorRef}
+              isPullRefreshing={isPullRefreshing}
+              filteredProducts={filteredProducts}
+              products={products}
+              openCreateProduct={openCreateProduct}
+              setIsManualItemModalOpen={setIsManualItemModalOpen}
+              virtualProducts={virtualProducts}
+              cartCommittedUnitsMap={cartCommittedUnitsMap}
+              exchangeRate={exchangeRate}
+              businessMode={businessMode}
+              posMode={posMode}
+              addToCart={addToCart}
+              decrementFromCard={decrementFromCard}
+              handleOpenBulkPicker={handleOpenBulkPicker}
+              handlePriceCheck={handlePriceCheck}
+              openEditProduct={openEditProduct}
+              handlePreviewImage={handlePreviewImage}
+              catalogColumns={catalogColumns}
+              catalogHasMore={catalogHasMore}
+              loadMoreCatalogItems={loadMoreCatalogItems}
+              catalogRemainingCount={catalogRemainingCount}
+              showAllCatalogItems={showAllCatalogItems}
+            />
 
-              {/* Conmutador Táctico Lista vs Cuadrícula */}
-              <button
-                type="button"
-                onClick={toggleCatalogLayout}
-                className={`h-8 px-2.5 rounded-full border flex items-center justify-center gap-1 shrink-0 text-xs font-bold transition-transform cursor-pointer active:scale-95 ${
-                  isLight
-                    ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                    : 'bg-[#131924] hover:bg-[#1a2230] text-slate-200 border-[#232d3f]'
-                }`}
-                title={catalogLayout === 'list' ? 'Cambiar a cuadrícula con fotos' : 'Cambiar a lista táctica rápida'}
-              >
-                {catalogLayout === 'list' ? (
-                  <>
-                    <LayoutGrid size={13} className="text-emerald-400" />
-                    <span className="text-[10.5px] font-extrabold hidden xs:inline">Fotos</span>
-                  </>
-                ) : (
-                  <>
-                    <List size={13} className="text-emerald-400" />
-                    <span className="text-[10.5px] font-extrabold hidden xs:inline">Lista</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* Grid de Productos con Paginación Fluida Automática en Scroll */}
-            <div 
-              id="mobile-product-catalog"
-              ref={catalogScrollRef}
-              onScroll={handleCatalogScroll}
-              onTouchStart={handleCatalogTouchStart}
-              onTouchMove={handleCatalogTouchMove}
-              onTouchEnd={handleCatalogTouchEnd}
-              className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-2.5 sm:p-3.5 md:p-4 pt-2.5 pb-6 custom-scrollbar"
-              style={{ WebkitOverflowScrolling: 'touch' }}
-            >
-              {/* Indicador Visual Interactivo de Pull-to-Refresh */}
-              <div 
-                ref={pullIndicatorRef}
-                className="w-full flex items-center justify-center transition-all overflow-hidden mb-2 pointer-events-none"
-                style={{ height: isPullRefreshing ? '44px' : '0px', opacity: isPullRefreshing ? 1 : 0 }}
-              >
-                <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0a0d12] text-white border border-[#1e242e] text-xs font-bold shadow-xs">
-                  <RefreshCw 
-                    size={14} 
-                    className={isPullRefreshing ? 'animate-spin text-emerald-400' : 'text-emerald-400'} 
-                  />
-                  <span>{isPullRefreshing ? 'Sincronizando con PC...' : 'Actualizar catálogo'}</span>
-                </div>
-              </div>
-
-              {filteredProducts.length === 0 ? (
-                <div className="h-64 flex flex-col items-center justify-center text-slate-500 text-xs sm:text-sm text-center px-4">
-                  <Search size={28} className="text-slate-600 mb-2" />
-                  <p className="font-bold">{products.length === 0 ? 'Catálogo Local Listo' : 'No se encontraron productos'}</p>
-                  <p className="text-slate-600 text-xs mb-3">
-                    {products.length === 0 
-                      ? 'Puedes vender ítems directos o registrar productos en modo local' 
-                      : 'Intenta con otro término o categoría'}
-                  </p>
-                  {products.length === 0 && (
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openCreateProduct()}
-                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-transform cursor-pointer"
-                      >
-                        <Plus size={14} />
-                        <span>Crear Producto</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsManualItemModalOpen(true)}
-                        className={`px-3.5 py-2 ${T.btnGhost} rounded-xl font-bold text-xs flex items-center gap-1.5 active:scale-95 transition-transform cursor-pointer`}
-                      >
-                        <ShoppingCart size={14} />
-                        <span>Ítem Rápido</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div>
-                  {catalogLayout === 'list' ? (
-                    <div className="flex flex-col gap-2">
-                      {virtualProducts.map(product => (
-                        <MobileProductCard
-                          key={product.id}
-                          product={product}
-                          layout="list"
-                          cartQuantity={cartCommittedUnitsMap.get(String(product.id)) || 0}
-                          exchangeRate={exchangeRate}
-                          businessMode={businessMode}
-                          posMode={posMode}
-                          isLight={isLight}
-                          T={T}
-                          onAddToCart={addToCart}
-                          onDecrementFromCart={decrementFromCard}
-                          onOpenBulkPicker={handleOpenBulkPicker}
-                          onPriceCheck={handlePriceCheck}
-                          onEditProduct={openEditProduct}
-                          onPreviewImage={handlePreviewImage}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div
-                      className="grid gap-2.5 sm:gap-3"
-                      style={{ gridTemplateColumns: `repeat(${catalogColumns || 2}, minmax(0, 1fr))` }}
-                    >
-                      {virtualProducts.map(product => (
-                        <MobileProductCard
-                          key={product.id}
-                          product={product}
-                          layout="grid"
-                          cartQuantity={cartCommittedUnitsMap.get(String(product.id)) || 0}
-                          exchangeRate={exchangeRate}
-                          businessMode={businessMode}
-                          posMode={posMode}
-                          isLight={isLight}
-                          T={T}
-                          onAddToCart={addToCart}
-                          onDecrementFromCart={decrementFromCard}
-                          onOpenBulkPicker={handleOpenBulkPicker}
-                          onPriceCheck={handlePriceCheck}
-                          onEditProduct={openEditProduct}
-                          onPreviewImage={handlePreviewImage}
-                        />
-                      ))}
-                    </div>
-                  )}
-
-                  {catalogHasMore && (
-                    <div className="py-4 flex flex-col sm:flex-row items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={loadMoreCatalogItems}
-                        className={`px-4 py-2 rounded-xl border text-xs font-extrabold cursor-pointer active:scale-95 transition-transform ${T.btnGhost}`}
-                      >
-                        Cargar más ({catalogRemainingCount} restantes de {filteredProducts.length})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={showAllCatalogItems}
-                        className="px-4 py-2 rounded-xl bg-[#0a0d12] text-white border border-[#1e242e] text-xs font-extrabold cursor-pointer active:scale-95 transition-transform"
-                      >
-                        Mostrar todos ({filteredProducts.length})
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* NUEVO ORDEN INFERIOR: ISLA FLOTANTE DE COBRO DUAL + DOCK TÁCTICO DE 5 MÓDULOS */}
-            <div
-              className={`px-3 pt-1.5 pb-1.5 border-t shrink-0 z-20 ${
-                isLight ? 'bg-white border-[#e2e8f0]' : 'bg-[#0b0e14] border-[#1c2330]'
-              }`}
-              style={{ paddingBottom: 'max(0.4rem, env(safe-area-inset-bottom, 0px))' }}
-            >
-              <div className="w-full max-w-2xl lg:max-w-none mx-auto flex flex-col gap-2">
-                {/* 1. Isla Flotante de Cobro Dual (Solo visible cuando hay productos en el ticket) */}
-                {cart.length > 0 && (
-                  <div className="lg:hidden w-full rounded-2xl p-1.5 bg-[#0f172a] border border-emerald-500/50 shadow-lg flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic(12);
-                        setIsMobileCartOpen(true);
-                      }}
-                      className="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-1 rounded-xl hover:bg-white/5 active:scale-[0.99] transition-transform cursor-pointer text-left"
-                      title="Toca para revisar o editar los artículos del ticket"
-                    >
-                      <div className="w-8 h-8 rounded-xl bg-emerald-500 text-slate-950 font-mono font-black text-xs flex items-center justify-center shrink-0 shadow-xs">
-                        {totalItemsCount}
-                      </div>
-                      <div className="min-w-0 flex-1 leading-tight">
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-sm sm:text-base font-black font-mono text-white tabular-nums">
-                            ${totalUSD.toFixed(2)}
-                          </span>
-                          <span className="text-[11px] font-extrabold font-mono text-amber-300 tabular-nums truncate">
-                            • Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                        <span className="text-[10px] font-bold text-slate-400 block truncate">
-                          Toca para ver detalle del ticket ({totalItemsCount} {totalItemsCount === 1 ? 'ítem' : 'ítems'})
-                        </span>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic(18);
-                        handleSelectPaymentMethod('Efectivo USD');
-                        setIsCheckoutOpen(true);
-                      }}
-                      className="h-10 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shrink-0 shadow-md cursor-pointer transition-transform"
-                      title="Ir directo a cobrar en 1 toque"
-                    >
-                      <span>Cobrar</span>
-                      <ArrowRight size={15} className="stroke-[2.8]" />
-                    </button>
-                  </div>
-                )}
-
-                {/* 2. Dock Táctico Inferior de 5 Accesos Ergonómicos (Thumb Zone Navigation) */}
-                <nav className="grid grid-cols-5 items-center gap-1 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic(10);
-                      setActiveModule('pos');
-                    }}
-                    className={`flex flex-col items-center justify-center py-1 rounded-xl transition-colors cursor-pointer ${
-                      activeModule === 'pos'
-                        ? 'text-emerald-500 font-black'
-                        : (isLight ? 'text-slate-500 hover:text-slate-900 font-bold' : 'text-slate-400 hover:text-white font-bold')
-                    }`}
-                  >
-                    <ShoppingCart size={17} />
-                    <span className="text-[10px] mt-0.5 leading-none">Venta</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic(10);
-                      setActiveModule('sales');
-                    }}
-                    className={`relative flex flex-col items-center justify-center py-1 rounded-xl transition-colors cursor-pointer ${
-                      activeModule === 'sales'
-                        ? 'text-emerald-500 font-black'
-                        : (isLight ? 'text-slate-500 hover:text-slate-900 font-bold' : 'text-slate-400 hover:text-white font-bold')
-                    }`}
-                  >
-                    <Receipt size={17} />
-                    <span className="text-[10px] mt-0.5 leading-none">Tickets</span>
-                    {pendingSalesCount > 0 && (
-                      <span className="absolute top-0.5 right-3 min-w-[15px] h-[15px] px-1 rounded-full bg-amber-500 text-slate-950 font-black text-[9px] flex items-center justify-center">
-                        {pendingSalesCount}
-                      </span>
-                    )}
-                  </button>
-
-                  {/* Botón Central Destacado: Escáner Láser de Cámara */}
-                  <div className="flex items-center justify-center">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        triggerHaptic(18);
-                        if (activeModule !== 'pos') setActiveModule('pos');
-                        if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.ensureCameraPermission) {
-                          try {
-                            await window.Capacitor.Plugins.PosNativeHardware.ensureCameraPermission();
-                          } catch (_e) {}
-                        }
-                        setIsScannerOpen(true);
-                      }}
-                      className="w-12 h-9 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-md active:scale-90 transition-transform cursor-pointer border border-emerald-300/60"
-                      title="Escanear código de barras con cámara"
-                    >
-                      <ScanBarcode size={20} className="stroke-[2.4]" />
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic(10);
-                      setActiveModule('inventory');
-                    }}
-                    className={`flex flex-col items-center justify-center py-1 rounded-xl transition-colors cursor-pointer ${
-                      activeModule === 'inventory'
-                        ? 'text-emerald-500 font-black'
-                        : (isLight ? 'text-slate-500 hover:text-slate-900 font-bold' : 'text-slate-400 hover:text-white font-bold')
-                    }`}
-                  >
-                    <Box size={17} />
-                    <span className="text-[10px] mt-0.5 leading-none">Stock</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic(10);
-                      setActiveModule('cash');
-                    }}
-                    className={`flex flex-col items-center justify-center py-1 rounded-xl transition-colors cursor-pointer ${
-                      activeModule === 'cash'
-                        ? 'text-emerald-500 font-black'
-                        : (isLight ? 'text-slate-500 hover:text-slate-900 font-bold' : 'text-slate-400 hover:text-white font-bold')
-                    }`}
-                  >
-                    <Wallet size={17} />
-                    <span className="text-[10px] mt-0.5 leading-none">Caja</span>
-                  </button>
-                </nav>
-              </div>
-            </div>
+            <MobilePOSBottomDock
+              isLight={isLight}
+              cart={cart}
+              totalItemsCount={totalItemsCount}
+              totalUSD={totalUSD}
+              totalBS={totalBS}
+              setIsMobileCartOpen={setIsMobileCartOpen}
+              handleSelectPaymentMethod={handleSelectPaymentMethod}
+              setIsCheckoutOpen={setIsCheckoutOpen}
+              activeModule={activeModule}
+              setActiveModule={setActiveModule}
+              pendingSalesCount={pendingSalesCount}
+              setIsScannerOpen={setIsScannerOpen}
+            />
           </div>
 
           {/* COLUMNA DERECHA PERMANENTE EN TABLETS / PANTALLAS GRANDES (lg: >= 1024px) */}

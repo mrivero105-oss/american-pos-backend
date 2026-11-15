@@ -3,9 +3,9 @@ import { RefreshCw, X } from 'lucide-react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import toast, { Toaster, ToastBar } from 'react-hot-toast';
 import ProtectedRoute from './components/ProtectedRoute';
-import DashboardLayout from './components/DashboardLayout';
-import Login from './pages/Login';
-import POS from './pages/POS';
+const DashboardLayout = lazy(() => import('./components/DashboardLayout'));
+const Login = lazy(() => import('./pages/Login'));
+const POS = lazy(() => import('./pages/POS'));
 
 // Lazy-loaded secondary pages (reduces initial mobile bundle by over 90%)
 const InventoryDashboard = lazy(() => import('./pages/InventoryDashboard'));
@@ -17,7 +17,6 @@ const Reports = lazy(() => import('./pages/Reports'));
 const CashRegister = lazy(() => import('./pages/CashRegister'));
 const CashierAuditCenter = lazy(() => import('./pages/CashierAuditCenter'));
 const AuditPanel = lazy(() => import('./pages/AuditPanel'));
-const AuditAlerts = lazy(() => import('./pages/AuditAlerts'));
 const Suppliers = lazy(() => import('./pages/Suppliers'));
 const PurchaseOrders = lazy(() => import('./pages/PurchaseOrders'));
 const Branches = lazy(() => import('./pages/Branches'));
@@ -28,9 +27,7 @@ const AccountsReceivable = lazy(() => import('./pages/AccountsReceivable'));
 const AccountsPayable = lazy(() => import('./pages/AccountsPayable'));
 const CatalogImporter = lazy(() => import('./pages/CatalogImporter'));
 const PublicStore = lazy(() => import('./pages/PublicStore'));
-const Banking = lazy(() => import('./pages/Banking'));
 const FiscalManager = lazy(() => import('./pages/FiscalManager'));
-const WarehousesManager = lazy(() => import('./pages/WarehousesManager'));
 const ExecutiveBI = lazy(() => import('./pages/ExecutiveBI'));
 const AccountingGeneral = lazy(() => import('./pages/AccountingGeneral'));
 const PayrollManager = lazy(() => import('./pages/PayrollManager'));
@@ -41,17 +38,18 @@ const MobilePOSSimulator = lazy(() => import('./pages/MobilePOSSimulator'));
 const CustomerDisplay = lazy(() => import('./pages/CustomerDisplay'));
 const TelecomRecharges = lazy(() => import('./pages/TelecomRecharges'));
 import { syncManager } from './services/syncManager';
-import LockScreen from './components/LockScreen';
-import ActivationPortal from './components/ActivationPortal';
-import SetupWizard from './components/SetupWizard';
+const LockScreen = lazy(() => import('./components/LockScreen'));
+const ActivationPortal = lazy(() => import('./components/ActivationPortal'));
+const SetupWizard = lazy(() => import('./components/SetupWizard'));
 import SplashScreen from './components/SplashScreen';
-import MobileInitialSyncWizard from './components/MobileInitialSyncWizard';
+const MobileInitialSyncWizard = lazy(() => import('./components/MobileInitialSyncWizard'));
 import { useAuth } from './hooks/AuthContext';
 import { useTheme } from './hooks/ThemeContext';
 import { useWin7Zoom } from './hooks/useWin7Zoom';
 import api from './services/api';
 import { otaUpdateService } from './services/otaUpdateService';
 import { cloudRateSyncService } from './services/cloudRateSyncService';
+import lanSyncService from './services/lanSyncService';
 
 const isMobileDevice = () => {
   if (typeof window === 'undefined') return false;
@@ -160,7 +158,10 @@ function App() {
       setCurrentHash(window.location.hash);
     };
     window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      cloudRateSyncService.destroy();
+    };
   }, []);
 
   const isPublicRoute = (() => {
@@ -199,9 +200,11 @@ function App() {
     if (user) {
       checkSetup();
       // Inicializar servicio LAN P2P y broadcast de impresoras
-      import('./services/lanSyncService').then(({ default: lanSyncService }) => {
+      try {
         lanSyncService.init();
-      }).catch(err => console.warn('[App] Error al inicializar lanSyncService:', err));
+      } catch (err) {
+        console.warn('[App] Error al inicializar lanSyncService:', err);
+      }
     } else {
       setSetupLoading(false);
       setHasCheckedSetup(false);
@@ -334,28 +337,36 @@ function App() {
           <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-[10px]">Verificando Licencia...</p>
         </div>
       ) : !isActivated ? (
-        <ActivationPortal 
-          machineId={machineId} 
-          onActivated={async () => {
-            setIsActivated(true);
-            if (checkLicense) await checkLicense();
-          }} 
-        />
+        <Suspense fallback={<RouteLoader />}>
+          <ActivationPortal 
+            machineId={machineId} 
+            onActivated={async () => {
+              setIsActivated(true);
+              if (checkLicense) await checkLicense();
+            }} 
+          />
+        </Suspense>
       ) : (!isInitialSyncDone && isMobileDevice()) ? (
-        <MobileInitialSyncWizard onComplete={() => setIsInitialSyncDone(true)} />
+        <Suspense fallback={<RouteLoader />}>
+          <MobileInitialSyncWizard onComplete={() => setIsInitialSyncDone(true)} />
+        </Suspense>
       ) : isLocked && user ? (
-        <LockScreen 
-          user={user} 
-          onUnlock={appUnlock} 
-          onLogout={logout} 
-        />
+        <Suspense fallback={<RouteLoader />}>
+          <LockScreen 
+            user={user} 
+            onUnlock={appUnlock} 
+            onLogout={logout} 
+          />
+        </Suspense>
       ) : setupLoading || (user && !hasCheckedSetup) ? (
         <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center gap-4">
           <RefreshCw className="animate-spin text-blue-500" size={40} />
           <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-[10px]">Cargando Configuración...</p>
         </div>
       ) : user && !isSetup ? (
-        <SetupWizard onComplete={() => setIsSetup(true)} />
+        <Suspense fallback={<RouteLoader />}>
+          <SetupWizard onComplete={() => setIsSetup(true)} />
+        </Suspense>
       ) : (
         <Suspense fallback={<RouteLoader />}>
           <Routes>
@@ -415,9 +426,6 @@ function App() {
                 </Route>
                 <Route element={<ProtectedRoute requiredPermission="canManageExpenses" />}>
                   <Route path="/expenses" element={<Expenses />} />
-                </Route>
-                <Route element={<ProtectedRoute requiredPermission="canManageBanking" />}>
-                  <Route path="/banking" element={<Banking />} />
                 </Route>
                 <Route element={<ProtectedRoute requiredPermission="canManageFiscal" />}>
                   <Route path="/fiscal" element={<FiscalManager />} />

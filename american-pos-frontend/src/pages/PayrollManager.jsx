@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { usePos } from '../hooks/PosContext';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 const showToast = (msg, type = 'info') => {
     if (type === 'success') toast.success(msg);
@@ -16,7 +17,7 @@ const showToast = (msg, type = 'info') => {
 
 export default function PayrollManager() {
     const { exchangeRate, settings: storeConfig } = usePos();
-    const confirm = async ({ title, message }) => window.confirm(`${title}\n\n${message}`);
+    const { confirm, confirmDialog } = useConfirmDialog();
     const bcvRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
 
     const [activeTab, setActiveTab] = useState('empleados'); // 'empleados' | 'periodos' | 'recibos'
@@ -28,7 +29,6 @@ export default function PayrollManager() {
     const [periods, setPeriods] = useState([]);
     const [selectedPeriodForReceipts, setSelectedPeriodForReceipts] = useState('');
     const [receipts, setReceipts] = useState([]);
-    const [bankAccounts, setBankAccounts] = useState([]);
 
     // Search
     const [employeeSearch, setEmployeeSearch] = useState('');
@@ -40,7 +40,6 @@ export default function PayrollManager() {
     const [isNewPeriodModalOpen, setIsNewPeriodModalOpen] = useState(false);
     const [isDisburseModalOpen, setIsDisburseModalOpen] = useState(false);
     const [selectedPeriodToClose, setSelectedPeriodToClose] = useState(null);
-    const [selectedBankAccountId, setSelectedBankAccountId] = useState('');
 
     // Forms
     const [employeeForm, setEmployeeForm] = useState({
@@ -116,17 +115,6 @@ export default function PayrollManager() {
         }
     };
 
-    const fetchBankAccounts = async () => {
-        try {
-            const res = await api.get('/treasury/accounts');
-            if ((res.data?.success || res.data?.ok)) {
-                setBankAccounts(res.data.accounts || []);
-            }
-        } catch (err) {
-            console.error('Error cargando cuentas bancarias:', err);
-        }
-    };
-
     const fetchReceipts = async (periodId) => {
         if (!periodId) return;
         setLoading(true);
@@ -145,7 +133,6 @@ export default function PayrollManager() {
     useEffect(() => {
         fetchEmployees();
         fetchPeriods();
-        fetchBankAccounts();
     }, []);
 
     useEffect(() => {
@@ -309,7 +296,6 @@ export default function PayrollManager() {
         try {
             setLoading(true);
             const res = await api.post(`/payroll/periods/${selectedPeriodToClose.id}/close`, {
-                bankAccountId: selectedBankAccountId || null,
                 paymentMethod: 'TRANSFERENCIA'
             });
             if ((res.data?.success || res.data?.ok)) {
@@ -325,11 +311,24 @@ export default function PayrollManager() {
         }
     };
 
-    const handleDownloadBankTxt = (periodId, bankFormat) => {
-        const token = localStorage.getItem('token');
-        const baseUrl = api.defaults.baseURL || '';
-        const url = `${baseUrl}/payroll/periods/${periodId}/bank-txt?bankFormat=${bankFormat}&token=${token}`;
-        window.open(url, '_blank');
+    const handleDownloadBankTxt = async (periodId, bankFormat) => {
+        try {
+            const res = await api.get(`/payroll/periods/${periodId}/bank-txt`, {
+                params: { bankFormat },
+                responseType: 'blob'
+            });
+            const blob = new Blob([res.data], { type: 'text/plain;charset=utf-8' });
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `nomina_${bankFormat}_${periodId}.txt`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            showToast(err.response?.data?.error || 'Error descargando archivo bancario TXT', 'error');
+        }
     };
 
     const fmtUSD = (val) => {
@@ -1240,23 +1239,6 @@ export default function PayrollManager() {
                             <strong>{fmtUSD(selectedPeriodToClose.totalNet)}</strong> ({fmtBs(selectedPeriodToClose.totalNet)}).
                         </p>
                         <form onSubmit={handleCloseAndDisburse} className="space-y-3 text-xs">
-                            <div>
-                                <label className="block font-semibold text-slate-500 mb-1">
-                                    Cuenta Bancaria / Tesorería de Origen:
-                                </label>
-                                <select
-                                    value={selectedBankAccountId}
-                                    onChange={(e) => setSelectedBankAccountId(e.target.value)}
-                                    className="w-full h-9 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded font-semibold"
-                                >
-                                    <option value="">Liquidar contra Efectivo en Caja General</option>
-                                    {bankAccounts.map(b => (
-                                        <option key={b.id} value={b.id}>
-                                            {b.bankName} — {b.accountNumber} (Saldo: {fmtUSD(b.currentBalance)})
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
                             <div className="p-3 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300">
                                 Se generará automáticamente el asiento de partida doble en el Libro Diario (Gasto de Nómina y Cestaticket contra Retenciones por Pagar y Banco/Caja).
                             </div>
@@ -1282,6 +1264,7 @@ export default function PayrollManager() {
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </div>
     );
 }

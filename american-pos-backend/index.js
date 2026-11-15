@@ -84,13 +84,14 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Global patch for console to prevent crashes when stdout/stderr are closed
+const { formatLogMessage } = require('./utils/formatLogArgs');
 const patchConsole = (method) => {
     const original = console[method];
     console[method] = (...args) => {
         try {
             original.apply(console, args);
             if (global.logger) {
-                const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+                const msg = formatLogMessage(args);
                 if (method === 'log') global.logger.info(msg);
                 else if (global.logger[method]) global.logger[method](msg);
             }
@@ -135,7 +136,9 @@ const loadEnvFile = (filePath) => {
 loadEnvFile(path.join(__dirname, '.env'));
 
 // 2. Cargar .env permanente en AppData (donde Electron y las instalaciones guardan la configuración real)
-if (process.platform === 'win32' && process.env.APPDATA) {
+// En tests aislados (ISAAC_TEST_ISOLATED=1 con USER_DATA_PATH dedicado), omitir AppData del usuario para no contaminar pruebas.
+const isTestIsolatedEnv = process.env.ISAAC_TEST_ISOLATED === '1' && Boolean(process.env.USER_DATA_PATH);
+if (!isTestIsolatedEnv && process.platform === 'win32' && process.env.APPDATA) {
     loadEnvFile(path.join(process.env.APPDATA, 'isaac-pos', '.env'));
     loadEnvFile(path.join(process.env.APPDATA, 'Isaac POS', '.env'));
     loadEnvFile(path.join(process.env.APPDATA, 'americanpos', '.env'));
@@ -144,17 +147,35 @@ if (process.env.USER_DATA_PATH) {
     loadEnvFile(path.join(process.env.USER_DATA_PATH, '.env'));
 }
 
-// 3. Fallbacks seguros con generación criptográfica aleatoria si faltan en entorno
-if (!process.env.JWT_SECRET) {
-    const crypto = require('crypto');
-    process.env.JWT_SECRET = crypto.randomBytes(32).toString('hex');
-    console.warn('[SECURITY] JWT_SECRET no configurado en entorno. Se generó un secreto efímero aleatorio para esta sesión.');
-}
-if (!process.env.SYNC_SECRET_KEY) {
-    const crypto = require('crypto');
-    process.env.SYNC_SECRET_KEY = crypto.randomBytes(32).toString('hex');
-    console.warn('[SECURITY] SYNC_SECRET_KEY no configurado en entorno. Se generó un secreto efímero aleatorio para esta sesión.');
-}
+// 3. Fallbacks seguros con generación criptográfica aleatoria e independiente si faltan en entorno
+const cryptoNode = require('crypto');
+const persistEnvPath = process.env.ISAAC_TEST_ISOLATED === '1'
+    ? null
+    : (process.env.USER_DATA_PATH && fs.existsSync(process.env.USER_DATA_PATH)
+        ? path.join(process.env.USER_DATA_PATH, '.env')
+        : (fs.existsSync(path.join(__dirname, '.env')) ? path.join(__dirname, '.env') : null));
+
+const ensureIndependentSecret = (envKey) => {
+    if (process.env[envKey] && String(process.env[envKey]).trim().length > 0) return;
+    const generated = cryptoNode.randomBytes(32).toString('hex');
+    process.env[envKey] = generated;
+    if (persistEnvPath) {
+        try {
+            const current = fs.existsSync(persistEnvPath) ? fs.readFileSync(persistEnvPath, 'utf8') : '';
+            const keyRegex = new RegExp(`^${envKey}=.*$`, 'm');
+            if (!keyRegex.test(current)) {
+                const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
+                fs.appendFileSync(persistEnvPath, `${prefix}${envKey}=${generated}\n`, 'utf8');
+            }
+        } catch (_) {}
+    }
+    console.warn(`[SECURITY] ${envKey} no configurado en entorno. Se generó una clave independiente dedicada.`);
+};
+
+ensureIndependentSecret('JWT_SECRET');
+ensureIndependentSecret('SYNC_SECRET_KEY');
+ensureIndependentSecret('BACKUP_ENCRYPTION_KEY');
+ensureIndependentSecret('AUDIT_HMAC_SECRET');
 if (!process.env.PORT) {
     process.env.PORT = '3005,5005,8080';
 }
@@ -186,8 +207,8 @@ const lazyRouter = (routePath) => {
     };
 };
 
-// Route declarations using lazy loading
-const authRoutes = lazyRouter('./routes/auth');
+// Eager load routers that instantiate express-rate-limit at module init (required by express-rate-limit v7+)
+const authRoutes = require('./routes/auth');
 const productRoutes = lazyRouter('./routes/products');
 const salesRoutes = lazyRouter('./routes/sales');
 const customerRoutes = lazyRouter('./routes/customers');
@@ -201,7 +222,7 @@ const refundRoutes = lazyRouter('./routes/refunds');
 const userRoutes = lazyRouter('./routes/users');
 const backupRoutes = lazyRouter('./routes/backup');
 const debugRoutes = lazyRouter('./routes/debug');
-const licenseRoutes = lazyRouter('./routes/license');
+const licenseRoutes = require('./routes/license');
 const expenseRoutes = lazyRouter('./routes/expenses');
 const serviceRoutes = lazyRouter('./routes/services');
 
@@ -214,7 +235,6 @@ const catalogRoutes = lazyRouter('./routes/catalog');
 const aiRoutes = lazyRouter('./routes/ai');
 const messageRoutes = lazyRouter('./routes/messages');
 const systemRoutes = lazyRouter('./routes/system');
-const bankRoutes = lazyRouter('./routes/bankAccounts');
 const fiscalRoutes = lazyRouter('./routes/fiscal');
 const warehousesRoutes = lazyRouter('./routes/warehouses');
 const biRoutes = lazyRouter('./routes/executiveBI');
@@ -230,7 +250,7 @@ const scannerRoutes = lazyRouter('./routes/scanner');
 const syncRoutes = lazyRouter('./routes/sync');
 const lanClusterRoutes = lazyRouter('./routes/lanCluster');
 const publicCatalogRoutes = lazyRouter('./routes/publicCatalog');
-const publicAiRoutes = lazyRouter('./routes/publicAi');
+const publicAiRoutes = require('./routes/publicAi');
 const rechargesRoutes = lazyRouter('./routes/recharges');
 const lotsRoutes = lazyRouter('./routes/lots');
 
@@ -243,8 +263,13 @@ const startServer = (ports, userDataPath = null) => {
 
         try {
             console.log('--- STARTUP SEQUENCE INITIATED ---');
-            if (userDataPath) {
-                process.env.USER_DATA_PATH = userDataPath;
+            const resolvedUserData = typeof userDataPath === 'string'
+                ? userDataPath.trim()
+                : (userDataPath && typeof userDataPath === 'object' && typeof userDataPath.userDataPath === 'string'
+                    ? userDataPath.userDataPath.trim()
+                    : '');
+            if (resolvedUserData) {
+                process.env.USER_DATA_PATH = resolvedUserData;
             }
 
             // High-Speed Database Pipeline in background (Non-blocking)
@@ -297,9 +322,10 @@ const startServer = (ports, userDataPath = null) => {
 
             const app = express();
 
-            // Basic Request Logger
+            // Basic Request Logger (redacta parámetros sensibles en query string)
             app.use((req, res, next) => {
-                logger.info(`[${req.method}] ${req.url}`);
+                const sanitizedUrl = String(req.url || '').replace(/([?&](?:token|sync_key|key|secret|password|pin)=)[^&]+/gi, '$1[REDACTED]');
+                logger.info(`[${req.method}] ${sanitizedUrl}`);
                 next();
             });
 
@@ -368,31 +394,33 @@ const startServer = (ports, userDataPath = null) => {
                 allowedOrigins.push(`http://127.0.0.1:${port}`);
             });
 
-            const corsOptions = {
-                origin: (origin, callback) => {
-                    if (!origin) return callback(null, true);
-                    const originLower = origin.toLowerCase();
-                    const myHost = os.hostname().toLowerCase();
+            const isOriginAllowed = (origin, callback) => {
+                if (!origin) return callback(null, true);
+                const originLower = origin.toLowerCase();
+                const myHost = os.hostname().toLowerCase();
 
-                    if (allowedOrigins.includes(origin) || 
-                        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) || 
-                        origin.startsWith('app://') || 
-                        origin.startsWith('capacitor://')) {
-                        return callback(null, true);
-                    }
-                    if (originLower.includes('//' + myHost + ':') || originLower.endsWith('//' + myHost) ||
-                        originLower.includes('//' + myHost + '.local:') || originLower.endsWith('//' + myHost + '.local')) {
-                        return callback(null, true);
-                    }
-                    if (/^https?:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/i.test(origin)) {
-                        return callback(null, true);
-                    }
-                    if (/^https?:\/\/[a-z0-9_-]+(\.(local|lan|home|internal))?(:\d+)?$/i.test(originLower)) {
-                        return callback(null, true);
-                    }
-                    logger.warn(`[CORS REJECTED] Origin no autorizado bloqueado: ${origin}`);
-                    return callback(null, false);
-                },
+                if (allowedOrigins.includes(origin) || 
+                    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) || 
+                    origin.startsWith('app://') || 
+                    origin.startsWith('capacitor://')) {
+                    return callback(null, true);
+                }
+                if (originLower.includes('//' + myHost + ':') || originLower.endsWith('//' + myHost) ||
+                    originLower.includes('//' + myHost + '.local:') || originLower.endsWith('//' + myHost + '.local')) {
+                    return callback(null, true);
+                }
+                if (/^https?:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/i.test(origin)) {
+                    return callback(null, true);
+                }
+                if (/^https?:\/\/[a-z0-9_-]+(\.(local|lan|home|internal))?(:\d+)?$/i.test(originLower)) {
+                    return callback(null, true);
+                }
+                logger.warn(`[CORS REJECTED] Origin no autorizado bloqueado: ${origin}`);
+                return callback(null, false);
+            };
+
+            const corsOptions = {
+                origin: isOriginAllowed,
                 credentials: true,
                 methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
                 allowedHeaders: [
@@ -507,11 +535,24 @@ const startServer = (ports, userDataPath = null) => {
                 if (req.method !== 'GET' && req.method !== 'HEAD') return next();
                 const ext = path.extname(req.path).toLowerCase();
                 if (ext) {
-                    const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.csv', '.xlsx', '.css', '.js', '.html', '.svg', '.woff', '.woff2', '.ttf', '.zip', '.sql', '.json', '.ico', '.apk'];
+                    const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.csv', '.xlsx', '.css', '.js', '.html', '.svg', '.woff', '.woff2', '.ttf', '.zip', '.json', '.ico', '.apk'];
                     if (!allowedExts.includes(ext)) {
                         return res.status(403).json({ error: 'Tipo de archivo estático no permitido' });
                     }
                 }
+                res.setHeader('X-Content-Type-Options', 'nosniff');
+                next();
+            };
+
+            const safeUserMediaMimeTypes = (req, res, next) => {
+                if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+                const ext = path.extname(req.path).toLowerCase();
+                const allowedMediaExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'];
+                if (!ext || !allowedMediaExts.includes(ext)) {
+                    return res.status(403).json({ error: 'Tipo de archivo multimedia no permitido' });
+                }
+                res.setHeader('X-Content-Type-Options', 'nosniff');
+                res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
                 next();
             };
 
@@ -555,7 +596,7 @@ const startServer = (ports, userDataPath = null) => {
                 }
             });
 
-            app.use('/uploads', safeStaticMimeTypes, express.static(path.join(staticPath, 'uploads')));
+            app.use('/uploads', safeUserMediaMimeTypes, express.static(path.join(staticPath, 'uploads')));
             
             // Serve all possible media paths (local, electron unpacked, and any existing AppData folders)
             const getValidCandidatePaths = (subfolder) => {
@@ -581,22 +622,34 @@ const startServer = (ports, userDataPath = null) => {
 
             const productImagesDirs = getValidCandidatePaths('product_images');
             productImagesDirs.forEach(dir => {
-                app.use('/product_images', safeStaticMimeTypes, express.static(dir));
+                app.use('/product_images', safeUserMediaMimeTypes, express.static(dir));
             });
 
             const supplierLogosDirs = getValidCandidatePaths('supplier_logos');
             supplierLogosDirs.forEach(dir => {
-                app.use('/supplier_logos', safeStaticMimeTypes, express.static(dir));
+                app.use('/supplier_logos', safeUserMediaMimeTypes, express.static(dir));
             });
 
             const invoicesDirs = getValidCandidatePaths('invoices');
+            const InvoiceService = require('./services/InvoiceService');
+            const verifyInvoiceAccess = async (req, res, next) => {
+                try {
+                    const check = await InvoiceService.assertInvoiceAccess(req.user, req.path);
+                    if (!check.allowed) {
+                        return res.status(check.status || 403).json({ error: check.error || 'Acceso denegado a esta factura' });
+                    }
+                    return next();
+                } catch (invErr) {
+                    return res.status(403).json({ error: 'No autorizado para acceder a esta factura' });
+                }
+            };
             invoicesDirs.forEach(dir => {
-                app.use('/invoices', safeStaticMimeTypes, express.static(dir));
+                app.use('/invoices', verifyToken, verifyInvoiceAccess, safeUserMediaMimeTypes, express.static(dir));
             });
 
             const displayAdsDirs = getValidCandidatePaths('display_ads');
             displayAdsDirs.forEach(dir => {
-                app.use('/display_ads', safeStaticMimeTypes, express.static(dir));
+                app.use('/display_ads', safeUserMediaMimeTypes, express.static(dir));
             });
 
             // Routes
@@ -708,42 +761,60 @@ const startServer = (ports, userDataPath = null) => {
             app.use('/license', waitForDb, licenseRoutes);
             app.use('/public-catalog', waitForDb, publicCatalogRoutes);
             app.use('/ai/public-query', waitForDb, publicAiRoutes);
-            app.get('/lan/peers', (req, res) => {
-                const LANClusterService = require('./services/LANClusterService');
-                res.json({ success: true, ...LANClusterService.getClusterTopology() });
-            });
-
             // Middleware de autenticación dual para nodos de sincronización LAN y terminales móviles
             const verifySyncOrToken = (req, res, next) => {
+                const { runWithTenantContext } = require('./database/tenantContext');
                 const authHeader = req.headers['authorization'];
-                if (authHeader && authHeader.startsWith('Bearer ')) {
+                if ((authHeader && authHeader.startsWith('Bearer ')) || (req.cookies && req.cookies.authToken)) {
                     return verifyToken(req, res, next);
                 }
-                const syncKey = req.headers['x-sync-key'] || req.query.sync_key;
-                const expectedKey = process.env.SYNC_SECRET_KEY || process.env.JWT_SECRET;
-                if (syncKey && expectedKey && syncKey === expectedKey) {
-                    req.user = { id: 'sync-node', role: 'admin', companyId: req.query.companyId || req.headers['x-company-id'] || 'default' };
-                    return next();
+                const syncKey = String(req.headers['x-sync-key'] || req.headers['X-Sync-Key'] || '');
+                const expectedKey = String(process.env.SYNC_SECRET_KEY || '');
+                if (syncKey && expectedKey) {
+                    const crypto = require('crypto');
+                    const hashA = crypto.createHash('sha256').update(syncKey, 'utf8').digest();
+                    const hashB = crypto.createHash('sha256').update(expectedKey, 'utf8').digest();
+                    if (crypto.timingSafeEqual(hashA, hashB)) {
+                        const syncCompanyId = String(process.env.DEFAULT_COMPANY_ID || '2');
+                        req.user = {
+                            id: 'sync-node',
+                            role: 'terminal_presale',
+                            isSyncNode: true,
+                            companyId: syncCompanyId,
+                            permissions: {
+                                canAccessPOS: true,
+                                canSyncCatalog: true,
+                                canViewCosts: false
+                            }
+                        };
+                        return runWithTenantContext({
+                            companyId: syncCompanyId,
+                            userId: 'sync-node',
+                            isSuperAdmin: false
+                        }, () => next());
+                    }
                 }
                 return res.status(401).json({ error: 'Acceso no autorizado a sincronización. Se requiere token Bearer o clave de sincronización autorizada.' });
             };
 
-            // Helper para resolver dinámicamente la empresa activa del negocio
-            const resolveActiveCompanyId = async (explicitCompanyId) => {
-                if (explicitCompanyId && explicitCompanyId !== 'default' && explicitCompanyId !== 'undefined' && explicitCompanyId !== 'admin') {
-                    try {
-                        const { Product } = require('./database/models');
-                        const count = await Product.count({ where: { companyId: String(explicitCompanyId) } });
-                        if (count > 0) return String(explicitCompanyId);
-                    } catch (e) {}
+            app.get('/lan/peers', verifySyncOrToken, (req, res) => {
+                const LANClusterService = require('./services/LANClusterService');
+                const topology = LANClusterService.getClusterTopology();
+                const userCompanyId = String(req.user?.companyId || 'default');
+                const userRole = String(req.user?.role || '').toLowerCase();
+                if (userRole !== 'superadmin' && Array.isArray(topology.peers)) {
+                    topology.peers = topology.peers.filter(p => !p.companyId || String(p.companyId) === userCompanyId);
+                    topology.clusterSize = topology.peers.length + (topology.localNode ? 1 : 0);
                 }
-                try {
-                    const { SETTINGS_FILE } = require('./config/paths');
-                    const { readJson } = require('./utils/helpers');
-                    const rawSettings = readJson(SETTINGS_FILE) || {};
-                    if (rawSettings['2']) return '2';
-                } catch (e) {}
-                return '2';
+                res.json({ success: true, ...topology });
+            });
+
+            // Helper para resolver estrictamente la empresa autorizada del usuario sin cruzar datos de otros tenants
+            const resolveActiveCompanyId = async (explicitCompanyId) => {
+                if (explicitCompanyId && explicitCompanyId !== 'undefined' && explicitCompanyId !== 'admin' && explicitCompanyId !== 'null') {
+                    return String(explicitCompanyId);
+                }
+                return 'default';
             };
 
             // WiFi Sync Route for Mobile Terminal (Protected LAN sync)
@@ -753,21 +824,22 @@ const startServer = (ports, userDataPath = null) => {
                     const { SETTINGS_FILE } = require('./config/paths');
                     const { readJson } = require('./utils/helpers');
                     
-                    const requestedCompanyId = req.user?.companyId || req.query.companyId || req.headers['x-company-id'];
+                    const userRole = String(req.user?.role || '').toLowerCase();
+                    const allowExplicitCompany = userRole === 'superadmin';
+                    const requestedCompanyId = allowExplicitCompany
+                        ? (req.query.companyId || req.headers['x-company-id'] || req.user?.companyId)
+                        : req.user?.companyId;
                     const companyId = await resolveActiveCompanyId(requestedCompanyId);
-                    const canViewCosts = req.user?.role === 'superadmin' || req.user?.permissions?.canViewCosts === true;
+                    const canViewCosts = userRole === 'superadmin' || userRole === 'admin' || userRole === 'owner' || userRole === 'dueño' || req.user?.permissions?.canViewCosts === true;
                     const productAttributes = canViewCosts
                         ? ['id', 'name', 'price', 'cost', 'stockQuantity', 'stock', 'category', 'barcode', 'imageUri', 'minStock', 'priceBs']
                         : ['id', 'name', 'price', 'stockQuantity', 'stock', 'category', 'barcode', 'imageUri', 'minStock', 'priceBs'];
 
-                    let products = await Product.findAll({
+                    const products = await Product.findAll({
                         where: { status: 'active', companyId },
                         attributes: productAttributes,
                         raw: true
                     });
-                    if (!products || products.length === 0) {
-                        products = await Product.findAll({ where: { status: 'active' }, attributes: productAttributes, raw: true });
-                    }
 
                     const sales = await Sale.findAll({
                         where: { companyId },
@@ -854,27 +926,22 @@ const startServer = (ports, userDataPath = null) => {
                     const { readJson } = require('./utils/helpers');
                     const { Op } = require('sequelize');
                     
-                    const requestedCompanyId = req.user?.companyId || req.query.companyId || req.headers['x-company-id'];
+                    const userRole = String(req.user?.role || '').toLowerCase();
+                    const allowExplicitCompany = userRole === 'superadmin';
+                    const requestedCompanyId = allowExplicitCompany
+                        ? (req.query.companyId || req.headers['x-company-id'] || req.user?.companyId)
+                        : req.user?.companyId;
                     const companyId = await resolveActiveCompanyId(requestedCompanyId);
-                    const canViewCosts = req.user?.role === 'superadmin' || req.user?.permissions?.canViewCosts === true;
+                    const canViewCosts = userRole === 'superadmin' || userRole === 'admin' || userRole === 'owner' || userRole === 'dueño' || req.user?.permissions?.canViewCosts === true;
                     const productAttributes = canViewCosts
                         ? ['id', 'name', 'price', 'cost', 'stockQuantity', 'stock', 'category', 'barcode', 'imageUri', 'minStock', 'priceBs', 'allowNegative', 'isSoldByWeight']
                         : ['id', 'name', 'price', 'stockQuantity', 'stock', 'category', 'barcode', 'imageUri', 'minStock', 'priceBs', 'allowNegative', 'isSoldByWeight'];
 
-                    let rawProducts = await Product.findAll({
+                    const rawProducts = await Product.findAll({
                         where: { status: 'active', companyId },
                         attributes: productAttributes,
                         include: [{ model: BranchStock, as: 'BranchStocks', attributes: ['quantity', 'branchId'] }]
                     });
-
-                    // Si no hay productos bajo ese companyId exacto, traer los del catálogo activo
-                    if (!rawProducts || rawProducts.length === 0) {
-                        rawProducts = await Product.findAll({
-                            where: { status: 'active' },
-                            attributes: productAttributes,
-                            include: [{ model: BranchStock, as: 'BranchStocks', attributes: ['quantity', 'branchId'] }]
-                        });
-                    }
 
                     const products = (rawProducts || []).map(p => {
                         const plain = p.get({ plain: true });
@@ -890,30 +957,21 @@ const startServer = (ports, userDataPath = null) => {
                         return plain;
                     });
 
-                    let customers = await Customer.findAll({
+                    const customers = await Customer.findAll({
                         where: { isActive: true, companyId },
                         raw: true
                     });
-                    if (!customers || customers.length === 0) {
-                        customers = await Customer.findAll({ where: { isActive: true }, raw: true });
-                    }
 
-                    let suppliers = await Supplier.findAll({
+                    const suppliers = await Supplier.findAll({
                         where: { isActive: true, companyId },
                         raw: true
                     });
-                    if (!suppliers || suppliers.length === 0) {
-                        suppliers = await Supplier.findAll({ where: { isActive: true }, raw: true });
-                    }
 
                     const cashiers = await User.findAll({
-                        where: { 
+                        where: {
                             status: 'active',
-                            role: { [Op.ne]: 'superadmin' },
-                            [Op.or]: [
-                                { companyId },
-                                { role: { [Op.in]: ['cashier', 'seller', 'user', 'admin', 'supervisor'] } }
-                            ]
+                            companyId,
+                            role: { [Op.ne]: 'superadmin' }
                         },
                         attributes: ['id', 'username', 'name', 'role', 'avatarColor', 'companyId', 'defaultCurrency'],
                         raw: true
@@ -922,18 +980,21 @@ const startServer = (ports, userDataPath = null) => {
                     let settings = {};
                     try {
                         const rawSettings = readJson(SETTINGS_FILE) || {};
-                        settings = { ...rawSettings };
-                        if (rawSettings[companyId]) {
-                            settings.business = rawSettings[companyId].businessInfo || {};
-                            settings.exchangeRate = rawSettings[companyId].exchangeRate || 1.0;
-                            settings.rate = rawSettings[companyId].exchangeRate || 1.0;
-                            settings.paymentMethods = rawSettings[companyId].paymentMethods || [];
-                        }
-                        delete settings.jwtSecret;
-                        delete settings.emailPassword;
-                        delete settings.adminPin;
-                        delete settings.licenseKey;
-                        delete settings.dbPassword;
+                        const companySettings = (rawSettings[companyId] && typeof rawSettings[companyId] === 'object')
+                            ? { ...rawSettings[companyId] }
+                            : {};
+                        delete companySettings.jwtSecret;
+                        delete companySettings.emailPassword;
+                        delete companySettings.adminPin;
+                        delete companySettings.licenseKey;
+                        delete companySettings.dbPassword;
+                        settings = {
+                            companyId,
+                            business: companySettings.businessInfo || {},
+                            exchangeRate: companySettings.exchangeRate || 1.0,
+                            rate: companySettings.exchangeRate || 1.0,
+                            paymentMethods: companySettings.paymentMethods || []
+                        };
                     } catch (e) {}
 
                     res.json({
@@ -1049,7 +1110,7 @@ const startServer = (ports, userDataPath = null) => {
                     res.json({
                         success: true,
                         message: 'Configuración guardada exitosamente en el disco.',
-                        config: saveResult.config,
+                        config: saveResult.publicConfig || DbConfigManager.getPublicConfig(),
                         test: testResult
                     });
                 } catch (err) {
@@ -1058,21 +1119,23 @@ const startServer = (ports, userDataPath = null) => {
             });
 
             // Endpoint HTTP universal para transmitir lecturas de código de barras desde el móvil o lector externo hacia la PC
-            app.post(['/remote-scan', '/api/remote-scan'], (req, res) => {
+            app.post(['/remote-scan', '/api/remote-scan'], verifySyncOrToken, (req, res) => {
                 try {
                     const code = String(req.body?.barcode || req.body?.code || '').trim();
                     if (!code) {
                         return res.status(400).json({ success: false, error: 'Código de barras vacío' });
                     }
+                    const companyId = String(req.user?.companyId || 'default');
                     const scanEvent = {
                         barcode: code,
+                        companyId,
                         source: req.body?.source || 'mobile_http',
                         senderSocketId: req.body?.senderSocketId || null,
                         timestamp: Date.now()
                     };
                     const virtualIoRef = app.get('io');
-                    if (virtualIoRef && typeof virtualIoRef.emit === 'function') {
-                        virtualIoRef.emit('remote_barcode_scan', scanEvent);
+                    if (virtualIoRef && typeof virtualIoRef.to === 'function') {
+                        virtualIoRef.to(companyId).emit('remote_barcode_scan', scanEvent);
                     }
                     return res.json({ success: true, barcode: code });
                 } catch (err) {
@@ -1104,7 +1167,6 @@ const startServer = (ports, userDataPath = null) => {
             app.use('/catalog', catalogRoutes);
             app.use('/ai', aiRoutes);
             app.use('/expenses', expenseRoutes);
-            app.use('/banks', bankRoutes);
             app.use('/fiscal', fiscalRoutes);
             app.use('/warehouses', warehousesRoutes);
             app.use('/bi', biRoutes);
@@ -1133,7 +1195,7 @@ const startServer = (ports, userDataPath = null) => {
                     '/cash', '/reports', '/settings', '/purchase-orders', '/refunds',
                     '/users', '/backup', '/debug', '/branches', '/quotations',
                     '/delivery-notes', '/audit', '/stock-intelligence', '/catalog',
-                    '/ai', '/expenses', '/banks', '/fiscal', '/warehouses', '/bi',
+                    '/ai', '/expenses', '/fiscal', '/warehouses', '/bi',
                     '/accounting', '/payroll', '/production', '/collections',
                     '/assets', '/promotions', '/stock-alerts', '/services', '/messages', '/sync', '/lan', '/system',
                     '/scanner', '/recharges', '/lots', '/whatsapp', '/api'
@@ -1152,6 +1214,14 @@ const startServer = (ports, userDataPath = null) => {
                         error: "No se puede eliminar el registro porque tiene historial de dependencias (ej. ventas o inventario).",
                         suggestInactivation: true
                     });
+                }
+                if (err.name === 'MulterError') {
+                    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+                    return res.status(status).json({ error: err.message || 'Archivo inválido o excede límite permitido', code: err.code });
+                }
+                const explicitStatus = Number(err.statusCode || err.status);
+                if (Number.isInteger(explicitStatus) && explicitStatus >= 400 && explicitStatus < 500) {
+                    return res.status(explicitStatus).json({ error: err.message || 'Solicitud inválida' });
                 }
                 logger.error(`--- UNHANDLED ERROR --- ${err.message}`, { stack: err.stack });
                 
@@ -1192,55 +1262,124 @@ const startServer = (ports, userDataPath = null) => {
             const ioInstances = [];
 
             const setupSocketEvents = (io) => {
-                // 🔒 SEGURIDAD MULTI-TENANT: Middleware de autenticación para WebSockets
-                io.use((socket, next) => {
+                // 🔒 SEGURIDAD MULTI-TENANT: Middleware estricto de autenticación y aislamiento para WebSockets
+                io.use(async (socket, next) => {
                     try {
-                        const token = socket.handshake.auth?.token || 
-                                      socket.handshake.headers?.authorization?.replace(/^Bearer\s+/, '') || 
-                                      socket.handshake.query?.token;
-                        if (token) {
-                            const { verifyJwtResilient } = require('./middleware/auth');
-                            const decoded = verifyJwtResilient(token);
-                            if (decoded) {
-                                socket.user = decoded;
-                                socket.companyId = String(decoded.companyId || '1');
+                        const {
+                            verifyJwtResilient,
+                            safeSecretEqual,
+                            verifyDisplayPairingToken,
+                            verifySocketJwtUser
+                        } = require('./middleware/auth');
+
+                        // Parsear cookie authToken si viene en handshake HTTP Same-Origin / Electron
+                        let cookieToken = null;
+                        const rawCookie = String(socket.handshake.headers?.cookie || '');
+                        if (rawCookie) {
+                            for (const part of rawCookie.split(';')) {
+                                const eqIdx = part.indexOf('=');
+                                if (eqIdx > 0) {
+                                    const k = part.slice(0, eqIdx).trim();
+                                    if (k === 'authToken') {
+                                        cookieToken = decodeURIComponent(part.slice(eqIdx + 1).trim());
+                                        break;
+                                    }
+                                }
                             }
                         }
-                    } catch (_) {}
-                    next();
+
+                        const token = socket.handshake.auth?.token ||
+                            socket.handshake.headers?.authorization?.replace(/^Bearer\s+/, '') ||
+                            cookieToken;
+                        if (token) {
+                            const decoded = verifyJwtResilient(token);
+                            const sockUserCheck = await verifySocketJwtUser(decoded);
+                            if (!sockUserCheck.ok) {
+                                return next(new Error(sockUserCheck.error || 'Unauthorized socket session'));
+                            }
+                            socket.user = {
+                                ...decoded,
+                                role: sockUserCheck.role,
+                                companyId: sockUserCheck.companyId
+                            };
+                            socket.companyId = sockUserCheck.companyId;
+                            socket.authMode = 'jwt';
+                            return next();
+                        }
+
+                        const syncKey = String(
+                            socket.handshake.auth?.syncKey ||
+                            socket.handshake.headers?.['x-sync-key'] ||
+                            ''
+                        );
+                        const expectedSyncKey = String(process.env.SYNC_SECRET_KEY || '');
+                        if (syncKey && expectedSyncKey && safeSecretEqual(syncKey, expectedSyncKey)) {
+                            socket.isSyncNode = true;
+                            socket.companyId = String(process.env.DEFAULT_COMPANY_ID || '2');
+                            socket.authMode = 'sync_key';
+                            return next();
+                        }
+
+                        // Visor de clientes pasivo: exige token de emparejamiento HMAC firmado
+                        if (socket.handshake.auth?.mode === 'customer_display') {
+                            const targetComp = String(socket.handshake.auth?.companyId || '2');
+                            const targetReg = String(socket.handshake.auth?.registerId || '1');
+                            const displayToken = String(socket.handshake.auth?.displayToken || '');
+                            if (displayToken && verifyDisplayPairingToken(displayToken, targetComp, targetReg)) {
+                                socket.isCustomerDisplayOnly = true;
+                                socket.companyId = targetComp;
+                                socket.registerId = targetReg;
+                                socket.authMode = 'customer_display';
+                                return next();
+                            }
+                        }
+                    } catch (sockErr) {
+                        console.warn('[SOCKET AUTH] Error verificando handshake:', sockErr.message);
+                    }
+
+                    return next(new Error('Unauthorized socket connection'));
                 });
 
                 io.on('connection', (socket) => {
-                    let userCompanyId = socket.companyId || null;
-                    socket.on('join_company', (companyId) => {
-                        // Si el socket está autenticado con JWT, forzar aislamiento a su empresa real
-                        if (socket.user && socket.user.companyId) {
+                    let userCompanyId = String(socket.companyId || 'default');
+                    const isAuthenticatedClient = Boolean(socket.user || socket.isSyncNode);
+
+                    if (isAuthenticatedClient) {
+                        socket.join(userCompanyId);
+                    }
+
+                    socket.on('join_company', (requestedCompanyId) => {
+                        if (!isAuthenticatedClient) return;
+                        const role = String(socket.user?.role || '').toLowerCase();
+                        const canSwitchCompany = role === 'superadmin';
+                        if (socket.user?.companyId && !canSwitchCompany) {
                             userCompanyId = String(socket.user.companyId);
-                        } else if (companyId) {
-                            userCompanyId = String(companyId);
+                        } else if (requestedCompanyId && canSwitchCompany) {
+                            userCompanyId = String(requestedCompanyId);
                         }
-                        if (userCompanyId) {
-                            socket.join(userCompanyId);
-                        }
+                        socket.companyId = userCompanyId;
+                        socket.join(userCompanyId);
                     });
-                    
+
                     // Typing events for internal chat (Aislados por empresa)
                     socket.on('internal_chat_typing', (data) => {
-                        const targetRoom = data?.companyId || userCompanyId;
-                        if (targetRoom) socket.to(targetRoom).emit('internal_chat_typing', data);
+                        if (!isAuthenticatedClient) return;
+                        socket.to(userCompanyId).emit('internal_chat_typing', { ...data, companyId: userCompanyId });
                     });
                     socket.on('internal_chat_stop_typing', (data) => {
-                        const targetRoom = data?.companyId || userCompanyId;
-                        if (targetRoom) socket.to(targetRoom).emit('internal_chat_stop_typing', data);
+                        if (!isAuthenticatedClient) return;
+                        socket.to(userCompanyId).emit('internal_chat_stop_typing', { ...data, companyId: userCompanyId });
                     });
 
                     // LAN Cluster P2P Socket Events
                     socket.on('lan_announce', (peerData) => {
+                        if (!isAuthenticatedClient) return;
                         try {
                             const LANClusterService = require('./services/LANClusterService');
                             if (peerData && peerData.nodeId) {
                                 LANClusterService.peers.set(`${peerData.nodeId}`, {
                                     ...peerData,
+                                    companyId: userCompanyId,
                                     lastSeen: Date.now()
                                 });
                                 LANClusterService.notifyTopologyChange();
@@ -1249,113 +1388,121 @@ const startServer = (ports, userDataPath = null) => {
                     });
 
                     socket.on('lan_stock_update', async (data) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            const targetRoom = data?.companyId || userCompanyId;
-                            if (targetRoom) socket.to(targetRoom).emit('lan_stock_update', data);
-                            socket.broadcast.emit('lan_stock_update', data);
+                            socket.to(userCompanyId).emit('lan_stock_update', data);
                         } catch (e) {}
                     });
 
                     socket.on('lan_sale_sync', async (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            const targetRoom = payload?.companyId || userCompanyId;
-                            if (targetRoom) socket.to(targetRoom).emit('lan_sale_sync', payload);
-                            socket.broadcast.emit('lan_sale_sync', payload);
+                            socket.to(userCompanyId).emit('lan_sale_sync', payload);
                         } catch (e) {}
                     });
 
-                    // Retransmisión en tiempo real de cambios originados en terminales móviles o secundarias
+                    // Retransmisión en tiempo real aislada por empresa
                     socket.on('product_updated', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            socket.broadcast.emit('product_updated', payload);
+                            socket.to(userCompanyId).emit('product_updated', payload);
                         } catch (e) {}
                     });
 
                     socket.on('inventory_changed', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            socket.broadcast.emit('inventory_changed', payload || { timestamp: Date.now() });
+                            socket.to(userCompanyId).emit('inventory_changed', payload || { timestamp: Date.now() });
                         } catch (e) {}
                     });
 
                     socket.on('customers_changed', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            socket.broadcast.emit('customers_changed', payload || { timestamp: Date.now() });
+                            socket.to(userCompanyId).emit('customers_changed', payload || { timestamp: Date.now() });
                         } catch (e) {}
                     });
 
                     socket.on('expenses_changed', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            socket.broadcast.emit('expenses_changed', payload || { timestamp: Date.now() });
+                            socket.to(userCompanyId).emit('expenses_changed', payload || { timestamp: Date.now() });
                         } catch (e) {}
                     });
 
                     socket.on('cash_updated', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            socket.broadcast.emit('cash_updated', payload || { timestamp: Date.now() });
+                            socket.to(userCompanyId).emit('cash_updated', payload || { timestamp: Date.now() });
                         } catch (e) {}
                     });
 
-                    // Visor de Cliente en Tiempo Real (Customer-Facing Display)
+                    // Visor de Cliente en Tiempo Real (Customer-Facing Display aislado por tenant autenticado)
                     socket.on('join_customer_display', (info) => {
                         try {
-                            socket.join('customer_displays');
-                            if (info?.registerId) socket.join(`register_${info.registerId}`);
-                            if (info?.companyId) socket.join(String(info.companyId));
+                            const targetCompany = isAuthenticatedClient
+                                ? userCompanyId
+                                : String(socket.companyId || '');
+                            if (!targetCompany) return;
+                            const regId = socket.isCustomerDisplayOnly
+                                ? String(socket.registerId || '1')
+                                : String(info?.registerId || socket.registerId || '1');
+                            socket.join(`customer_displays:${targetCompany}`);
+                            if (regId) socket.join(`display_register:${targetCompany}:${regId}`);
                         } catch (e) {}
                     });
 
                     socket.on('request_customer_display_cart', (data) => {
                         try {
-                            socket.broadcast.emit('request_customer_display_cart', data);
+                            const targetCompany = isAuthenticatedClient
+                                ? userCompanyId
+                                : String(socket.companyId || '');
+                            if (!targetCompany) return;
+                            socket.to(targetCompany).emit('request_customer_display_cart', data);
                         } catch (e) {}
                     });
 
                     socket.on('customer_display_cart_update', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            const targetRoom = payload?.companyId || userCompanyId;
-                            if (targetRoom) {
-                                socket.to(String(targetRoom)).emit('customer_display_cart_update', payload);
-                            }
+                            socket.to(userCompanyId).emit('customer_display_cart_update', payload);
+                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_cart_update', payload);
                             if (payload?.registerId) {
-                                socket.to(`register_${payload.registerId}`).emit('customer_display_cart_update', payload);
+                                socket.to(`display_register:${userCompanyId}:${payload.registerId}`).emit('customer_display_cart_update', payload);
                             }
-                            // Reenviar a cualquier visor suscrito
-                            io.to('customer_displays').emit('customer_display_cart_update', payload);
-                            // Broadcast universal para cualquier otra ventana o dispositivo en la LAN
-                            socket.broadcast.emit('customer_display_cart_update', payload);
                         } catch (e) {}
                     });
 
                     socket.on('customer_display_payment_update', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            const targetRoom = payload?.companyId || userCompanyId;
-                            if (targetRoom) {
-                                socket.to(String(targetRoom)).emit('customer_display_payment_update', payload);
-                            }
+                            socket.to(userCompanyId).emit('customer_display_payment_update', payload);
+                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_payment_update', payload);
                             if (payload?.registerId) {
-                                socket.to(`register_${payload.registerId}`).emit('customer_display_payment_update', payload);
+                                socket.to(`display_register:${userCompanyId}:${payload.registerId}`).emit('customer_display_payment_update', payload);
                             }
-                            io.to('customer_displays').emit('customer_display_payment_update', payload);
-                            socket.broadcast.emit('customer_display_payment_update', payload);
                         } catch (e) {}
                     });
 
                     socket.on('customer_display_sale_completed', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            io.to('customer_displays').emit('customer_display_sale_completed', payload);
-                            socket.broadcast.emit('customer_display_sale_completed', payload);
+                            socket.to(userCompanyId).emit('customer_display_sale_completed', payload);
+                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_sale_completed', payload);
                         } catch (e) {}
                     });
 
                     socket.on('customer_display_ads_updated', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
-                            io.to('customer_displays').emit('customer_display_ads_updated', payload);
-                            socket.broadcast.emit('customer_display_ads_updated', payload);
+                            socket.to(userCompanyId).emit('customer_display_ads_updated', payload);
+                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_ads_updated', payload);
                         } catch (e) {}
                     });
 
-                    // 📱 Preventa Remota Móvil -> Despacho instantáneo a Caja Principal (PC)
+                    // 📱 Preventa Remota Móvil -> Despacho instantáneo a Caja Principal (aislado por tenant)
                     socket.on('remote_held_sale', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
                             if (!payload || !Array.isArray(payload.items) || payload.items.length === 0) return;
                             const reg = global.__remoteHeldSalesRegistry || (global.__remoteHeldSalesRegistry = { items: new Map(), recentBroadcasts: new Map() });
@@ -1364,7 +1511,7 @@ const startServer = (ports, userDataPath = null) => {
                             const enriched = {
                                 ...payload,
                                 id: saleId,
-                                companyId: String(payload.companyId || userCompanyId || '1'),
+                                companyId: userCompanyId,
                                 timestamp: payload.timestamp || now
                             };
                             reg.items.set(saleId, enriched);
@@ -1381,23 +1528,25 @@ const startServer = (ports, userDataPath = null) => {
                             const lastSent = reg.recentBroadcasts.get(saleId) || 0;
                             if (now - lastSent > 6000) {
                                 reg.recentBroadcasts.set(saleId, now);
-                                io.emit('remote_held_sale', enriched);
+                                io.to(userCompanyId).emit('remote_held_sale', enriched);
                             }
                         } catch (e) {}
                     });
 
-                    // 📡 Escáner de Código de Barras Remoto (Teléfono / Terminal -> PC Principal)
+                    // 📡 Escáner de Código de Barras Remoto (aislado por empresa)
                     socket.on('remote_barcode_scan', (payload) => {
+                        if (!isAuthenticatedClient) return;
                         try {
                             const code = String(payload?.barcode || payload?.code || '').trim();
                             if (!code) return;
                             const scanEvent = {
                                 barcode: code,
+                                companyId: userCompanyId,
                                 source: payload?.source || 'mobile_socket',
                                 senderSocketId: socket.id,
                                 timestamp: payload?.timestamp || Date.now()
                             };
-                            socket.broadcast.emit('remote_barcode_scan', scanEvent);
+                            socket.to(userCompanyId).emit('remote_barcode_scan', scanEvent);
                         } catch (e) {}
                     });
                 });
@@ -1411,10 +1560,16 @@ const startServer = (ports, userDataPath = null) => {
                         : http.createServer(app);
                     
                     const io = new Server(httpServer, {
-                        cors: { 
-                            origin: true,
-                            credentials: true,
-                            methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
+                        cors: corsOptions,
+                        allowRequest: (req, callback) => {
+                            const origin = req.headers?.origin;
+                            if (!origin) return callback(null, true);
+                            isOriginAllowed(origin, (err, allowed) => {
+                                if (err || !allowed) {
+                                    return callback('Origin not allowed', false);
+                                }
+                                return callback(null, true);
+                            });
                         }
                     });
 
@@ -1426,8 +1581,10 @@ const startServer = (ports, userDataPath = null) => {
                         resPort(null);
                     });
                     httpServer.listen(p, '::', () => {
-                        console.log(`🚀 Server running on port ${p} (${isHttps ? 'HTTPS' : 'HTTP'})`);
-                        const srvObj = { server: httpServer, port: p };
+                        const boundAddress = typeof httpServer.address === 'function' ? httpServer.address() : null;
+                        const actualPort = (boundAddress && typeof boundAddress === 'object' && boundAddress.port) ? boundAddress.port : p;
+                        console.log(`🚀 Server running on port ${actualPort} (${isHttps ? 'HTTPS' : 'HTTP'})`);
+                        const srvObj = { server: httpServer, port: actualPort };
                         servers.push(srvObj);
                         resPort(srvObj);
                     });
@@ -1435,8 +1592,8 @@ const startServer = (ports, userDataPath = null) => {
             };
 
             // 1. Iniciar inmediatamente el puerto principal para que la UI cargue en < 500ms
-            const primaryPort = portList[0];
-            await bindSinglePort(primaryPort);
+            const boundPrimary = await bindSinglePort(portList[0]);
+            const primaryPort = boundPrimary ? boundPrimary.port : portList[0];
 
             // Create a virtual "io" hub that forwards emissions to all port instances
             const virtualIo = {
@@ -1463,14 +1620,51 @@ const startServer = (ports, userDataPath = null) => {
             app.set('io', virtualIo);
             global.io = virtualIo;
 
+            const stopServer = async () => {
+                for (const ioInst of ioInstances) {
+                    try {
+                        await new Promise((resIo) => ioInst.close(() => resIo()));
+                    } catch (err) {
+                        console.warn('[Server Shutdown] Error cerrando Socket.IO:', err.message);
+                    }
+                }
+                for (const sObj of servers) {
+                    if (sObj && sObj.server) {
+                        try {
+                            if (typeof sObj.server.closeAllConnections === 'function') {
+                                sObj.server.closeAllConnections();
+                            }
+                            if (sObj.server.listening) {
+                                await new Promise((resSrv) => sObj.server.close(() => resSrv()));
+                            }
+                        } catch (err) {
+                            console.warn('[Server Shutdown] Error cerrando HTTP server:', err.message);
+                        }
+                    }
+                }
+                try {
+                    const { sequelize } = require('./database/connection');
+                    if (sequelize && typeof sequelize.close === 'function') {
+                        await sequelize.close();
+                    }
+                } catch (err) {
+                    console.warn('[Server Shutdown] Error cerrando Sequelize:', err.message);
+                }
+            };
+
             // Resolve IMMEDIATELY so Launcher / Edge opens instantly!
-            resolve({ servers, mainPort: primaryPort });
+            resolve({ servers, mainPort: primaryPort, app, ioInstances, dbInitPromise, stopServer });
 
             // 2. Levantar puertos secundarios y servicios en segundo plano sin bloquear el arranque
             setImmediate(async () => {
                 const secondaryPorts = portList.slice(1);
                 for (const secPort of secondaryPorts) {
                     await bindSinglePort(secPort);
+                }
+
+                if (process.env.DISABLE_BACKGROUND_WORKERS === 'true') {
+                    console.log('🧪 [Startup] Workers en segundo plano desactivados (DISABLE_BACKGROUND_WORKERS=true).');
+                    return;
                 }
 
                 // Initialize LAN Cluster Service (P2P Discovery & Sync)
@@ -1489,7 +1683,7 @@ const startServer = (ports, userDataPath = null) => {
                     const firstUser = await User.findOne({ where: { role: ['superadmin', 'admin'] } }) || await User.findOne();
                     const companyId = firstUser?.companyId || 'default';
                     
-                    WhatsappBotService.init(companyId);
+                    WhatsappBotService.init(companyId, { autoStart: true });
                     console.log(`✅ WhatsApp Bot background init completed (Company: ${companyId}).`);
                 } catch (err) {
                     console.warn('⚠️ WhatsApp Bot background init notice:', err.message);

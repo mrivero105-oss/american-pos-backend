@@ -1,8 +1,8 @@
 import { lazy, Suspense } from 'react';
 import { usePos } from '../hooks/PosContext';
 import { RefreshCw } from 'lucide-react';
-import POSOriginal from '../pages/POS_OriginalBackup';
 
+const POSOriginal = lazy(() => import('../pages/POS_OriginalBackup'));
 const PharmacyPOSView = lazy(() => import('../pages/PharmacyPOSView'));
 const ClothingPOSView = lazy(() => import('./clothing/ClothingPOSView'));
 
@@ -33,5 +33,9 @@ export default function POSSwitcher() {
     );
   }
 
-  return <POSOriginal />;
+  return (
+    <Suspense fallback={<POSLoader />}>
+      <POSOriginal />
+    </Suspense>
+  );
 }

@@ -106,19 +106,9 @@ export default function SupervisorAuthModal({
       biometricService.triggerHaptic('error');
       const serverMsg = err.response?.data?.message || err.response?.data?.error;
 
-      // Si estamos 100% offline y el servidor es inalcanzable
+      // Si estamos 100% offline y el servidor es inalcanzable: no fabricar aprobaciones offline falsas
       if ((err.code === 'ECONNABORTED' || !navigator.onLine) && !err.response) {
-        // En contingencia offline estricta: Solo autorizar si el usuario actual ya posee rango administrativo
-        const role = (currentUser?.role || '').toLowerCase();
-        const isMaster = ['admin', 'superadmin', 'supervisor', 'owner'].includes(role);
-        if (isMaster) {
-          console.warn('[SupervisorAuth] Autorización offline de contingencia por rol activo');
-          onAuthorized?.({ id: `offline_auth_${Date.now()}`, isOffline: true });
-          onClose();
-          return;
-        } else {
-          setError('Sin conexión al servidor para validar PIN de supervisor');
-        }
+        setError('Sin conexión al servidor para validar y firmar autorización de supervisor.');
       } else {
         setError(serverMsg || 'PIN incorrecto o no autorizado');
       }

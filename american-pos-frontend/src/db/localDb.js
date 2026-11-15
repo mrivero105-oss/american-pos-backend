@@ -103,18 +103,36 @@ const createUnifiedTable = (storeName, keyPath = 'id') => ({
             return all.filter(predicate);
         }
     }),
-    orderBy: (fieldName) => ({
-        toArray: async () => {
-            const all = await unifiedDb.getAll(storeName);
-            return [...all].sort((a, b) => (a?.[fieldName] > b?.[fieldName] ? 1 : -1));
-        },
-        reverse: () => ({
-            toArray: async () => {
-                const all = await unifiedDb.getAll(storeName);
-                return [...all].sort((a, b) => (a?.[fieldName] < b?.[fieldName] ? 1 : -1));
-            }
-        })
-    }),
+    orderBy: (fieldName) => {
+        const sortAsc = (items) => [...items].sort((a, b) => {
+            const va = a?.[fieldName] ?? '';
+            const vb = b?.[fieldName] ?? '';
+            return va > vb ? 1 : (va < vb ? -1 : 0);
+        });
+        const sortDesc = (items) => [...items].sort((a, b) => {
+            const va = a?.[fieldName] ?? '';
+            const vb = b?.[fieldName] ?? '';
+            return va < vb ? 1 : (va > vb ? -1 : 0);
+        });
+        return {
+            toArray: async () => sortAsc(await unifiedDb.getAll(storeName)),
+            limit: (count) => ({
+                toArray: async () => {
+                    const sorted = sortAsc(await unifiedDb.getAll(storeName));
+                    return Number.isFinite(count) && count >= 0 ? sorted.slice(0, count) : sorted;
+                }
+            }),
+            reverse: () => ({
+                toArray: async () => sortDesc(await unifiedDb.getAll(storeName)),
+                limit: (count) => ({
+                    toArray: async () => {
+                        const sorted = sortDesc(await unifiedDb.getAll(storeName));
+                        return Number.isFinite(count) && count >= 0 ? sorted.slice(0, count) : sorted;
+                    }
+                })
+            })
+        };
+    },
     toCollection: () => ({
         toArray: () => unifiedDb.getAll(storeName),
         primaryKeys: async () => {
@@ -125,6 +143,8 @@ const createUnifiedTable = (storeName, keyPath = 'id') => ({
         }
     })
 });
+
+let txChain = Promise.resolve();
 
 const localDb = {
     products: createUnifiedTable('products', 'id'),
@@ -140,11 +160,48 @@ const localDb = {
     metadata: createUnifiedTable('metadata', 'key'),
     syncQueue: createUnifiedTable('syncQueue', 'id'),
 
-    transaction: async (_mode, ...args) => {
+    transaction: async (mode, ...args) => {
         const callback = args[args.length - 1];
-        if (typeof callback === 'function') {
-            return await callback();
-        }
+        if (typeof callback !== 'function') return;
+
+        const tableArgs = args.slice(0, -1).flat();
+        const isWriteTx = typeof mode === 'string' && (mode.includes('w') || mode === 'readwrite');
+
+        const runAtomic = async () => {
+            const snapshots = [];
+            if (isWriteTx && tableArgs.length > 0) {
+                const cloneSnapshot = typeof globalThis.structuredClone === 'function'
+                    ? (val) => globalThis.structuredClone(val)
+                    : (val) => JSON.parse(JSON.stringify(val));
+                for (const tbl of tableArgs) {
+                    const storeName = typeof tbl === 'string' ? tbl : tbl?.name;
+                    if (storeName) {
+                        const currentItems = await unifiedDb.getAll(storeName).catch(() => []);
+                        snapshots.push({
+                            storeName,
+                            items: Array.isArray(currentItems) ? cloneSnapshot(currentItems) : []
+                        });
+                    }
+                }
+            }
+
+            try {
+                return await callback();
+            } catch (txErr) {
+                if (snapshots.length > 0) {
+                    for (const snap of snapshots) {
+                        await unifiedDb.replaceAllAtomic(snap.storeName, snap.items).catch((rbErr) => {
+                            console.warn(`[localDb] Error revertiendo store "${snap.storeName}":`, rbErr?.message || rbErr);
+                        });
+                    }
+                }
+                throw txErr;
+            }
+        };
+
+        const nextTx = txChain.then(runAtomic, runAtomic);
+        txChain = nextTx.catch(() => {});
+        return nextTx;
     },
     open: async () => localDb,
     isOpen: () => true,

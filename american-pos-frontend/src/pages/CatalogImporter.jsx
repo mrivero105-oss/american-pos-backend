@@ -24,13 +24,15 @@ import {
     BookOpen,
     CreditCard,
     CheckCheck,
-    ShieldCheck
+    ShieldCheck,
+    History
 } from 'lucide-react';
 import api from '../services/api';
 import PrinterScanModal from '../components/PrinterScanModal';
 import CameraScanModal from '../components/CameraScanModal';
 import InvoiceViewerModal from '../components/InvoiceViewerModal';
 import InvoiceSettlementModal from '../components/InvoiceSettlementModal';
+import ImportedInvoicesDrawer from '../components/ImportedInvoicesDrawer';
 import toast from 'react-hot-toast';
 import { normalizeProductImage } from '../utils/imageProcess';
 
@@ -491,6 +493,41 @@ export default function CatalogImporter() {
     const [invoiceUrl, setInvoiceUrl] = useState('');
     const [showInvoiceViewer, setShowInvoiceViewer] = useState(false);
     const [previewProductImage, setPreviewProductImage] = useState(null);
+    const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
+
+    const handleViewInvoiceFromHistory = (url, label) => {
+        setInvoiceUrl(url);
+        setShowInvoiceViewer(true);
+    };
+
+    const handleLoadInvoiceIntoImporter = async (historyInvoice) => {
+        setIsHistoryDrawerOpen(false);
+        if (!historyInvoice.invoiceUrl) {
+            toast.error('Esta factura no tiene archivo digitalizado adjunto');
+            return;
+        }
+        setInvoiceUrl(historyInvoice.invoiceUrl);
+        setReferenceNumber(historyInvoice.referenceNumber || '');
+        if (historyInvoice.supplierId) {
+            setSelectedSupplierId(String(historyInvoice.supplierId));
+        }
+        const toastId = toast.loading('Cargando factura para revisión y auditoría...', { duration: 60000 });
+        try {
+            const { data } = await api.post('/products/reparse-invoice', {
+                invoiceUrl: historyInvoice.invoiceUrl,
+                supplierId: historyInvoice.supplierId
+            });
+            const success = applyExtractedCatalogData(data);
+            if (success) {
+                toast.success(`Factura #${historyInvoice.referenceNumber} cargada con ${data.items?.length || 0} renglones`, { id: toastId });
+            } else {
+                toast.error('No se pudieron extraer renglones de la factura', { id: toastId });
+            }
+        } catch (err) {
+            console.error('Error re-procesando factura de historial:', err);
+            toast.error(err.response?.data?.error || 'Error al re-procesar factura', { id: toastId });
+        }
+    };
 
     useEffect(() => {
         const fetchSuppliers = async () => {
@@ -1446,31 +1483,45 @@ export default function CatalogImporter() {
                     </div>
                 </div>
 
-                {/* Conmutador de Modo: Factura de Compra vs Catálogo de Precios */}
-                <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl self-start lg:self-auto">
+                {/* Controles de Modo e Historial */}
+                <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto">
+                    {/* Conmutador de Modo: Factura de Compra vs Catálogo de Precios */}
+                    <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
+                        <button
+                            type="button"
+                            onClick={() => handleSwitchImportMode('INVOICE')}
+                            className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                                importMode === 'INVOICE'
+                                    ? 'bg-white dark:bg-slate-800 text-primary-600 dark:text-primary-400 shadow-xs border border-slate-200/80 dark:border-slate-700'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                            }`}
+                        >
+                            <Receipt size={15} />
+                            <span>Factura / Compra (Stock + Cuentas)</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleSwitchImportMode('CATALOG')}
+                            className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                                importMode === 'CATALOG'
+                                    ? 'bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-xs border border-slate-200/80 dark:border-slate-700'
+                                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                            }`}
+                        >
+                            <BookOpen size={15} />
+                            <span>Catálogo / Lista (Solo Precios)</span>
+                        </button>
+                    </div>
+
+                    {/* Botón Historial de Facturas Cargadas (Drawer Deslizable) */}
                     <button
                         type="button"
-                        onClick={() => handleSwitchImportMode('INVOICE')}
-                        className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                            importMode === 'INVOICE'
-                                ? 'bg-white dark:bg-slate-800 text-primary-600 dark:text-primary-400 shadow-xs border border-slate-200/80 dark:border-slate-700'
-                                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                        }`}
+                        onClick={() => setIsHistoryDrawerOpen(true)}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-primary-500/40 transition-all shadow-xs cursor-pointer"
+                        title="Ver historial de facturas cargadas anteriormente"
                     >
-                        <Receipt size={15} />
-                        <span>Factura / Compra (Stock + Cuentas)</span>
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => handleSwitchImportMode('CATALOG')}
-                        className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                            importMode === 'CATALOG'
-                                ? 'bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-xs border border-slate-200/80 dark:border-slate-700'
-                                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                        }`}
-                    >
-                        <BookOpen size={15} />
-                        <span>Catálogo / Lista (Solo Precios)</span>
+                        <History size={15} className="text-primary-500" />
+                        <span>Historial</span>
                     </button>
                 </div>
             </div>
@@ -2618,6 +2669,14 @@ export default function CatalogImporter() {
                 }}
                 suppliers={suppliers}
                 initialSupplierId={selectedSupplierId}
+            />
+
+            {/* Modal Deslizable Lateral: Historial de Facturas Cargadas */}
+            <ImportedInvoicesDrawer
+                isOpen={isHistoryDrawerOpen}
+                onClose={() => setIsHistoryDrawerOpen(false)}
+                onViewInvoice={handleViewInvoiceFromHistory}
+                onLoadInvoiceIntoImporter={handleLoadInvoiceIntoImporter}
             />
         </div>
     );

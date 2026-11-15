@@ -2,6 +2,8 @@ const { Expense, AuditLog, CashShift } = require('../database/models');
 const { sequelize } = require('../database/connection');
 const { generateRobustId } = require('../utils/helpers');
 const { Op } = require('sequelize');
+const precision = require('../utils/VortexMathEngine');
+const AccountingEngineService = require('./AccountingEngineService');
 
 
 class ExpenseService {
@@ -66,8 +68,8 @@ class ExpenseService {
                     physicalDrawerAmount = parseFloat(nativeAmount);
                 } else if (rate > 1) {
                     // API directa envió monto en Bolívares + tasa de cambio
-                    physicalDrawerAmount = rawAmt;
-                    usdAmount = Math.round((rawAmt / rate) * 100) / 100;
+                    physicalDrawerAmount = precision.round(rawAmt, 2);
+                    usdAmount = precision.round(precision.divide(rawAmt, rate), 2);
                 }
             }
 
@@ -121,6 +123,8 @@ class ExpenseService {
                     }, { transaction: t });
                 }
             }
+
+            await AccountingEngineService.generateExpenseEntry(newExpense, companyId, t);
 
             await this._logAudit(reqUser, 'EXPENSE_CREATE', `Gasto registrado: ${description} ($${usdAmount} USD / ${physicalDrawerAmount} ${expCurrency})`, newExpense.id, null, newExpense, t);
 
@@ -216,7 +220,7 @@ class ExpenseService {
                     console.warn('[ExpenseService] Error al eliminar CashMovement asociado:', e.message);
                 }
 
-                await this._logAudit(reqUser, 'EXPENSE_DELETE', `Eliminado gasto: ${expense.description}`, id, expense, null);
+                await this._logAudit(reqUser, 'EXPENSE_DELETE', `Eliminado gasto: ${expense.description}`, id, expense, null, t);
                 return true;
             }
             return false;

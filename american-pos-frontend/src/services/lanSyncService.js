@@ -2,6 +2,7 @@ import { io } from 'socket.io-client';
 import api from './api';
 import { db as primaryDb } from './db';
 import db from '../db/localDb';
+import { fetchGlobalSettings } from '../utils/format';
 
 class LANSyncService {
   constructor() {
@@ -32,7 +33,20 @@ class LANSyncService {
    * Conecta al clúster LAN por WebSockets y activa el monitoreo continuo de red.
    */
   init() {
-    if (this.socket && (this.socket.connected || this.socket.active || this.isConnecting)) return;
+    const currentAuthToken = typeof window !== 'undefined' ? (localStorage.getItem('auth_token') || null) : null;
+    const currentSyncKey = typeof window !== 'undefined' ? (import.meta.env?.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key') || null) : null;
+    if (!currentAuthToken && !currentSyncKey) {
+      return;
+    }
+
+    const tokenChanged = this.socket && this._socketAuthToken !== currentAuthToken;
+    if (this.socket && (this.socket.connected || this.socket.active || this.isConnecting) && !tokenChanged) return;
+
+    if (tokenChanged) {
+      try { this.socket.disconnect(); } catch (_) {}
+      this.socket = null;
+      this.isConnecting = false;
+    }
 
     if (!this.isListeningNetwork) {
       window.addEventListener('online', this.handleNetworkChange);
@@ -42,7 +56,7 @@ class LANSyncService {
 
     this.connectSocket();
 
-    // Sondeo de respaldo de peers vía REST inteligente (solo cuando el socket no esté activo, o cada 60s)
+    // Sondeo de respaldo de peers vía REST inteligente (solo cuando el socket no esté activo, cada 45s)
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
@@ -80,12 +94,25 @@ class LANSyncService {
       this.isConnecting = true;
       const isAndroidCap = typeof window !== 'undefined' && ((window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform()) || window.location.protocol === 'capacitor:');
       const isLocalLoopback = typeof window !== 'undefined' && !isAndroidCap && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && localStorage.getItem('isaac_pos_node_role') !== 'client';
+      const localHost = (typeof window !== 'undefined' && window.location.hostname === 'localhost') ? 'localhost' : '127.0.0.1';
+      const currentPort = typeof window !== 'undefined' ? window.location.port : '';
+      const devPorts = ['5173', '5174', '5175'];
+      const targetLocalPort = (devPorts.includes(currentPort) || !currentPort) ? '3005' : currentPort;
       let baseUrl = isLocalLoopback
-        ? 'http://127.0.0.1:3005'
-        : (api.defaults.baseURL || (isAndroidCap ? 'http://192.168.1.30:3005' : `${window.location.protocol}//${window.location.hostname}:3005`));
+        ? `http://${localHost}:${targetLocalPort}`
+        : (api.defaults.baseURL || (isAndroidCap ? 'http://192.168.1.30:3005' : `${window.location.protocol}//${window.location.hostname}:${targetLocalPort}`));
       const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+      const syncKey = typeof window !== 'undefined' ? (import.meta.env?.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key')) : null;
+      if (!authToken && !syncKey) {
+        this.isConnecting = false;
+        return;
+      }
+      this._socketAuthToken = authToken || null;
       this.socket = io(baseUrl, {
-        auth: { token: authToken },
+        auth: {
+          token: authToken || undefined,
+          syncKey: syncKey || undefined
+        },
         reconnection: true,
         reconnectionDelay: 2000,
         reconnectionAttempts: Infinity,
@@ -98,7 +125,7 @@ class LANSyncService {
         this.status.state = navigator.onLine ? 'CLOUD_ONLINE' : 'LAN_P2P_ACTIVE';
 
         try {
-          const userStr = localStorage.getItem('pos_user') || sessionStorage.getItem('pos_user');
+          const userStr = localStorage.getItem('isaac_pos_saved_user_profile') || localStorage.getItem('pos_user') || sessionStorage.getItem('pos_user');
           if (userStr) {
             const parsedUser = JSON.parse(userStr);
             if (parsedUser?.companyId) {
@@ -248,7 +275,6 @@ class LANSyncService {
             console.log(`[LAN_SYNC] 🖨️ Imprimiendo réplica simultánea de venta #${data.sale.invoiceNumber || data.sale.id} en ${stationPrinter}`);
 
             const { formatSaleToEscPos } = await import('../utils/escposFormatter');
-            const { fetchGlobalSettings } = await import('../utils/format');
             const globalSettings = await fetchGlobalSettings();
 
             let payMethods = [];
@@ -277,6 +303,9 @@ class LANSyncService {
   }
 
   async fetchLANPeers() {
+    const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const syncKey = typeof window !== 'undefined' ? (import.meta.env?.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key')) : null;
+    if (!authToken && !syncKey) return;
     try {
       const res = await api.get('/lan/peers');
       if (res.data && res.data.success) {

@@ -1,4 +1,5 @@
 import api from '../services/api';
+import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
 
 const getStoredSetting = (key, fallback) => {
     if (typeof window !== 'undefined') {
@@ -55,13 +56,11 @@ export const fetchGlobalSettings = async () => {
         return globalSettings;
     } catch (error) {
         console.error('Error fetching global settings locally, intentando Supabase Cloud:', error?.message || error);
-        try {
-            const cloudRes = await fetch('https://puvqiipussyktfmgafgv.supabase.co/rest/v1/cloud_configuracion?id=eq.general', {
-                headers: {
-                    'apikey': 'sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6',
-                    'Authorization': 'Bearer sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6'
-                }
-            });
+        if (hasSupabaseConfig()) {
+            try {
+                const cloudRes = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general'), {
+                    headers: getSupabaseHeaders()
+                });
             if (cloudRes.ok) {
                 const cloudData = await cloudRes.json();
                 if (Array.isArray(cloudData) && cloudData.length > 0) {
@@ -84,8 +83,9 @@ export const fetchGlobalSettings = async () => {
                     return globalSettings;
                 }
             }
-        } catch (cloudErr) {
-            console.warn('Fallback de configuracion en nube fallo:', cloudErr?.message || cloudErr);
+            } catch (cloudErr) {
+                console.warn('Fallback de configuracion en nube fallo:', cloudErr?.message || cloudErr);
+            }
         }
         return { ...getStoredBusinessSettings(), ...globalSettings };
     }

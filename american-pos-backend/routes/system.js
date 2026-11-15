@@ -20,7 +20,7 @@ router.post('/restart-service', requirePermission('canManageSettings'), (req, re
 /**
  * GET /system/health - Enterprise APM & Telemetry (Real-time telemetry)
  */
-router.get('/health', async (req, res) => {
+router.get('/health', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const companyId = String(req.user?.companyId || '1');
         const mem = process.memoryUsage();
@@ -120,7 +120,9 @@ router.get('/health', async (req, res) => {
         try {
             const LANClusterService = require('../services/LANClusterService');
             lanCluster = LANClusterService.getClusterTopology();
-        } catch (e) {}
+        } catch (e) {
+            console.warn('[System] Aviso leyendo topología LAN:', e.message);
+        }
 
         const heapUsedMB = Number((mem.heapUsed / 1024 / 1024).toFixed(2));
         const heapTotalMB = Number((mem.heapTotal / 1024 / 1024).toFixed(2));
@@ -486,7 +488,9 @@ const getUpdaterConfig = () => {
                     data.githubOwner = owner;
                     data.githubRepo = repo;
                     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-                } catch (saveErr) {}
+                } catch (saveErr) {
+                    console.warn('[System Updater] Aviso migrando owner/repo de configuración:', saveErr.message);
+                }
             }
             return {
                 githubOwner: owner,
@@ -521,7 +525,7 @@ const saveUpdaterConfig = (config) => {
 /**
  * GET /system/updater/status - Check current app version vs GitHub Releases & Git status
  */
-router.get('/updater/status', async (req, res) => {
+router.get('/updater/status', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const config = getUpdaterConfig();
         let currentVersion = '2.0.2';
@@ -605,10 +609,19 @@ router.get('/updater/status', async (req, res) => {
 
         if (gitInfo.isGitWorkspace) {
             try {
-                const { execSync } = require('child_process');
-                execSync('git fetch', { cwd: path.join(__dirname, '..'), timeout: 10000 });
-                const behind = execSync('git rev-list HEAD..origin/main --count', { cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: 2000 }).trim();
-                if (parseInt(behind) > 0) {
+                const { execFile } = require('child_process');
+                const { promisify } = require('util');
+                const execFileAsync = promisify(execFile);
+                const repoCwd = path.join(__dirname, '..');
+
+                await execFileAsync('git', ['fetch'], { cwd: repoCwd, timeout: 10000 });
+                const { stdout: behindRaw } = await execFileAsync('git', ['rev-list', 'HEAD..origin/main', '--count'], {
+                    cwd: repoCwd,
+                    encoding: 'utf8',
+                    timeout: 3000
+                });
+                const behind = String(behindRaw || '').trim();
+                if (parseInt(behind, 10) > 0) {
                     isUpdateAvailable = true;
                     latestRelease = {
                         tagName: 'Git',

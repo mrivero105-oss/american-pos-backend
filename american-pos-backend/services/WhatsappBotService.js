@@ -58,6 +58,8 @@ class WhatsappBotService {
         this.chatHistory = new Map(); // chatId -> Array<{ role: 'user'|'model', content: string, timestamp: number }>
         this.pendingBursts = new Map(); // chatId -> { texts: string[], lastMsg: Message, timer: Timeout }
         this.initTimeout = null;
+        this.qrAttempts = 0;
+        this.maxQrAttempts = 4;
     }
 
     _recordChatTurn(chatId, role, content) {
@@ -85,13 +87,20 @@ class WhatsappBotService {
         return list.map(item => ({ role: item.role, content: item.content }));
     }
 
-    async init(companyId = 'default') {
+    async init(companyId = 'default', options = {}) {
+        const isAutoStart = Boolean(options?.autoStart);
+        this.qrAttempts = 0;
+        this.maxQrAttempts = isAutoStart ? 4 : 12;
+
         if (this.client) {
             try {
                 await this.client.destroy();
             } catch (_) {}
             this.client = null;
         }
+
+        const currentInitToken = Symbol('wa_init');
+        this._activeInitToken = currentInitToken;
 
         this.companyId = (!companyId || companyId === 'DEFAULT_COMPANY') ? 'default' : companyId;
         this.status = 'INITIALIZING';
@@ -155,8 +164,21 @@ class WhatsappBotService {
         }
 
         this.client.on('qr', async (qr) => {
+            if (this._activeInitToken !== currentInitToken) return;
             if (this.initTimeout) clearTimeout(this.initTimeout);
-            console.log('[WHATSAPP] QR Code generado');
+            this.qrAttempts += 1;
+            if (this.qrAttempts > this.maxQrAttempts) {
+                console.log(`[WHATSAPP] ⏸️ Sin escaneo tras ${this.maxQrAttempts} códigos QR; pausando cliente en segundo plano hasta vinculación manual.`);
+                const staleClient = this.client;
+                this.client = null;
+                this.status = 'DISCONNECTED';
+                this.qrCodeUrl = null;
+                if (staleClient) {
+                    try { await staleClient.destroy(); } catch (_) {}
+                }
+                return;
+            }
+            console.log(`[WHATSAPP] QR Code generado (${this.qrAttempts}/${this.maxQrAttempts})`);
             this.status = 'QR_READY';
             try {
                 this.qrCodeUrl = await qrcode.toDataURL(qr);
@@ -166,7 +188,9 @@ class WhatsappBotService {
         });
 
         this.client.on('ready', () => {
+            if (this._activeInitToken !== currentInitToken) return;
             if (this.initTimeout) clearTimeout(this.initTimeout);
+            this.qrAttempts = 0;
             console.log('[WHATSAPP] ¡Cliente conectado y listo!');
             this.status = 'CONNECTED';
             this.qrCodeUrl = null;

@@ -10,7 +10,8 @@ export default function ConfirmModal({
     message = 'Esta acción no se puede deshacer.',
     confirmText = 'Confirmar',
     cancelText = 'Cancelar',
-    variant = 'primary' // 'danger', 'success', 'primary'
+    variant = 'primary', // 'danger', 'success', 'primary'
+    zIndex = 'z-[100000]',
 }) {
     useEffect(() => {
         if (isOpen) {
@@ -68,6 +69,7 @@ export default function ConfirmModal({
             isOpen={isOpen}
             onClose={onClose}
             maxWidth="max-w-[420px]"
+            zIndex={zIndex}
             className="bg-white dark:bg-slate-900 overflow-hidden border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-xl"
         >
             <div className="px-5 pt-5 pb-4 flex items-start gap-3.5 relative">

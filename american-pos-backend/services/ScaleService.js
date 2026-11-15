@@ -65,8 +65,8 @@ class ScaleService {
             unit = 'lb';
         }
 
-        // 2. Extracción numérica del peso
-        const numMatch = clean.match(/[-+]?\s*(\d+(\.\d+)?)/);
+        // 2. Extracción numérica del peso (capturando el signo directamente junto al dígito)
+        const numMatch = clean.match(/([-+])?\s*(\d+(?:\.\d+)?)/);
         if (!numMatch) {
             return {
                 success: false,
@@ -75,8 +75,8 @@ class ScaleService {
             };
         }
 
-        let rawWeight = parseFloat(numMatch[1]);
-        if (clean.includes('-')) {
+        let rawWeight = parseFloat(numMatch[2]);
+        if (numMatch[1] === '-') {
             rawWeight = -rawWeight;
         }
 

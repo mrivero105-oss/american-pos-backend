@@ -3,9 +3,11 @@ import { Lock, Unlock, KeyRound, AlertCircle, RefreshCw, LogOut, ShieldCheck } f
 import { useAuth } from '../hooks/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 export default function InactivityLockModal() {
     const { user, logout } = useAuth();
+    const { confirm, confirmDialog } = useConfirmDialog();
     const [isLocked, setIsLocked] = useState(false);
     const [pin, setPin] = useState('');
     const [verifying, setVerifying] = useState(false);
@@ -225,8 +227,15 @@ export default function InactivityLockModal() {
                 <div className="mt-4 pt-3 border-t border-slate-100 dark:border-white/5 w-full">
                     <button
                         type="button"
-                        onClick={() => {
-                            if (window.confirm('¿Cerrar sesión y cambiar de usuario? Asegúrese de que no haya ventas pendientes en otra caja.')) {
+                        onClick={async () => {
+                            const confirmed = await confirm({
+                                title: 'Cerrar sesión',
+                                message: '¿Cerrar sesión y cambiar de usuario? Asegúrese de que no haya ventas pendientes en otra caja.',
+                                confirmText: 'Cerrar sesión',
+                                variant: 'danger',
+                                zIndex: 'z-[1000000]'
+                            });
+                            if (confirmed) {
                                 logout();
                             }
                         }}
@@ -237,6 +246,7 @@ export default function InactivityLockModal() {
                     </button>
                 </div>
             </div>
+            {confirmDialog}
         </div>
     );
 }

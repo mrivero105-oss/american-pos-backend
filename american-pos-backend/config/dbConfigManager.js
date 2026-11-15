@@ -1,10 +1,91 @@
 const fs = require('fs');
 const path = require('path');
 const dgram = require('dgram');
+const crypto = require('crypto');
+const os = require('os');
 const { Client: PgClient } = require('pg');
 const { BASE_PATH } = require('./paths');
 
 const CONFIG_FILE_PATH = path.join(BASE_PATH, 'db-config.json');
+const DB_IDENTIFIER_REGEX = /^[a-zA-Z0-9_]{1,63}$/;
+let cachedLocalAesKey = null;
+
+function getElectronSafeStorage() {
+    try {
+        if (process.versions && process.versions.electron) {
+            const electron = require('electron');
+            if (electron && electron.safeStorage && typeof electron.safeStorage.isEncryptionAvailable === 'function') {
+                if (electron.safeStorage.isEncryptionAvailable()) {
+                    return electron.safeStorage;
+                }
+            }
+        }
+    } catch (_) {}
+    return null;
+}
+
+function getLocalAesKey() {
+    if (cachedLocalAesKey) return cachedLocalAesKey;
+    const explicitKey = process.env.DB_CONFIG_KEY ? String(process.env.DB_CONFIG_KEY).trim() : '';
+    const material = explicitKey || `${os.hostname()}|${process.platform}|${process.arch}|${BASE_PATH}|isaac-db-cfg-v1`;
+    cachedLocalAesKey = crypto.scryptSync(material, 'isaac-pos-dbcfg-salt-2026', 32);
+    return cachedLocalAesKey;
+}
+
+function encryptDbPassword(plainPassword) {
+    const raw = plainPassword === undefined || plainPassword === null ? '' : String(plainPassword);
+    if (!raw) {
+        return { passwordEncrypted: true, passwordEncScheme: 'empty', passwordCipher: '' };
+    }
+    const safeStorage = getElectronSafeStorage();
+    if (safeStorage) {
+        const encBuf = safeStorage.encryptString(raw);
+        return {
+            passwordEncrypted: true,
+            passwordEncScheme: 'dpapi',
+            passwordCipher: encBuf.toString('base64')
+        };
+    }
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', getLocalAesKey(), iv);
+    const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return {
+        passwordEncrypted: true,
+        passwordEncScheme: 'aes256gcm',
+        passwordCipher: `${iv.toString('hex')}:${tag.toString('hex')}:${encrypted.toString('hex')}`
+    };
+}
+
+function decryptDbPassword(fileConfig) {
+    if (!fileConfig || typeof fileConfig !== 'object') return undefined;
+    if (fileConfig.passwordEncScheme === 'empty') return '';
+
+    if (fileConfig.passwordCipher && fileConfig.passwordEncScheme === 'dpapi') {
+        const safeStorage = getElectronSafeStorage();
+        if (!safeStorage) {
+            throw new Error('safeStorage DPAPI no disponible para descifrar db-config.json');
+        }
+        return safeStorage.decryptString(Buffer.from(String(fileConfig.passwordCipher), 'base64'));
+    }
+
+    if (fileConfig.passwordCipher && fileConfig.passwordEncScheme === 'aes256gcm') {
+        const parts = String(fileConfig.passwordCipher).split(':');
+        if (parts.length !== 3) {
+            throw new Error('Formato de cifra AES-256-GCM inválido en db-config.json');
+        }
+        const [ivHex, tagHex, dataHex] = parts;
+        const decipher = crypto.createDecipheriv('aes-256-gcm', getLocalAesKey(), Buffer.from(ivHex, 'hex'));
+        decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+        const dec = Buffer.concat([decipher.update(Buffer.from(dataHex, 'hex')), decipher.final()]);
+        return dec.toString('utf8');
+    }
+
+    if (fileConfig.password !== undefined) {
+        return String(fileConfig.password);
+    }
+    return undefined;
+}
 
 const DEFAULT_CONFIG = {
     mode: 'server', // 'server' (localhost) o 'client' (terminal de venta LAN)
@@ -18,11 +99,39 @@ const DEFAULT_CONFIG = {
 
 /**
  * Gestor Centralizado y Resiliente de Configuración de Base de Datos para Isaac POS.
- * Almacena y recupera los parámetros fuera del directorio empaquetado de la app (en %AppData%\isaac-pos).
+ * Almacena y recupera los parámetros fuera del directorio empaquetado de la app (en %AppData%\isaac-pos),
+ * cifrando credenciales con DPAPI (Electron safeStorage) o AES-256-GCM.
  */
 class DbConfigManager {
     static getConfigFilePath() {
         return CONFIG_FILE_PATH;
+    }
+
+    static validateDatabaseName(dbName) {
+        const name = String(dbName || '').trim();
+        if (!DB_IDENTIFIER_REGEX.test(name)) {
+            throw new Error(`Nombre de base de datos inválido: '${name}'. Solo se permiten letras, números y guión bajo (máx 63).`);
+        }
+        return name;
+    }
+
+    static toPublicConfig(cfg) {
+        if (!cfg) return null;
+        return {
+            mode: cfg.mode,
+            dialect: cfg.dialect || 'postgres',
+            host: cfg.host,
+            port: cfg.port,
+            database: cfg.database,
+            user: cfg.user,
+            hasPassword: Boolean(cfg.password),
+            passwordEncrypted: true,
+            updatedAt: cfg.updatedAt || null
+        };
+    }
+
+    static getPublicConfig() {
+        return this.toPublicConfig(this.getConfig());
     }
 
     /**
@@ -33,21 +142,29 @@ class DbConfigManager {
      * 3. Valores por defecto seguros (127.0.0.1:5432)
      */
     static getConfig() {
+        const isTestMode = process.env.ISAAC_TEST_ISOLATED === '1' || process.env.NODE_ENV === 'test';
+        const explicitUserData = Boolean(process.env.USER_DATA_PATH);
         let fileConfig = {};
+        let loadedFromPrimaryPath = false;
+        let decryptedPassword;
         try {
-            const candidatePaths = [
-                CONFIG_FILE_PATH,
-                path.join(process.env.APPDATA || '', 'isaac-pos', 'db-config.json'),
-                path.join(process.env.APPDATA || '', 'Isaac POS', 'db-config.json'),
-                path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming', 'isaac-pos', 'db-config.json')
-            ];
+            const candidatePaths = (isTestMode || explicitUserData)
+                ? [CONFIG_FILE_PATH]
+                : [
+                    CONFIG_FILE_PATH,
+                    path.join(process.env.APPDATA || '', 'isaac-pos', 'db-config.json'),
+                    path.join(process.env.APPDATA || '', 'Isaac POS', 'db-config.json'),
+                    path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming', 'isaac-pos', 'db-config.json')
+                ];
             for (const cPath of candidatePaths) {
                 if (cPath && fs.existsSync(cPath)) {
                     const raw = fs.readFileSync(cPath, 'utf8');
                     fileConfig = JSON.parse(raw);
+                    loadedFromPrimaryPath = path.resolve(cPath) === path.resolve(CONFIG_FILE_PATH);
                     break;
                 }
             }
+            decryptedPassword = decryptDbPassword(fileConfig);
         } catch (e) {
             console.warn('[DbConfigManager] Aviso leyendo db-config.json:', e.message);
         }
@@ -56,10 +173,15 @@ class DbConfigManager {
         let resolvedHost = fileConfig.host !== undefined ? fileConfig.host : (process.env.DB_HOST || (isClient ? '' : DEFAULT_CONFIG.host));
 
         // Normalización IPv4: Si el host apunta al hostname de esta máquina o a 'localhost', forzar '127.0.0.1'
-        // Esto evita que Node.js resuelva a una dirección IPv6 (fe80::) que PostgreSQL rechaza en pg_hba.conf
-        const os = require('os');
         if (resolvedHost && (resolvedHost.toLowerCase() === os.hostname().toLowerCase() || resolvedHost.toLowerCase() === 'localhost')) {
             resolvedHost = '127.0.0.1';
+        }
+
+        const forcedDb = process.env.DB_NAME_FORCE || (isTestMode && process.env.DB_NAME ? process.env.DB_NAME : '');
+        const rawDatabase = forcedDb || fileConfig.database || process.env.DB_NAME || DEFAULT_CONFIG.database;
+        const resolvedDatabase = this.validateDatabaseName(rawDatabase);
+        if (isTestMode && resolvedDatabase === 'americanpos') {
+            throw new Error('[DbConfigManager] Bloqueado: un entorno de test intentó usar la base de datos de producción "americanpos".');
         }
 
         const resolvedConfig = {
@@ -67,10 +189,33 @@ class DbConfigManager {
             dialect: 'postgres',
             host: resolvedHost,
             port: parseInt(fileConfig.port || process.env.DB_PORT || DEFAULT_CONFIG.port, 10),
-            database: fileConfig.database || process.env.DB_NAME || DEFAULT_CONFIG.database,
+            database: resolvedDatabase,
             user: fileConfig.user || process.env.DB_USER || DEFAULT_CONFIG.user,
-            password: fileConfig.password !== undefined ? fileConfig.password : (process.env.DB_PASSWORD !== undefined ? process.env.DB_PASSWORD : DEFAULT_CONFIG.password)
+            password: decryptedPassword !== undefined
+                ? decryptedPassword
+                : (process.env.DB_PASSWORD !== undefined ? process.env.DB_PASSWORD : DEFAULT_CONFIG.password),
+            updatedAt: fileConfig.updatedAt || null
         };
+
+        // Migración silenciosa automática: si existía contraseña en claro en CONFIG_FILE_PATH, reescribir cifrada
+        if (loadedFromPrimaryPath && fileConfig.password !== undefined && !fileConfig.passwordEncrypted) {
+            try {
+                const enc = encryptDbPassword(resolvedConfig.password);
+                const migratedDisk = {
+                    mode: resolvedConfig.mode,
+                    dialect: 'postgres',
+                    host: resolvedConfig.host,
+                    port: resolvedConfig.port,
+                    database: resolvedConfig.database,
+                    user: resolvedConfig.user,
+                    ...enc,
+                    updatedAt: new Date().toISOString()
+                };
+                const tempPath = `${CONFIG_FILE_PATH}.tmp`;
+                fs.writeFileSync(tempPath, JSON.stringify(migratedDisk, null, 2), 'utf8');
+                fs.renameSync(tempPath, CONFIG_FILE_PATH);
+            } catch (_) {}
+        }
 
         // Sincronizar variables de entorno para compatibilidad global con Sequelize y librerías heredadas
         this.applyToEnv(resolvedConfig);
@@ -96,30 +241,53 @@ class DbConfigManager {
     }
 
     /**
-     * Guarda la configuración de forma atómica en el directorio de usuario (AppData).
+     * Guarda la configuración de forma atómica cifrando la contraseña en el directorio de usuario (AppData).
      */
-    static saveConfig(newConfig) {
+    static saveConfig(newConfig = {}) {
         try {
             if (!fs.existsSync(BASE_PATH)) {
                 fs.mkdirSync(BASE_PATH, { recursive: true });
             }
 
             const current = this.getConfig();
+            const targetDatabase = this.validateDatabaseName(
+                newConfig.database !== undefined ? newConfig.database : current.database
+            );
+
+            const hasExplicitPassword = typeof newConfig.password === 'string' && newConfig.password.length > 0;
+            const resolvedPassword = hasExplicitPassword
+                ? newConfig.password
+                : (newConfig.clearPassword === true ? '' : current.password);
+
             const merged = {
                 ...current,
                 ...newConfig,
                 dialect: 'postgres',
+                database: targetDatabase,
                 port: parseInt(newConfig.port || current.port, 10),
+                password: resolvedPassword,
                 updatedAt: new Date().toISOString()
             };
 
+            const encFields = encryptDbPassword(merged.password);
+            const diskPayload = {
+                mode: merged.mode,
+                dialect: 'postgres',
+                host: merged.host,
+                port: merged.port,
+                database: merged.database,
+                user: merged.user,
+                ...encFields,
+                updatedAt: merged.updatedAt
+            };
+
             const tempPath = `${CONFIG_FILE_PATH}.tmp`;
-            fs.writeFileSync(tempPath, JSON.stringify(merged, null, 2), 'utf8');
+            fs.writeFileSync(tempPath, JSON.stringify(diskPayload, null, 2), 'utf8');
             fs.renameSync(tempPath, CONFIG_FILE_PATH);
 
             this.applyToEnv(merged);
-            console.log(`[DbConfigManager] Configuración guardada con éxito en: ${CONFIG_FILE_PATH}`);
-            return { success: true, config: merged };
+            console.log(`[DbConfigManager] Configuración cifrada guardada con éxito en: ${CONFIG_FILE_PATH} (${encFields.passwordEncScheme})`);
+            return { success: true, config: merged, publicConfig: this.toPublicConfig(merged) };
         } catch (e) {
             console.error('[DbConfigManager] Error guardando db-config.json:', e.message);
             return { success: false, error: e.message };
@@ -131,11 +299,18 @@ class DbConfigManager {
      * No congela la app ni bloquea el proceso.
      */
     static async testConnection(candidateConfig = null) {
-        const config = candidateConfig ? { ...candidateConfig } : this.getConfig();
+        const stored = this.getConfig();
+        const config = candidateConfig ? {
+            ...candidateConfig,
+            password: (typeof candidateConfig.password === 'string' && candidateConfig.password.length > 0)
+                ? candidateConfig.password
+                : stored.password
+        } : stored;
+        const safeDb = this.validateDatabaseName(config.database || 'americanpos');
         const client = new PgClient({
             host: config.host || '127.0.0.1',
             port: parseInt(config.port || 5432, 10),
-            database: config.database || 'americanpos',
+            database: safeDb,
             user: config.user || 'postgres',
             password: config.password || 'postgres',
             connectionTimeoutMillis: 3000
@@ -147,7 +322,7 @@ class DbConfigManager {
             await client.end();
             return {
                 success: true,
-                message: `Conexión exitosa a la base de datos '${res.rows[0]?.db || config.database}'`,
+                message: `Conexión exitosa a la base de datos '${res.rows[0]?.db || safeDb}'`,
                 database: res.rows[0]?.db,
                 host: config.host,
                 port: config.port
@@ -199,21 +374,34 @@ class DbConfigManager {
                     try {
                         const data = JSON.parse(msg.toString());
                         if (data && data.type === 'LAN_HEARTBEAT' && data.ip) {
-                            const crypto = require('crypto');
-                            const secret = process.env.LAN_CLUSTER_SECRET || 'isaac_pos_lan_cluster_hmac_v1';
+                            const secret = process.env.LAN_CLUSTER_SECRET || process.env.SYNC_SECRET_KEY;
+                            if (!secret) {
+                                return; // No procesar beacons si no hay clave de clúster configurada
+                            }
+                            // Validar ventana temporal anti-replay (máx 5 minutos)
+                            const packetTs = Number(data.timestamp || 0);
+                            if (!Number.isFinite(packetTs) || Math.abs(Date.now() - packetTs) > 5 * 60 * 1000) {
+                                return;
+                            }
+                            // Validar IPv4 básica
+                            const ipStr = String(data.ip).trim();
+                            if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ipStr)) {
+                                return;
+                            }
                             const canonical = `${data.type}|${data.nodeId}|${data.ip}|${data.httpPort}|${data.role}|${data.timestamp}`;
                             const expectedSig = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-                            if (!data.sig || data.sig !== expectedSig) {
-                                return; // Ignorar beacon UDP sin firma HMAC válida
+                            const sigBuf = typeof data.sig === 'string' ? Buffer.from(data.sig, 'utf8') : null;
+                            const expBuf = Buffer.from(expectedSig, 'utf8');
+                            if (!sigBuf || sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+                                return; // Ignorar beacon UDP sin firma HMAC válida en tiempo constante
                             }
-                            // Ignorar si el paquete viene de localhost en modo no servidor
                             clearTimeout(timer);
                             finish({
                                 found: true,
-                                serverIp: data.ip,
-                                serverName: data.nodeName || 'Servidor Isaac POS',
+                                serverIp: ipStr,
+                                serverName: String(data.nodeName || 'Servidor Isaac POS').replace(/[<>"']/g, '').slice(0, 64),
                                 role: data.role,
-                                httpPort: data.httpPort || 3005,
+                                httpPort: Number(data.httpPort) || 3005,
                                 dbPort: 5432,
                                 discoveredFrom: rinfo.address
                             });

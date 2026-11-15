@@ -24,13 +24,10 @@ const replacement1 = `      let rateLoaded = false;
       }
 
       // Si la PC local no respondió (Ej: fuera del local con datos móviles), consultar Supabase Cloud 24/7
-      if (!rateLoaded) {
+      if (!rateLoaded && hasSupabaseConfig()) {
         try {
-          const cloudRes = await fetch('https://puvqiipussyktfmgafgv.supabase.co/rest/v1/cloud_configuracion?id=eq.general&select=*', {
-            headers: {
-              'apikey': 'sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6',
-              'Authorization': 'Bearer sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6'
-            }
+          const cloudRes = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general&select=*'), {
+            headers: getSupabaseHeaders()
           });
           if (cloudRes.ok) {
             const rows = await cloudRes.json();

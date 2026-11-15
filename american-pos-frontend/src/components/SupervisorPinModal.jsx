@@ -75,6 +75,12 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
         const supObj = supervisors.find(s => s.id === selectedSupervisor);
         try {
             setLoading(true);
+            const enrolledCred = biometricService.getEnrolledCredential();
+            if (!enrolledCred?.biometricToken || String(enrolledCred.userId) !== String(selectedSupervisor)) {
+                setError('No hay una huella criptográfica vinculada en este equipo para el supervisor seleccionado. Usa tu PIN.');
+                return;
+            }
+
             const bioResult = await biometricService.authenticate({
                 supervisorName: supObj?.name || supObj?.username || 'Supervisor'
             });
@@ -83,6 +89,7 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
                 const res = await api.post('/auth/supervisor-authorize', { 
                     supervisorId: selectedSupervisor, 
                     isBiometric: true,
+                    biometricToken: enrolledCred.biometricToken,
                     actionType: actionType || 'GENERAL_ACTION', 
                     referenceId 
                 });

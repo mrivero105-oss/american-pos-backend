@@ -313,7 +313,13 @@ try {
         const isExplicitEscl = deviceId && deviceId.startsWith('ESCL_NET_');
         let targetIp = null;
         if (isExplicitEscl) {
-            targetIp = deviceId.replace('ESCL_NET_', '');
+            const candidateIp = String(deviceId).slice('ESCL_NET_'.length).trim();
+            const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(candidateIp);
+            const validOctets = ipv4Match && ipv4Match.slice(1).every(o => Number(o) >= 0 && Number(o) <= 255);
+            if (!validOctets) {
+                throw new Error('Identificador de escáner de red eSCL inválido.');
+            }
+            targetIp = candidateIp;
         } else if (!deviceId || deviceId === 'DEFAULT_WIA_SCANNER') {
             const esclDevs = await this.discoverEsclDevices().catch(() => []);
             if (esclDevs.length > 0) {
@@ -355,8 +361,11 @@ try {
             if (colorMode === 'bw' || colorMode === 'monochrome') wiaIntent = 4;
             else if (colorMode === 'gray' || colorMode === 'grayscale') wiaIntent = 2;
 
-            const safeDeviceId = (deviceId && !deviceId.startsWith('DEFAULT') && !deviceId.startsWith('ESCL_')) 
-                ? String(deviceId).replace(/[`$"\\]/g, '') 
+            const safeDeviceId = (deviceId && !deviceId.startsWith('DEFAULT') && !deviceId.startsWith('ESCL_'))
+                ? String(deviceId)
+                    .replace(/[`$"\\\r\n\0]/g, '')
+                    .replace(/'/g, "''")
+                    .slice(0, 200)
                 : '';
             const safeDpi = Math.max(75, Math.min(Number(dpi) || 300, 1200));
             const safeIntent = [1, 2, 4].includes(wiaIntent) ? wiaIntent : 1;

@@ -264,14 +264,14 @@ export default function BulkEditModal({ isOpen, onClose, onSave, selectedCount, 
                 {/* Value Input */}
                 <div>
                     <label className="block text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1.5">
-                        {adjustmentType === 'margin' ? 'Margen de Utilidad Deseado (%)' : adjustmentType === 'percentage' ? 'Porcentaje de Ajuste (%)' : 'Monto Fijo a Sumar/Restar ($)'}
+                        {adjustmentType === 'margin' ? 'Margen / Markup sobre Costo (%)' : adjustmentType === 'percentage' ? 'Porcentaje de Ajuste (%)' : 'Monto Fijo a Sumar/Restar ($)'}
                     </label>
                     <div className="relative">
                         <input
                             type="number"
                             step="0.01"
                             min="0.01"
-                            max={adjustmentType === 'margin' ? '99' : '1000'}
+                            max={adjustmentType === 'margin' ? '10000' : '1000'}
                             required
                             value={value}
                             onChange={(e) => setValue(e.target.value)}

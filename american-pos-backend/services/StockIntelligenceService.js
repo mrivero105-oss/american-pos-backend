@@ -25,11 +25,10 @@ class StockIntelligenceService {
                 ],
                 include: [{
                     model: Sale,
-                    as: 'Sale',
                     attributes: [],
                     where: {
                         companyId,
-                        status: { [Op.in]: ['completed', 'paid', 'refunded', 'partially_refunded'] },
+                        status: { [Op.in]: ['completed', 'paid', 'partially_refunded'] },
                         createdAt: { [Op.gte]: startDate }
                     }
                 }],

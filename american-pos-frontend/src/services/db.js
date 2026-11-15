@@ -219,24 +219,43 @@ const migrateAndPurgeLegacyDatabases = async () => {
 
     try {
         for (const legacyName of LEGACY_DB_NAMES) {
+            let migrationOk = true;
             const legacySales = await readLegacyStore(legacyName, 'sales');
             const pendingSales = legacySales.filter(s => s && (s.status === 'pending_sync' || s.isOffline));
             for (const sale of pendingSales) {
-                await db.put('sales', sale).catch(() => {});
+                try {
+                    await db.put('sales', sale);
+                } catch (putErr) {
+                    migrationOk = false;
+                    console.warn(`[Storage Migration] Error migrando venta pendiente desde ${legacyName}:`, putErr?.message || putErr);
+                }
             }
 
             const legacyQueue = await readLegacyStore(legacyName, 'syncQueue');
             for (const qItem of legacyQueue) {
-                await db.put('syncQueue', qItem).catch(() => {});
+                try {
+                    await db.put('syncQueue', qItem);
+                } catch (qErr) {
+                    migrationOk = false;
+                    console.warn(`[Storage Migration] Error migrando syncQueue desde ${legacyName}:`, qErr?.message || qErr);
+                }
             }
 
-            try {
-                indexedDB.deleteDatabase(legacyName);
-            } catch (_) {}
+            if (migrationOk) {
+                try {
+                    indexedDB.deleteDatabase(legacyName);
+                } catch (delErr) {
+                    console.warn(`[Storage Migration] No se pudo eliminar ${legacyName}:`, delErr?.message || delErr);
+                }
+            } else {
+                console.warn(`[Storage Migration] Se conserva ${legacyName} por error al migrar registros pendientes.`);
+            }
         }
         localStorage.setItem(LEGACY_CLEANUP_FLAG, 'true');
-        console.log('🧹 [Storage Migration] Bases de datos antiguas de IndexedDB eliminadas tras verificar migración.');
-    } catch (_) {}
+        console.log('🧹 [Storage Migration] Bases de datos antiguas de IndexedDB procesadas tras verificar migración.');
+    } catch (migErr) {
+        console.warn('[Storage Migration] Error en limpieza de bases legadas:', migErr?.message || migErr);
+    }
 };
 
 export const initDB = () => {
@@ -514,16 +533,12 @@ export const db = {
                 const request = store.getAll();
                 request.onsuccess = () => {
                     const list = Array.isArray(request.result) ? request.result : [];
-                    if (list.length > 0) {
-                        mirror.clear();
-                        for (let i = 0; i < list.length; i++) {
-                            const k = extractRecordKey(storeName, list[i]);
-                            if (k) mirror.set(k, list[i]);
-                        }
-                        resolve(list);
-                    } else {
-                        resolve(Array.from(mirror.values()));
+                    mirror.clear();
+                    for (let i = 0; i < list.length; i++) {
+                        const k = extractRecordKey(storeName, list[i]);
+                        if (k) mirror.set(k, list[i]);
                     }
+                    resolve(list);
                 };
                 request.onerror = () => resolve(Array.from(mirror.values()));
             } catch (_) {

@@ -241,7 +241,7 @@ export default function LicenseSettings({
                     </div>
 
                     {/* Módulo Especial de Soporte / Master Admin */}
-                    {user?.email === 'mrivero105@gmail.com' && (
+                    {['superadmin', 'owner', 'dueño', 'dueno', 'master'].includes((user?.role || '').toLowerCase()) && (
                         <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
                             <div className="flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-700 pb-3">
                                 <Cpu size={16} className="text-primary-600 dark:text-primary-400" />

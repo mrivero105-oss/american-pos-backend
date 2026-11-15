@@ -3,6 +3,7 @@ import { CapacitorUpdater } from '@capgo/capacitor-updater';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { getBaseUrl } from './api';
+import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
 
 let isChecking = false;
 let updateReady = false;
@@ -79,7 +80,9 @@ export const otaUpdateService = {
             // 2. Fallback: Servidor local de la PC (Wi-Fi)
             let res = null;
             try {
-                res = await axios.get(`https://puvqiipussyktfmgafgv.supabase.co/storage/v1/object/public/app-updates/version.json?_t=${Date.now()}`, { timeout: 5000 });
+                const cloudManifestUrl = getSupabaseStoragePublicUrl('app-updates', 'version.json');
+                if (!cloudManifestUrl) throw new Error('Supabase URL no configurada');
+                res = await axios.get(`${cloudManifestUrl}?_t=${Date.now()}`, { timeout: 5000 });
                 console.log('[OTA_UPDATE] ☁️ Manifiesto de versión obtenido desde Supabase Cloud Storage');
             } catch (cloudErr) {
                 console.warn('[OTA_UPDATE] Supabase Storage no disponible, intentando servidor local PC:', cloudErr.message);

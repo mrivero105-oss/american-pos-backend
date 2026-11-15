@@ -331,7 +331,10 @@ const auditController = {
         try {
             const crypto = require('crypto');
             const companyId = req.user?.companyId || 'default';
-            const secret = process.env.AUDIT_HMAC_SECRET || process.env.JWT_SECRET || 'isaac_secure_audit_ledger_2026';
+            const secret = process.env.AUDIT_HMAC_SECRET ? String(process.env.AUDIT_HMAC_SECRET).trim() : '';
+            if (!secret) {
+                return res.status(500).json({ error: 'AUDIT_HMAC_SECRET no configurado en el servidor (prohibido reutilizar JWT_SECRET).' });
+            }
             
             const logs = await AuditLog.findAll({
                 where: { companyId },

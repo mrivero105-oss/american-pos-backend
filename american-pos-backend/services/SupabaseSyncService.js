@@ -6,11 +6,26 @@ const { sequelize } = require('../database/connection');
 
 class SupabaseSyncService {
     constructor() {
-        this.supabaseUrl = process.env.SUPABASE_URL || 'https://puvqiipussyktfmgafgv.supabase.co';
-        this.serviceKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
+        const isIsolated = this._isIsolatedEnv();
+        this.supabaseUrl = isIsolated ? '' : (process.env.SUPABASE_URL || '');
+        this.serviceKey = isIsolated ? '' : (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY);
         this.branchId = process.env.POS_BRANCH_ID || 'principal';
         this.isSyncing = false;
         this.timer = null;
+    }
+
+    _isIsolatedEnv() {
+        return (
+            process.env.ISAAC_TEST_ISOLATED === '1' ||
+            process.env.NODE_ENV === 'test' ||
+            process.env.DISABLE_BACKGROUND_WORKERS === 'true'
+        );
+    }
+
+    _isRealCloudTargetInIsolatedEnv() {
+        if (!this._isIsolatedEnv()) return false;
+        if (!this.supabaseUrl || !this.serviceKey) return true;
+        return Boolean(process.env.SUPABASE_URL && this.supabaseUrl === process.env.SUPABASE_URL);
     }
 
     /**
@@ -19,13 +34,22 @@ class SupabaseSyncService {
      */
     async queueEvent(entityName, entityId, operation, payload, transaction = null) {
         try {
-            return await SyncOutbox.create({
+            const recordPayload = {
                 entity_name: entityName,
                 entity_id: String(entityId),
                 operation: operation || 'INSERT',
                 payload: payload,
                 status: 'PENDING'
-            }, transaction ? { transaction } : {});
+            };
+
+            if (transaction) {
+                // Usar SAVEPOINT (transacción anidada) para que un error en sync_outbox nunca aborte la TX financiera en PostgreSQL
+                return await sequelize.transaction({ transaction }, async (savepointTx) => {
+                    return await SyncOutbox.create(recordPayload, { transaction: savepointTx });
+                });
+            }
+
+            return await SyncOutbox.create(recordPayload);
         } catch (error) {
             console.error('[OUTBOX QUEUE ERROR]:', error.message);
             // No bloqueamos la venta local si falla la cola, pero lo registramos
@@ -62,6 +86,9 @@ class SupabaseSyncService {
      * Procesa un lote de registros pendientes y los envía a Supabase
      */
     async processBatch(limit = 50) {
+        if (this._isRealCloudTargetInIsolatedEnv()) {
+            return { success: false, skipped: true, message: 'Desactivado en entorno aislado/test' };
+        }
         if (!this.serviceKey || !this.supabaseUrl) {
             return { success: false, message: 'Faltan credenciales de Supabase en el .env' };
         }
@@ -73,11 +100,12 @@ class SupabaseSyncService {
         const t = await sequelize.transaction();
         try {
             // PostgreSQL 16: Selección atómica no bloqueante con SKIP LOCKED
-            // Evita colisiones si hay múltiples workers o llamadas concurrentes
+            // Incluye rescate de registros que quedaron en PROCESSING por más de 5 minutos (p.ej. corte eléctrico)
             const [rows] = await sequelize.query(`
                 SELECT id, entity_name, entity_id, operation, payload, retry_count
                 FROM sync_outbox
                 WHERE status = 'PENDING'
+                   OR (status = 'PROCESSING' AND created_at < NOW() - INTERVAL '5 minutes')
                 ORDER BY created_at ASC
                 LIMIT :limit
                 FOR UPDATE SKIP LOCKED;
@@ -158,19 +186,45 @@ class SupabaseSyncService {
 
                 } catch (tableError) {
                     console.error(`[SYNC ERROR TABLE ${table}]:`, tableError.response?.data || tableError.message);
-                    const errMsg = String(tableError.response?.data?.message || tableError.message || 'Error desconocido').slice(0, 1000);
+                    // Fallback fila por fila para que un registro defectuoso no bloquee el resto del lote
                     for (const fItem of items) {
-                        const newRetry = Number(fItem.retry_count || 0) + 1;
-                        const newStatus = newRetry >= 5 ? 'FAILED' : 'PENDING';
-                        await sequelize.query(`
-                            UPDATE sync_outbox
-                            SET status = :newStatus,
-                                retry_count = :newRetry,
-                                last_error = :errMsg
-                            WHERE id = :itemId;
-                        `, {
-                            replacements: { newStatus, newRetry, errMsg, itemId: fItem.id }
-                        });
+                        const singlePayload = { ...fItem.payload };
+                        if (!singlePayload.sucursal_id) singlePayload.sucursal_id = this.branchId;
+                        try {
+                            await axios.post(
+                                `${this.supabaseUrl}/rest/v1/${table}`,
+                                [singlePayload],
+                                {
+                                    headers: {
+                                        'apikey': this.serviceKey,
+                                        'Authorization': `Bearer ${this.serviceKey}`,
+                                        'Content-Type': 'application/json',
+                                        'Prefer': 'resolution=merge-duplicates'
+                                    },
+                                    timeout: 10000
+                                }
+                            );
+                            await sequelize.query(`
+                                UPDATE sync_outbox
+                                SET status = 'SYNCED',
+                                    synced_at = NOW(),
+                                    last_error = NULL
+                                WHERE id = :itemId;
+                            `, { replacements: { itemId: fItem.id } });
+                        } catch (singleErr) {
+                            const errMsg = String(singleErr.response?.data?.message || singleErr.message || 'Error desconocido').slice(0, 1000);
+                            const newRetry = Number(fItem.retry_count || 0) + 1;
+                            const newStatus = newRetry >= 5 ? 'FAILED' : 'PENDING';
+                            await sequelize.query(`
+                                UPDATE sync_outbox
+                                SET status = :newStatus,
+                                    retry_count = :newRetry,
+                                    last_error = :errMsg
+                                WHERE id = :itemId;
+                            `, {
+                                replacements: { newStatus, newRetry, errMsg, itemId: fItem.id }
+                            });
+                        }
                     }
                 }
             }
@@ -192,7 +246,14 @@ class SupabaseSyncService {
      * Sincroniza la tasa de cambio y datos del negocio a Supabase periódicamente
      */
     async syncConfig(force = false) {
+        if (this._isRealCloudTargetInIsolatedEnv()) {
+            return;
+        }
         if (!this.serviceKey || !this.supabaseUrl) return;
+        const now = Date.now();
+        if (!force && this._configNextRetryAt && now < this._configNextRetryAt) {
+            return;
+        }
         try {
             const fs = require('fs');
             const paths = require('../config/paths');
@@ -201,10 +262,6 @@ class SupabaseSyncService {
             const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
             const comp = settings['2'] || settings['default'] || {};
             const rate = Number(comp.exchangeRate || 1000);
-            
-            if (!force && this._lastSyncedRate === rate && (Date.now() - (this._lastConfigSync || 0)) < 60000) {
-                return;
-            }
 
             const payload = {
                 id: 'general',
@@ -219,6 +276,20 @@ class SupabaseSyncService {
                 actualizado_el: new Date().toISOString()
             };
 
+            const configSignature = JSON.stringify([
+                payload.tasa_cambio,
+                payload.nombre_negocio,
+                payload.rif_cedula,
+                payload.direccion,
+                payload.modo_moneda,
+                payload.iva_porcentaje,
+                payload.igtf_porcentaje
+            ]);
+
+            if (!force && this._lastConfigSignature === configSignature && (now - (this._lastConfigSync || 0)) < 300000) {
+                return;
+            }
+
             await axios.post(
                 `${this.supabaseUrl}/rest/v1/cloud_configuracion`,
                 [payload],
@@ -229,14 +300,20 @@ class SupabaseSyncService {
                         'Content-Type': 'application/json',
                         'Prefer': 'resolution=merge-duplicates'
                     },
-                    timeout: 8000
+                    timeout: 15000
                 }
             );
             this._lastSyncedRate = rate;
+            this._lastConfigSignature = configSignature;
             this._lastConfigSync = Date.now();
+            this._configFailureCount = 0;
+            this._configNextRetryAt = 0;
             console.log(`[SUPABASE CONFIG SYNC] 💱 Tasa y configuración sincronizadas a la nube: ${rate} Bs/$`);
         } catch (err) {
-            console.warn('[SUPABASE CONFIG SYNC] Error sincronizando config:', err.message);
+            this._configFailureCount = (this._configFailureCount || 0) + 1;
+            const backoffMs = Math.min(300000, 30000 * (2 ** Math.min(this._configFailureCount - 1, 3)));
+            this._configNextRetryAt = Date.now() + backoffMs;
+            console.warn(`[SUPABASE CONFIG SYNC] Error sincronizando config (reintento en ${Math.round(backoffMs / 1000)}s): ${err.message}`);
         }
     }
 
@@ -246,6 +323,9 @@ class SupabaseSyncService {
     async queueProduct(product) {
         if (!product) return;
         try {
+            const resolvedStock = product.stockQuantity !== undefined && product.stockQuantity !== null
+                ? product.stockQuantity
+                : (product.stock !== undefined && product.stock !== null ? product.stock : (product.stock_actual || 0));
             const payload = {
                 id: String(product.id),
                 sucursal_id: this.branchId,
@@ -253,7 +333,7 @@ class SupabaseSyncService {
                 nombre: String(product.name || product.nombre || ''),
                 categoria: String(product.category || product.categoria || 'General'),
                 precio_venta: Number(Number(product.price || product.precio_venta || 0).toFixed(2)),
-                stock_actual: Number(product.stock !== undefined ? product.stock : (product.stock_actual || 0)),
+                stock_actual: Number(resolvedStock) || 0,
                 actualizado_el: new Date().toISOString()
             };
             await this.queueEvent('products', product.id, 'UPSERT', payload);
@@ -306,6 +386,10 @@ class SupabaseSyncService {
     }
 
     start(intervalMs = 15000) {
+        if (this._isIsolatedEnv()) {
+            console.log('🧪 [SUPABASE SYNC] Worker periódico omitido en entorno aislado/test.');
+            return;
+        }
         if (this.timer) return;
         console.log(`[SUPABASE SYNC] Worker iniciado (Intervalo: ${intervalMs / 1000}s)`);
         this.timer = setInterval(async () => { 

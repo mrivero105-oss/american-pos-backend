@@ -32,7 +32,7 @@ import {
     ShieldAlert
 } from 'lucide-react';
 import { CachedImage } from './CachedImage';
-import { formatStock, isDualCurrencyMode, isDollarOnlyCountry, isUsdOnlyMode } from '../utils/format';
+import { formatStock, formatBs, isDualCurrencyMode, isDollarOnlyCountry, isUsdOnlyMode } from '../utils/format';
 import { usePos } from '../hooks/PosContext';
 import { useTheme } from '../hooks/ThemeContext';
 import { useAuth } from '../hooks/AuthContext';
@@ -877,7 +877,7 @@ const CartSidebar = memo(({
                             </div>
                             <div className="flex items-center justify-between text-[10px] text-slate-400 border-t border-slate-100 dark:border-slate-800/60 pt-1.5">
                                 <span>Caja: {registerDisplayName || 'Principal'}</span>
-                                <span className="font-mono">Tasa: {renderFormatMoney(exchangeRate, 'VES')}</span>
+                                <span className="font-mono">Tasa: {formatBs(exchangeRate)}</span>
                             </div>
                         </div>
                     </>

@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const CollectionIntelligenceService = require('../services/CollectionIntelligenceService');
+const { requirePermission } = require('../middleware/auth');
+
+router.use(requirePermission('canAccessCollections'));
 
 // Matriz de Antigüedad de Saldos (Aging Analysis)
 router.get('/aging', async (req, res) => {

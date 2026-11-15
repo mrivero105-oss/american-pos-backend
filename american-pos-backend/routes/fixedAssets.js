@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const FixedAssetService = require('../services/FixedAssetService');
-const { verifyToken, isAdmin } = require('../middleware/auth');
+const { verifyToken, isAdmin, requirePermission } = require('../middleware/auth');
 
 router.use(verifyToken);
+router.use(requirePermission('canManageAssets'));
 
 // Listar activos fijos
 router.get('/', async (req, res) => {

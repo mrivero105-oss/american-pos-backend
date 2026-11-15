@@ -29,8 +29,9 @@ export default function ProtectedRoute({ masterOnly = false, adminOnly = false, 
         return '/login';
     };
 
-    // Master enforcement (Hardcoded to mrivero105@gmail.com)
-    if (masterOnly && user.email !== 'mrivero105@gmail.com') {
+    // Master enforcement (Owner / Superadmin / Master)
+    const userRoleLower = (user.role || '').toLowerCase();
+    if (masterOnly && !['superadmin', 'owner', 'dueño', 'dueno', 'master'].includes(userRoleLower)) {
         console.warn('MasterGate: Access denied for', user.email);
         return <Navigate to={getFallbackRoute()} replace />;
     }

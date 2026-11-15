@@ -294,7 +294,7 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
             toast.success('¡Caja abierta exitosamente!');
 
             if (printOpeningTicketOnStart) {
-                printOpeningReceipt({ shift: data, user, settings: businessSettings, kickDrawer: kickDrawerOnStart });
+                printOpeningReceipt({ shift: data, user, settings: businessSettings, kickDrawer: kickDrawerOnStart, autoPrint: true });
             } else if (kickDrawerOnStart) {
                 handleKickDrawer();
             }
@@ -342,6 +342,7 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
             );
 
             const { data } = await api.post('/cash/movement', {
+                shiftId: currentShift?.id,
                 type: movementType,
                 category: movementCategory,
                 amount: Number(movementAmount),
@@ -359,7 +360,8 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
                     shift: currentShift,
                     user,
                     settings: businessSettings,
-                    kickDrawer: true
+                    kickDrawer: true,
+                    autoPrint: true
                 });
             } else {
                 handleKickDrawer();
@@ -1018,7 +1020,7 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
                                                         Bs. {(Number(currentShift?.expectedCashBs) || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                                                     </p>
                                                     <p className="text-[10px] font-medium text-slate-400 mt-1">
-                                                        ~ ${((Number(currentShift?.expectedCashBs) || 0) / exchangeRate).toFixed(2)} USD
+                                                        ~ ${((Number(currentShift?.expectedCashBs) || 0) / (Number(exchangeRate) > 0 ? Number(exchangeRate) : 1)).toFixed(2)} USD
                                                     </p>
                                                 </div>
                                             )}
@@ -1305,7 +1307,7 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
                 isOpen={isMovementModalOpen}
                 onClose={() => setIsMovementModalOpen(false)}
                 maxWidth="max-w-md"
-                zIndex="z-[1100]"
+                zIndex="z-[100020]"
                 className="p-6 font-sans"
             >
                 <div className="flex justify-between items-center mb-6">
@@ -1456,7 +1458,7 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
             />
 
             {/* Close Shift Modal */}
-            {currentShift && (
+            {(currentShift || isCloseShiftModalOpen) && (
                 <CloseShiftModal
                     isOpen={isCloseShiftModalOpen}
                     onClose={() => setIsCloseShiftModalOpen(false)}

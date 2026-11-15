@@ -25,7 +25,11 @@ export const SocketProvider = ({ children }) => {
         } else if (typeof window !== 'undefined' && ((window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform()) || window.location.protocol === 'capacitor:')) {
             socketUrl = api.defaults.baseURL || 'http://192.168.1.30:3005';
         } else if (isLocalDev) {
-            socketUrl = 'http://127.0.0.1:3005';
+            const localHost = (typeof window !== 'undefined' && window.location.hostname === 'localhost') ? 'localhost' : '127.0.0.1';
+            const currentPort = typeof window !== 'undefined' ? window.location.port : '';
+            const devPorts = ['5173', '5174', '5175'];
+            const targetPort = (devPorts.includes(currentPort) || !currentPort) ? '3005' : currentPort;
+            socketUrl = `http://${localHost}:${targetPort}`;
         } else {
             const currentPort = window.location.port;
             const devPorts = ['5173', '5174', '5175'];

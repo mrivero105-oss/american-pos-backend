@@ -5,6 +5,15 @@ const fs = require('fs');
 class LocalPrinterService {
     static _helperExePath = path.join(process.env.TEMP || 'C:\\Windows\\Temp', 'IsaacPOS_RawPrinter_v1.exe');
     static _printerQueues = new Map();
+    static _printersCache = null;
+    static _printersCacheAt = 0;
+    static _printersFetchPromise = null;
+    static PRINTER_CACHE_TTL_MS = 30000;
+
+    static invalidatePrinterCache() {
+        this._printersCache = null;
+        this._printersCacheAt = 0;
+    }
 
     /**
      * Encola tareas de impresión secuencialmente por impresora física para evitar colisiones de puerto USB/Spooler
@@ -98,56 +107,143 @@ public class RawPrinterHelper {
         });
     }
 
-    /**
-     * Obtiene la lista de impresoras instaladas en Windows
-     */
-    static async getSystemPrinters() {
-        if (process.platform !== 'win32') {
-            return [];
+    static _runRegQuery(args, timeout = 3000) {
+        return new Promise((resolve) => {
+            execFile('reg.exe', ['query', ...args], { windowsHide: true, timeout }, (err, stdout) => {
+                resolve(err || !stdout ? '' : String(stdout));
+            });
+        });
+    }
+
+    static _parseRegistryPrinters(printersRaw, defaultRaw, connectionsRaw) {
+        let defaultName = '';
+        if (defaultRaw) {
+            const devMatch = defaultRaw.match(/Device\s+REG_\w+\s+([^\r\n]+)/i);
+            if (devMatch && devMatch[1]) {
+                defaultName = devMatch[1].split(/,winspool/i)[0].trim();
+            }
         }
 
+        const printers = [];
+        const seen = new Set();
+        const prefix = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Print\\Printers\\';
+        let currentName = null;
+        let currentPort = '';
+
+        const flushCurrent = () => {
+            if (currentName && !seen.has(currentName.toLowerCase())) {
+                seen.add(currentName.toLowerCase());
+                printers.push({
+                    name: currentName,
+                    isDefault: !!defaultName && currentName.toLowerCase() === defaultName.toLowerCase(),
+                    portName: currentPort
+                });
+            }
+        };
+
+        for (const rawLine of String(printersRaw || '').split(/\r?\n/)) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            if (line.startsWith(prefix)) {
+                flushCurrent();
+                const sub = line.slice(prefix.length);
+                currentName = sub && !sub.includes('\\') ? sub.trim() : null;
+                currentPort = '';
+                continue;
+            }
+            if (currentName) {
+                const portMatch = line.match(/^Port\s+REG_\w+\s+(.*)$/i);
+                if (portMatch) currentPort = (portMatch[1] || '').trim();
+            }
+        }
+        flushCurrent();
+
+        // Impresoras compartidas de red por usuario (HKCU\Printers\Connections\,,server,share)
+        for (const rawLine of String(connectionsRaw || '').split(/\r?\n/)) {
+            const line = rawLine.trim();
+            const connPrefix = 'HKEY_CURRENT_USER\\Printers\\Connections\\,,';
+            if (!line.startsWith(connPrefix)) continue;
+            const rest = line.slice(connPrefix.length);
+            if (!rest || rest.includes('\\')) continue;
+            const uncName = `\\\\${rest.replace(',', '\\')}`;
+            if (!seen.has(uncName.toLowerCase())) {
+                seen.add(uncName.toLowerCase());
+                printers.push({
+                    name: uncName,
+                    isDefault: !!defaultName && uncName.toLowerCase() === defaultName.toLowerCase(),
+                    portName: uncName
+                });
+            }
+        }
+
+        return printers;
+    }
+
+    static async _fetchWindowsPrinters() {
+        // Vía 1: Registro nativo de Windows (~80ms, sin overhead ni timeouts de PowerShell/WMI)
+        const [printersRaw, defaultRaw, connectionsRaw] = await Promise.all([
+            this._runRegQuery(['HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Print\\Printers', '/s', '/v', 'Port']),
+            this._runRegQuery(['HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows', '/v', 'Device']),
+            this._runRegQuery(['HKCU\\Printers\\Connections'])
+        ]);
+        const fromReg = this._parseRegistryPrinters(printersRaw, defaultRaw, connectionsRaw);
+        if (fromReg.length > 0) return fromReg;
+
+        // Vía 2: Fallback CIM en PowerShell (sin wmic obsoleto) cuando el registro no reporta impresoras
         return new Promise((resolve) => {
             const psCmd = `Get-CimInstance Win32_Printer | Select-Object Name, Default, PortName | ConvertTo-Json -Compress`;
-            exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, { timeout: 6000 }, (err, stdout) => {
-                if (err || !stdout) {
-                    exec('wmic printer get name,default,portname /format:csv', { timeout: 5000 }, (werr, wout) => {
-                        if (werr || !wout) return resolve([]);
-                        try {
-                            const lines = wout.trim().split(/\r?\n/).filter(l => l && !l.toLowerCase().startsWith('node'));
-                            const list = lines.map(line => {
-                                const parts = line.split(',');
-                                if (parts.length >= 3) {
-                                    return {
-                                        name: parts[2]?.trim() || parts[1]?.trim(),
-                                        isDefault: parts[1]?.toLowerCase() === 'true',
-                                        portName: parts[3]?.trim() || ''
-                                    };
-                                }
-                                return null;
-                            }).filter(p => p && p.name);
-                            resolve(list);
-                        } catch (_) {
-                            resolve([]);
-                        }
-                    });
-                    return;
-                }
-
+            exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, { timeout: 10000, windowsHide: true }, (err, stdout) => {
+                if (err || !stdout) return resolve([]);
                 try {
                     let parsed = JSON.parse(stdout.trim());
                     if (!Array.isArray(parsed)) parsed = [parsed];
-                    const printers = parsed.filter(p => p && p.Name).map(p => ({
-                        name: p.Name,
-                        isDefault: !!p.Default,
-                        portName: p.PortName || ''
-                    }));
-                    resolve(printers);
+                    resolve(
+                        parsed.filter(p => p && p.Name).map(p => ({
+                            name: p.Name,
+                            isDefault: !!p.Default,
+                            portName: p.PortName || ''
+                        }))
+                    );
                 } catch (e) {
                     console.warn('[LocalPrinterService] Error parseando salida de impresoras:', e.message);
                     resolve([]);
                 }
             });
         });
+    }
+
+    /**
+     * Obtiene la lista de impresoras instaladas en Windows (con caché TTL de 30s)
+     */
+    static async getSystemPrinters(forceRefresh = false) {
+        if (process.platform !== 'win32') {
+            return [];
+        }
+
+        const now = Date.now();
+        if (!forceRefresh && this._printersCache && (now - this._printersCacheAt) < this.PRINTER_CACHE_TTL_MS) {
+            return this._printersCache;
+        }
+
+        if (!forceRefresh && this._printersFetchPromise) {
+            return this._printersFetchPromise;
+        }
+
+        const fetchPromise = this._fetchWindowsPrinters()
+            .then((printers) => {
+                this._printersCache = printers;
+                // Caché corta si vino vacía para evitar re-intentos pesados en ráfagas, 30s si hay hardware
+                this._printersCacheAt = printers.length > 0 ? Date.now() : (Date.now() - this.PRINTER_CACHE_TTL_MS + 5000);
+                return printers;
+            })
+            .finally(() => {
+                if (this._printersFetchPromise === fetchPromise) {
+                    this._printersFetchPromise = null;
+                }
+            });
+
+        this._printersFetchPromise = fetchPromise;
+        return fetchPromise;
     }
 
     /**

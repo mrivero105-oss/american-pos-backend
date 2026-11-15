@@ -48,10 +48,9 @@ class AuthorizationService {
         let isValid = false;
 
         if (authData.isBiometric) {
-            // Autorización biométrica local validada por hardware (TEE/Keystore/WebAuthn).
-            // Regla Zero-Trust: La huella local del dispositivo solo puede autorizar cuando el
-            // titular de la sesión activa ES el propio supervisor seleccionado. Si la sesión
-            // pertenece a un cajero, el supervisor debe ingresar su PIN secreto.
+            // Regla Zero-Trust: La huella local solo puede autorizar cuando el titular de la sesión
+            // ES el propio supervisor seleccionado Y envía un biometricToken cuyo SHA-256 coincide
+            // en tiempo constante con supervisor.biometricTokenHash en base de datos.
             if (!reqUser || !reqUser.id || reqUser.role === 'public_guest' || reqUser.isPublicContext) {
                 throw new Error('ACCESO_DENEGADO: Se requiere una sesión de usuario válida para autorizaciones.');
             }
@@ -59,7 +58,18 @@ class AuthorizationService {
             if (String(reqUser.id) !== String(supervisor.id) || !allowedRoles.includes(reqRole)) {
                 throw new Error('Por seguridad, cuando la sesión activa pertenece a un cajero, el supervisor debe autorizar ingresando su PIN secreto.');
             }
-            isValid = true;
+
+            const rawBiometricToken = typeof authData.biometricToken === 'string' ? authData.biometricToken.trim() : '';
+            if (!rawBiometricToken || !supervisor.biometricTokenHash) {
+                throw new Error('Huella biométrica no registrada o token biométrico ausente para este supervisor.');
+            }
+
+            const crypto = require('crypto');
+            const providedHash = crypto.createHash('sha256').update(rawBiometricToken).digest('hex');
+            const storedHash = String(supervisor.biometricTokenHash);
+            if (providedHash.length === storedHash.length) {
+                isValid = crypto.timingSafeEqual(Buffer.from(providedHash, 'utf8'), Buffer.from(storedHash, 'utf8'));
+            }
         } else {
             if (!supervisor.supervisorPin) {
                 throw new Error('El supervisor no tiene un PIN configurado.');

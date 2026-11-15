@@ -1,4 +1,4 @@
-const { exec } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const LocalPrinterService = require('./LocalPrinterService');
@@ -40,7 +40,7 @@ class FiscalSpoolerService {
 
         return new Promise((resolve) => {
             const psCmd = `[System.IO.Ports.SerialPort]::GetPortNames() | ConvertTo-Json -Compress`;
-            exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, { timeout: 4000 }, (err, stdout) => {
+            execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], { timeout: 4000, windowsHide: true }, (err, stdout) => {
                 if (err || !stdout) {
                     return resolve(['COM1', 'COM2', 'COM3', 'COM4']);
                 }
@@ -179,12 +179,26 @@ class FiscalSpoolerService {
      * Envía comandos directamente al puerto serial COM vía PowerShell .NET
      */
     static async sendToComPort(portName, baudRate = 9600, rawCommands) {
+        const cleanPort = String(portName || '').trim().toUpperCase();
+        if (!/^COM\d{1,3}$/.test(cleanPort)) {
+            throw new Error(`Nombre de puerto COM inválido: "${portName}"`);
+        }
+
+        const ALLOWED_BAUD_RATES = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200];
+        const numericBaud = Number(baudRate || 9600);
+        if (!Number.isInteger(numericBaud) || !ALLOWED_BAUD_RATES.includes(numericBaud)) {
+            throw new Error(`Velocidad baudRate no permitida: ${baudRate}`);
+        }
+
+        if (typeof rawCommands !== 'string' || rawCommands.length === 0) {
+            throw new Error('Los comandos fiscales deben ser una cadena no vacía.');
+        }
+
         return new Promise((resolve, reject) => {
             const base64Data = Buffer.from(rawCommands, 'utf8').toString('base64');
-            const cleanPort = portName.replace(/[^a-zA-Z0-9_]/g, '');
 
             const psScript = `
-                $port = New-Object System.IO.Ports.SerialPort("${cleanPort}", ${baudRate}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One);
+                $port = New-Object System.IO.Ports.SerialPort("${cleanPort}", ${numericBaud}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One);
                 $port.ReadTimeout = 3000;
                 $port.WriteTimeout = 3000;
                 $port.Open();
@@ -199,10 +213,37 @@ class FiscalSpoolerService {
                 Write-Output $response;
             `;
 
-            exec(`powershell -NoProfile -NonInteractive -Command "${psScript.replace(/\r?\n/g, ' ')}"`, { timeout: 10000 }, (err, stdout, stderr) => {
-                if (err) {
-                    console.error(`[FiscalSpooler] Error writing to ${cleanPort}:`, stderr || err.message);
-                    return reject(new Error(`Fallo de comunicación con puerto ${cleanPort}: ${err.message}`));
+            const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
+            const child = spawn('powershell.exe', [
+                '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedCommand
+            ], { windowsHide: true });
+
+            let stdout = '';
+            let stderr = '';
+            let finished = false;
+            const timer = setTimeout(() => {
+                if (!finished) {
+                    finished = true;
+                    try { child.kill(); } catch (_) {}
+                    reject(new Error(`Tiempo de espera agotado al comunicar con ${cleanPort}`));
+                }
+            }, 10000);
+
+            child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+            child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+            child.on('error', (err) => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                reject(new Error(`Fallo de comunicación con puerto ${cleanPort}: ${err.message}`));
+            });
+            child.on('close', (code) => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                if (code !== 0) {
+                    console.error(`[FiscalSpooler] Error writing to ${cleanPort}:`, stderr);
+                    return reject(new Error(`Fallo de comunicación con puerto ${cleanPort}: código ${code}`));
                 }
                 resolve({ success: true, port: cleanPort, response: stdout.trim() });
             });
@@ -221,12 +262,46 @@ class FiscalSpoolerService {
      * Envía comandos a un archivo de spooler (The Factory HKA o Bixolon Spooler)
      */
     static async sendToSpoolerFile(filePath, rawCommands) {
-        const targetDir = path.dirname(filePath);
+        if (typeof filePath !== 'string' || !filePath.trim() || filePath.includes('\0')) {
+            throw new Error('Ruta de archivo spooler fiscal inválida.');
+        }
+
+        const resolvedPath = path.resolve(filePath.trim());
+        const allowedExtensions = ['.txt', '.cmd', '.in', '.dat', '.prn'];
+        if (!allowedExtensions.includes(path.extname(resolvedPath).toLowerCase())) {
+            throw new Error('Extensión de archivo spooler no permitida (use .txt, .cmd, .in, .dat o .prn).');
+        }
+
+        const userDataBase = process.env.USER_DATA_PATH || path.join(__dirname, '..');
+        const allowedRoots = [
+            'C:\\IntTFHKA',
+            'C:\\BixolonFiscal',
+            'C:\\HKA',
+            'C:\\TheFactory',
+            'C:\\Spooler',
+            path.join(userDataBase, 'spooler'),
+            path.join(userDataBase, 'fiscal_spooler'),
+            process.env.FISCAL_SPOOLER_DIR
+        ].filter(Boolean).map(dir => path.resolve(dir));
+
+        const isInsideAllowedRoot = allowedRoots.some((root) => {
+            const rel = path.relative(
+                process.platform === 'win32' ? root.toLowerCase() : root,
+                process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath
+            );
+            return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+        });
+
+        if (!isInsideAllowedRoot) {
+            throw new Error('Ruta de spooler fuera de directorios fiscales autorizados (ej. C:\\IntTFHKA, C:\\BixolonFiscal).');
+        }
+
+        const targetDir = path.dirname(resolvedPath);
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true });
         }
-        await fs.promises.writeFile(filePath, rawCommands, { encoding: 'utf8' });
-        return { success: true, filePath };
+        await fs.promises.writeFile(resolvedPath, String(rawCommands || ''), { encoding: 'utf8' });
+        return { success: true, filePath: resolvedPath };
     }
 
     /**

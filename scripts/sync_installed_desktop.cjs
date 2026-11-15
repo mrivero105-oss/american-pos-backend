@@ -85,14 +85,32 @@ async function main() {
         }
     }
 
-    // Copiar archivos raíz del backend esenciales (main.js, index.js, preload.js, paths.js, package.json, etc.)
-    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.json', '.env'];
+    // Copiar archivos raíz del backend esenciales (excluyendo .env por seguridad: main.js gestiona .env en UserData)
+    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.json'];
+    try {
+        const leftoverEnv = path.join(TEMP_EXTRACTED, '.env');
+        if (fs.existsSync(leftoverEnv)) fs.unlinkSync(leftoverEnv);
+    } catch (_) {}
     for (const file of backendRootFiles) {
         const srcFile = path.join(BACKEND_DIR, file);
         const destFile = path.join(TEMP_EXTRACTED, file);
         if (fs.existsSync(srcFile)) {
             fs.copyFileSync(srcFile, destFile);
         }
+    }
+
+    // Garantizar que node_modules exista en staging (si se limpió Temp, copiar desde backend)
+    const stagingNodeModules = path.join(TEMP_EXTRACTED, 'node_modules');
+    const backendNodeModules = path.join(BACKEND_DIR, 'node_modules');
+    if (!fs.existsSync(path.join(stagingNodeModules, 'express'))) {
+        if (fs.existsSync(path.join(backendNodeModules, 'express'))) {
+            console.log('📂 Copiando node_modules del backend hacia staging (no estaba en caché temporal)...');
+            fs.cpSync(backendNodeModules, stagingNodeModules, { recursive: true, force: true });
+        }
+    }
+
+    if (!fs.existsSync(path.join(stagingNodeModules, 'express'))) {
+        throw new Error('Abortando empaquetado: falta node_modules/express en staging y en american-pos-backend.');
     }
 
     // 3. Empaquetar asar en archivo temporal .new usando API nativa
@@ -127,6 +145,17 @@ async function main() {
             }
         }
         fs.renameSync(targetNewAsar, targetAsar);
+        const tempUnpacked = `${targetNewAsar}.unpacked`;
+        const targetUnpacked = `${targetAsar}.unpacked`;
+        if (fs.existsSync(tempUnpacked)) {
+            if (fs.existsSync(targetUnpacked)) {
+                try { fs.rmSync(targetUnpacked, { recursive: true, force: true }); } catch (_) {}
+            }
+            try { fs.renameSync(tempUnpacked, targetUnpacked); } catch (_) {
+                fs.cpSync(tempUnpacked, targetUnpacked, { recursive: true, force: true });
+                fs.rmSync(tempUnpacked, { recursive: true, force: true });
+            }
+        }
     } catch (renameErr) {
         if (renameErr.code === 'EPERM' || renameErr.code === 'EBUSY') {
             console.error('\n⚠️ [AVISO DE BLOQUEO DE ARCHIVO]');

@@ -61,7 +61,6 @@ async function localizeLibs() {
 
     const libs = [
         { name: 'html5-qrcode.min.js', src: path.join(__dirname, '../node_modules/html5-qrcode/html5-qrcode.min.js') },
-        { name: 'xlsx.full.min.js', src: path.join(__dirname, '../node_modules/xlsx/dist/xlsx.full.min.js') },
         { name: 'chart.js', src: path.join(__dirname, '../node_modules/chart.js/dist/chart.umd.js') },
         { name: 'toastify.js', src: path.join(__dirname, '../node_modules/toastify-js/src/toastify.js') },
         { name: 'toastify.min.css', src: path.join(__dirname, '../node_modules/toastify-js/src/toastify.css'), destDir: CSS_DIR }

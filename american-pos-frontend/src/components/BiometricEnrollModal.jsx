@@ -3,9 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Fingerprint, ShieldCheck, CheckCircle2, Trash2, AlertCircle, X, RefreshCw, Smartphone, Laptop } from 'lucide-react';
 import { useAuth } from '../hooks/AuthContext';
 import biometricService from '../services/biometricService';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 export default function BiometricEnrollModal({ isOpen, onClose, onEnrolledChange }) {
     const { user, registerBiometrics, revokeBiometrics } = useAuth();
+    const { confirm, confirmDialog } = useConfirmDialog();
     const [enrolledCred, setEnrolledCred] = useState(null);
     const [hasHardware, setHasHardware] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -58,7 +60,13 @@ export default function BiometricEnrollModal({ isOpen, onClose, onEnrolledChange
     };
 
     const handleRevoke = async () => {
-        if (!window.confirm('¿Seguro que deseas desvincular la huella dactilar de este dispositivo?')) {
+        const confirmed = await confirm({
+            title: 'Desvincular huella dactilar',
+            message: '¿Seguro que deseas desvincular la huella dactilar de este dispositivo?',
+            confirmText: 'Desvincular',
+            variant: 'danger'
+        });
+        if (!confirmed) {
             return;
         }
 
@@ -222,6 +230,7 @@ export default function BiometricEnrollModal({ isOpen, onClose, onEnrolledChange
                         </div>
                     </div>
                 </motion.div>
+                {confirmDialog}
             </div>
         </AnimatePresence>
     );

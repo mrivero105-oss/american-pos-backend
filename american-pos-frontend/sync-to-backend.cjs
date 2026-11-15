@@ -95,22 +95,29 @@ function copyRecursive(src, target) {
 for (const targetDir of targetDirs) {
   if (fs.existsSync(path.dirname(targetDir))) {
     console.log(`[BUILD SYNC] Sincronizando bundle de dist/ hacia ${targetDir}...`);
-    // Conservar chunks recientes en assets para no romper sesiones de navegador abiertas con el bundle previo
+    // Purgar chunks obsoletos en assets/ y artefactos públicos retirados para evitar exponer builds previos
+    const srcAssetsDir = path.join(srcDir, 'assets');
+    const currentAssetFiles = new Set(fs.existsSync(srcAssetsDir) ? fs.readdirSync(srcAssetsDir) : []);
     const assetsDir = path.join(targetDir, 'assets');
     if (fs.existsSync(assetsDir)) {
       try {
-        const now = Date.now();
-        const maxAgeMs = 3 * 24 * 60 * 60 * 1000; // 3 días de tolerancia
         const files = fs.readdirSync(assetsDir);
         for (const f of files) {
-          const fPath = path.join(assetsDir, f);
-          const stat = fs.statSync(fPath);
-          if (now - stat.mtimeMs > maxAgeMs) {
-            fs.unlinkSync(fPath);
+          if (!currentAssetFiles.has(f)) {
+            const fPath = path.join(assetsDir, f);
+            fs.rmSync(fPath, { recursive: true, force: true });
           }
         }
       } catch (rmErr) {
         console.warn(`[BUILD SYNC] Limpieza de assets antiguos omitida:`, rmErr.message);
+      }
+    }
+    const legacyPocketLicense = path.join(targetDir, 'pocket-license.html');
+    if (fs.existsSync(legacyPocketLicense)) {
+      try {
+        fs.unlinkSync(legacyPocketLicense);
+      } catch (unlinkErr) {
+        console.warn(`[BUILD SYNC] No se pudo eliminar pocket-license.html obsoleto:`, unlinkErr.message);
       }
     }
     copyRecursive(srcDir, targetDir);

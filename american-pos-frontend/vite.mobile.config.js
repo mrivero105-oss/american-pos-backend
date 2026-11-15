@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import process from 'node:process';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
@@ -66,7 +67,6 @@ export default defineConfig({
       '/backup': 'http://localhost:3005',
       '/license': 'http://localhost:3005',
       '/expenses': 'http://localhost:3005',
-      '/banks': 'http://localhost:3005',
       '/fiscal': 'http://localhost:3005',
       '/warehouses': 'http://localhost:3005',
       '/bi': 'http://localhost:3005',
@@ -92,6 +92,8 @@ export default defineConfig({
     outDir: 'dist-mobile',
     emptyOutDir: true,
     sourcemap: false,
+    target: ['es2020', 'chrome108'],
+    cssTarget: 'chrome108',
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
@@ -99,7 +101,6 @@ export default defineConfig({
           'vendor-react': ['react', 'react-dom', 'react-router-dom', 'zustand'],
           'vendor-icons': ['lucide-react'],
           'vendor-motion': ['framer-motion'],
-          'vendor-db': ['dexie'],
           'vendor-zxing': ['@zxing/library'],
           'vendor-utils': ['axios', 'date-fns', 'uuid', 'fuse.js']
         }

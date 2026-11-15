@@ -4,10 +4,10 @@ import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../hooks/AuthContext';
 import { useTheme } from '../hooks/ThemeContext';
-import { LogOut, Store, Menu, Banknote, ShoppingCart, Package, Users as UsersIcon, History, Settings, Bell, AlertTriangle, X, Shield, ShieldAlert, ShieldCheck, Truck, FileText, ShoppingBag, UserCog, Tag, Key, DollarSign, Lock, Clock, Calculator, PieChart, Palette, ChevronDown, ChevronUp, Landmark, FileSpreadsheet, Warehouse, TrendingUp, Scale, Coins, Building2, Columns2, Grid2x2, Cpu, Search, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, BellOff, ChevronRight, ArrowRight, Smartphone, Check } from 'lucide-react';
+import { LogOut, Store, Menu, Banknote, ShoppingCart, Package, Users as UsersIcon, History, Settings, Bell, AlertTriangle, X, Shield, ShieldAlert, ShieldCheck, Truck, FileText, ShoppingBag, UserCog, Tag, Key, DollarSign, Lock, Clock, Calculator, PieChart, Palette, ChevronDown, ChevronUp, FileSpreadsheet, Warehouse, TrendingUp, Scale, Coins, Building2, Columns2, Grid2x2, Cpu, Search, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, BellOff, ChevronRight, ArrowRight, Smartphone, Check } from 'lucide-react';
 import { stopAI } from '../utils/tts';
-import CashRegisterModal from './CashRegisterModal';
-import QuickSettingsFinder from './settings/QuickSettingsFinder';
+const CashRegisterModal = lazy(() => import('./CashRegisterModal'));
+const QuickSettingsFinder = lazy(() => import('./settings/QuickSettingsFinder'));
 import Logo from './Logo';
 import BranchSelector from './BranchSelector';
 import api from '../services/api';
@@ -149,7 +149,9 @@ export default function DashboardLayout() {
     const [businessSettings, setBusinessSettings] = useState({});
     const [processingProduct, setProcessingProduct] = useState(false);
     const [isShiftOpen, setIsShiftOpen] = useState(false);
+    const [shiftStatusChecked, setShiftStatusChecked] = useState(false);
     const [currentShiftData, setCurrentShiftData] = useState(null);
+    const prevCashModalOpenRef = useRef(false);
     const [isAppearanceModalOpen, setIsAppearanceModalOpen] = useState(false);
     const [isWhatsappModalOpen, setIsWhatsappModalOpen] = useState(false);
     const [showFirstTimeSetup, setShowFirstTimeSetup] = useState(() => !localStorage.getItem('initial_setup_completed'));
@@ -243,6 +245,8 @@ export default function DashboardLayout() {
                 }
             } catch (error) {
                 console.error('Error checking register status:', error);
+            } finally {
+                setShiftStatusChecked(true);
             }
         };
         checkRegisterStatus();
@@ -299,9 +303,11 @@ export default function DashboardLayout() {
         };
     }, [registerId, location.pathname]);
 
-    // Re-check shift status when modal closes
+    // Re-check shift status only when modal transitions from open to closed
     useEffect(() => {
-        if (!isCashModalOpen) {
+        const wasOpen = prevCashModalOpenRef.current;
+        prevCashModalOpenRef.current = isCashModalOpen;
+        if (wasOpen && !isCashModalOpen) {
             const checkStatus = async () => {
                 try {
                     const { data } = await api.get('/cash/current', { params: { registerId } });
@@ -413,7 +419,6 @@ export default function DashboardLayout() {
         const canManagePurchases = hasPermission('canManagePurchases');
         const canManagePayables = hasPermission('canManagePayables');
         const canImportCatalog = hasPermission('canImportCatalog');
-        const canManageBanking = hasPermission('canManageBanking');
         const effectiveCountry = businessSettings?.country || country || localStorage.getItem('pos_country') || '';
         const isVenezuela = (effectiveCountry && (effectiveCountry.toLowerCase() === 'venezuela' || effectiveCountry.toLowerCase() === 've')) || (!effectiveCountry && (!localStorage.getItem('pos_country') || localStorage.getItem('pos_country')?.toLowerCase() === 'venezuela'));
         const canManageFiscal = isVenezuela && hasPermission('canManageFiscal');
@@ -618,23 +623,20 @@ export default function DashboardLayout() {
                 )}
 
                 {/* 3. TESORERÍA & FISCAL */}
-                {(canManageExpenses || canManageBanking || canManageFiscal) && (
+                {(canManageExpenses || canManageFiscal) && (
                     <>
-                        <SectionTitle title={canManageFiscal ? "Tesorería & Fiscal" : "Tesorería & Bancos"} />
+                        <SectionTitle title={canManageFiscal ? "Tesorería & Fiscal" : "Tesorería & Gastos"} />
                         {canManageFiscal && (
                             <NavItem to="/fiscal" label="Gestión Fiscal SENIAT" section="Tesorería & Fiscal" icon={FileSpreadsheet} />
                         )}
                         {canManageExpenses && (
                             <NavItem to="/expenses" label="Gastos Operativos" section="Tesorería & Fiscal" icon={Banknote} />
                         )}
-                        {canManageBanking && (
-                            <NavItem to="/banking" label="Bancos & Cuentas" section="Tesorería & Fiscal" icon={Landmark} />
-                        )}
                     </>
                 )}
 
                 {/* 4. GERENCIA & AJUSTES */}
-                {(canAccessBI || canViewReports || canManageAccounting || canManagePayroll || canManageAssets || canAccessAudit || canMonitorCashiers || canManageBranches || canManageUsers || canManageSettings || (isSuperadmin && user?.email === 'mrivero105@gmail.com')) && (
+                {(canAccessBI || canViewReports || canManageAccounting || canManagePayroll || canManageAssets || canAccessAudit || canMonitorCashiers || canManageBranches || canManageUsers || canManageSettings || isSuperadmin) && (
                     <>
                         <SectionTitle title="Gerencia & Ajustes" />
                         {canAccessBI && (
@@ -673,7 +675,7 @@ export default function DashboardLayout() {
                         {canManageSettings && (
                             <NavItem to="/settings" label="Ajustes" section="Gerencia & Ajustes" icon={Settings} />
                         )}
-                        {isSuperadmin && user?.email === 'mrivero105@gmail.com' && (
+                        {isSuperadmin && (
                             <NavItem to="/licenses" label="Licencias" section="Gerencia & Ajustes" icon={Key} />
                         )}
                     </>
@@ -1537,13 +1539,17 @@ export default function DashboardLayout() {
                 document.body
             )}
 
-            <CashRegisterModal
-                isOpen={isCashModalOpen}
-                onClose={() => setIsCashModalOpen(false)}
-                registerId={registerId}
-                registerDisplayName={registerDisplayName}
-                businessSettings={businessSettings}
-            />
+            {isCashModalOpen && (
+                <Suspense fallback={null}>
+                    <CashRegisterModal
+                        isOpen={isCashModalOpen}
+                        onClose={() => setIsCashModalOpen(false)}
+                        registerId={registerId}
+                        registerDisplayName={registerDisplayName}
+                        businessSettings={businessSettings}
+                    />
+                </Suspense>
+            )}
 
             {isProductModalOpen && (
                 <Suspense fallback={null}>
@@ -1563,7 +1569,7 @@ export default function DashboardLayout() {
                 </Suspense>
             )}
 
-            {(!isCashModalOpen && !isShiftOpen && location.pathname === '/pos') && (
+            {(shiftStatusChecked && !registerDisplayName && !isCashModalOpen && !isShiftOpen && location.pathname === '/pos') && (
                 <Suspense fallback={null}>
                     <RegisterSetupModal isOpen={true} onClose={() => setIsShiftOpen(true)} />
                 </Suspense>
@@ -1617,11 +1623,15 @@ export default function DashboardLayout() {
             )}
 
             {/* Quick Settings Finder (Ctrl + K o botón táctil) */}
-            <QuickSettingsFinder
-                isOpen={isGlobalFinderOpen}
-                onClose={() => setIsGlobalFinderOpen(false)}
-                onSelectSetting={handleQuickSelectSetting}
-            />
+            {isGlobalFinderOpen && (
+                <Suspense fallback={null}>
+                    <QuickSettingsFinder
+                        isOpen={isGlobalFinderOpen}
+                        onClose={() => setIsGlobalFinderOpen(false)}
+                        onSelectSetting={handleQuickSelectSetting}
+                    />
+                </Suspense>
+            )}
 
             {/* Removed duplicate LockScreen, managed by App.jsx globally */}
         </div>

@@ -243,8 +243,22 @@ export default function AccountsPayable() {
                     </button>
 
                     <button 
-                        onClick={() => {
-                            window.open('/api/reports/bi/export?type=accounts-payable', '_blank');
+                        onClick={async () => {
+                            try {
+                                const res = await api.get('/reports/bi/export?type=accounts-payable', { responseType: 'blob' });
+                                const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' });
+                                const url = window.URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.href = url;
+                                link.setAttribute('download', `cuentas_por_pagar_${new Date().toISOString().slice(0, 10)}.csv`);
+                                document.body.appendChild(link);
+                                link.click();
+                                link.remove();
+                                window.URL.revokeObjectURL(url);
+                            } catch (err) {
+                                console.error('Error exportando cuentas por pagar:', err);
+                                toast.error('Error al exportar Cuentas por Pagar');
+                            }
                         }}
                         className="inline-flex items-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 shadow-xs transition-colors cursor-pointer"
                     >

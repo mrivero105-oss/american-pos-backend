@@ -5,7 +5,7 @@ const fs = require('fs');
 const { isAdmin, requirePermission } = require('../middleware/auth');
 const ProductService = require('../services/ProductService');
 const SupabaseSyncService = require('../services/SupabaseSyncService');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const validate = require('../middleware/validate');
 const { productSchema } = require('../schemas/productSchema');
 const PDFService = require('../services/PDFService');
@@ -24,10 +24,32 @@ const getUploadPath = () => {
     return uploadDir;
 };
 
+const PRODUCT_UPLOAD_ALLOWED_EXTS = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.xlsx', '.xls', '.csv']);
+const PRODUCT_UPLOAD_ALLOWED_MIMES = new Set([
+    'application/pdf',
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv',
+    'application/csv',
+    'text/plain'
+]);
+
 const upload = multer({
     dest: getUploadPath(),
     limits: {
         fileSize: 25 * 1024 * 1024 // 25 MB max limit to protect against DoS
+    },
+    fileFilter: (req, file, cb) => {
+        const ext = path.extname(file.originalname || '').toLowerCase();
+        const mime = String(file.mimetype || '').toLowerCase();
+        if (PRODUCT_UPLOAD_ALLOWED_EXTS.has(ext) && (!mime || mime === 'application/octet-stream' || PRODUCT_UPLOAD_ALLOWED_MIMES.has(mime))) {
+            return cb(null, true);
+        }
+        return cb(new Error('Tipo de archivo no permitido para importación de productos/catálogo.'));
     }
 });
 
@@ -36,33 +58,41 @@ const cache = require('../utils/cacheService');
 // --- PRODUCT ROUTES (v3.0.0 - Service Oriented) ---
 
 /**
- * GET /categories - List all unique product categories
+ * GET /categories - List all unique product categories (solo productos activos, sin categorías virtuales)
  */
 router.get('/categories', async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
-        const cacheKey = `categories_${companyId}`;
+        const cacheKey = `categories_v2_${companyId}`;
         const cached = cache.get(cacheKey);
         if (cached) {
             return res.json(cached);
         }
 
+        const { Op } = require('sequelize');
+        const { sequelize } = require('../database/connection');
         const { Product } = require('../database/models');
+        const companyCondition = (companyId === '2' || companyId === 'default')
+            ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }] }
+            : { companyId };
+
         const categories = await Product.findAll({
             attributes: [
-                [require('../database/connection').sequelize.fn('DISTINCT', require('../database/connection').sequelize.col('category')), 'category']
+                [sequelize.fn('DISTINCT', sequelize.col('category')), 'category']
             ],
-            where: { companyId }
+            where: {
+                ...companyCondition,
+                status: 'active',
+                isCustom: { [Op.or]: [false, null] }
+            }
         });
         const rawCategories = categories.map(c => c.category).filter(Boolean);
-        
+
         // Helper to normalize: "golosinas" -> "Golosinas"
         const normalize = (str) => str.trim().charAt(0).toUpperCase() + str.trim().slice(1).toLowerCase();
-        
-        const uniqueCats = [...new Set(rawCategories.map(normalize))].sort();
-        
-        // Expert Bonus: Add the virtual category for the Master
-        uniqueCats.push('🚫 Productos sin stock');
+
+        const uniqueCats = [...new Set(rawCategories.map(normalize))].sort((a, b) => a.localeCompare(b, 'es'));
+
         cache.set(cacheKey, uniqueCats, 300); // 5 min cache
         res.json(uniqueCats);
     } catch (error) {
@@ -346,9 +376,7 @@ router.put('/:id', requirePermission('canCreateProducts'), validate(productSchem
         if (io) {
             const compId = String(req.user.companyId || '2');
             io.to(compId).emit('inventory_changed');
-            io.emit('inventory_changed');
             io.to(compId).emit('product_updated', updatedProduct);
-            io.emit('product_updated', updatedProduct);
         }
         SupabaseSyncService.queueProduct(updatedProduct).catch(() => {});
         res.json({ message: 'Producto actualizado exitosamente', product: updatedProduct });
@@ -642,7 +670,7 @@ router.post('/bulk-price-adjustment', requirePermission('canCreateProducts'), ha
 /**
  * GET /export/excel - Export products to XLSX
  */
-router.get('/export/excel', async (req, res) => {
+router.get('/export/excel', requirePermission(['canManageInventory', 'canCreateProducts', 'canViewReports', 'canViewCosts']), async (req, res) => {
     try {
         const result = await ProductService.getAllProducts(req.user, {});
         const data = result.products.map(p => ({
@@ -656,10 +684,20 @@ router.get('/export/excel', async (req, res) => {
             Min_Stock: p.minStock || 0
         }));
 
-        const worksheet = XLSX.utils.json_to_sheet(data);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, 'Productos');
-        const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Productos');
+        worksheet.columns = [
+            { header: 'ID', key: 'ID', width: 22 },
+            { header: 'Nombre', key: 'Nombre', width: 34 },
+            { header: 'Categoria', key: 'Categoria', width: 18 },
+            { header: 'Costo', key: 'Costo', width: 14 },
+            { header: 'Precio', key: 'Precio', width: 14 },
+            { header: 'Stock', key: 'Stock', width: 14 },
+            { header: 'Unidad', key: 'Unidad', width: 14 },
+            { header: 'Min_Stock', key: 'Min_Stock', width: 14 }
+        ];
+        worksheet.addRows(data);
+        const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename=productos.xlsx');
@@ -961,6 +999,76 @@ const importCatalogHandler = async (req, res) => {
 
 
 /**
+ * GET /imported-invoices - Lista el historial de facturas cargadas con respaldo digitalizado y detalle contable
+ */
+router.get('/imported-invoices', canImportCatalog, async (req, res) => {
+    try {
+        const { PurchaseOrder, Supplier } = require('../database/models');
+        const { Op } = require('sequelize');
+        const { companyId } = req.user;
+        const { search, limit = 50, page = 1 } = req.query;
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+        const offset = (Math.max(1, parseInt(page, 10) || 1) - 1) * limitNum;
+
+        const whereCondition = {
+            companyId,
+            [Op.or]: [
+                { invoiceUrl: { [Op.ne]: null } },
+                { status: 'received' }
+            ]
+        };
+
+        const { count, rows } = await PurchaseOrder.findAndCountAll({
+            where: whereCondition,
+            include: [{
+                model: Supplier,
+                as: 'Supplier',
+                attributes: ['id', 'name', 'rif', 'phone']
+            }],
+            order: [['createdAt', 'DESC']],
+            limit: limitNum,
+            offset
+        });
+
+        let filteredRows = rows;
+        if (search && search.trim()) {
+            const q = search.trim().toLowerCase();
+            filteredRows = rows.filter(r => 
+                (r.referenceNumber && r.referenceNumber.toLowerCase().includes(q)) ||
+                (r.Supplier?.name && r.Supplier.name.toLowerCase().includes(q)) ||
+                (r.Supplier?.rif && r.Supplier.rif.toLowerCase().includes(q))
+            );
+        }
+
+        res.json({
+            success: true,
+            total: count,
+            invoices: filteredRows.map(o => ({
+                id: o.id,
+                referenceNumber: o.referenceNumber || 'S/N',
+                supplierName: o.Supplier?.name || 'Proveedor General',
+                supplierRif: o.Supplier?.rif || null,
+                supplierId: o.supplierId,
+                date: o.arrivalDate || o.date || (o.createdAt ? o.createdAt.toISOString().split('T')[0] : null),
+                totalUsd: Number(o.total || 0),
+                totalVes: Number(o.totalVes || 0),
+                exchangeRate: Number(o.exchangeRate || 1),
+                paymentStatus: o.paymentStatus || 'paid',
+                status: o.status,
+                itemsCount: Array.isArray(o.items) ? o.items.length : 0,
+                items: Array.isArray(o.items) ? o.items : [],
+                invoiceUrl: o.invoiceUrl,
+                notes: o.notes,
+                createdAt: o.createdAt
+            }))
+        });
+    } catch (err) {
+        console.error('[IMPORTED INVOICES] Error:', err);
+        res.status(500).json({ error: 'Error al consultar historial de facturas: ' + err.message });
+    }
+});
+
+/**
  * POST /reparse-invoice - Re-extraer renglones y precios con IA desde una factura ya digitalizada
  */
 router.post('/reparse-invoice', canImportCatalog, async (req, res) => {
@@ -970,9 +1078,21 @@ router.post('/reparse-invoice', canImportCatalog, async (req, res) => {
             return res.status(400).json({ error: 'URL de factura inválida' });
         }
 
-        const filename = path.basename(invoiceUrl);
-        const invoicesDir = InvoiceService.getInvoicesDir();
-        const fullPath = path.join(invoicesDir, filename);
+        const rawName = String(invoiceUrl || '').trim();
+        if (!rawName || rawName.includes('\0') || rawName.includes('..')) {
+            return res.status(400).json({ error: 'URL de factura inválida' });
+        }
+        const filename = path.basename(rawName);
+        const invoicesDir = path.resolve(InvoiceService.getInvoicesDir());
+        const fullPath = path.resolve(invoicesDir, filename);
+        const rel = path.relative(invoicesDir, fullPath);
+        if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+            return res.status(403).json({ error: 'Ruta de factura fuera de directorio permitido' });
+        }
+        const accessCheck = await InvoiceService.assertInvoiceAccess(req.user, invoiceUrl);
+        if (!accessCheck.allowed) {
+            return res.status(accessCheck.status || 403).json({ error: accessCheck.error || 'Acceso denegado: la factura pertenece a otra empresa' });
+        }
 
         if (!fs.existsSync(fullPath)) {
             return res.status(404).json({ error: 'El archivo físico de la factura no existe en el servidor' });
@@ -1052,7 +1172,6 @@ router.post('/apply-mapping', requirePermission('canCreateProducts'), async (req
         if (io && result.updateCount > 0) {
             const compRoom = String(req.user.companyId || 'default');
             io.to(compRoom).emit('inventory_changed');
-            io.emit('inventory_changed');
             if (result.creditCharged) {
                 io.to(compRoom).emit('suppliers_updated');
             }
@@ -1080,10 +1199,43 @@ router.post('/import/excel', requirePermission('canCreateProducts'), async (req,
         if (!base64) return res.status(400).json({ error: 'No se proporcionaron datos del archivo Excel' });
 
         const buffer = Buffer.from(base64, 'base64');
-        const workbook = XLSX.read(buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const data = XLSX.utils.sheet_to_json(sheet);
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(buffer);
+        const sheet = workbook.worksheets[0];
+        if (!sheet || sheet.rowCount < 2) {
+            return res.status(400).json({ error: 'El archivo Excel está vacío o es inválido' });
+        }
+
+        const forbiddenHeaderKeys = new Set(['__proto__', 'constructor', 'prototype']);
+        const headers = [];
+        const headerRow = sheet.getRow(1);
+        headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            const rawHeader = String(cell?.text ?? cell?.value ?? '').trim();
+            headers[colNumber] = (!rawHeader || forbiddenHeaderKeys.has(rawHeader)) ? null : rawHeader;
+        });
+
+        const data = [];
+        const maxRows = Math.min(sheet.rowCount, 25000);
+        for (let r = 2; r <= maxRows; r++) {
+            const row = sheet.getRow(r);
+            const rowObj = {};
+            let hasValue = false;
+            row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+                const headerName = headers[colNumber];
+                if (!headerName) return;
+                let val = cell.value;
+                if (val && typeof val === 'object') {
+                    if (Object.prototype.hasOwnProperty.call(val, 'result')) val = val.result;
+                    else if (Object.prototype.hasOwnProperty.call(val, 'text')) val = val.text;
+                    else if (Array.isArray(val.richText)) val = val.richText.map(rt => rt.text || '').join('');
+                }
+                if (val !== null && val !== undefined && val !== '') {
+                    rowObj[headerName] = val;
+                    hasValue = true;
+                }
+            });
+            if (hasValue) data.push(rowObj);
+        }
 
         if (!data || data.length === 0) {
             return res.status(400).json({ error: 'El archivo Excel está vacío o es inválido' });
@@ -1399,7 +1551,7 @@ router.post('/:id/lots', require('../middleware/auth').verifyToken, async (req, 
             date: new Date().toISOString()
         }, { transaction: t });
 
-        await product.update({ stock: null, stockQuantity: String(newTotalStock) }, { transaction: t });
+        await product.update({ stock: String(newTotalStock), stockQuantity: String(newTotalStock) }, { transaction: t });
 
         await t.commit();
         res.status(201).json(lot);
@@ -1407,6 +1559,116 @@ router.post('/:id/lots', require('../middleware/auth').verifyToken, async (req, 
         if (t) await t.rollback();
         console.error('Create lot error:', error);
         res.status(500).json({ error: 'Error al crear lote: ' + error.message });
+    }
+});
+
+// POST /products/transfer - Transferir stock entre sucursales
+router.post('/transfer', requirePermission('canManageInventory'), async (req, res) => {
+    const { sequelize, Product, BranchStock, StockMovement } = require('../database/models');
+    const t = await sequelize.transaction();
+    try {
+        const companyId = req.user.companyId || 'default';
+        const { productId, fromBranchId, toBranchId, quantity, reason } = req.body;
+        const qty = Number(quantity);
+
+        if (!productId || !fromBranchId || !toBranchId) {
+            await t.rollback();
+            return res.status(400).json({ error: 'Faltan parámetros obligatorios (productId, fromBranchId, toBranchId).' });
+        }
+        if (String(fromBranchId) === String(toBranchId)) {
+            await t.rollback();
+            return res.status(400).json({ error: 'La sucursal de origen y destino no pueden ser la misma.' });
+        }
+        if (!Number.isFinite(qty) || qty <= 0) {
+            await t.rollback();
+            return res.status(400).json({ error: 'La cantidad a transferir debe ser mayor a cero.' });
+        }
+
+        const product = await Product.findOne({ where: { id: productId, companyId }, transaction: t, lock: t.LOCK.UPDATE });
+        if (!product) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Producto no encontrado.' });
+        }
+
+        let originStock = await BranchStock.findOne({
+            where: { productId, branchId: fromBranchId, companyId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const currentOriginQty = Number(originStock ? originStock.stockQuantity : 0);
+        if (currentOriginQty < qty) {
+            await t.rollback();
+            return res.status(400).json({ error: `Stock insuficiente en la sucursal origen (${currentOriginQty} disponibles).` });
+        }
+
+        const newOriginQty = Number((currentOriginQty - qty).toFixed(4));
+        await originStock.update({ stockQuantity: newOriginQty }, { transaction: t });
+
+        let destStock = await BranchStock.findOne({
+            where: { productId, branchId: toBranchId, companyId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        const currentDestQty = Number(destStock ? destStock.stockQuantity : 0);
+        const newDestQty = Number((currentDestQty + qty).toFixed(4));
+
+        if (destStock) {
+            await destStock.update({ stockQuantity: newDestQty }, { transaction: t });
+        } else {
+            destStock = await BranchStock.create({
+                id: generateRobustId(),
+                productId,
+                branchId: toBranchId,
+                companyId,
+                stockQuantity: newDestQty,
+                minStock: Number(product.minStock || 5)
+            }, { transaction: t });
+        }
+
+        const nowIso = new Date().toISOString();
+        const noteText = reason || 'Transferencia entre sucursales';
+
+        await StockMovement.create({
+            id: generateRobustId(),
+            productId,
+            companyId,
+            userId: req.user.id,
+            branchId: fromBranchId,
+            type: 'OUT',
+            category: 'transferencia',
+            quantity: qty,
+            stockBefore: String(currentOriginQty),
+            stockAfter: String(newOriginQty),
+            reason: `${noteText} (Hacia sucursal ${toBranchId})`,
+            date: nowIso
+        }, { transaction: t });
+
+        await StockMovement.create({
+            id: generateRobustId(),
+            productId,
+            companyId,
+            userId: req.user.id,
+            branchId: toBranchId,
+            type: 'IN',
+            category: 'transferencia',
+            quantity: qty,
+            stockBefore: String(currentDestQty),
+            stockAfter: String(newDestQty),
+            reason: `${noteText} (Desde sucursal ${fromBranchId})`,
+            date: nowIso
+        }, { transaction: t });
+
+        await t.commit();
+        res.json({
+            success: true,
+            message: 'Transferencia completada exitosamente.',
+            fromBranchStock: newOriginQty,
+            toBranchStock: newDestQty
+        });
+    } catch (error) {
+        if (t) await t.rollback();
+        console.error('Transfer stock error:', error);
+        res.status(500).json({ error: 'Error al transferir stock: ' + error.message });
     }
 });
 

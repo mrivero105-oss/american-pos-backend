@@ -96,6 +96,7 @@ export default function BlindClosureModal(props) {
     }, [isOpen]);
 
     const fetchRiskLevel = async () => {
+        if (!currentShift?.userId) return;
         try {
             const { data } = await api.get(`/cash/risk-level/${currentShift.userId}`);
             setRisk(data);
@@ -162,7 +163,8 @@ export default function BlindClosureModal(props) {
                     settings: businessSettings,
                     businessSettings,
                     kickDrawer: businessSettings?.openDrawerOnPrint !== false,
-                    itemsSummary: shiftItems
+                    itemsSummary: shiftItems,
+                    autoPrint: true
                 });
 
                 if (businessSettings?.zReportItemsPrintMode === 'SEPARATE' && shiftItems.length > 0) {
@@ -170,7 +172,8 @@ export default function BlindClosureModal(props) {
                         shift: data?.shift || currentShift,
                         itemsSummary: shiftItems,
                         settings: businessSettings,
-                        businessSettings
+                        businessSettings,
+                        autoPrint: true
                     });
                 }
             } catch (printErr) {

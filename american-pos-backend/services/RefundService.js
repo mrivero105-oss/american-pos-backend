@@ -1,7 +1,33 @@
+const { Op } = require('sequelize');
 const { Refund, Sale, SaleItem, Product, BranchStock, StockMovement, AuditLog, Customer, CreditHistory, CashShift, CashMovement, Branch, ProductLot, SupervisorApproval } = require('../database/models');
 const { sequelize } = require('../database/connection');
-const { generateRobustId } = require('../utils/helpers');
+const { generateRobustId, getUserSettings, readJson } = require('../utils/helpers');
+const { SETTINGS_FILE } = require('../config/paths');
 const precision = require('../utils/precision');
+const AccountingEngineService = require('./AccountingEngineService');
+const FiscalService = require('./FiscalService');
+
+const isCreditMethod = (m) => ['fiado', 'credit', 'credit_usd', 'credito'].includes(String(m || '').toLowerCase().trim());
+
+const isVesMethodOrCurrency = (methodName, explicitCurrency = '') => {
+    const cur = String(explicitCurrency || '').toUpperCase().trim();
+    if (cur === 'VES' || cur === 'BS') return true;
+    if (cur === 'USD' || cur === 'USDT') return false;
+    const m = String(methodName || '').toLowerCase().trim();
+    return (
+        m.includes('ves') ||
+        m.includes('_bs') ||
+        m.endsWith('bs') ||
+        m.includes('bolivar') ||
+        m.includes('pago_movil') ||
+        m.includes('pagomovil') ||
+        m.includes('biopago') ||
+        m === 'debit' ||
+        m.includes('punto') ||
+        m.includes('tarjeta') ||
+        m.includes('debito')
+    );
+};
 
 class RefundService {
     /**
@@ -11,6 +37,11 @@ class RefundService {
         const { saleId, items, reason, paymentMethods, supervisorApprovalId } = refundData;
         const companyId = reqUser.companyId;
         const userId = reqUser.id;
+
+        if (!saleId) throw new Error('ID de venta requerido para procesar devolución.');
+        if (!Array.isArray(items) || items.length === 0) {
+            throw new Error('Debes especificar al menos un producto para devolver.');
+        }
 
         // Find or create default branch if none exists for the company
         let dbBranch = null;
@@ -85,6 +116,19 @@ class RefundService {
                 if (approval.expiresAt && new Date(approval.expiresAt) < new Date()) {
                     throw new Error('AUTH_REQUIRED: La aprobación de supervisor ha expirado.');
                 }
+
+                const normalizedActionType = String(approval.actionType || '').trim().toUpperCase();
+                const allowedRefundActions = new Set([
+                    'SALE_REFUND',
+                    'ANULAR / REEMBOLSAR FACTURA',
+                    'VOID_SALE',
+                    'POS_OVERRIDE',
+                    'MOBILE_AUTHORIZATION',
+                    'GENERAL_ACTION'
+                ]);
+                if (!allowedRefundActions.has(normalizedActionType)) {
+                    throw new Error(`AUTH_REQUIRED: La aprobación proporcionada (${approval.actionType || 'N/A'}) no corresponde a devoluciones o anulaciones.`);
+                }
             }
 
             // 3. CONSULTAR DEVOLUCIONES PREVIAS PARA VALIDACIÓN ACUMULADA (PROTEGIDO POR TRANSACCIÓN)
@@ -113,27 +157,273 @@ class RefundService {
                 }
             }
 
-            // 4. VALIDAR CANTIDADES Y MONTOS (INTEGER MATH)
-            let totalToRefund = 0;
+            // 4. VALIDAR CANTIDADES Y CALCULAR MONTOS CON PRORRATEO EXACTO (DESCUENTOS + PROMOS + IGTF)
+            let returnedGrossSubtotal = 0;
             const itemsToProcess = [];
+            const requestedQtyMap = {};
 
             for (const item of items) {
+                const reqQty = Number(item.quantity);
+                if (!Number.isFinite(reqQty) || reqQty <= 0) {
+                    throw new Error(`Cantidad inválida para el producto ${item.name || item.productId || ''}.`);
+                }
+
                 const matchingSaleItems = sale.SaleItems.filter(si => String(si.productId) === String(item.productId) || String(si.id) === String(item.productId));
                 const originalItem = matchingSaleItems.find(si => String(si.id) === String(item.id)) || matchingSaleItems[0];
                 if (!originalItem) throw new Error(`El producto ${item.name} no pertenece a esta venta.`);
-                
-                const pId = String(item.productId || originalItem.productId);
+
+                const pId = String(originalItem.productId || item.productId);
                 const prevRefundedQty = previouslyRefundedQtyMap[pId] || 0;
+                const alreadyRequestedInTx = requestedQtyMap[pId] || 0;
                 const totalOriginalQtyForProduct = matchingSaleItems.reduce((acc, si) => precision.add([acc, Number(si.quantity) || 0]), 0);
-                const availableToRefund = precision.subtract(totalOriginalQtyForProduct, prevRefundedQty);
+                const availableToRefund = precision.subtract(totalOriginalQtyForProduct, precision.add([prevRefundedQty, alreadyRequestedInTx]));
 
-                if (Number(item.quantity) > availableToRefund) {
-                    throw new Error(`Cantidad a devolver (${item.quantity}) excede la cantidad disponible para reembolso (${availableToRefund}).`);
+                if (reqQty > availableToRefund + 0.0001) {
+                    throw new Error(`Cantidad a devolver (${reqQty}) excede la cantidad disponible para reembolso (${Math.max(0, availableToRefund)}).`);
                 }
+                requestedQtyMap[pId] = precision.add([alreadyRequestedInTx, reqQty]);
 
-                const itemRefundAmount = precision.multiply(item.price, item.quantity);
-                totalToRefund = precision.add([totalToRefund, itemRefundAmount]);
-                itemsToProcess.push({ ...item, originalItem });
+                const origQty = Number(originalItem.quantity) || 1;
+                const authoritativeUnitPrice = Number(originalItem.price) > 0
+                    ? Number(originalItem.price)
+                    : (Number(originalItem.subtotal) > 0 ? precision.divide(Number(originalItem.subtotal), origQty) : (Number(item.price) || 0));
+                const itemGrossAmount = precision.multiply(authoritativeUnitPrice, reqQty);
+                returnedGrossSubtotal = precision.add([returnedGrossSubtotal, itemGrossAmount]);
+                itemsToProcess.push({ ...item, productId: pId, quantity: reqQty, price: authoritativeUnitPrice, originalItem });
+            }
+
+            const saleTotalAmount = Number(sale.total) || 0;
+            const remainingRefundableAmount = Math.max(0, precision.round(precision.subtract(saleTotalAmount, pastRefundedTotalAmount), 2));
+            if (saleTotalAmount > 0 && remainingRefundableAmount <= 0) {
+                throw new Error('El monto total de esta venta ya fue reembolsado en devoluciones previas.');
+            }
+
+            const originalQtyByProduct = {};
+            for (const si of sale.SaleItems) {
+                const pId = String(si.productId || si.id);
+                originalQtyByProduct[pId] = precision.add([originalQtyByProduct[pId] || 0, Number(si.quantity) || 0]);
+            }
+            const allItemsNowRefunded = Object.keys(originalQtyByProduct).length > 0 && Object.entries(originalQtyByProduct).every(([pId, origQ]) => {
+                const totalReturned = precision.add([previouslyRefundedQtyMap[pId] || 0, requestedQtyMap[pId] || 0]);
+                return totalReturned >= (origQ - 0.0001);
+            });
+
+            const grossSaleItemsSubtotal = Number(sale.subtotal) > 0
+                ? Number(sale.subtotal)
+                : sale.SaleItems.reduce((acc, si) => {
+                    const lineSub = Number(si.subtotal) > 0
+                        ? Number(si.subtotal)
+                        : precision.multiply(Number(si.price) || 0, Number(si.quantity) || 1);
+                    return precision.add([acc, lineSub]);
+                }, 0);
+
+            let totalToRefund = 0;
+            if (saleTotalAmount > 0 && allItemsNowRefunded) {
+                totalToRefund = remainingRefundableAmount;
+            } else if (saleTotalAmount > 0 && grossSaleItemsSubtotal > 0) {
+                const grossRatio = Math.min(1, precision.divide(returnedGrossSubtotal, grossSaleItemsSubtotal));
+                totalToRefund = precision.round(precision.multiply(saleTotalAmount, grossRatio), 2);
+                if (totalToRefund > remainingRefundableAmount) {
+                    totalToRefund = remainingRefundableAmount;
+                }
+            } else {
+                totalToRefund = precision.round(returnedGrossSubtotal, 2);
+                if (saleTotalAmount > 0 && totalToRefund > remainingRefundableAmount) {
+                    totalToRefund = remainingRefundableAmount;
+                }
+            }
+
+            const saleRate = Number(sale.exchangeRate) > 0 ? Number(sale.exchangeRate) : 1;
+            const refundRatioOnSale = saleTotalAmount > 0 ? Math.min(1, precision.divide(totalToRefund, saleTotalAmount)) : 1;
+            let taxRefundUsd = Number(sale.tax) > 0 ? precision.round(precision.multiply(Number(sale.tax), refundRatioOnSale), 2) : 0;
+            let igtfRefundUsd = Number(sale.igtfAmount) > 0 ? precision.round(precision.multiply(Number(sale.igtfAmount), refundRatioOnSale), 2) : 0;
+            if (precision.add([taxRefundUsd, igtfRefundUsd]) > totalToRefund) {
+                igtfRefundUsd = Math.min(igtfRefundUsd, totalToRefund);
+                taxRefundUsd = Math.min(taxRefundUsd, Math.max(0, precision.round(precision.subtract(totalToRefund, igtfRefundUsd), 2)));
+            }
+
+            // 4B. PLANIFICAR DESGLOSE DE DEVOLUCIÓN (FIADO MIXTO + MÉTODO/MONEDA REAL DE VENTA)
+            let paymentMethodsList = [];
+            if (Array.isArray(sale.paymentMethods)) {
+                paymentMethodsList = sale.paymentMethods;
+            } else if (typeof sale.paymentMethods === 'string') {
+                try {
+                    const parsed = JSON.parse(sale.paymentMethods);
+                    if (Array.isArray(parsed)) paymentMethodsList = parsed;
+                } catch (e) {}
+            }
+
+            const pmToUsdEq = (pm) => {
+                if (!pm) return 0;
+                const conv = Number(pm.convertedAmountUsd);
+                if (Number.isFinite(conv) && conv > 0) return conv;
+                const amt = Number(pm.amount) || 0;
+                const mKey = pm.method || pm.id || '';
+                const isVes = isVesMethodOrCurrency(mKey, pm.currency);
+                return isVes && saleRate > 0 ? precision.divide(amt, saleRate) : amt;
+            };
+
+            const originalFiadoMethods = paymentMethodsList.filter(pm => pm && isCreditMethod(pm.method || pm.id));
+            const nonFiadoMethods = paymentMethodsList.filter(pm => pm && !isCreditMethod(pm.method || pm.id));
+
+            let originalFiadoUsd = originalFiadoMethods.reduce((acc, pm) => precision.add([acc, pmToUsdEq(pm)]), 0);
+            if (paymentMethodsList.length === 0 && (isCreditMethod(sale.paymentMethod) || ['credit', 'unpaid', 'pending'].includes(String(sale.paymentStatus || '').toLowerCase()))) {
+                originalFiadoUsd = saleTotalAmount;
+            }
+
+            let previousFiadoAbatedUsd = 0;
+            for (const prevRefund of previousRefunds) {
+                let prevPms = [];
+                if (Array.isArray(prevRefund.paymentMethods)) prevPms = prevRefund.paymentMethods;
+                else if (typeof prevRefund.paymentMethods === 'string') {
+                    try {
+                        const p = JSON.parse(prevRefund.paymentMethods);
+                        if (Array.isArray(p)) prevPms = p;
+                    } catch (_) {}
+                }
+                if (prevPms.length > 0) {
+                    for (const ppm of prevPms) {
+                        if (ppm && isCreditMethod(ppm.method || ppm.id)) {
+                            previousFiadoAbatedUsd = precision.add([previousFiadoAbatedUsd, pmToUsdEq(ppm)]);
+                        }
+                    }
+                } else if (nonFiadoMethods.length === 0 && originalFiadoUsd > 0) {
+                    previousFiadoAbatedUsd = precision.add([previousFiadoAbatedUsd, Number(prevRefund.amount) || 0]);
+                }
+            }
+            const remainingSaleFiadoUsd = Math.max(0, precision.round(precision.subtract(originalFiadoUsd, previousFiadoAbatedUsd), 2));
+
+            let customer = null;
+            if (sale.customerId) {
+                customer = await Customer.findOne({
+                    where: { id: sale.customerId, companyId },
+                    lock: t.LOCK.UPDATE,
+                    transaction: t
+                });
+            }
+
+            let creditPortionUsd = 0;
+            if (remainingSaleFiadoUsd > 0 && customer) {
+                const currentCustomerBalance = Math.max(0, Number(customer.creditBalance) || 0);
+                creditPortionUsd = precision.round(Math.min(totalToRefund, remainingSaleFiadoUsd, currentCustomerBalance), 2);
+            }
+            const cashBankPortionUsd = precision.round(precision.subtract(totalToRefund, creditPortionUsd), 2);
+
+            const executedRefundMethods = [];
+            if (creditPortionUsd > 0) {
+                executedRefundMethods.push({
+                    method: 'fiado',
+                    amount: creditPortionUsd,
+                    currency: 'USD',
+                    convertedAmountUsd: creditPortionUsd
+                });
+            }
+
+            if (cashBankPortionUsd > 0) {
+                const explicitNonFiado = Array.isArray(paymentMethods)
+                    ? paymentMethods.filter(pm => pm && !isCreditMethod(pm.method || pm.id))
+                    : [];
+
+                if (explicitNonFiado.length > 0) {
+                    const explicitItems = explicitNonFiado.map(pm => {
+                        const mId = String(pm.method || pm.id || 'cash');
+                        const isVes = isVesMethodOrCurrency(mId, pm.currency);
+                        const cur = isVes ? 'VES' : 'USD';
+                        const eqUsd = pmToUsdEq({ ...pm, method: mId, currency: cur });
+                        return { method: mId, currency: cur, rawAmt: Number(pm.amount) || 0, eqUsd };
+                    });
+                    const sumExplicitUsd = explicitItems.reduce((acc, it) => precision.add([acc, it.eqUsd]), 0);
+                    const needsRescale = sumExplicitUsd <= 0 || Math.abs(precision.subtract(sumExplicitUsd, cashBankPortionUsd)) > 0.02;
+
+                    if (!needsRescale) {
+                        explicitItems.forEach(it => {
+                            executedRefundMethods.push({
+                                method: it.method,
+                                amount: precision.round(it.rawAmt, 2),
+                                currency: it.currency,
+                                convertedAmountUsd: precision.round(it.eqUsd, 2)
+                            });
+                        });
+                    } else {
+                        let assignedUsd = 0;
+                        explicitItems.forEach((it, idx) => {
+                            const isLast = idx === explicitItems.length - 1;
+                            const shareUsd = isLast
+                                ? precision.round(precision.subtract(cashBankPortionUsd, assignedUsd), 2)
+                                : (sumExplicitUsd > 0
+                                    ? precision.round(precision.multiply(cashBankPortionUsd, precision.divide(it.eqUsd, sumExplicitUsd)), 2)
+                                    : precision.round(precision.divide(cashBankPortionUsd, explicitItems.length), 2));
+                            assignedUsd = precision.add([assignedUsd, shareUsd]);
+                            if (shareUsd <= 0) return;
+                            const nativeAmt = it.currency === 'VES'
+                                ? precision.round(precision.multiply(shareUsd, saleRate), 2)
+                                : shareUsd;
+                            executedRefundMethods.push({
+                                method: it.method,
+                                amount: nativeAmt,
+                                currency: it.currency,
+                                convertedAmountUsd: shareUsd
+                            });
+                        });
+                    }
+                } else if (refundData.currency) {
+                    const explicitCur = String(refundData.currency).toUpperCase() === 'BS' ? 'VES' : String(refundData.currency).toUpperCase();
+                    const fallbackMethod = String(
+                        nonFiadoMethods[0]?.method ||
+                        nonFiadoMethods[0]?.id ||
+                        (!isCreditMethod(sale.paymentMethod) && sale.paymentMethod ? sale.paymentMethod : (explicitCur === 'VES' ? 'cash_bs' : 'cash'))
+                    );
+                    const nativeAmt = explicitCur === 'VES'
+                        ? precision.round(precision.multiply(cashBankPortionUsd, saleRate), 2)
+                        : cashBankPortionUsd;
+                    executedRefundMethods.push({
+                        method: fallbackMethod,
+                        amount: nativeAmt,
+                        currency: explicitCur,
+                        convertedAmountUsd: cashBankPortionUsd
+                    });
+                } else if (nonFiadoMethods.length > 0) {
+                    const mappedNonFiado = nonFiadoMethods.map(pm => {
+                        const mId = String(pm.method || pm.id || 'cash');
+                        const cur = isVesMethodOrCurrency(mId, pm.currency) ? 'VES' : 'USD';
+                        const eqUsd = pmToUsdEq({ ...pm, method: mId, currency: cur });
+                        return { method: mId, currency: cur, eqUsd };
+                    });
+                    const totalPaidNonFiadoUsd = mappedNonFiado.reduce((acc, m) => precision.add([acc, m.eqUsd]), 0);
+                    let assignedUsd = 0;
+                    mappedNonFiado.forEach((m, idx) => {
+                        const isLast = idx === mappedNonFiado.length - 1;
+                        const portionUsd = isLast
+                            ? precision.round(precision.subtract(cashBankPortionUsd, assignedUsd), 2)
+                            : (totalPaidNonFiadoUsd > 0
+                                ? precision.round(precision.multiply(cashBankPortionUsd, precision.divide(m.eqUsd, totalPaidNonFiadoUsd)), 2)
+                                : precision.round(precision.divide(cashBankPortionUsd, mappedNonFiado.length), 2));
+                        assignedUsd = precision.add([assignedUsd, portionUsd]);
+                        if (portionUsd <= 0) return;
+                        const movAmt = m.currency === 'VES'
+                            ? precision.round(precision.multiply(portionUsd, saleRate), 2)
+                            : portionUsd;
+                        executedRefundMethods.push({
+                            method: m.method,
+                            amount: movAmt,
+                            currency: m.currency,
+                            convertedAmountUsd: portionUsd
+                        });
+                    });
+                } else {
+                    const fallbackMethod = (!isCreditMethod(sale.paymentMethod) && sale.paymentMethod) ? String(sale.paymentMethod) : 'cash';
+                    const isVes = isVesMethodOrCurrency(fallbackMethod);
+                    const fallbackCur = isVes ? 'VES' : 'USD';
+                    const nativeAmt = isVes
+                        ? precision.round(precision.multiply(cashBankPortionUsd, saleRate), 2)
+                        : cashBankPortionUsd;
+                    executedRefundMethods.push({
+                        method: fallbackMethod,
+                        amount: nativeAmt,
+                        currency: fallbackCur,
+                        convertedAmountUsd: cashBankPortionUsd
+                    });
+                }
             }
 
             // 5. CREAR REGISTRO DE DEVOLUCIÓN
@@ -147,21 +437,40 @@ class RefundService {
                 reason: reason || 'Devolución de cliente',
                 amount: totalToRefund,
                 items: items,
-                paymentMethods,
+                paymentMethods: executedRefundMethods,
                 supervisorApprovalId,
                 status: 'completed'
             }, { transaction: t });
 
-            // Consumir aprobación de supervisor (anti-replay)
+            // Consumir aprobación de supervisor de forma atómica (anti-replay)
             if (approval) {
-                await approval.update({
-                    used: true,
-                    usedAt: new Date(),
-                    referenceId: refund.id
-                }, { transaction: t });
+                const now = new Date();
+                const [consumedCount] = await SupervisorApproval.update(
+                    {
+                        used: true,
+                        usedAt: now,
+                        referenceId: refund.id
+                    },
+                    {
+                        where: {
+                            id: approval.id,
+                            companyId,
+                            used: false,
+                            [Op.or]: [{ expiresAt: null }, { expiresAt: { [Op.gte]: now } }]
+                        },
+                        transaction: t
+                    }
+                );
+                if (consumedCount !== 1) {
+                    throw new Error('AUTH_REQUIRED: Esta aprobación de supervisor ya fue utilizada previamente o ha expirado.');
+                }
             }
 
-            // 5. REVERTIR STOCK E INVENTARIO (EN ORDEN DETERMINÍSTICO ANTI-DEADLOCK)
+            // 5B. REVERTIR STOCK E INVENTARIO (EN ORDEN DETERMINÍSTICO ANTI-DEADLOCK)
+            let returnedCostUsd = 0;
+            let hasQuarantineItems = false;
+            let hasNonQuarantineItems = false;
+
             const sortedItemsToProcess = [...itemsToProcess].sort((a, b) =>
                 String(a.productId || '').localeCompare(String(b.productId || ''))
             );
@@ -176,16 +485,31 @@ class RefundService {
                     const shouldRevertStock = product.category !== 'Servicios' && item.isReturnable !== false;
 
                     if (shouldRevertStock) {
+                        const unitsMultiplier = Number(item.factorConversion) > 0
+                            ? Number(item.factorConversion)
+                            : (Number(item.originalItem?.factorConversion) > 0
+                                ? Number(item.originalItem.factorConversion)
+                                : (item.isBulk || item.originalItem?.isBulk
+                                    ? (Number(product.unitsPerBulk) || Number(item.originalItem?.unitsPerBulk) || 1)
+                                    : (item.isMidBulk || item.originalItem?.isMidBulk
+                                        ? (Number(product.unitsPerMidBulk) || Number(item.originalItem?.unitsPerMidBulk) || 1)
+                                        : 1)));
+                        const unitsToRestore = precision.multiply(item.quantity, unitsMultiplier);
+                        const lineUnitCost = Number(item.originalItem?.cost) > 0
+                            ? Number(item.originalItem.cost)
+                            : precision.multiply(Number(product.cost) || 0, unitsMultiplier);
+
                         if (refundData.quarantine || refundData.isPharmacyQuarantine || product.es_controlado) {
-                            // PROTOCOLO DE CUARENTENA SANITARIA FARMACÉUTICA
+                            hasQuarantineItems = true;
+                            // PROTOCOLO DE CUARENTENA SANITARIA FARMACÉUTICA (EN UNIDADES BASE REALES)
                             await ProductLot.create({
                                 id: generateRobustId(),
                                 companyId,
                                 productId: product.id,
                                 lotNumber: `CUARENTENA-${Date.now().toString().slice(-6)}`,
-                                quantity: item.quantity,
+                                quantity: unitsToRestore,
                                 expirationDate: item.expirationDate || null,
-                                cost: item.cost || product.cost || 0,
+                                cost: unitsMultiplier > 0 ? precision.divide(lineUnitCost, unitsMultiplier) : lineUnitCost,
                                 status: 'quarantine'
                             }, { transaction: t });
 
@@ -195,26 +519,24 @@ class RefundService {
                                 userId,
                                 companyId,
                                 type: 'IN_QUARANTINE',
-                                quantity: item.quantity,
+                                quantity: unitsToRestore,
                                 stockBefore: Number(product.stockQuantity) || 0,
                                 stockAfter: Number(product.stockQuantity) || 0,
                                 reason: `Cuarentena Sanitaria - Devolución Venta #${saleId.split('-').pop()}`,
                                 referenceId: refund.id,
+                                date: new Date().toISOString(),
                                 timestamp: new Date()
                             }, { transaction: t });
                         } else {
+                            hasNonQuarantineItems = true;
+                            returnedCostUsd = precision.add([returnedCostUsd, precision.multiply(lineUnitCost, item.quantity)]);
+
                             const [branchStock] = await BranchStock.findOrCreate({
                                 where: { productId: product.id, branchId, companyId },
                                 defaults: { quantity: 0 },
                                 transaction: t
                             });
 
-                            const unitsMultiplier = Number(item.factorConversion) > 0 
-                                ? Number(item.factorConversion) 
-                                : (Number(item.originalItem?.factorConversion) > 0 
-                                    ? Number(item.originalItem.factorConversion) 
-                                    : (item.isBulk ? (Number(product.unitsPerBulk) || 1) : (item.isMidBulk ? (Number(product.unitsPerMidBulk) || 1) : 1)));
-                            const unitsToRestore = precision.multiply(item.quantity, unitsMultiplier);
                             const stockBefore = Number(product.stockQuantity || product.stock || 0);
                             const stockAfter = precision.add([stockBefore, unitsToRestore]);
 
@@ -250,6 +572,7 @@ class RefundService {
                                 stockAfter,
                                 reason: `Devolución Venta #${saleId.split('-').pop()}`,
                                 referenceId: refund.id,
+                                date: new Date().toISOString(),
                                 timestamp: new Date().toISOString()
                             }, { transaction: t });
                         }
@@ -257,7 +580,7 @@ class RefundService {
                 }
             }
 
-            // 6. REVERTIR LEDGER (DINERO)
+            // 6. REVERTIR LEDGER (DINERO: FIADO MIXTO + CAJA/BANCOS + LEALTAD)
             const totalCumulativeRefunded = precision.add([pastRefundedTotalAmount, totalToRefund]);
             const isFullRefund = precision.subtract(sale.total, totalCumulativeRefunded) <= 0.01;
             const hasCashAdvanceItem = itemsToProcess.some(it => {
@@ -266,7 +589,6 @@ class RefundService {
                 return nm.includes('avance') || cat === 'servicios';
             });
 
-            // Si la venta original contenía un Avance de Efectivo (ADV-...) y es devolución total o del ítem de avance, revertir la salida
             if (isFullRefund || hasCashAdvanceItem) {
                 try {
                     await CashMovement.destroy({
@@ -277,151 +599,78 @@ class RefundService {
                     console.warn('[RefundService] No se pudo revertir movimiento de avance:', advErr.message);
                 }
             }
-            // Si hubo crédito (Fiado), reducir la deuda del cliente
-            let paymentMethodsList = [];
-            if (Array.isArray(sale.paymentMethods)) {
-                paymentMethodsList = sale.paymentMethods;
-            } else if (typeof sale.paymentMethods === 'string') {
-                try {
-                    const parsed = JSON.parse(sale.paymentMethods);
-                    if (Array.isArray(parsed)) paymentMethodsList = parsed;
-                } catch (e) {}
+
+            // 6A. Abonar porción fiado a la deuda del cliente (incluye ventas mixtas)
+            if (creditPortionUsd > 0 && customer) {
+                const newBalance = precision.round(Math.max(0, precision.subtract(customer.creditBalance || 0, creditPortionUsd)), 2);
+
+                await CreditHistory.create({
+                    id: generateRobustId(),
+                    userId,
+                    companyId,
+                    customerId: customer.id,
+                    type: 'credit', // Abono por devolución
+                    amount: creditPortionUsd,
+                    balanceAfter: newBalance,
+                    description: `Devolución Factura #${saleId.split('-').pop()}`,
+                    saleId: sale.id,
+                    timestamp: new Date().toISOString()
+                }, { transaction: t });
+
+                await customer.update({ creditBalance: newBalance }, { transaction: t });
             }
-            const isFiado = paymentMethodsList.some(pm => pm && pm.method === 'fiado') || sale.paymentMethod === 'fiado';
+
+            // 6B. Registrar salidas reales de caja/bancos por la porción no fiado
             let currentShift = null;
-            if (isFiado && sale.customerId) {
-                const customer = await Customer.findOne({
-                    where: { id: sale.customerId, companyId },
-                    lock: t.LOCK.UPDATE,
-                    transaction: t
-                });
-
-                if (customer) {
-                    const refundAmount = precision.round(totalToRefund, 2);
-                    const newBalance = precision.round(precision.subtract(customer.creditBalance || 0, refundAmount), 2);
-
-                    await CreditHistory.create({
-                        id: generateRobustId(),
-                        userId,
-                        companyId,
-                        customerId: customer.id,
-                        type: 'credit', // Abono por devolución
-                        amount: refundAmount,
-                        balanceAfter: newBalance,
-                        description: `Devolución Factura #${saleId.split('-').pop()}`,
-                        saleId: sale.id,
-                        timestamp: new Date().toISOString()
-                    }, { transaction: t });
-
-                    await customer.update({ creditBalance: newBalance }, { transaction: t });
-                }
-            } else {
-                // Si fue pago en efectivo/digital, registrar movimiento de salida de caja
+            if (cashBankPortionUsd > 0) {
                 currentShift = await CashShift.findOne({
                     where: { userId, status: 'open', companyId },
                     transaction: t
                 });
 
-                // Detectar moneda y método del reembolso respetando la venta original
-                let refundCurrency = 'USD';
-                let refundMethodId = 'cash';
-                if (refundData.currency) {
-                    refundCurrency = String(refundData.currency).toUpperCase();
-                } else if (Array.isArray(refundData.paymentMethods) && refundData.paymentMethods[0]?.currency) {
-                    refundCurrency = String(refundData.paymentMethods[0].currency).toUpperCase();
-                    refundMethodId = refundData.paymentMethods[0].method || refundMethodId;
-                } else if (paymentMethodsList.length > 0) {
-                    const firstPm = paymentMethodsList[0];
-                    if (firstPm?.currency) {
-                        refundCurrency = String(firstPm.currency).toUpperCase();
-                    } else if (firstPm?.method && (firstPm.method.includes('ves') || firstPm.method.includes('bs'))) {
-                        refundCurrency = 'VES';
-                    }
-                    refundMethodId = firstPm?.method || refundMethodId;
-                } else if (sale.paymentMethod && (sale.paymentMethod.includes('ves') || sale.paymentMethod.includes('bs'))) {
-                    refundCurrency = 'VES';
-                }
-
                 if (currentShift) {
-                    // Validar disponibilidad de efectivo físico en gaveta si aplica
-                    const isPhysicalCash = ['cash', 'efectivo', 'cash_usd', 'cash_ves', 'cash_bs'].some(k => refundMethodId.toLowerCase().includes(k));
-                    if (isPhysicalCash && !refundData.bypassCashCheck) {
+                    const nonCreditExecuted = executedRefundMethods.filter(pm => pm && !isCreditMethod(pm.method));
+
+                    // Verificar disponibilidad de efectivo físico cuando haya salidas en efectivo
+                    if (!refundData.bypassCashCheck && nonCreditExecuted.some(pm => ['cash', 'efectivo', 'cash_usd', 'cash_ves', 'cash_bs'].some(k => String(pm.method || '').toLowerCase().includes(k)))) {
                         const movements = await CashMovement.findAll({
                             where: { shiftId: currentShift.id, companyId },
                             transaction: t
                         });
-                        let availableCash = 0;
-                        try {
-                            const initBreakdown = typeof currentShift.initialBreakdown === 'string'
-                                ? JSON.parse(currentShift.initialBreakdown)
-                                : (currentShift.initialBreakdown || {});
-                            if (refundCurrency === 'VES') {
-                                availableCash = Number(initBreakdown.cash_ves || initBreakdown.efectivo_bs || initBreakdown.cash_bs || 0);
-                            } else {
-                                availableCash = Number(initBreakdown.cash || initBreakdown.cash_usd || initBreakdown.efectivo || currentShift.initialAmount || 0);
+                        const initBreakdown = (() => {
+                            try {
+                                return typeof currentShift.initialBreakdown === 'string'
+                                    ? JSON.parse(currentShift.initialBreakdown)
+                                    : (currentShift.initialBreakdown || {});
+                            } catch (e) {
+                                return {};
                             }
-                        } catch (e) {
-                            availableCash = Number(currentShift.initialAmount || 0);
-                        }
+                        })();
 
-                        for (const m of movements) {
-                            if (m.id && m.id.startsWith('OPEN-')) continue;
-                            const mCur = (m.currency || 'USD').toUpperCase();
-                            if (mCur === refundCurrency) {
-                                const amt = Number(m.amount || 0);
-                                if (m.type === 'in') availableCash = precision.add([availableCash, amt]);
-                                else if (m.type === 'out') availableCash = precision.subtract(availableCash, amt);
+                        for (const pm of nonCreditExecuted) {
+                            const isPhysicalCash = ['cash', 'efectivo', 'cash_usd', 'cash_ves', 'cash_bs'].some(k => String(pm.method || '').toLowerCase().includes(k));
+                            if (!isPhysicalCash) continue;
+                            const cur = String(pm.currency || 'USD').toUpperCase();
+                            let availableCash = cur === 'VES'
+                                ? Number(initBreakdown.cash_ves || initBreakdown.efectivo_bs || initBreakdown.cash_bs || 0)
+                                : Number(initBreakdown.cash || initBreakdown.cash_usd || initBreakdown.efectivo || currentShift.initialAmount || 0);
+
+                            for (const m of movements) {
+                                if (m.id && m.id.startsWith('OPEN-')) continue;
+                                const mCur = (m.currency || 'USD').toUpperCase();
+                                if (mCur === cur) {
+                                    const amt = Number(m.amount || 0);
+                                    if (m.type === 'in') availableCash = precision.add([availableCash, amt]);
+                                    else if (m.type === 'out') availableCash = precision.subtract(availableCash, amt);
+                                }
                             }
-                        }
-
-                        if (availableCash > 0 && totalToRefund > availableCash) {
-                            console.warn(`[REFUND-WARNING] Saldo en gaveta (${refundCurrency} ${availableCash}) inferior a la devolución solicitada (${totalToRefund}). Aprobado por supervisor: ${supervisorApprovalId}`);
+                            if (availableCash > 0 && pm.amount > availableCash) {
+                                console.warn(`[REFUND-WARNING] Saldo en gaveta (${cur} ${availableCash}) inferior a la devolución solicitada (${pm.amount}). Aprobado por supervisor: ${supervisorApprovalId}`);
+                            }
                         }
                     }
 
-                    const hasExplicitMethod = Boolean(refundData.currency) || (Array.isArray(refundData.paymentMethods) && refundData.paymentMethods.length > 0);
-                    const nonFiadoMethods = paymentMethodsList.filter(pm => pm && pm.method !== 'fiado');
-                    const saleRate = Number(sale.exchangeRate) || 1;
-
-                    if (!hasExplicitMethod && nonFiadoMethods.length > 1) {
-                        // Prorratear proporcionalmente entre los métodos originales de pago mixto
-                        const methodsWithUsd = nonFiadoMethods.map(pm => {
-                            const pmCur = (pm.currency || ((pm.method && (pm.method.includes('ves') || pm.method.includes('bs'))) ? 'VES' : 'USD')).toUpperCase();
-                            const rawAmt = Number(pm.amount || 0);
-                            const usdEq = Number(pm.convertedAmountUsd) > 0
-                                ? Number(pm.convertedAmountUsd)
-                                : ((pmCur === 'VES' || pmCur === 'BS') && saleRate > 0 ? precision.divide(rawAmt, saleRate) : rawAmt);
-                            return { method: pm.method || 'cash', currency: pmCur === 'BS' ? 'VES' : pmCur, usdEq };
-                        });
-                        const totalPaidUsd = methodsWithUsd.reduce((acc, m) => precision.add([acc, m.usdEq]), 0);
-
-                        for (const m of methodsWithUsd) {
-                            const ratio = totalPaidUsd > 0 ? (m.usdEq / totalPaidUsd) : (1 / methodsWithUsd.length);
-                            const portionUsd = precision.round(precision.multiply(totalToRefund, ratio), 2);
-                            if (portionUsd <= 0) continue;
-                            const movAmt = m.currency === 'VES'
-                                ? precision.round(precision.multiply(portionUsd, saleRate), 2)
-                                : portionUsd;
-
-                            await CashMovement.create({
-                                id: generateRobustId(),
-                                shiftId: currentShift.id,
-                                userId,
-                                companyId,
-                                type: 'out',
-                                category: 'REFUND',
-                                amount: movAmt,
-                                currency: m.currency,
-                                paymentMethodId: m.method,
-                                reason: `Devolución Venta #${saleId.split('-').pop()} (Prorrateo ${m.method}): ${reason || 'Reembolso'}`,
-                                timestamp: new Date().toISOString()
-                            }, { transaction: t });
-                        }
-                    } else {
-                        const movementAmount = (refundCurrency === 'VES' || refundCurrency === 'BS')
-                            ? precision.round(precision.multiply(totalToRefund, saleRate), 2)
-                            : totalToRefund;
-
+                    for (const pm of nonCreditExecuted) {
                         await CashMovement.create({
                             id: generateRobustId(),
                             shiftId: currentShift.id,
@@ -429,10 +678,10 @@ class RefundService {
                             companyId,
                             type: 'out',
                             category: 'REFUND',
-                            amount: movementAmount,
-                            currency: refundCurrency,
-                            paymentMethodId: refundMethodId,
-                            reason: `Devolución Venta #${saleId.split('-').pop()}: ${reason || 'Reembolso'}`,
+                            amount: pm.amount,
+                            currency: pm.currency,
+                            paymentMethodId: pm.method,
+                            reason: `Devolución Venta #${saleId.split('-').pop()} (${pm.method}): ${reason || 'Reembolso'}`,
                             timestamp: new Date().toISOString()
                         }, { transaction: t });
                     }
@@ -440,6 +689,69 @@ class RefundService {
                     console.warn(`[REFUND-AUDIT] Devolución procesada para la venta ${saleId} sin turno de caja abierto asignado al usuario ${userId}. Se registrará únicamente en auditoría.`);
                 }
             }
+
+            // 6C. Revertir proporcionalmente puntos de lealtad otorgados al cliente
+            if (customer) {
+                const allSettings = readJson(SETTINGS_FILE);
+                const userSettings = getUserSettings(allSettings, companyId) || {};
+                const loyaltyRate = Number(userSettings.loyaltyPointsRate || refundData.loyaltyPointsRate || 0.10);
+                const pointsToDeduct = precision.round(precision.multiply(totalToRefund, loyaltyRate), 0);
+                const currentPoints = Math.max(0, Number(customer.loyaltyPoints) || 0);
+                const actualPointsDeduct = Math.min(currentPoints, Math.max(0, pointsToDeduct));
+                if (actualPointsDeduct > 0) {
+                    await customer.update({
+                        loyaltyPoints: precision.subtract(currentPoints, actualPointsDeduct)
+                    }, { transaction: t });
+                }
+            }
+
+            // 6D. Emitir Nota de Crédito fiscal y Libro de Ventas en la misma transacción
+            const netAfterTaxAndIgtf = Math.max(0, precision.round(precision.subtract(totalToRefund, precision.add([taxRefundUsd, igtfRefundUsd])), 2));
+            const taxableBaseUsd = taxRefundUsd > 0
+                ? Math.min(netAfterTaxAndIgtf, precision.round(precision.divide(taxRefundUsd, 0.16), 2))
+                : 0;
+            const exemptUsd = Math.max(0, precision.round(precision.subtract(netAfterTaxAndIgtf, taxableBaseUsd), 2));
+
+            const creditNote = await FiscalService.createCreditNoteInTransaction(companyId, userId, {
+                branchId,
+                saleId: sale.id,
+                affectedInvoiceNumber: sale.invoiceNumber || sale.id,
+                customerId: sale.customerId || null,
+                customerName: sale.customerName || customer?.name || 'Consumidor Final',
+                customerRif: sale.customerRif || customer?.idDocument || 'V-00000000',
+                subtotal: taxableBaseUsd,
+                taxAmount: taxRefundUsd,
+                exemptAmount: exemptUsd,
+                totalAmount: totalToRefund,
+                currency: 'USD',
+                exchangeRate: saleRate,
+                reason: 'DEVOLUCION_MERCANCIA',
+                reenterStock: hasNonQuarantineItems,
+                items: itemsToProcess.map(it => ({
+                    productId: it.productId,
+                    name: it.name || it.originalItem?.name || 'Producto',
+                    quantity: it.quantity,
+                    price: it.price
+                })),
+                date: new Date().toISOString().split('T')[0],
+                notes: reason || 'Devolución de cliente'
+            }, t);
+
+            // 6E. Asiento Contable Automático Síncrono dentro de la misma transacción
+            const allInQuarantine = hasQuarantineItems && !hasNonQuarantineItems;
+            await AccountingEngineService.generateRefundEntry({
+                id: refund.id,
+                saleId: sale.id,
+                date: refund.date,
+                amount: totalToRefund,
+                taxAmount: taxRefundUsd,
+                igtfAmount: igtfRefundUsd,
+                returnedCost: precision.round(returnedCostUsd, 2),
+                isQuarantine: allInQuarantine,
+                exchangeRate: saleRate,
+                paymentMethods: executedRefundMethods,
+                userId
+            }, sale, companyId, t);
 
             // 7. ACTUALIZAR ESTADO DE LA VENTA
             const newSaleStatus = isFullRefund ? 'refunded' : 'partially_refunded';
@@ -453,13 +765,14 @@ class RefundService {
                 action: 'SALE_REFUND',
                 description: `Devolución procesada para venta ${saleId}. Monto: ${totalToRefund}`,
                 entityId: refund.id,
-                newValue: JSON.stringify({ refundId: refund.id, amount: totalToRefund }),
+                newValue: JSON.stringify({
+                    refundId: refund.id,
+                    amount: totalToRefund,
+                    paymentMethods: executedRefundMethods,
+                    creditNoteNumber: creditNote?.creditNoteNumber || null
+                }),
                 timestamp: new Date().toISOString()
             }, { transaction: t });
-
-            if (approval) {
-                await approval.update({ used: true, usedAt: new Date().toISOString() }, { transaction: t });
-            }
 
             await t.commit();
 

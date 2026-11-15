@@ -348,7 +348,7 @@
       </div>
       <div class="form-group">
         <label>Contraseña:</label>
-        <input type="password" id="inputPassword" value="postgres" />
+        <input type="password" id="inputPassword" value="" placeholder="Contraseña de PostgreSQL" />
       </div>
     </div>
 
@@ -388,7 +388,9 @@
             document.getElementById('inputPort').value = cfg.port || 5432;
             document.getElementById('inputDatabase').value = cfg.database || 'americanpos';
             document.getElementById('inputUser').value = cfg.user || 'postgres';
-            document.getElementById('inputPassword').value = cfg.password || 'postgres';
+            const pwdInput = document.getElementById('inputPassword');
+            pwdInput.value = '';
+            pwdInput.placeholder = cfg.hasPassword ? '•••••••• (guardada; dejar vacío para conservar)' : 'Contraseña de PostgreSQL';
             selectRole(cfg.mode || (cfg.host === '127.0.0.1' || cfg.host === 'localhost' ? 'server' : 'client'));
           }
         }
@@ -429,15 +431,17 @@
     }
 
     function getFormData() {
-      return {
+      const data = {
         mode: currentRole,
         dialect: 'postgres',
         host: document.getElementById('inputHost').value.trim() || '127.0.0.1',
         port: parseInt(document.getElementById('inputPort').value.trim() || '5432', 10),
         database: document.getElementById('inputDatabase').value.trim() || 'americanpos',
-        user: document.getElementById('inputUser').value.trim() || 'postgres',
-        password: document.getElementById('inputPassword').value
+        user: document.getElementById('inputUser').value.trim() || 'postgres'
       };
+      const pwdVal = document.getElementById('inputPassword').value;
+      if (pwdVal) data.password = pwdVal;
+      return data;
     }
 
     async function testConnection() {

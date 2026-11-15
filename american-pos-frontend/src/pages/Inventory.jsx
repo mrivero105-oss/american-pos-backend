@@ -20,7 +20,7 @@ import StockTransferModal from '../components/StockTransferModal';
 import QuickStockAdjustModal from '../components/QuickStockAdjustModal';
 import WasteManagementModal from '../components/WasteManagementModal';
 import { getImageUrl } from '../utils/imageUtils';
-import { formatMoney, fetchGlobalSettings, formatStock, isSingleCurrencyMode } from '../utils/format';
+import { formatMoney, fetchGlobalSettings, formatStock, isSingleCurrencyMode, isVesOnlyMode } from '../utils/format';
 import useScanner from '../hooks/useScanner';
 
 // Custom debounce hook for search optimization
@@ -501,22 +501,31 @@ export function InventoryList() {
     const [categoryFilter, setCategoryFilter] = useState('');
     const [categories, setCategories] = useState([]);
     const [stockFilter, setStockFilter] = useState('all'); // 'all' | 'low' | 'out' | 'in'
+    const [missingCostOnly, setMissingCostOnly] = useState(false);
     const [pharmacyFilter, setPharmacyFilter] = useState('all'); // 'all' | 'controlled' | 'expiring'
     const [priceRange, setPriceRange] = useState({ min: '', max: '' });
     const showFilters = true;
     const [viewMode, setViewMode] = useState(() => {
         return localStorage.getItem('inventory_view_mode') || 'list';
     });
+    const tableSectionRef = useRef(null);
 
     // Executive Valuation KPIs
+    const [valuationLoaded, setValuationLoaded] = useState(false);
     const [valuation, setValuation] = useState({
         totalValueAtCost: 0,
         totalRetailValue: 0,
         itemCount: 0,
+        serviceCount: 0,
+        totalCatalogCount: 0,
         lowStockCount: 0,
         outOfStockCount: 0,
         projectedMarginProfit: 0,
-        projectedMarginPercent: 0
+        projectedMarginPercent: 0,
+        missingCostCount: 0,
+        missingCostRetailValue: 0,
+        zeroPriceCount: 0,
+        canViewCosts: true
     });
 
     // Pagination state
@@ -556,7 +565,7 @@ export function InventoryList() {
 
         // Buscar primero en el catálogo local si el código ya existe
         try {
-            const localProds = await db.products.toArray();
+            const localProds = await db.getAll('products');
             const lower = cleanCode.toLowerCase();
             const stripped = lower.replace(/^0+/, '');
             const matched = localProds.find(p => {
@@ -576,7 +585,9 @@ export function InventoryList() {
                 toast.success(`Producto encontrado: ${matched.name}`, { id: 'inv-barcode-scan' });
                 return;
             }
-        } catch (_e) {}
+        } catch (localScanErr) {
+            console.warn('[Inventory] Error buscando código en catálogo local:', localScanErr?.message || localScanErr);
+        }
 
         // Si no está en caché local, consultar al servidor por si acaso
         try {
@@ -602,19 +613,49 @@ export function InventoryList() {
 
     const fetchValuation = useCallback(async () => {
         try {
-            const { data } = await api.get('/reports/bi/inventory-valuation');
+            const params = user?.activeBranchId ? { branchId: user.activeBranchId } : {};
+            const { data } = await api.get('/reports/bi/inventory-valuation', { params });
             setValuation(data || {
                 totalValueAtCost: 0,
                 totalRetailValue: 0,
                 itemCount: 0,
+                serviceCount: 0,
+                totalCatalogCount: 0,
                 lowStockCount: 0,
                 outOfStockCount: 0,
                 projectedMarginProfit: 0,
-                projectedMarginPercent: 0
+                projectedMarginPercent: 0,
+                missingCostCount: 0,
+                missingCostRetailValue: 0,
+                zeroPriceCount: 0,
+                canViewCosts: true
             });
+            setValuationLoaded(true);
         } catch (error) {
             console.error('Error fetching valuation metrics:', error);
         }
+    }, [user?.activeBranchId]);
+
+    const handleKpiStockToggle = useCallback((target) => {
+        setMissingCostOnly(false);
+        setStockFilter(prev => {
+            const next = prev === target ? 'all' : target;
+            if (next !== 'all') {
+                setTimeout(() => tableSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+            }
+            return next;
+        });
+    }, []);
+
+    const handleMissingCostToggle = useCallback(() => {
+        setMissingCostOnly(prev => {
+            const next = !prev;
+            if (next) {
+                setStockFilter('all');
+                setTimeout(() => tableSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+            }
+            return next;
+        });
     }, []);
 
     const fetchSuppliers = useCallback(async () => {
@@ -627,9 +668,15 @@ export function InventoryList() {
     }, []);
 
     const fetchCategories = useCallback(async () => {
+        const cleanCategoryList = (list) => [...new Set(
+            (list || [])
+                .map(c => c?.trim())
+                .filter(c => Boolean(c) && !c.toLowerCase().includes('sin stock'))
+        )].sort((a, b) => a.localeCompare(b, 'es'));
+
         try {
             const { data } = await api.get('/products/categories', { timeout: 3000 });
-            const uniqueCats = [...new Set((data || []).map(c => c?.trim()))].filter(Boolean).sort();
+            const uniqueCats = cleanCategoryList(data);
             if (uniqueCats.length > 0) {
                 setCategories(uniqueCats);
                 try { localStorage.setItem('pos_categories', JSON.stringify(uniqueCats)); } catch {}
@@ -637,12 +684,12 @@ export function InventoryList() {
         } catch (error) {
             console.error('Error fetching categories in Inventory (trying offline fallback):', error);
             try {
-                const cached = JSON.parse(localStorage.getItem('pos_categories') || '[]');
+                const cached = cleanCategoryList(JSON.parse(localStorage.getItem('pos_categories') || '[]'));
                 if (cached.length > 0) {
                     setCategories(cached);
                 } else {
                     const localProducts = await db.getAll('products');
-                    const localCats = [...new Set((localProducts || []).map(p => p.category?.trim()))].filter(Boolean).sort();
+                    const localCats = cleanCategoryList((localProducts || []).map(p => p.category));
                     if (localCats.length > 0) setCategories(localCats);
                 }
             } catch (fallbackErr) {
@@ -679,11 +726,14 @@ export function InventoryList() {
 
             params.append('limit', limit);
             params.append('page', currentPage);
+            params.append('branchScoped', 'true');
+            if (user?.activeBranchId) params.append('branchId', user.activeBranchId);
 
             if (debouncedSearchTerm) params.append('search', debouncedSearchTerm);
             if (supplierFilter) params.append('supplierId', supplierFilter);
             if (categoryFilter) params.append('category', categoryFilter);
             if (stockFilter !== 'all') params.append('stockStatus', stockFilter);
+            if (missingCostOnly) params.append('missingCost', 'true');
             if (pharmacyFilter === 'controlled') params.append('es_controlado', 'true');
             if (pharmacyFilter === 'expiring') params.append('expirationFilter', 'expiring');
             if (priceRange.min) params.append('minPrice', priceRange.min);
@@ -712,6 +762,7 @@ export function InventoryList() {
             try {
                 let localProducts = await db.getAll('products');
                 if (localProducts && localProducts.length > 0) {
+                    const isServiceItem = (p) => String(p.category || '').trim().toLowerCase() === 'servicios';
                     // Apply client-side filtering
                     if (debouncedSearchTerm) {
                         const term = debouncedSearchTerm.toLowerCase();
@@ -722,12 +773,16 @@ export function InventoryList() {
                         );
                     }
                     if (categoryFilter) {
-                        localProducts = localProducts.filter(p => p.category === categoryFilter);
+                        const catTarget = categoryFilter.trim().toLowerCase();
+                        localProducts = localProducts.filter(p => (p.category || '').trim().toLowerCase() === catTarget);
                     }
                     if (stockFilter === 'low') {
-                        localProducts = localProducts.filter(p => (p.stockQuantity || 0) <= (p.minStock || 5) && (p.stockQuantity || 0) > 0);
+                        localProducts = localProducts.filter(p => !isServiceItem(p) && Number(p.stockQuantity || 0) <= Number(p.minStock || 0) && Number(p.stockQuantity || 0) > 0);
                     } else if (stockFilter === 'out') {
-                        localProducts = localProducts.filter(p => (p.stockQuantity || 0) <= 0);
+                        localProducts = localProducts.filter(p => !isServiceItem(p) && Number(p.stockQuantity || 0) <= 0);
+                    }
+                    if (missingCostOnly) {
+                        localProducts = localProducts.filter(p => !isServiceItem(p) && Number(p.stockQuantity || 0) > 0 && Number(p.cost || 0) <= 0);
                     }
                     // Sort by name
                     localProducts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -752,7 +807,7 @@ export function InventoryList() {
         } finally {
             setLoading(false);
         }
-    }, [page, debouncedSearchTerm, supplierFilter, categoryFilter, stockFilter, pharmacyFilter, priceRange, limit]);
+    }, [page, debouncedSearchTerm, supplierFilter, categoryFilter, stockFilter, missingCostOnly, pharmacyFilter, priceRange, limit, user?.activeBranchId]);
 
     useEffect(() => {
         fetchSettings();
@@ -766,7 +821,7 @@ export function InventoryList() {
 
     useEffect(() => {
         setPage(1);
-    }, [debouncedSearchTerm, supplierFilter, categoryFilter, stockFilter, pharmacyFilter, priceRange]);
+    }, [debouncedSearchTerm, supplierFilter, categoryFilter, stockFilter, missingCostOnly, pharmacyFilter, priceRange]);
 
     useEffect(() => {
         fetchProducts(page === 1);
@@ -787,8 +842,13 @@ export function InventoryList() {
         const handleProductUpdated = (updatedProduct) => {
             setProducts(prev => {
                 let stockQty = updatedProduct.stockQuantity;
-                if (updatedProduct.BranchStocks) {
-                    stockQty = updatedProduct.BranchStocks.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
+                if (Array.isArray(updatedProduct.BranchStocks) && updatedProduct.BranchStocks.length > 0) {
+                    if (user?.activeBranchId) {
+                        const branchRow = updatedProduct.BranchStocks.find(s => String(s.branchId) === String(user.activeBranchId));
+                        stockQty = branchRow ? Number(branchRow.quantity || 0) : 0;
+                    } else {
+                        stockQty = updatedProduct.BranchStocks.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
+                    }
                 }
                 return prev.map(p => p.id === updatedProduct.id ? {
                     ...p,
@@ -805,7 +865,7 @@ export function InventoryList() {
             socket.off('inventory_changed', handleRealTimeUpdate);
             socket.off('product_updated', handleProductUpdated);
         };
-    }, [socket, fetchProducts, fetchValuation]);
+    }, [socket, fetchProducts, fetchValuation, user?.activeBranchId]);
 
     const handleCreateProduct = () => {
         setSelectedProduct(null);
@@ -1021,8 +1081,9 @@ export function InventoryList() {
                         toast.success('Producto creado exitosamente');
                     }
                 } catch (netErr) {
-                    if (netErr.response?.status === 403) {
-                        toast.error(netErr.response?.data?.error || 'Acceso denegado: Se requiere autorización de supervisor');
+                    if (netErr.response && netErr.response.status >= 400 && netErr.response.status < 500) {
+                        const errorMsg = netErr.response?.data?.error || netErr.response?.data?.message || 'Error al validar el producto';
+                        toast.error(errorMsg);
                         setProcessing(false);
                         return;
                     }
@@ -1053,6 +1114,7 @@ export function InventoryList() {
                         endpoint: selectedProduct?.id ? `/products/${selectedProduct.id}` : '/products',
                         method: selectedProduct?.id ? 'PUT' : 'POST',
                         payload: productData,
+                        ...(!selectedProduct?.id ? { tempLocalId: targetId } : {}),
                         timestamp: Date.now()
                     });
                 } catch (queueErr) {
@@ -1250,6 +1312,13 @@ export function InventoryList() {
 
     const _renderFormatMoney = (val, mode = null) => formatMoney(val, mode, settings);
 
+    const showCostCards = canViewCosts && valuation.canViewCosts !== false;
+    const isVesOnly = isVesOnlyMode(settings);
+    const isSingleCurr = isSingleCurrencyMode(settings);
+    const kpiCurrency = isVesOnly ? 'VES' : 'USD';
+    const marginPct = Number(valuation.projectedMarginPercent || 0);
+    const isNegativeMargin = marginPct < 0;
+
     return (
         <div className="space-y-6 pb-28 sm:pb-20 pb-safe animate-in fade-in duration-500 responsive-zoom">
             {/* Header Section */}
@@ -1265,10 +1334,10 @@ export function InventoryList() {
                         </span>
                     </div>
                     <div className="flex items-center gap-2 mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        <span>Catálogo centralizado de artículos</span>
+                        <span>{valuation.branchName ? `Sucursal: ${valuation.branchName}` : 'Catálogo centralizado de artículos'}</span>
                         <span className="inline-block w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600"></span>
                         <span className="tabular-nums font-mono font-medium text-slate-700 dark:text-slate-300">
-                            {valuation.itemCount || products.length} SKUs activos
+                            {valuationLoaded ? valuation.itemCount : '—'} SKUs físicos{valuation.serviceCount > 0 ? ` (+${valuation.serviceCount} serv.)` : ''}
                         </span>
                     </div>
                 </div>
@@ -1349,7 +1418,7 @@ export function InventoryList() {
             </div>
 
             {/* Executive Valuation & Stock KPI Grid */}
-            <div className={`px-1 sm:px-2 grid grid-cols-2 ${canViewCosts ? 'lg:grid-cols-4' : 'lg:grid-cols-2'} gap-3 sm:gap-4`}>
+            <div className={`px-1 sm:px-2 grid grid-cols-2 ${showCostCards ? 'lg:grid-cols-4' : 'lg:grid-cols-2'} gap-3 sm:gap-4`}>
                 {/* Total SKUs */}
                 <div className="bg-white dark:bg-slate-900 rounded-lg p-4 border border-slate-200 dark:border-slate-800 shadow-2xs transition-all">
                     <div className="flex items-center justify-between mb-2">
@@ -1358,8 +1427,18 @@ export function InventoryList() {
                             <Package size={14} />
                         </div>
                     </div>
-                    <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white tracking-tight tabular-nums">
-                        {valuation.itemCount || products.length}
+                    <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-bold font-mono text-slate-900 dark:text-white tracking-tight tabular-nums">
+                            {valuationLoaded ? valuation.itemCount : '—'}
+                        </span>
+                        {valuation.serviceCount > 0 && (
+                            <span
+                                className="text-[11px] font-medium text-slate-400 dark:text-slate-500 font-mono"
+                                title={`${valuation.serviceCount} servicio(s) excluidos del conteo físico y alertas`}
+                            >
+                                +{valuation.serviceCount} serv.
+                            </span>
+                        )}
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 mt-2 flex items-center gap-1.5 truncate">
                         <Layers size={12} className="text-slate-400 shrink-0" />
@@ -1368,7 +1447,7 @@ export function InventoryList() {
                 </div>
 
                 {/* Valuation at Cost */}
-                {canViewCosts && (
+                {showCostCards && (
                     <div className="bg-white dark:bg-slate-900 rounded-lg p-4 border border-slate-200 dark:border-slate-800 shadow-2xs transition-all">
                         <div className="flex items-center justify-between mb-2">
                             <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Inversión Costo</span>
@@ -1377,18 +1456,37 @@ export function InventoryList() {
                             </div>
                         </div>
                         <div className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight font-mono tabular-nums">
-                            {formatMoney(valuation.totalValueAtCost || 0, 'USD')}
+                            {valuationLoaded ? formatMoney(valuation.totalValueAtCost || 0, kpiCurrency, settings) : '—'}
                         </div>
-                        {!isSingleCurrencyMode() && (
-                            <div className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-mono tabular-nums truncate">
-                                ≈ {((valuation.totalValueAtCost || 0) * (settings.rate || 1)).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
-                            </div>
-                        )}
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-2 flex items-center justify-between gap-2 truncate">
+                            {!isSingleCurr && !isVesOnly ? (
+                                <span className="font-mono tabular-nums truncate">
+                                    ≈ {((valuation.totalValueAtCost || 0) * (settings.rate || 1)).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
+                                </span>
+                            ) : (
+                                <span className="truncate">Costo real registrado</span>
+                            )}
+                            {valuation.missingCostCount > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={handleMissingCostToggle}
+                                    className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition-colors ${
+                                        missingCostOnly
+                                            ? 'bg-amber-500 text-white'
+                                            : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/60 hover:bg-amber-100 dark:hover:bg-amber-900/60'
+                                    }`}
+                                    title={`${valuation.missingCostCount} producto(s) con stock no tienen costo registrado (Retail: ${formatMoney(valuation.missingCostRetailValue || 0, 'USD', settings)}). Haz clic para filtrarlos.`}
+                                >
+                                    <AlertTriangle size={10} />
+                                    <span>{valuation.missingCostCount} sin costo</span>
+                                </button>
+                            )}
+                        </div>
                     </div>
                 )}
 
                 {/* Valuation at Retail & Margin */}
-                {canViewCosts && (
+                {showCostCards && (
                     <div className="bg-white dark:bg-slate-900 rounded-lg p-4 border border-slate-200 dark:border-slate-800 shadow-2xs transition-all">
                         <div className="flex items-center justify-between mb-2">
                             <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Retail Proyectado</span>
@@ -1397,11 +1495,20 @@ export function InventoryList() {
                             </div>
                         </div>
                         <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 tracking-tight font-mono tabular-nums">
-                            {formatMoney(valuation.totalRetailValue || 0, 'USD')}
+                            {valuationLoaded ? formatMoney(valuation.totalRetailValue || 0, kpiCurrency, settings) : '—'}
                         </div>
-                        <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mt-2 flex items-center gap-1.5 truncate">
-                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            <span>Margen Proyectado: +{valuation.projectedMarginPercent || 0}%</span>
+                        <div
+                            className={`text-xs font-medium mt-2 flex items-center gap-1.5 truncate ${
+                                isNegativeMargin
+                                    ? 'text-rose-600 dark:text-rose-400'
+                                    : 'text-emerald-700 dark:text-emerald-400'
+                            }`}
+                            title={`Ganancia proyectada: ${formatMoney(valuation.projectedMarginProfit || 0, kpiCurrency, settings)} (calculado sobre productos con costo y precio cargados${valuation.zeroPriceCount > 0 ? `; ${valuation.zeroPriceCount} con stock sin precio` : ''})`}
+                        >
+                            <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${isNegativeMargin ? 'bg-rose-500' : 'bg-emerald-500'}`}></span>
+                            <span className="truncate">
+                                Margen Proyectado: {isNegativeMargin ? '' : '+'}{marginPct}%
+                            </span>
                         </div>
                     </div>
                 )}
@@ -1416,23 +1523,44 @@ export function InventoryList() {
                     </div>
                     <div className="flex items-baseline gap-2">
                         <button
-                            onClick={() => setStockFilter('low')}
-                            className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 hover:underline tabular-nums"
-                            title="Filtrar por Bajo Stock"
+                            type="button"
+                            onClick={() => handleKpiStockToggle('low')}
+                            className={`text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 tabular-nums rounded px-1 -mx-1 transition-all ${
+                                stockFilter === 'low'
+                                    ? 'bg-amber-50 dark:bg-amber-950/50 ring-1 ring-amber-300 dark:ring-amber-700'
+                                    : 'hover:underline'
+                            }`}
+                            title={stockFilter === 'low' ? 'Clic para quitar filtro de bajo stock' : 'Filtrar por Bajo Stock'}
                         >
-                            {valuation.lowStockCount || 0} <span className="text-xs font-normal text-slate-500 dark:text-slate-400">bajos</span>
+                            {valuationLoaded ? (valuation.lowStockCount || 0) : '—'} <span className="text-xs font-normal text-slate-500 dark:text-slate-400">bajos</span>
                         </button>
                         <span className="text-slate-300 dark:text-slate-700">/</span>
                         <button
-                            onClick={() => setStockFilter('out')}
-                            className="text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 hover:underline tabular-nums"
-                            title="Filtrar por Agotados"
+                            type="button"
+                            onClick={() => handleKpiStockToggle('out')}
+                            className={`text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 tabular-nums rounded px-1 -mx-1 transition-all ${
+                                stockFilter === 'out'
+                                    ? 'bg-rose-50 dark:bg-rose-950/50 ring-1 ring-rose-300 dark:ring-rose-700'
+                                    : 'hover:underline'
+                            }`}
+                            title={stockFilter === 'out' ? 'Clic para quitar filtro de agotados' : 'Filtrar por Agotados'}
                         >
-                            {valuation.outOfStockCount || 0} <span className="text-xs font-normal text-slate-500 dark:text-slate-400">agotados</span>
+                            {valuationLoaded ? (valuation.outOfStockCount || 0) : '—'} <span className="text-xs font-normal text-slate-500 dark:text-slate-400">agotados</span>
                         </button>
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 mt-2 flex items-center gap-1 truncate">
-                        <span>Selecciona una cifra para filtrar</span>
+                        {(stockFilter === 'low' || stockFilter === 'out') ? (
+                            <button
+                                type="button"
+                                onClick={() => setStockFilter('all')}
+                                className="inline-flex items-center gap-1 text-primary-600 dark:text-primary-400 font-medium hover:underline"
+                            >
+                                <X size={11} />
+                                <span>Filtro activo • Clic para limpiar</span>
+                            </button>
+                        ) : (
+                            <span>Selecciona una cifra para filtrar</span>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1523,6 +1651,18 @@ export function InventoryList() {
                                 <span>Quitar filtro</span>
                             </button>
                         )}
+                        {missingCostOnly && (
+                            <button
+                                type="button"
+                                onClick={() => setMissingCostOnly(false)}
+                                className="px-2.5 py-1 rounded-md text-xs font-medium bg-amber-500 text-white border border-amber-600 shadow-2xs inline-flex items-center gap-1.5 ml-auto"
+                                title="Clic para mostrar todos los productos"
+                            >
+                                <AlertTriangle size={12} />
+                                <span>Mostrando solo sin costo</span>
+                                <X size={12} />
+                            </button>
+                        )}
                     </div>
 
                     {/* Bottom Row: Advanced Filters */}
@@ -1602,6 +1742,7 @@ export function InventoryList() {
                                         setSupplierFilter('');
                                         setCategoryFilter('');
                                         setStockFilter('all');
+                                        setMissingCostOnly(false);
                                         setPharmacyFilter('all');
                                         setPriceRange({ min: '', max: '' });
                                     }}
@@ -1617,7 +1758,7 @@ export function InventoryList() {
             </div>
 
             {/* Product List / Grid */}
-            <div className="px-1 sm:px-2">
+            <div ref={tableSectionRef} className="px-1 sm:px-2">
                 {viewMode === 'list' ? (
                     <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xs">
                         {/* Desktop Table View */}

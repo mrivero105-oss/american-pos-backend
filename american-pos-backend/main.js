@@ -1,4 +1,7 @@
-const { app, BrowserWindow, dialog, session, shell } = require('electron');
+const { app, BrowserWindow, dialog, session, shell, nativeImage } = require('electron');
+
+// 🔒 Identificador AUMID de Windows para anclaje e icono de barra de tareas oficial
+app.setAppUserModelId('com.isaacpos.frontend');
 const path = require('path');
 
 // Configuración de Renderizado Gráfico
@@ -83,22 +86,66 @@ function sanitizePrinterName(name) {
 // AND to optionally redirect all logs to our persistent desktop log file.
 const LOGS_ENABLED = true;
 
+const { formatLogMessage } = require('./utils/formatLogArgs');
+
+const MAX_STARTUP_LOG_BYTES = 5 * 1024 * 1024;
 let logStream = null;
+let startupLogDir = null;
+let startupLogFile = null;
+let startupLogBytes = 0;
+
+function rotateStartupLogIfNeeded() {
+    if (!startupLogFile || startupLogBytes <= MAX_STARTUP_LOG_BYTES) return;
+    try {
+        const fs = require('fs');
+        if (logStream) {
+            try { logStream.end(); } catch (_endErr) {}
+            logStream = null;
+        }
+        const rotatedLog = path.join(startupLogDir, 'pos_startup_log.old.txt');
+        try { if (fs.existsSync(rotatedLog)) fs.unlinkSync(rotatedLog); } catch (_e) {}
+        if (fs.existsSync(startupLogFile)) {
+            fs.renameSync(startupLogFile, rotatedLog);
+        }
+        startupLogBytes = 0;
+        logStream = fs.createWriteStream(startupLogFile, { flags: 'a' });
+    } catch (_rotErr) {}
+}
+
 try {
     const fs = require('fs');
-    const logDir = path.join(app.getPath('userData'), 'logs');
-    if (!fs.existsSync(logDir)) {
-        fs.mkdirSync(logDir, { recursive: true });
+    startupLogDir = path.join(app.getPath('userData'), 'logs');
+    if (!fs.existsSync(startupLogDir)) {
+        fs.mkdirSync(startupLogDir, { recursive: true });
     }
-    const logFile = path.join(logDir, 'pos_startup_log.txt');
-    logStream = fs.createWriteStream(logFile, { flags: 'a' });
+    startupLogFile = path.join(startupLogDir, 'pos_startup_log.txt');
+    try {
+        if (fs.existsSync(startupLogFile)) {
+            const stats = fs.statSync(startupLogFile);
+            startupLogBytes = stats.size || 0;
+            rotateStartupLogIfNeeded();
+        }
+    } catch (_rotErr) {}
+    if (!logStream) {
+        logStream = fs.createWriteStream(startupLogFile, { flags: 'a' });
+    }
 } catch (e) { }
 
 function log(message) {
     if (!LOGS_ENABLED || !logStream) return;
     try {
         const timestamp = new Date().toISOString();
-        logStream.write(`[${timestamp}] ${message}\n`);
+        const line = `[${timestamp}] ${message}\n`;
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        if (startupLogBytes + lineBytes > MAX_STARTUP_LOG_BYTES) {
+            startupLogBytes += lineBytes;
+            rotateStartupLogIfNeeded();
+        } else {
+            startupLogBytes += lineBytes;
+        }
+        if (logStream) {
+            logStream.write(line);
+        }
     } catch (e) { }
 }
 
@@ -108,9 +155,7 @@ const patchConsole = (method) => {
         try {
             if (LOGS_ENABLED) {
                 // Log to our file first
-                const msg = args.map(arg =>
-                    typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-                ).join(' ');
+                const msg = formatLogMessage(args, { pretty: true });
                 log(`[CONSOLE.${method.toUpperCase()}] ${msg}`);
             }
 
@@ -129,29 +174,36 @@ const patchConsole = (method) => {
 };
 ['log', 'error', 'warn', 'info', 'debug'].forEach(patchConsole);
 
-// Load environment variables immediately to ensure DB_DIALECT and other settings are available
+// Asegurar fetch global en Electron 22 (Node 16) antes de operaciones de red o auto-update
 try {
-    require('dotenv').config({ path: path.join(__dirname, '.env') });
-} catch (dotenvErr) {
+    require('./utils/ensureFetchPolyfill').ensureFetchPolyfill();
+} catch (e) { }
+
+// En desarrollo local cargamos .env del proyecto; en empaquetado usamos exclusivamente %APPDATA%\isaac-pos\.env
+if (!app.isPackaged) {
     try {
-        const fs = require('fs');
-        const envPath = path.join(__dirname, '.env');
-        if (fs.existsSync(envPath)) {
-            const envLines = fs.readFileSync(envPath, 'utf8').split('\n');
-            envLines.forEach(line => {
-                const trimmed = line.trim();
-                if (trimmed && !trimmed.startsWith('#')) {
-                    const eqIdx = trimmed.indexOf('=');
-                    if (eqIdx > 0) {
-                        const key = trimmed.substring(0, eqIdx).trim();
-                        let val = trimmed.substring(eqIdx + 1).trim();
-                        if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
-                        if (!process.env[key]) process.env[key] = val;
+        require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true });
+    } catch (dotenvErr) {
+        try {
+            const fs = require('fs');
+            const envPath = path.join(__dirname, '.env');
+            if (fs.existsSync(envPath)) {
+                const envLines = fs.readFileSync(envPath, 'utf8').split('\n');
+                envLines.forEach(line => {
+                    const trimmed = line.trim();
+                    if (trimmed && !trimmed.startsWith('#')) {
+                        const eqIdx = trimmed.indexOf('=');
+                        if (eqIdx > 0) {
+                            const key = trimmed.substring(0, eqIdx).trim();
+                            let val = trimmed.substring(eqIdx + 1).trim();
+                            if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+                            if (!process.env[key]) process.env[key] = val;
+                        }
                     }
-                }
-            });
-        }
-    } catch (e) { }
+                });
+            }
+        } catch (e) { }
+    }
 }
 
 const fs = require('fs');
@@ -232,6 +284,32 @@ function createWindow(serverPort) {
         return;
     }
 
+    // Resolver icono oficial de la aplicación en alta definición (priorizar .ico externo y contenedor nativo)
+    let resolvedAppIcon = null;
+    try {
+        const externalIco = path.join(path.dirname(app.getPath('exe')), 'app_icon_fhd.ico');
+        const internalIco = path.join(__dirname, 'build', 'icon.ico');
+        const fallbackFavicon = path.join(__dirname, 'public', 'favicon.ico');
+        const emblemPng = path.join(__dirname, 'public', 'isaac-emblem.png');
+        
+        let chosenIconPath = null;
+        if (fs.existsSync(externalIco)) {
+            chosenIconPath = externalIco;
+        } else if (fs.existsSync(internalIco)) {
+            chosenIconPath = internalIco;
+        } else if (fs.existsSync(fallbackFavicon)) {
+            chosenIconPath = fallbackFavicon;
+        } else if (fs.existsSync(emblemPng)) {
+            chosenIconPath = emblemPng;
+        }
+
+        if (chosenIconPath) {
+            resolvedAppIcon = nativeImage.createFromPath(chosenIconPath);
+        }
+    } catch (_icoErr) {
+        resolvedAppIcon = path.join(__dirname, 'public', 'isaac-emblem.png');
+    }
+
     const windowOptions = {
         width: 1200,
         height: 800,
@@ -242,10 +320,11 @@ function createWindow(serverPort) {
         minimizable: true,
         fullscreenable: true,
         backgroundColor: '#070d1e',
-        icon: path.join(__dirname, 'public/assets/icon.png'),
+        icon: resolvedAppIcon,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
+            sandbox: true,
             preload: path.join(__dirname, 'preload.js'),
             scrollBounce: false,
             webviewTag: true
@@ -264,6 +343,9 @@ function createWindow(serverPort) {
     try {
         mainWindow.setResizable(true);
         mainWindow.setMaximizable(true);
+        if (resolvedAppIcon && typeof mainWindow.setIcon === 'function') {
+            mainWindow.setIcon(resolvedAppIcon);
+        }
     } catch (_) {}
 
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -291,8 +373,14 @@ function createWindow(serverPort) {
         }
     });
 
-    // 🔒 SEGURIDAD: Prevenir apertura de DevTools y recargas accidentales en modo producción
+    // 🔒 SEGURIDAD: Prevenir apertura de DevTools, recargas y atajo F1
     mainWindow.webContents.on('before-input-event', (event, input) => {
+        // Bloquear F1 nativo en todo el sistema para evitar ayuda del OS y acciones no deseadas
+        if (input.key === 'F1') {
+            event.preventDefault();
+            return;
+        }
+
         if (app.isPackaged) {
             const isDevTools = (input.control && input.shift && input.key.toLowerCase() === 'i');
             // F5 y F12 son teclas operativas esenciales del POS (F5: Pausar/Espera, F12: Modo de Cobro)
@@ -443,15 +531,14 @@ function createWindow(serverPort) {
             isQuittingAfterBackup = true;
             log('Window close intercepted. Running fast DB backup before quit...');
 
-            // Race the fast backup against a 1.5-second timeout for instant shutdown
-            const backupTimeout = new Promise(resolve => setTimeout(() => resolve(false), 1500));
+            // Race the fast backup against an 8-second timeout (sqliteBackupHelper writes atomically via .tmp)
+            const backupTimeout = new Promise(resolve => setTimeout(() => resolve(false), 8000));
             Promise.race([performFastDbBackupOnly(), backupTimeout]).then((success) => {
                 log(`Fast auto-backup result: ${success ? 'SUCCESS' : 'FAILED/TIMEOUT'}. Closing process.`);
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.destroy();
                 }
                 app.quit();
-                setTimeout(() => process.exit(0), 300);
             });
         }
     });
@@ -560,7 +647,7 @@ function configureAutoLaunch(enabled = true) {
     }
 
     try {
-        const settingsPath = path.join(__dirname, 'settings.json');
+        const settingsPath = path.join(app.getPath('userData'), 'auto_launch.json');
         let settings = {};
         if (fs.existsSync(settingsPath)) {
             settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -1018,48 +1105,60 @@ if ($success) { exit 0 } else { exit 1 }`;
                 return resolve({ success: false, error: 'Lectura de balanza serial disponible en Windows.' });
             }
 
+            const safePort = String(portName || 'COM1').trim().toUpperCase();
+            if (!/^COM\d{1,3}$/.test(safePort)) {
+                return resolve({ success: false, error: `Puerto serial inválido: ${portName}` });
+            }
+            const safeBaud = parseInt(baudRate, 10) || 9600;
             const { spawn } = require('child_process');
-            // Script de lectura de puerto serie continuo con timeout de 1.5s
+            // Script de lectura de puerto serie continuo con timeout de 1.5s y cierre garantizado en finally
             const psScaleScript = `
+$port = $null
 try {
-    $port = New-Object System.IO.Ports.SerialPort '${portName}', ${baudRate}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One
+    $port = New-Object System.IO.Ports.SerialPort '${safePort}', ${safeBaud}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One
     $port.ReadTimeout = 1500
     $port.Open()
     $line = $port.ReadLine()
-    $port.Close()
     Write-Output $line
 } catch {
     Write-Error $_.Exception.Message
     exit 1
+} finally {
+    if ($port -ne $null -and $port.IsOpen) { $port.Close() }
 }
 `;
             const encodedScript = Buffer.from(psScaleScript, 'utf16le').toString('base64');
-            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript]);
+            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript], { windowsHide: true });
             
             let output = '';
             let errorOut = '';
+            let settled = false;
             child.stdout.on('data', (d) => { output += d.toString(); });
             child.stderr.on('data', (d) => { errorOut += d.toString(); });
 
+            const killTimer = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    try { child.kill(); } catch (_e) {}
+                    resolve({ success: false, error: 'Tiempo de espera agotado al leer la balanza.' });
+                }
+            }, 3000);
+
             child.on('close', (code) => {
+                clearTimeout(killTimer);
+                if (settled) return;
+                settled = true;
                 if (code === 0 && output) {
-                    // Extraer valor numérico del flujo continuo (ej. "ST,GS,+  1.250kg" -> 1.250)
-                    const match = output.match(/[-+]?\s*(\d+(?:\.\d+)?)/);
+                    const match = output.match(/([-+])?\s*(\d+(?:\.\d+)?)/);
                     if (match) {
-                        const weight = parseFloat(match[1]);
+                        let weight = parseFloat(match[2]);
+                        if (match[1] === '-') weight = -weight;
                         return resolve({ success: true, weight, raw: output.trim(), unit: output.toLowerCase().includes('lb') ? 'lb' : 'kg' });
                     }
                     return resolve({ success: true, weight: 0, raw: output.trim(), unit: 'kg' });
                 }
-                resolve({ success: false, error: errorOut.trim() || 'No se recibió respuesta de la balanza en ' + portName });
+                resolve({ success: false, error: errorOut.trim() || 'No se recibió respuesta de la balanza en ' + safePort });
             });
-
-            setTimeout(() => {
-                if (!child.killed) {
-                    child.kill();
-                    resolve({ success: false, error: 'Tiempo de espera agotado al leer la balanza.' });
-                }
-            }, 3000);
         });
     });
 
@@ -1327,21 +1426,56 @@ if ($success) { exit 0 } else { exit 1 }`;
                 }
             }
 
+            const extractSha512FromYml = (ymlText, targetFileName = '') => {
+                const raw = String(ymlText || '');
+                if (targetFileName) {
+                    const escaped = targetFileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const fileBlock = raw.match(new RegExp(`url:\\s*${escaped}[\\s\\S]{0,300}?sha512:\\s*([A-Za-z0-9+/=]{64,})`, 'm'));
+                    if (fileBlock && fileBlock[1]) return fileBlock[1].trim();
+                }
+                const globalMatch = raw.match(/^sha512:\s*([A-Za-z0-9+/=]{64,})/m);
+                return globalMatch ? globalMatch[1].trim() : null;
+            };
+
+            let ymlText = null;
+            let expectedSha512 = null;
             if (!url || typeof url !== 'string') {
                 const res = await axios.get('https://github.com/mrivero105-oss/american-pos-backend/releases/latest/download/latest.yml', {
                     timeout: 6000,
                     headers: { 'User-Agent': 'IsaacPOS-Updater-Service/2.0' }
                 });
-                const ymlText = res.data || '';
+                ymlText = res.data || '';
                 const versionMatch = ymlText.match(/version:\s*([^\s\n\r]+)/);
                 const remoteTag = versionMatch ? versionMatch[1] : null;
                 const pathMatch = ymlText.match(/path:\s*([^\s\n\r]+)/);
                 const pathVal = pathMatch ? pathMatch[1] : null;
+                expectedSha512 = extractSha512FromYml(ymlText, pathVal || '');
                 if (remoteTag && pathVal) {
                     url = `https://github.com/mrivero105-oss/american-pos-backend/releases/download/v${remoteTag}/${pathVal}`;
                 }
+            } else {
+                try {
+                    const parsedUrl = new URL(url);
+                    const fileName = path.basename(parsedUrl.pathname);
+                    const releaseDir = parsedUrl.pathname.substring(0, parsedUrl.pathname.lastIndexOf('/'));
+                    const ymlCandidate = `${parsedUrl.origin}${releaseDir}/latest.yml`;
+                    const ymlRes = await axios.get(ymlCandidate, {
+                        timeout: 6000,
+                        headers: { 'User-Agent': 'IsaacPOS-Updater-Service/2.0' }
+                    });
+                    ymlText = ymlRes.data || '';
+                    expectedSha512 = extractSha512FromYml(ymlText, fileName);
+                } catch (ymlErr) {
+                    log(`[SECURITY] No se pudo obtener latest.yml para verificar SHA-512 de ${url}: ${ymlErr.message}`);
+                }
             }
+
             if (url) {
+                if (!expectedSha512) {
+                    log(`[SECURITY] Blocked fallback download because SHA-512 digest is unavailable for ${url}`);
+                    return { success: false, error: 'No se pudo obtener la firma de integridad SHA-512 oficial (latest.yml) para esta actualización.' };
+                }
+
                 log(`Fallback download: descargando ${url} manualmente en segundo plano...`);
                 const tempDir = os.tmpdir();
                 const exePath = path.join(tempDir, `IsaacPOS-Update-${Date.now()}.exe`);
@@ -1374,8 +1508,10 @@ if ($success) { exit 0 } else { exit 1 }`;
                     log(`Descarga manual completa en: ${exePath}`);
                     if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloaded' });
                     global.downloadedUpdatePath = exePath;
+                    global.downloadedUpdateMeta = { exePath, expectedSha512, url };
                     return { success: true };
                 } catch (dlErr) {
+                    try { if (fs.existsSync(exePath)) fs.unlinkSync(exePath); } catch (_) {}
                     log(`Error descargando fallback en segundo plano: ${dlErr.message}`);
                     log(`Abriendo fallback en navegador externo...`);
                     await shell.openExternal(url);
@@ -1394,6 +1530,7 @@ if ($success) { exit 0 } else { exit 1 }`;
             const os = require('os');
             const path = require('path');
             const fs = require('fs');
+            const crypto = require('crypto');
             const tempDir = os.tmpdir();
             const resolvedPath = path.resolve(global.downloadedUpdatePath);
             const isValidPath = resolvedPath.startsWith(path.resolve(tempDir)) && 
@@ -1405,10 +1542,66 @@ if ($success) { exit 0 } else { exit 1 }`;
                 return { success: false, error: 'Ruta de actualización no confiable o archivo corrupto' };
             }
 
-            log(`Instalando actualizacion manual desde: ${global.downloadedUpdatePath}`);
+            const expectedSha512 = global.downloadedUpdateMeta && global.downloadedUpdateMeta.exePath === global.downloadedUpdatePath
+                ? global.downloadedUpdateMeta.expectedSha512
+                : null;
+            if (!expectedSha512 || typeof expectedSha512 !== 'string') {
+                log(`[SECURITY] Blocked execution of update without expected SHA-512 hash: ${resolvedPath}`);
+                try { fs.unlinkSync(resolvedPath); } catch (_) {}
+                global.downloadedUpdatePath = null;
+                return { success: false, error: 'Actualización bloqueada: falta huella SHA-512 oficial verificada.' };
+            }
+
+            try {
+                const actualDigest = await new Promise((resolve, reject) => {
+                    const hash = crypto.createHash('sha512');
+                    const stream = fs.createReadStream(resolvedPath);
+                    stream.on('data', (chunk) => hash.update(chunk));
+                    stream.on('end', () => resolve(hash.digest()));
+                    stream.on('error', reject);
+                });
+                const expectedDigest = Buffer.from(expectedSha512.trim(), 'base64');
+                if (expectedDigest.length !== 64 || actualDigest.length !== expectedDigest.length || !crypto.timingSafeEqual(actualDigest, expectedDigest)) {
+                    log(`[SECURITY] Blocked corrupted/tampered update binary (SHA-512 mismatch): ${resolvedPath}`);
+                    try { fs.unlinkSync(resolvedPath); } catch (_) {}
+                    global.downloadedUpdatePath = null;
+                    global.downloadedUpdateMeta = null;
+                    return { success: false, error: 'Actualización bloqueada: la verificación de integridad SHA-512 falló.' };
+                }
+
+                if (process.platform === 'win32') {
+                    const { execFile } = require('child_process');
+                    const sigStatus = await new Promise((resolve) => {
+                        execFile(
+                            'powershell.exe',
+                            ['-NoProfile', '-NonInteractive', '-Command', '(Get-AuthenticodeSignature -LiteralPath $env:ISAAC_UPD_FILE).Status'],
+                            { env: { ...process.env, ISAAC_UPD_FILE: resolvedPath }, timeout: 10000 },
+                            (err, stdout) => {
+                                resolve(err ? 'Unknown' : String(stdout || '').trim());
+                            }
+                        );
+                    });
+                    if (sigStatus === 'HashMismatch' || sigStatus === 'NotTrusted') {
+                        log(`[SECURITY] Blocked update with compromised Authenticode status (${sigStatus}): ${resolvedPath}`);
+                        try { fs.unlinkSync(resolvedPath); } catch (_) {}
+                        global.downloadedUpdatePath = null;
+                        global.downloadedUpdateMeta = null;
+                        return { success: false, error: `Actualización bloqueada por firma Authenticode inválida (${sigStatus}).` };
+                    }
+                    if (process.env.REQUIRE_AUTHENTICODE_SIGNATURE === 'true' && sigStatus !== 'Valid') {
+                        log(`[SECURITY] Blocked unsigned update (${sigStatus}) because REQUIRE_AUTHENTICODE_SIGNATURE=true`);
+                        return { success: false, error: `Instalador sin firma Authenticode válida (${sigStatus}).` };
+                    }
+                }
+            } catch (hashErr) {
+                log(`[SECURITY] Error verificando integridad del instalador: ${hashErr.message}`);
+                return { success: false, error: 'Error verificando integridad SHA-512 de la actualización.' };
+            }
+
+            log(`Instalando actualización verificada (SHA-512 OK) desde: ${resolvedPath}`);
             try {
                 const { spawn } = require('child_process');
-                spawn(global.downloadedUpdatePath, ['/S'], { detached: true, stdio: 'ignore' }).unref();
+                spawn(resolvedPath, ['/S'], { detached: true, stdio: 'ignore' }).unref();
                 app.quit();
                 return { success: true };
             } catch (err) {
@@ -1427,7 +1620,7 @@ if ($success) { exit 0 } else { exit 1 }`;
         if (!verifyIpcSender(event)) return null;
         try {
             const DbConfigManager = require('./config/dbConfigManager');
-            return DbConfigManager.getConfig();
+            return DbConfigManager.getPublicConfig();
         } catch (err) {
             log(`Error in get-db-config IPC: ${err.message}`);
             return null;
@@ -1483,10 +1676,43 @@ app.whenReady().then(async () => {
     // Inicializar manejadores IPC una sola vez
     setupIpcHandlers();
 
-    // Interceptar aperturas de ventanas nuevas (target="_blank") y redirigirlas al navegador del SO
+    // Interceptar aperturas de ventanas nuevas (target="_blank") y adjuntos <webview>
     app.on('web-contents-created', (event, contents) => {
+        contents.on('will-attach-webview', (waEvent, webPreferences, params) => {
+            delete webPreferences.preload;
+            delete webPreferences.preloadURL;
+            webPreferences.nodeIntegration = false;
+            webPreferences.nodeIntegrationInSubFrames = false;
+            webPreferences.contextIsolation = true;
+            webPreferences.sandbox = true;
+            webPreferences.webSecurity = true;
+
+            const src = String(params?.src || '').trim();
+            if (!src || src === 'about:blank') return;
+            try {
+                const parsed = new URL(src);
+                const host = parsed.hostname.toLowerCase();
+                const isAllowedMovilway = parsed.protocol === 'https:' && (
+                    host === 'movilway.net' || host.endsWith('.movilway.net') ||
+                    host === 'movilway.com' || host.endsWith('.movilway.com')
+                );
+                if (!isAllowedMovilway) {
+                    log(`[SECURITY] Bloqueado <webview> hacia origen no autorizado: ${src}`);
+                    waEvent.preventDefault();
+                }
+            } catch (_) {
+                log(`[SECURITY] Bloqueado <webview> con URL inválida: ${src}`);
+                waEvent.preventDefault();
+            }
+        });
+
         contents.setWindowOpenHandler(({ url }) => {
-            require('electron').shell.openExternal(url);
+            try {
+                const parsed = new URL(url);
+                if (['http:', 'https:', 'mailto:', 'whatsapp:'].includes(parsed.protocol)) {
+                    require('electron').shell.openExternal(url);
+                }
+            } catch (_e) {}
             return { action: 'deny' };
         });
     });
@@ -1497,42 +1723,44 @@ app.whenReady().then(async () => {
     process.env.USER_DATA_PATH = userDataPath;
     log('Set USER_DATA_PATH env var.');
 
-    // 🔒 Cargar o generar el archivo .env en UserData para producción
+    // 🔒 Cargar y garantizar secretos criptográficos independientes en UserData .env
     const userEnvPath = path.join(userDataPath, '.env');
-    if (!process.env.JWT_SECRET) {
-        log(`JWT_SECRET not in environment. Checking UserData .env at: ${userEnvPath}`);
-        if (fs.existsSync(userEnvPath)) {
-            log('Loading environment variables from UserData .env...');
-            require('dotenv').config({ path: userEnvPath });
+    if (fs.existsSync(userEnvPath)) {
+        log(`Loading environment variables from UserData .env at: ${userEnvPath}`);
+        require('dotenv').config({ path: userEnvPath });
+    }
+
+    const crypto = require('crypto');
+    const requiredSecrets = ['JWT_SECRET', 'LEGACY_HMAC_SECRET', 'SYNC_SECRET_KEY', 'BACKUP_ENCRYPTION_KEY', 'AUDIT_HMAC_SECRET'];
+    const missingSecrets = requiredSecrets.filter((k) => !process.env[k] || String(process.env[k]).trim().length === 0);
+
+    if (missingSecrets.length > 0) {
+        log(`Provisioning independent cryptographic secrets in UserData .env: ${missingSecrets.join(', ')}`);
+        const generatedLines = [];
+        for (const k of missingSecrets) {
+            const val = crypto.randomBytes(32).toString('hex');
+            process.env[k] = val;
+            generatedLines.push(`${k}=${val}`);
         }
-
-        // Si aún no está definido (o el archivo no existía/estaba vacío), lo generamos
-        if (!process.env.JWT_SECRET) {
-            log('No JWT_SECRET found in UserData .env. Generating a new secure one...');
-            const crypto = require('crypto');
-            const newSecret = crypto.randomBytes(32).toString('hex');
-            const legacySecret = crypto.randomBytes(32).toString('hex');
-            const syncSecret = crypto.randomBytes(32).toString('hex');
-            const defaultEnvContent = [
-                `# Isaac POS - Archivo de Configuración Local`,
-                `JWT_SECRET=${newSecret}`,
-                `LEGACY_HMAC_SECRET=${legacySecret}`,
-                `SYNC_SECRET_KEY=${syncSecret}`,
-                `PORT=3005,5005,8080`,
-                `DB_DIALECT=postgres`,
-                `GOOGLE_API_KEY=`
-            ].join('\n');
-
-            try {
+        try {
+            if (!fs.existsSync(userEnvPath)) {
+                const defaultEnvContent = [
+                    `# Isaac POS - Archivo de Configuración Local`,
+                    ...generatedLines,
+                    `PORT=3005,5005,8080`,
+                    `DB_DIALECT=postgres`,
+                    `GOOGLE_API_KEY=`
+                ].join('\n') + '\n';
                 fs.writeFileSync(userEnvPath, defaultEnvContent, 'utf8');
                 log('UserData .env file created successfully.');
-                // Volver a cargar el .env recién creado
-                require('dotenv').config({ path: userEnvPath });
-            } catch (envWriteErr) {
-                log(`Error writing UserData .env file: ${envWriteErr.message}`);
-                // Fallback en memoria si no se puede escribir el archivo
-                process.env.JWT_SECRET = newSecret;
+            } else {
+                const existingRaw = fs.readFileSync(userEnvPath, 'utf8');
+                const sep = existingRaw.length > 0 && !existingRaw.endsWith('\n') ? '\n' : '';
+                fs.appendFileSync(userEnvPath, sep + generatedLines.join('\n') + '\n', 'utf8');
+                log('UserData .env updated with missing independent secrets.');
             }
+        } catch (envWriteErr) {
+            log(`Error writing UserData .env file: ${envWriteErr.message}`);
         }
     }
 

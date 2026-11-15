@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const reportService = require('../services/ReportService');
+const productService = require('../services/ProductService');
 const { isAdmin, requirePermission } = require('../middleware/auth');
 
 // GET /audit-logs
@@ -98,7 +99,8 @@ router.get('/bi/customers/ranking', requirePermission('canViewReports'), async (
 // GET /inventory/valuation
 router.get('/inventory/valuation', requirePermission('canViewReports'), async (req, res) => {
     try {
-        const valuation = await reportService.getInventoryValuation(req.user.companyId);
+        const branchId = req.query.branchId || req.user.activeBranchId || null;
+        const valuation = await reportService.getInventoryValuation(req.user.companyId, branchId);
         res.json(valuation);
     } catch (error) {
         console.error('Valuation error:', error);
@@ -160,10 +162,26 @@ router.get('/bi/accounts-payable', requirePermission('canViewReports'), async (r
 });
 
 // GET /bi/inventory-valuation
-router.get('/bi/inventory-valuation', requirePermission('canViewReports'), async (req, res) => {
+router.get('/bi/inventory-valuation', requirePermission(['canViewReports', 'canManageInventory', 'canCreateProducts', 'canViewCosts']), async (req, res) => {
     try {
-        const result = await reportService.getInventoryValuation(req.user.companyId);
-        res.json(result);
+        const branchId = req.query.branchId || req.user.activeBranchId || null;
+        const result = await reportService.getInventoryValuation(req.user.companyId, branchId);
+        const allowCosts = productService.canUserViewCosts(req.user);
+
+        if (!allowCosts) {
+            return res.json({
+                ...result,
+                canViewCosts: false,
+                totalValueAtCost: null,
+                totalRetailValue: null,
+                projectedMarginProfit: null,
+                projectedMarginPercent: null,
+                missingCostRetailValue: null,
+                summary: { itemCount: result.itemCount }
+            });
+        }
+
+        res.json({ ...result, canViewCosts: true });
     } catch (error) {
         console.error('Inventory Valuation error:', error);
         res.status(500).json({ error: 'Error al obtener valoración de inventario' });
@@ -185,10 +203,31 @@ router.get('/bi/series', requirePermission('canViewReports'), async (req, res) =
 // GET /bi/export
 router.get('/bi/export', requirePermission('canViewReports'), async (req, res) => {
     try {
-        const { sales, productCostMap } = await reportService.getDetailedExportData(req.user.companyId, req.query);
-        
         const BOM = '\ufeff';
         const SEP = ';';
+
+        if (req.query.type === 'accounts-payable') {
+            const { Supplier } = require('../database/models');
+            const companyId = req.user.companyId || 'default';
+            const suppliers = await Supplier.findAll({
+                where: { companyId },
+                order: [['debt', 'DESC'], ['name', 'ASC']]
+            });
+
+            let csv = BOM + `Proveedor${SEP}RIF${SEP}Contacto${SEP}Telefono${SEP}Categoria${SEP}Deuda USD${SEP}Saldo a Favor USD\n`;
+            suppliers.forEach(sup => {
+                const debt = Number(sup.debt || 0).toFixed(2);
+                const credit = Number(sup.creditBalance || 0).toFixed(2);
+                csv += `"${(sup.name || '').replace(/"/g, '""')}"${SEP}"${sup.rif || 'N/A'}"${SEP}"${sup.contactName || ''}"${SEP}"${sup.phone || ''}"${SEP}"${sup.category || 'General'}"${SEP}${debt}${SEP}${credit}\n`;
+            });
+
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', 'attachment; filename=cuentas_por_pagar.csv');
+            return res.status(200).send(csv);
+        }
+
+        const { sales, productCostMap } = await reportService.getDetailedExportData(req.user.companyId, req.query);
+        
         let csv = BOM + `Fecha${SEP}Hora${SEP}Referencia${SEP}Cliente${SEP}Metodo Pago${SEP}Producto${SEP}Cant${SEP}Precio Unit${SEP}Subtotal${SEP}Costo Unit${SEP}Utilidad Item\n`;
         
         sales.forEach(sale => {
@@ -243,7 +282,7 @@ const PostgresAnalyticsService = require('../services/PostgresAnalyticsService')
 // GET /reports/pg-analytics/daily-summary - Resumen diario de ventas instantáneo
 router.get('/pg-analytics/daily-summary', requirePermission('canViewReports'), async (req, res) => {
     try {
-        const companyId = req.user?.companyId || '2';
+        const companyId = req.user?.companyId || 'default';
         const data = await PostgresAnalyticsService.getDailySalesSummary(companyId, req.query);
         res.json({ success: true, count: data.length, data });
     } catch (error) {
@@ -255,7 +294,7 @@ router.get('/pg-analytics/daily-summary', requirePermission('canViewReports'), a
 // GET /reports/pg-analytics/top-products - Rotación y ranking de productos
 router.get('/pg-analytics/top-products', requirePermission('canViewReports'), async (req, res) => {
     try {
-        const companyId = req.user?.companyId || '2';
+        const companyId = req.user?.companyId || 'default';
         const data = await PostgresAnalyticsService.getTopProducts(companyId, req.query);
         res.json({ success: true, count: data.length, data });
     } catch (error) {
@@ -267,7 +306,7 @@ router.get('/pg-analytics/top-products', requirePermission('canViewReports'), as
 // GET /reports/pg-analytics/payment-breakdown - Desglose financiero SQL/JSON de alta velocidad
 router.get('/pg-analytics/payment-breakdown', requirePermission('canViewReports'), async (req, res) => {
     try {
-        const companyId = req.user?.companyId || '2';
+        const companyId = req.user?.companyId || 'default';
         const data = await PostgresAnalyticsService.getShiftPaymentBreakdownNative({
             companyId,
             openedAt: req.query.openedAt,

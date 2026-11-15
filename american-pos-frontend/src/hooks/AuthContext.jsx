@@ -11,6 +11,130 @@ import {
     getIdleLockTimeoutMs,
 } from '../utils/idleLockSettings';
 
+const OFFLINE_VERIFIERS_KEY = 'isaac_pos_offline_verifiers';
+const OFFLINE_BIO_HASHES_KEY = 'isaac_pos_offline_bio_hashes';
+
+function pureSha256Hex(asciiInput) {
+    const rightRotate = (value, amount) => (value >>> amount) | (value << (32 - amount));
+    const bytes = new TextEncoder().encode(String(asciiInput || ''));
+    const bitLen = bytes.length * 8;
+    const paddedLen = Math.ceil((bytes.length + 9) / 64) * 64;
+    const padded = new Uint8Array(paddedLen);
+    padded.set(bytes);
+    padded[bytes.length] = 0x80;
+    const view = new DataView(padded.buffer);
+    view.setUint32(paddedLen - 4, bitLen >>> 0, false);
+    view.setUint32(paddedLen - 8, Math.floor(bitLen / 0x100000000), false);
+
+    const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    const k = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+    ];
+    const w = new Uint32Array(64);
+    for (let i = 0; i < paddedLen; i += 64) {
+        for (let t = 0; t < 16; t++) w[t] = view.getUint32(i + t * 4, false);
+        for (let t = 16; t < 64; t++) {
+            const s0 = rightRotate(w[t - 15], 7) ^ rightRotate(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+            const s1 = rightRotate(w[t - 2], 17) ^ rightRotate(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+            w[t] = (w[t - 16] + s0 + w[t - 7] + s1) >>> 0;
+        }
+        let [a, b, c, d, e, f, g, hh] = h;
+        for (let t = 0; t < 64; t++) {
+            const S1 = rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25);
+            const ch = (e & f) ^ ((~e) & g);
+            const temp1 = (hh + S1 + ch + k[t] + w[t]) >>> 0;
+            const S0 = rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22);
+            const maj = (a & b) ^ (a & c) ^ (b & c);
+            const temp2 = (S0 + maj) >>> 0;
+            hh = g; g = f; f = e; e = (d + temp1) >>> 0; d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+        }
+        h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
+        h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0;
+    }
+    return h.map(v => v.toString(16).padStart(8, '0')).join('');
+}
+
+async function computeSha256Hex(input) {
+    const str = String(input || '');
+    if (typeof window !== 'undefined' && window.crypto?.subtle) {
+        try {
+            const buf = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        } catch (_) {}
+    }
+    return pureSha256Hex(str);
+}
+
+function generateSaltHex() {
+    if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+        const arr = new Uint8Array(16);
+        window.crypto.getRandomValues(arr);
+        return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    return `${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function saveOfflinePasswordVerifier(userObj, rawPassword) {
+    if (!userObj || !rawPassword || typeof localStorage === 'undefined') return;
+    try {
+        const verifiers = JSON.parse(localStorage.getItem(OFFLINE_VERIFIERS_KEY) || '{}');
+        const salt = generateSaltHex();
+        const hash = await computeSha256Hex(`${salt}:${String(userObj.id)}:${rawPassword}`);
+        const entry = { salt, hash, userId: String(userObj.id), updatedAt: Date.now() };
+        if (userObj.id) verifiers[String(userObj.id)] = entry;
+        if (userObj.username) verifiers[`u:${String(userObj.username).toLowerCase()}`] = entry;
+        if (userObj.email) verifiers[`e:${String(userObj.email).toLowerCase()}`] = entry;
+        localStorage.setItem(OFFLINE_VERIFIERS_KEY, JSON.stringify(verifiers));
+    } catch (_) {}
+}
+
+async function verifyOfflinePassword(userObj, rawPassword) {
+    if (!userObj || !rawPassword || typeof localStorage === 'undefined') return false;
+    try {
+        const verifiers = JSON.parse(localStorage.getItem(OFFLINE_VERIFIERS_KEY) || '{}');
+        const entry =
+            verifiers[String(userObj.id)] ||
+            (userObj.username ? verifiers[`u:${String(userObj.username).toLowerCase()}`] : null) ||
+            (userObj.email ? verifiers[`e:${String(userObj.email).toLowerCase()}`] : null);
+        if (!entry?.salt || !entry?.hash) return false;
+        const computed = await computeSha256Hex(`${entry.salt}:${String(entry.userId || userObj.id)}:${rawPassword}`);
+        return computed === entry.hash;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function saveOfflineBiometricHash(userId, rawBiometricToken) {
+    if (!userId || !rawBiometricToken || typeof localStorage === 'undefined') return;
+    try {
+        const hashes = JSON.parse(localStorage.getItem(OFFLINE_BIO_HASHES_KEY) || '{}');
+        const salt = generateSaltHex();
+        const hash = await computeSha256Hex(`${salt}:${String(rawBiometricToken)}`);
+        hashes[String(userId)] = { salt, hash };
+        localStorage.setItem(OFFLINE_BIO_HASHES_KEY, JSON.stringify(hashes));
+    } catch (_) {}
+}
+
+async function verifyOfflineBiometricToken(userId, rawBiometricToken) {
+    if (!userId || !rawBiometricToken || typeof localStorage === 'undefined') return false;
+    try {
+        const hashes = JSON.parse(localStorage.getItem(OFFLINE_BIO_HASHES_KEY) || '{}');
+        const entry = hashes[String(userId)];
+        if (!entry?.salt || !entry?.hash) return false;
+        const computed = await computeSha256Hex(`${entry.salt}:${String(rawBiometricToken)}`);
+        return computed === entry.hash;
+    } catch (_) {
+        return false;
+    }
+}
+
 const AuthContext = globalThis.__ISAAC_AUTH_CONTEXT__ || (globalThis.__ISAAC_AUTH_CONTEXT__ = createContext());
 
 export const useAuth = () => useContext(AuthContext) || {};
@@ -39,10 +163,43 @@ export const AuthProvider = ({ children }) => {
 
     const appUnlock = async (password, isBiometric = false) => {
         try {
-            if (isBiometric && user) {
-                setIsLocked(false);
-                sessionStorage.setItem('isaac_pos_session_active', 'true');
-                return { success: true };
+            if (isBiometric) {
+                const bioToken = typeof password === 'string' ? password.trim() : '';
+                if (!user || !bioToken) {
+                    return { success: false, message: 'Credencial biométrica ausente o inválida.' };
+                }
+                try {
+                    const bioRes = await api.post('/auth/biometrics/login', {
+                        userId: user.id,
+                        username: user.username,
+                        biometricToken: bioToken
+                    }, { timeout: 3000 });
+                    if (bioRes.data?.token) {
+                        localStorage.setItem('auth_token', bioRes.data.token);
+                        secureMobileStorage.setToken(bioRes.data.token);
+                    }
+                    if (bioRes.data?.user) {
+                        setUser(bioRes.data.user);
+                    }
+                    await saveOfflineBiometricHash(user.id, bioToken);
+                    setIsLocked(false);
+                    sessionStorage.setItem('isaac_pos_session_active', 'true');
+                    return { success: true };
+                } catch (bioErr) {
+                    if (bioErr.response) {
+                        return {
+                            success: false,
+                            message: bioErr.response.data?.error || bioErr.response.data?.message || 'Huella biométrica inválida o revocada.'
+                        };
+                    }
+                    const offlineValid = await verifyOfflineBiometricToken(user.id, bioToken);
+                    if (!offlineValid) {
+                        return { success: false, message: 'No se pudo validar la huella sin conexión. Ingresa tu PIN o contraseña.' };
+                    }
+                    setIsLocked(false);
+                    sessionStorage.setItem('isaac_pos_session_active', 'true');
+                    return { success: true, isOffline: true };
+                }
             }
 
             // 1. Intentar desbloqueo ultrarrápido vía /auth/quick-unlock (soporta quickPin, supervisorPin y contraseña)
@@ -163,7 +320,14 @@ export const AuthProvider = ({ children }) => {
                 if (savedKey) {
                     try {
                         const localCheck = await validateLicenseKeyLocally(savedKey, currentTerminalId);
-                        isLocallyValid = localCheck.valid;
+                        if (localCheck.valid) {
+                            isLocallyValid = true;
+                        } else if (localCheck.requiresServerValidation && savedActivated) {
+                            // Llave v1 activada previamente contra el servidor: mantener validez offline si no está expirada ni asignada a otro equipo
+                            isLocallyValid = true;
+                        } else {
+                            isLocallyValid = false;
+                        }
                     } catch (_) {}
                 }
                 if (isLocallyValid) {
@@ -275,7 +439,7 @@ export const AuthProvider = ({ children }) => {
                     if (res.data.user.companyId) {
                         localStorage.setItem('companyId', String(res.data.user.companyId));
                     }
-                    syncService.autoSyncOnLogin().catch(() => {});
+                    syncService.autoSyncOnLogin().catch((e) => console.warn('[Auth] Auto-sync tras discovery falló:', e?.message || e));
                 }
             } catch {
                 // Ignore silent refresh error if not logged in
@@ -355,8 +519,8 @@ export const AuthProvider = ({ children }) => {
         const isDeviceOffline = typeof navigator !== 'undefined' && !navigator.onLine;
         const preferOffline = Boolean(options.preferOffline || isDeviceOffline);
 
-        // Helper para resolver inicio de sesión offline inmediato (0 ms)
-        const resolveOfflineLogin = () => {
+        // Helper para resolver inicio de sesión offline estricto (solo usuarios reales previamente autenticados online)
+        const resolveOfflineLogin = async () => {
             const savedProfile = localStorage.getItem('isaac_pos_saved_user_profile');
             let offlineUser = null;
             if (savedProfile) {
@@ -382,46 +546,34 @@ export const AuthProvider = ({ children }) => {
                 } catch {}
             }
 
-            if (!offlineUser) {
-                const isCashierName = /cajer|vend|operador|pos/i.test(username);
-                offlineUser = {
-                    id: `offline_${username.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
-                    username: username,
-                    role: isCashierName ? 'cajero' : 'admin',
-                    name: username.charAt(0).toUpperCase() + username.slice(1) + ' (Offline)',
-                    companyId: localStorage.getItem('companyId') || '1',
-                    status: 'active',
-                    defaultCurrency: 'USD'
+            if (!offlineUser || offlineUser.status === 'inactive') {
+                return {
+                    success: false,
+                    message: 'Usuario no autenticado previamente en este equipo. Inicia sesión con conexión al servidor.'
                 };
             }
 
-            if (offlineUser && password && password.length >= 1) {
-                console.log('⚡ Acceso Instantáneo MODO OFFLINE:', offlineUser.name);
-                const userWithOffline = { ...offlineUser, isOfflineMode: true };
-                sessionStorage.setItem('isaac_pos_session_active', 'true');
-                setUser(userWithOffline);
-                localStorage.setItem('isaac_pos_saved_user_profile', JSON.stringify(userWithOffline));
-                localStorage.setItem('isaac_pos_is_offline_mode', 'true');
-                localStorage.setItem('isaac_pos_license_activated', 'true');
-
-                try {
-                    const cached = JSON.parse(localStorage.getItem('isaac_pos_cached_cashiers') || '[]');
-                    if (Array.isArray(cached)) {
-                        const idx = cached.findIndex(c => c.username?.toLowerCase() === username.toLowerCase());
-                        if (idx >= 0) cached[idx] = userWithOffline;
-                        else cached.push(userWithOffline);
-                        localStorage.setItem('isaac_pos_cached_cashiers', JSON.stringify(cached));
-                    }
-                } catch (_) {}
-
-                return { success: true, isOffline: true };
+            const isPasswordValid = await verifyOfflinePassword(offlineUser, password);
+            if (!isPasswordValid) {
+                return {
+                    success: false,
+                    message: 'Contraseña incorrecta o sesión offline no verificada previamente online.'
+                };
             }
-            return { success: false, message: 'Ingresa usuario y contraseña válidos.' };
+
+            console.log('⚡ Acceso verificado MODO OFFLINE:', offlineUser.name);
+            const userWithOffline = { ...offlineUser, isOfflineMode: true };
+            sessionStorage.setItem('isaac_pos_session_active', 'true');
+            setUser(userWithOffline);
+            localStorage.setItem('isaac_pos_saved_user_profile', JSON.stringify(userWithOffline));
+            localStorage.setItem('isaac_pos_is_offline_mode', 'true');
+
+            return { success: true, isOffline: true };
         };
 
-        // Si ya sabemos que está offline o sin conexión física, entrar en 0 ms
+        // Si ya sabemos que está offline o sin conexión física, entrar verificando hash guardado
         if (preferOffline) {
-            return resolveOfflineLogin();
+            return await resolveOfflineLogin();
         }
 
         try {
@@ -432,7 +584,12 @@ export const AuthProvider = ({ children }) => {
             if (token) {
                 localStorage.setItem('auth_token', token);
             }
+            const enrolledCred = biometricService.getEnrolledCredential();
+            if (userData?.id && enrolledCred?.biometricToken && (!enrolledCred.userId || String(enrolledCred.userId) === String(userData.id))) {
+                await saveOfflineBiometricHash(userData.id, enrolledCred.biometricToken);
+            }
             if (userData) {
+                await saveOfflinePasswordVerifier(userData, password);
                 localStorage.setItem('isaac_pos_saved_user_profile', JSON.stringify(userData));
                 if (userData.companyId) {
                     localStorage.setItem('companyId', String(userData.companyId));
@@ -460,8 +617,8 @@ export const AuthProvider = ({ children }) => {
                 return { success: false, message };
             }
 
-            // Fallback offline inmediato (< 5 ms) si el servidor no responde o no hay red
-            return resolveOfflineLogin();
+            // Fallback offline verificado si el servidor no responde o no hay red
+            return await resolveOfflineLogin();
         } finally {
             // No manipular 'loading' aquí — loading es solo del bootstrap inicial.
         }
@@ -473,6 +630,10 @@ export const AuthProvider = ({ children }) => {
             const { user: userData, token } = data;
             if (token) {
                 localStorage.setItem('auth_token', token);
+            }
+            const enrolledCred = biometricService.getEnrolledCredential();
+            if (userData?.id && enrolledCred?.biometricToken && (!enrolledCred.userId || String(enrolledCred.userId) === String(userData.id))) {
+                await saveOfflineBiometricHash(userData.id, enrolledCred.biometricToken);
             }
             if (userData) {
                 localStorage.setItem('isaac_pos_saved_user_profile', JSON.stringify(userData));
@@ -492,7 +653,7 @@ export const AuthProvider = ({ children }) => {
             sessionStorage.setItem('isaac_pos_session_active', 'true');
             localStorage.removeItem('isaac_pos_is_offline_mode');
             setUser(userData);
-            syncService.autoSyncOnLogin().catch(() => {});
+            syncService.autoSyncOnLogin().catch((e) => console.warn('[Auth] Auto-sync biométrico falló:', e?.message || e));
             return { success: true, user: userData };
         } catch (err) {
             console.error('Biometric login error:', err);
@@ -503,7 +664,11 @@ export const AuthProvider = ({ children }) => {
 
     const registerBiometrics = useCallback(async (deviceName) => {
         if (!user) throw new Error('No hay usuario autenticado');
-        return await biometricService.registerBiometrics(user, deviceName);
+        const res = await biometricService.registerBiometrics(user, deviceName);
+        if (res?.credential?.biometricToken && user?.id) {
+            await saveOfflineBiometricHash(user.id, res.credential.biometricToken);
+        }
+        return res;
     }, [user]);
 
     const revokeBiometrics = useCallback(async () => {
@@ -568,7 +733,7 @@ export const AuthProvider = ({ children }) => {
                 canViewCosts: true, canManageWarehouses: true,
                 canManagePromotions: true,
                 canManageSuppliers: true, canManagePurchases: true, canManagePayables: true,
-                canImportCatalog: true, canManageExpenses: true, canManageBanking: true,
+                canImportCatalog: true, canManageExpenses: true,
                 canManageFiscal: true, canAccessBI: true, canViewReports: true,
                 canManageAccounting: true, canManagePayroll: true, canManageAssets: true,
                 canAccessAudit: true, canMonitorCashiers: true, canManageBranches: true,

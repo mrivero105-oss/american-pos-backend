@@ -105,33 +105,37 @@ class FixedAssetService {
             throw new Error('El formato del período debe ser YYYY-MM (ej. 2026-09).');
         }
 
-        // 1. Verificar si ya se corrió la depreciación para este período
-        const existingLogs = await AssetDepreciationLog.count({
-            where: { companyId, period }
-        });
-
-        if (existingLogs > 0) {
-            throw new Error(`La depreciación para el período ${period} ya fue ejecutada previamente.`);
-        }
-
-        // 2. Buscar activos fijos activos
-        const activeAssets = await FixedAsset.findAll({
-            where: {
-                ...this.buildCompanyWhere(companyId),
-                status: 'ACTIVE'
-            }
-        });
-
-        if (activeAssets.length === 0) {
-            return {
-                success: true,
-                message: 'No existen activos fijos activos sujetos a depreciación.',
-                depreciatedCount: 0,
-                totalDepreciation: 0
-            };
-        }
-
         return await sequelize.transaction(async (t) => {
+            // 1. Verificar si ya se corrió la depreciación para este período dentro de la transacción
+            const existingLogs = await AssetDepreciationLog.count({
+                where: { companyId, period },
+                transaction: t
+            });
+
+            if (existingLogs > 0) {
+                throw new Error(`La depreciación para el período ${period} ya fue ejecutada previamente.`);
+            }
+
+            // 2. Buscar activos fijos activos con bloqueo pesimista para evitar doble corrida concurrente
+            const activeAssets = await FixedAsset.findAll({
+                where: {
+                    ...this.buildCompanyWhere(companyId),
+                    status: 'ACTIVE'
+                },
+                order: [['id', 'ASC']],
+                lock: t.LOCK.UPDATE,
+                transaction: t
+            });
+
+            if (activeAssets.length === 0) {
+                return {
+                    success: true,
+                    message: 'No existen activos fijos activos sujetos a depreciación.',
+                    depreciatedCount: 0,
+                    totalDepreciation: 0
+                };
+            }
+
             let totalMonthlyDepreciation = 0;
             const logEntries = [];
             const updatedAssetIds = [];

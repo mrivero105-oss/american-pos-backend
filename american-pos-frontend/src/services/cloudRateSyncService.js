@@ -6,8 +6,14 @@
  * sin requerir que el usuario pulse ningún botón.
  */
 
-const SUPABASE_URL = 'https://puvqiipussyktfmgafgv.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6';
+import {
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  hasSupabaseConfig,
+  getSupabaseRealtimeWsUrl,
+  getSupabaseRestUrl,
+  getSupabaseHeaders
+} from '../config/supabaseConfig';
 
 class CloudRateSyncService {
   constructor() {
@@ -76,11 +82,14 @@ class CloudRateSyncService {
     }
 
     try {
-      const wsUrl = `wss://puvqiipussyktfmgafgv.supabase.co/realtime/v1/websocket?apikey=${SUPABASE_ANON_KEY}&vsn=1.0.0`;
+      const wsUrl = getSupabaseRealtimeWsUrl();
+      if (!wsUrl) return;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         this.isConnected = true;
+        this.stopPolling();
+        clearTimeout(this.reconnectTimer);
         // Enviar unión al topic del canal de postgres_changes para cloud_configuracion
         const joinMsg = {
           topic: 'realtime:public:cloud_configuracion',
@@ -131,12 +140,14 @@ class CloudRateSyncService {
       this.ws.onerror = () => {
         this.isConnected = false;
         this.notifyStatus(false);
+        this.startPolling();
       };
 
       this.ws.onclose = () => {
         this.isConnected = false;
         this.notifyStatus(false);
         clearInterval(this.heartbeatTimer);
+        this.startPolling();
         // Reintentar en 5 segundos si la app sigue visible
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = setTimeout(() => {
@@ -147,15 +158,46 @@ class CloudRateSyncService {
       };
     } catch (_err) {
       this.isConnected = false;
+      this.startPolling();
+    }
+  }
+
+  stopPolling() {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+      this.pollingTimer = null;
     }
   }
 
   startPolling() {
-    clearInterval(this.pollingTimer);
-    // Polling ligero cada 6 segundos
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isConnected) {
+      this.stopPolling();
+      return;
+    }
+    this.stopPolling();
+    // Polling ligero de respaldo cada 6 segundos solo cuando el WebSocket no está conectado
     this.pollingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isConnected) {
+        this.stopPolling();
+        return;
+      }
       this.checkRate();
     }, 6000);
+  }
+
+  destroy() {
+    this.stopPolling();
+    clearInterval(this.heartbeatTimer);
+    clearTimeout(this.reconnectTimer);
+    if (this.ws) {
+      try {
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.close();
+      } catch (_e) {}
+      this.ws = null;
+    }
+    this.isConnected = false;
   }
 
   async checkRate() {
@@ -171,12 +213,10 @@ class CloudRateSyncService {
         signal = controller.signal;
       }
 
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/cloud_configuracion?id=eq.general&select=tasa_cambio,modo_moneda,actualizado_el`, {
+      if (!hasSupabaseConfig()) return;
+      const res = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general&select=tasa_cambio,modo_moneda,actualizado_el'), {
         signal,
-        headers: {
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
-        }
+        headers: getSupabaseHeaders()
       });
       if (timeoutId) clearTimeout(timeoutId);
 

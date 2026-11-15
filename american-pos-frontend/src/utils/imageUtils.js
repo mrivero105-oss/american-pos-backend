@@ -1,6 +1,7 @@
 import api from '../services/api';
+import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
 
-export const SUPABASE_STORAGE_URL = 'https://puvqiipussyktfmgafgv.supabase.co/storage/v1/object/public/product-images';
+export const SUPABASE_STORAGE_URL = getSupabaseStoragePublicUrl('product-images');
 
 /**
  * Detecta si el entorno de ejecución actual es un dispositivo móvil (Capacitor nativo o navegador móvil)
@@ -39,7 +40,7 @@ export const getImageUrl = (uri) => {
         // Si estamos en entorno móvil (Android APK / Navegador de celular) o no hay servidor local configurado:
         // Cargar directamente desde Supabase Storage CDN (funciona 24/7 en WiFi y datos móviles LTE)
         if (isMobileClient() || !api?.defaults?.baseURL) {
-            return `${SUPABASE_STORAGE_URL}/${encodeURIComponent(filename)}`;
+            return SUPABASE_STORAGE_URL ? `${SUPABASE_STORAGE_URL}/${encodeURIComponent(filename)}` : '';
         }
     }
 
@@ -63,12 +64,11 @@ export const getImageUrl = (uri) => {
 
 export const getInvoiceUrl = (uri) => {
     if (!uri) return '';
-    if (uri.startsWith('http') || uri.startsWith('data:')) return uri;
+    if (uri.startsWith('http') || uri.startsWith('data:') || uri.startsWith('blob:')) return uri;
     const baseUrl = api?.defaults?.baseURL || '';
     const origin = baseUrl.replace(/\/api$/, '');
     let cleanPath = uri.startsWith('/') ? uri.substring(1) : uri;
-    if (cleanPath.startsWith('invoices/') || cleanPath.startsWith('uploads/')) {
-        return `${origin}/${cleanPath}`;
-    }
-    return `${origin}/invoices/${cleanPath}`;
+    return (cleanPath.startsWith('invoices/') || cleanPath.startsWith('uploads/'))
+        ? `${origin}/${cleanPath}`
+        : `${origin}/invoices/${cleanPath}`;
 };

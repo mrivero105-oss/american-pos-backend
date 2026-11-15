@@ -6,6 +6,9 @@ const fs = require('fs');
 const { ServiceOrder, Sale, SaleItem } = require('../database/models');
 
 // Configure storage for service evidence photos
+const SERVICE_ALLOWED_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+const SERVICE_ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const baseDir = process.env.USER_DATA_PATH || require('os').tmpdir();
@@ -17,22 +20,44 @@ const storage = multer.diskStorage({
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'SO-' + uniqueSuffix + path.extname(file.originalname || '.jpg'));
+    const rawExt = path.extname(file.originalname || '').toLowerCase();
+    const safeExt = SERVICE_ALLOWED_EXTS.has(rawExt) ? rawExt : '.jpg';
+    cb(null, 'SO-' + uniqueSuffix + safeExt);
   }
 });
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit per photo
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit per photo
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const mimeOk = SERVICE_ALLOWED_MIMES.has(String(file.mimetype || '').toLowerCase());
+    const extOk = !ext || SERVICE_ALLOWED_EXTS.has(ext);
+    if (mimeOk && extOk) {
+      return cb(null, true);
+    }
+    const filterErr = new Error('Tipo de archivo no permitido para evidencia de servicio (solo imágenes JPG, PNG, WEBP, GIF).');
+    filterErr.statusCode = 400;
+    return cb(filterErr);
+  }
 });
+
+const getServiceTenantScope = (req) => {
+  const role = String(req.user?.role || '').toLowerCase();
+  const isSuperAdmin = role === 'superadmin';
+  const companyId = String(req.user?.companyId || '2');
+  return { isSuperAdmin, companyId, whereCompany: isSuperAdmin ? {} : { companyId } };
+};
 
 /**
  * GET /api/services
- * List all service orders
+ * List all service orders isolated by tenant
  */
 router.get('/', async (req, res) => {
   try {
+    const { whereCompany } = getServiceTenantScope(req);
     const orders = await ServiceOrder.findAll({
+      where: whereCompany,
       order: [['createdAt', 'DESC']]
     });
     res.json(orders);
@@ -48,13 +73,23 @@ router.get('/', async (req, res) => {
  */
 router.post('/', upload.array('evidencia', 4), async (req, res) => {
   try {
-    const orderData = JSON.parse(req.body.orderData);
+    let orderData;
+    try {
+      orderData = typeof req.body.orderData === 'string'
+        ? JSON.parse(req.body.orderData)
+        : (req.body.orderData || {});
+    } catch (_) {
+      return res.status(400).json({ error: 'Formato JSON inválido en orderData' });
+    }
+    const { companyId } = getServiceTenantScope(req);
+    const { companyId: _ignoreComp, id: _ignoreId, status: _ignoreStatus, ...safeOrderData } = orderData || {};
     
     // Process uploaded files to get URLs
-    const photoUrls = req.files.map(file => `/uploads/services/${file.filename}`);
+    const photoUrls = (req.files || []).map(file => `/uploads/services/${file.filename}`);
 
     const newOrder = await ServiceOrder.create({
-      ...orderData,
+      ...safeOrderData,
+      companyId,
       photos: photoUrls,
       status: 'RECEIVED'
     });
@@ -74,8 +109,13 @@ router.patch('/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
+    const allowedStatuses = ['RECEIVED', 'IN_PROGRESS', 'READY', 'DELIVERED', 'CANCELLED'];
+    if (!status || !allowedStatuses.includes(String(status))) {
+      return res.status(400).json({ error: 'Estado de servicio inválido' });
+    }
+    const { whereCompany } = getServiceTenantScope(req);
     
-    const order = await ServiceOrder.findByPk(id);
+    const order = await ServiceOrder.findOne({ where: { id, ...whereCompany } });
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
     order.status = status;
@@ -94,17 +134,19 @@ router.patch('/:id/status', async (req, res) => {
 router.post('/:id/payments', async (req, res) => {
   try {
     const { id } = req.params;
-    const { amount, method, reference } = req.body;
+    const { amount } = req.body;
+    const parsedAmount = parseFloat(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ error: 'Monto de pago inválido' });
+    }
+    const { whereCompany } = getServiceTenantScope(req);
     
-    const order = await ServiceOrder.findByPk(id);
+    const order = await ServiceOrder.findOne({ where: { id, ...whereCompany } });
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
     // Update order balance
-    order.balancePaid = (order.balancePaid || 0) + parseFloat(amount);
+    order.balancePaid = Number(((Number(order.balancePaid) || 0) + parsedAmount).toFixed(2));
     await order.save();
-
-    // In a real system, we'd also create a record in ServiceOrderPayments table
-    // For now, we update the main record to maintain the "Single Ledger" goal.
 
     res.json({ success: true, order });
   } catch (error) {
@@ -112,7 +154,6 @@ router.post('/:id/payments', async (req, res) => {
     res.status(500).json({ error: 'Error processing payment' });
   }
 });
-
 
 /**
  * POST /api/services/:id/finalize
@@ -125,8 +166,9 @@ router.post('/:id/finalize', async (req, res) => {
   try {
     const { id } = req.params;
     const { paymentData, customerName, seller } = req.body;
+    const { whereCompany } = getServiceTenantScope(req);
     
-    const order = await ServiceOrder.findByPk(id, { transaction: t });
+    const order = await ServiceOrder.findOne({ where: { id, ...whereCompany }, transaction: t });
     if (!order) {
       await t.rollback();
       return res.status(404).json({ error: 'Orden no encontrada' });

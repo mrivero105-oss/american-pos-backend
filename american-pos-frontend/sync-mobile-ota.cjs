@@ -93,8 +93,11 @@ for (const targetDir of targetDirs) {
     try { dns.setDefaultResultOrder('ipv4first'); } catch (_) {}
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL || 'https://puvqiipussyktfmgafgv.supabase.co';
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY || '';
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('SUPABASE_URL y SUPABASE_SERVICE_KEY deben definirse en variables de entorno.');
+  }
 
   try {
     const axios = require('../american-pos-backend/node_modules/axios');

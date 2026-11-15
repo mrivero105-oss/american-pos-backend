@@ -7,6 +7,9 @@ const { generateRobustId, readJson, getUserSettings } = require('../utils/helper
 const { SETTINGS_FILE } = require('../config/paths');
 const precision = require('../utils/precision');
 const AccountingEngineService = require('../services/AccountingEngineService');
+const { requirePermission } = require('../middleware/auth');
+
+router.use(requirePermission(['canViewSalesHistory', 'canAccessPOS']));
 
 // GET all delivery notes (Albaranes)
 router.get('/', async (req, res) => {
@@ -275,7 +278,7 @@ router.put('/:id/convert', async (req, res) => {
 });
 
 // DELETE Cancel Delivery Note (Reverts Stock)
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requirePermission('canVoidSales'), async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const note = await Sale.findOne({
@@ -284,7 +287,7 @@ router.delete('/:id', async (req, res) => {
                 companyId: req.user.companyId,
                 documentType: 'nota_entrega'
             },
-            include: [{ model: SaleItem, as: 'SaleItems' }],
+            lock: t.LOCK.UPDATE,
             transaction: t
         });
 
@@ -293,25 +296,38 @@ router.delete('/:id', async (req, res) => {
             return res.status(404).json({ error: 'Albarán no encontrado' });
         }
 
+        if (note.status === 'cancelled' || note.status === 'invoiced') {
+            await t.rollback();
+            return res.status(400).json({ error: `El albarán ya se encuentra en estado "${note.status}" y no puede anularse nuevamente.` });
+        }
+
+        const noteItems = await SaleItem.findAll({
+            where: { saleId: note.id },
+            transaction: t
+        });
+
         const activeBranchId = note.branchId || req.user.activeBranchId;
 
         // Revert Stock
-        for (const item of note.SaleItems) {
+        for (const item of noteItems) {
             const pId = item.productId;
-            const qty = item.quantity;
+            const product = await Product.findOne({ where: { id: pId, companyId: req.user.companyId }, lock: t.LOCK.UPDATE, transaction: t });
+            const factor = Number(item.factorConversion) > 0
+                ? Number(item.factorConversion)
+                : (item.isBulk ? (Number(product?.unitsPerBulk) || 1) : (item.isMidBulk ? (Number(product?.unitsPerMidBulk) || 1) : 1));
+            const unitsToRestore = precision.round(precision.multiply(Number(item.quantity) || 0, factor), 6);
 
-            const product = await Product.findOne({ where: { id: pId, companyId: req.user.companyId }, transaction: t });
+            const currentProdStock = Number(product?.stockQuantity || product?.stock || 0);
+            const newProdStock = precision.round(precision.add([currentProdStock, unitsToRestore]), 6);
             if (product) {
-                const currentProdStock = Number(product.stockQuantity || product.stock || 0);
-                const newProdStock = precision.round(precision.add([currentProdStock, Number(qty)]), 6);
                 await product.update({ stockQuantity: String(newProdStock), stock: newProdStock }, { transaction: t });
             }
 
             if (activeBranchId) {
-                let branchStock = await BranchStock.findOne({ where: { productId: pId, branchId: activeBranchId, companyId: req.user.companyId }, transaction: t });
+                let branchStock = await BranchStock.findOne({ where: { productId: pId, branchId: activeBranchId, companyId: req.user.companyId }, lock: t.LOCK.UPDATE, transaction: t });
                 if (branchStock) {
                     const currentBsStock = Number(branchStock.quantity) || 0;
-                    await branchStock.update({ quantity: precision.round(precision.add([currentBsStock, Number(qty)]), 6) }, { transaction: t });
+                    await branchStock.update({ quantity: precision.round(precision.add([currentBsStock, unitsToRestore]), 6) }, { transaction: t });
                 }
             }
 
@@ -322,7 +338,9 @@ router.delete('/:id', async (req, res) => {
                 userId: req.user.id,
                 companyId: req.user.companyId,
                 type: 'IN',
-                quantity: Number(qty),
+                quantity: unitsToRestore,
+                stockBefore: String(currentProdStock),
+                stockAfter: String(newProdStock),
                 reason: 'Albarán Cancelado',
                 referenceId: note.id,
                 date: new Date().toISOString()

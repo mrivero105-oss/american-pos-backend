@@ -1,0 +1,108 @@
+{
+  "appId": "com.isaacpos.frontend",
+  "productName": "Isaac POS",
+  "electronVersion": "22.3.27",
+  "compression": "normal",
+  "npmRebuild": false,
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/**/*.node",
+    "**/bin/**/*",
+    "**/scripts/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "scripts",
+      "to": "scripts"
+    }
+  ],
+  "directories": {
+    "output": "dist_final_installer"
+  },
+  "files": [
+    "**/*",
+    "!**/*.sqlite",
+    "!**/*.sqlite*",
+    "!**/*.bak",
+    "!**/*.dev_backup",
+    "!**/serviceAccountKey.json",
+    "!**/.env*",
+    "!env_backup.txt",
+    "!app_fixed.asar",
+    "!test_backup.zip",
+    "!.wwebjs_auth/**",
+    "!.wwebjs_cache/**",
+    "!.test_wwebjs_auth/**",
+    "!dist*/**",
+    "!backups/**",
+    "!build_temp/**",
+    "!auto-backups/**",
+    "!scratch/**",
+    "!uploads/**",
+    "!product_images/**",
+    "!supplier_logos/**",
+    "!invoices/**",
+    "!logs/**",
+    "!**/*.log",
+    "!**/*.log.gz",
+    "!db.json",
+    "!db-config.json",
+    "!settings.json",
+    "!cloud_mirror_config.json",
+    "!.git/**",
+    "!**/*.md",
+    "!LICENSE",
+    "!*.ps1",
+    "!public/*.exe",
+    "!public/*.apk",
+    "!public/*.zip",
+    "!node_modules/electron/**",
+    "!node_modules/electron-builder/**",
+    "!node_modules/@electron/rebuild/**",
+    "!node_modules/builder-util/**",
+    "!node_modules/typescript/**",
+    "!tests/**",
+    "!test-results/**",
+    "!playwright-report/**",
+    "!*.apk",
+    "!**/*.apk",
+    "!test_*.js",
+    "!check_*.js",
+    "!fix_*.js",
+    "!inspect_*.js",
+    "!find_*.js",
+    "!scratch*.js",
+    "!*.bat",
+    "!tailwind.config.js",
+    "!backup_debug.log",
+    "!build/cert.pfx",
+    "!**/*.pfx",
+    "!**/*.p12",
+    "!**/*.key",
+    "!**/keys/*private*",
+    "!**/*private*.pem"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "icon": "build/icon.ico",
+    "requestedExecutionLevel": "asInvoker",
+    "artifactName": "3_IsaacPOS_Windows7_8_8.1_Setup.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false,
+    "shortcutName": "Isaac POS",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "artifactName": "3_IsaacPOS_Windows7_8_8.1_Setup.${ext}",
+    "include": "build/installer.nsh"
+  }
+}

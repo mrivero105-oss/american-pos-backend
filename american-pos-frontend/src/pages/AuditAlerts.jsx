@@ -231,7 +231,7 @@ const AuditAlerts = () => {
                                                     {new Date(alert.createdAt).toLocaleString()}
                                                 </span>
                                             </div>
-                                            <h3 className="text-base font-bold text-slate-900 dark:text-white">{alert.type.toUpperCase().replace('_', ' ')}</h3>
+                                            <h3 className="text-base font-bold text-slate-900 dark:text-white">{String(alert.type || 'ALERTA').toUpperCase().replace(/_/g, ' ')}</h3>
                                             <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">{alert.message}</p>
                                             
                                             {alert.user && (
@@ -299,7 +299,7 @@ const AuditAlerts = () => {
                                         <div className="flex-1 space-y-2">
                                             <div className="flex flex-wrap items-center gap-1.5">
                                                 <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border ${isPending ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900/40' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700'}`}>
-                                                    {item.status.replace('_', ' ')}
+                                                    {String(item.status || 'pending').replace(/_/g, ' ')}
                                                 </span>
                                                 <span className="text-xs font-mono text-slate-400">
                                                     ID: {item.id}
@@ -320,7 +320,7 @@ const AuditAlerts = () => {
                                             {payloadData && (
                                                 <div className="bg-slate-50 dark:bg-slate-800/60 p-3 rounded-lg border border-slate-200 dark:border-slate-700/60 text-xs space-y-2">
                                                     <div className="font-semibold text-slate-800 dark:text-white flex justify-between items-center">
-                                                        <span>Venta #{payloadData.clientTransactionId || item.offlineId || item.id.slice(-6)}</span>
+                                                        <span>Venta #{payloadData.clientTransactionId || item.offlineId || String(item.id || '').slice(-6)}</span>
                                                         <span className="text-emerald-600 dark:text-emerald-400 font-bold font-mono text-sm">
                                                             ${Number(payloadData.total || 0).toFixed(2)} USD
                                                         </span>

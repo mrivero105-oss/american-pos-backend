@@ -250,7 +250,7 @@ export default function AuditDashboard() {
                 <div className="lg:col-span-2 space-y-3">
                     <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-1">Insights del Sistema</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {summary?.insights.length > 0 ? summary.insights.map((insight, i) => (
+                        {(summary?.insights?.length || 0) > 0 ? summary.insights.map((insight, i) => (
                             <div key={i} className={`p-5 rounded-xl border ${
                                 insight.type === 'danger' 
                                 ? 'bg-red-50/70 border-red-200 text-red-900 dark:bg-red-950/20 dark:border-red-900/40 dark:text-red-300' 
@@ -283,17 +283,17 @@ export default function AuditDashboard() {
                         <div className="space-y-5">
                             <MetricRow 
                                 label="Total Faltantes (USD)" 
-                                value={formatUSD(Math.abs(summary?.ranking.reduce((s, r) => s + (Number(r.totalDiffUSD) < 0 ? Number(r.totalDiffUSD) : 0), 0)))}
+                                value={formatUSD(Math.abs((summary?.ranking || []).reduce((s, r) => s + (Number(r.totalDiffUSD) < 0 ? Number(r.totalDiffUSD) : 0), 0)))}
                                 color="text-red-600 dark:text-red-400"
                             />
                             <MetricRow 
                                 label="Total Sobrantes (USD)" 
-                                value={formatUSD(summary?.ranking.reduce((s, r) => s + (Number(r.totalDiffUSD) > 0 ? Number(r.totalDiffUSD) : 0), 0))}
+                                value={formatUSD((summary?.ranking || []).reduce((s, r) => s + (Number(r.totalDiffUSD) > 0 ? Number(r.totalDiffUSD) : 0), 0))}
                                 color="text-emerald-600 dark:text-emerald-400"
                             />
                             <MetricRow 
                                 label="Cierres Forzados" 
-                                value={summary?.alerts.filter(a => a.Shift?.status === 'forced_closed').length}
+                                value={(summary?.alerts || []).filter(a => a.Shift?.status === 'forced_closed').length}
                                 color="text-amber-600 dark:text-amber-400"
                             />
                             <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -314,10 +314,10 @@ export default function AuditDashboard() {
             <div className="space-y-4">
                 <div className="flex items-center justify-between px-2">
                     <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Ranking de Precisión Financiera</h3>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Basado en últimos {summary?.ranking.reduce((s,r) => s + Number(r.totalShifts), 0)} turnos</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Basado en últimos {(summary?.ranking || []).reduce((s,r) => s + Number(r.totalShifts || 0), 0)} turnos</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {summary?.ranking.map((cashier, i) => (
+                    {(summary?.ranking || []).map((cashier, i) => (
                         <CashierCard key={i} cashier={cashier} />
                     ))}
                 </div>
@@ -347,7 +347,7 @@ export default function AuditDashboard() {
                                             <p className="text-xs font-semibold text-slate-900 dark:text-white">
                                                 {formatDate(audit.createdAt, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                                             </p>
-                                            <p className="text-[11px] font-mono text-slate-400 mt-0.5">Turno: {audit.shiftId.substring(0, 8)}</p>
+                                            <p className="text-[11px] font-mono text-slate-400 mt-0.5">Turno: {String(audit.shiftId || 'N/A').substring(0, 8)}</p>
                                         </td>
                                         <td className="px-6 py-3.5 text-xs font-medium text-slate-700 dark:text-slate-300">
                                             {audit.userName || 'Usuario'}
@@ -394,7 +394,7 @@ export default function AuditDashboard() {
                                         <p className="text-xs font-semibold text-slate-900 dark:text-white">
                                             {formatDate(audit.createdAt, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                                         </p>
-                                        <p className="text-[10px] font-mono text-slate-400">Turno: {audit.shiftId.substring(0, 8)}</p>
+                                        <p className="text-[10px] font-mono text-slate-400">Turno: {String(audit.shiftId || 'N/A').substring(0, 8)}</p>
                                     </div>
                                     {audit.differenceUSD === 0 && audit.differenceVES === 0 ? (
                                         <span className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 px-2 py-0.5 rounded text-[10px] font-semibold border border-emerald-200 dark:border-emerald-900/40">Quadre OK</span>
@@ -447,7 +447,7 @@ export default function AuditDashboard() {
                                 <Fingerprint size={24} />
                             </div>
                             <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">Detalle de Auditoría</h2>
-                            <p className="text-xs font-mono text-slate-400 mt-0.5">Hash: {selectedAudit.hash.substring(0, 16)}...</p>
+                            <p className="text-xs font-mono text-slate-400 mt-0.5">Hash: {String(selectedAudit.hash || 'N/A').substring(0, 16)}...</p>
                         </div>
 
                         <div className="grid grid-cols-2 gap-3">
@@ -484,7 +484,7 @@ export default function AuditDashboard() {
                         )}
 
                         <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
-                            <button className="w-full sm:w-1/2 min-h-[38px] py-2 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs">
+                            <button onClick={() => window.print()} className="w-full sm:w-1/2 min-h-[38px] py-2 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs">
                                 <Printer size={15} /> Re-imprimir Ticket
                             </button>
                             <button onClick={() => setSelectedAudit(null)} className="w-full sm:w-1/2 min-h-[38px] py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-lg font-semibold text-xs shadow-xs hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors flex items-center justify-center cursor-pointer">

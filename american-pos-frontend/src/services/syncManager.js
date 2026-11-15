@@ -55,25 +55,40 @@ class SyncManager {
   async getPendingCount() {
     let salesCount = 0;
     let queueCount = 0;
+    let quarantinedCount = 0;
 
     try {
       if (db && db.sales) {
         salesCount = await db.sales.where('status').equals('pending_sync').count();
+        quarantinedCount = await db.sales.where('status').equals('quarantined').count();
       } else {
         const byPending = await primaryDb.getByIndex('sales', 'status', 'pending_sync').catch(() => []);
         salesCount = Array.isArray(byPending) ? byPending.length : 0;
+        const byQuarantined = await primaryDb.getByIndex('sales', 'status', 'quarantined').catch(() => []);
+        quarantinedCount = Array.isArray(byQuarantined) ? byQuarantined.length : 0;
       }
-    } catch (_) {}
+    } catch (_salesErr) {
+      console.warn('[SyncManager] Error leyendo ventas pendientes locales:', _salesErr?.message || _salesErr);
+    }
 
+    let syncErrorCount = 0;
     try {
       const queueItems = await primaryDb.getAll('syncQueue').catch(() => []);
-      queueCount = Array.isArray(queueItems) ? queueItems.length : 0;
-    } catch (_) {}
+      if (Array.isArray(queueItems)) {
+        const activeItems = queueItems.filter(i => !i?.failedPermanent && i?.status !== 'sync_error');
+        queueCount = activeItems.length;
+        syncErrorCount = queueItems.length - activeItems.length;
+      }
+    } catch (_queueErr) {
+      console.warn('[SyncManager] Error leyendo cola syncQueue local:', _queueErr?.message || _queueErr);
+    }
 
     return {
       total: salesCount + queueCount,
       salesCount,
-      queueCount
+      queueCount,
+      quarantinedCount: quarantinedCount + syncErrorCount,
+      syncErrorCount
     };
   }
 
@@ -98,7 +113,7 @@ class SyncManager {
         for (const c of allLocal) {
           const cid = String(c.id || '');
           if (cid === realId) continue;
-          const isTemp = cid.startsWith('cust_off_') || cid.startsWith('CUST-') || c.status === 'pending_sync';
+          const isTemp = cid.startsWith('cust_off_') || cid.startsWith('cust_offline_') || cid.startsWith('CUST-') || c.status === 'pending_sync';
           if (!isTemp) continue;
 
           const cName = String(c.name || c.nombre || '').trim().toLowerCase();
@@ -109,15 +124,17 @@ class SyncManager {
         }
 
         for (const oldId of tempIdsToPurge) {
-          await db.customers.delete(oldId).catch(() => {});
-          await primaryDb.delete('customers', oldId).catch(() => {});
+          await db.customers.delete(oldId).catch((e) => console.warn('[SyncManager] Error eliminando cliente temporal local:', oldId, e?.message || e));
+          await primaryDb.delete('customers', oldId).catch((e) => console.warn('[SyncManager] Error eliminando cliente temporal primaryDb:', oldId, e?.message || e));
         }
 
         const syncedRecord = { ...serverCustomer, status: 'synced', syncedAt: new Date().toISOString() };
-        await db.customers.put(syncedRecord).catch(() => {});
-        await primaryDb.put('customers', syncedRecord).catch(() => {});
+        await db.customers.put(syncedRecord).catch((e) => console.warn('[SyncManager] Error guardando cliente reconciliado:', e?.message || e));
+        await primaryDb.put('customers', syncedRecord).catch((e) => console.warn('[SyncManager] Error guardando cliente primaryDb:', e?.message || e));
       }
-    } catch (_) {}
+    } catch (_recErr) {
+      console.warn('[SyncManager] Error purgando ID temporal de cliente:', _recErr?.message || _recErr);
+    }
 
     // Actualizar ventas pendientes que referenciaban el ID temporal del cliente
     if (tempIdsToPurge.size > 0) {
@@ -127,14 +144,19 @@ class SyncManager {
           for (const sale of pendingSales) {
             if (sale.customerId && tempIdsToPurge.has(String(sale.customerId))) {
               await db.sales.update(sale.id, { customerId: realId });
-              const pSale = await primaryDb.getById('sales', sale.id).catch(() => null);
+              const pSale = await primaryDb.getById('sales', sale.id).catch((e) => {
+                console.warn('[SyncManager] Error leyendo venta pendiente para actualizar cliente:', sale.id, e?.message || e);
+                return null;
+              });
               if (pSale) {
-                await primaryDb.put('sales', { ...pSale, customerId: realId }).catch(() => {});
+                await primaryDb.put('sales', { ...pSale, customerId: realId }).catch((e) => console.warn('[SyncManager] Error actualizando venta primaryDb:', sale.id, e?.message || e));
               }
             }
           }
         }
-      } catch (_) {}
+      } catch (_updCustErr) {
+        console.warn('[SyncManager] Error actualizando customerId en ventas pendientes:', _updCustErr?.message || _updCustErr);
+      }
     }
   }
 
@@ -158,7 +180,7 @@ class SyncManager {
 
         for (const p of allLocal) {
           const pid = String(p.id || '');
-          if (pid === realId || !pid.startsWith('off_prod_')) continue;
+          if (pid === realId || (!pid.startsWith('off_prod_') && !pid.startsWith('offline_'))) continue;
           const pName = String(p.name || p.nombre || '').trim().toLowerCase();
           const pBarcode = String(p.barcode || p.codigo_barras || '').trim();
           if ((targetName && pName === targetName) || (targetBarcode && pBarcode === targetBarcode)) {
@@ -167,14 +189,16 @@ class SyncManager {
         }
 
         for (const oldId of tempIdsToPurge) {
-          await db.products.delete(oldId).catch(() => {});
-          await primaryDb.delete('products', oldId).catch(() => {});
+          await db.products.delete(oldId).catch((e) => console.warn('[SyncManager] Error eliminando producto temporal local:', oldId, e?.message || e));
+          await primaryDb.delete('products', oldId).catch((e) => console.warn('[SyncManager] Error eliminando producto temporal primaryDb:', oldId, e?.message || e));
         }
 
-        await db.products.put(serverProduct).catch(() => {});
-        await primaryDb.put('products', serverProduct).catch(() => {});
+        await db.products.put(serverProduct).catch((e) => console.warn('[SyncManager] Error guardando producto reconciliado:', e?.message || e));
+        await primaryDb.put('products', serverProduct).catch((e) => console.warn('[SyncManager] Error guardando producto primaryDb:', e?.message || e));
       }
-    } catch (_) {}
+    } catch (_recProdErr) {
+      console.warn('[SyncManager] Error purgando ID temporal de producto:', _recProdErr?.message || _recProdErr);
+    }
 
     // Actualizar ítems en ventas pendientes que referenciaban el producto temporal
     if (tempIdsToPurge.size > 0) {
@@ -201,7 +225,9 @@ class SyncManager {
             }
           }
         }
-      } catch (_) {}
+      } catch (_updProdErr) {
+        console.warn('[SyncManager] Error actualizando productId en ventas pendientes:', _updProdErr?.message || _updProdErr);
+      }
     }
   }
 
@@ -270,8 +296,11 @@ class SyncManager {
     try {
       // 1. Sincronizar cola genérica de acciones (productos, clientes, caja, gastos y anulaciones en modo offline)
       try {
-        const queueItems = await primaryDb.getAll('syncQueue');
-        if (Array.isArray(queueItems) && queueItems.length > 0) {
+        const rawQueueItems = await primaryDb.getAll('syncQueue');
+        const queueItems = Array.isArray(rawQueueItems)
+          ? rawQueueItems.filter(i => !i?.failedPermanent && i?.status !== 'sync_error')
+          : [];
+        if (queueItems.length > 0) {
           console.log(`[SyncManager] Sincronizando ${queueItems.length} acciones pendientes en syncQueue...`);
           for (const item of queueItems) {
             try {
@@ -286,13 +315,24 @@ class SyncManager {
                 res = await api.delete(endpoint, { timeout: 6000 });
               }
               if (res && res.status >= 200 && res.status < 300) {
-                // Reconciliar IDs temporales de clientes o productos creados en modo offline
+                const tempIdRef = item.tempLocalId || item.tempId || null;
+                // Reconciliar IDs temporales de clientes, productos o turnos creados en modo offline
                 if (method === 'post' && endpoint === '/customers') {
                   const createdCust = res.data?.customer || res.data;
-                  await this.reconcileOfflineCustomer(item.payload, createdCust, item.tempLocalId);
+                  await this.reconcileOfflineCustomer(item.payload, createdCust, tempIdRef);
                 } else if (method === 'post' && endpoint === '/products') {
                   const createdProd = res.data?.product || res.data;
-                  await this.reconcileOfflineProduct(item.payload, createdProd, item.tempLocalId);
+                  await this.reconcileOfflineProduct(item.payload, createdProd, tempIdRef);
+                } else if (method === 'post' && endpoint === '/cash/open') {
+                  const createdShift = res.data?.shift || res.data;
+                  if (createdShift?.id && tempIdRef && String(tempIdRef).startsWith('shift_off_')) {
+                    try {
+                      await primaryDb.delete('cashShifts', tempIdRef).catch(() => {});
+                      await primaryDb.put('cashShifts', { ...createdShift, status: 'open', isOffline: false }).catch(() => {});
+                    } catch (_shiftErr) {
+                      console.warn('[SyncManager] Error actualizando cashShift local tras sync:', _shiftErr?.message || _shiftErr);
+                    }
+                  }
                 }
 
                 await primaryDb.delete('syncQueue', item.id);
@@ -301,9 +341,28 @@ class SyncManager {
             } catch (itemErr) {
               console.warn(`[SyncManager] Error al procesar item en syncQueue:`, itemErr.message);
               const status = itemErr.response?.status;
-              // Solo descartar ante errores definitivos (400, 404, 409, 422), preservando en cola ante 401 (token expirado), 408 (timeout) o 429 (rate limit)
-              if (status && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status)) {
+              const retries = (Number(item.retryCount) || 0) + 1;
+              if (status === 409) {
+                // Conflicto / duplicado ya procesado en el servidor
                 await primaryDb.delete('syncQueue', item.id);
+              } else if (status && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status)) {
+                const errDetail = itemErr.response?.data?.error || itemErr.message;
+                if (retries >= 3) {
+                  await primaryDb.put('syncQueue', {
+                    ...item,
+                    status: 'sync_error',
+                    failedPermanent: true,
+                    retryCount: retries,
+                    lastError: errDetail,
+                    lastHttpStatus: status,
+                    failedAt: new Date().toISOString()
+                  });
+                  window.dispatchEvent(new CustomEvent('sync-queue-error', {
+                    detail: { itemId: item.id, endpoint: item.endpoint, status, error: errDetail }
+                  }));
+                } else {
+                  await primaryDb.put('syncQueue', { ...item, retryCount: retries, lastError: errDetail, lastHttpStatus: status });
+                }
               }
             }
           }
@@ -362,7 +421,9 @@ class SyncManager {
             }
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn('[SyncManager] Error migrando ventas pendientes desde primaryDb:', e?.message || e);
+      }
 
       // 4. Process Sales queue only after dependencies are verified
       const pendingSales = await db.sales
@@ -414,7 +475,9 @@ class SyncManager {
                 if (sItem) {
                   await primaryDb.put('sales', { ...sItem, status: 'synced', isOffline: false, syncedAt: new Date().toISOString() });
                 }
-              } catch {}
+              } catch (_pUpdErr) {
+                console.warn('[SyncManager] Error marcando venta sincronizada en primaryDb:', _pUpdErr?.message || _pUpdErr);
+              }
             }
           }
 
@@ -446,7 +509,9 @@ class SyncManager {
               console.warn('[SyncManager] ⚠️ Se detectaron advertencias de inventario diferido tras sincronizar:', serverWarnings);
               window.dispatchEvent(new CustomEvent('lan-stock-deficit-detected', { detail: { warnings: serverWarnings } }));
             }
-          } catch (_wErr) {}
+          } catch (_wErr) {
+            console.warn('[SyncManager] Error procesando alertas de inventario diferido:', _wErr?.message || _wErr);
+          }
         }
       }
 

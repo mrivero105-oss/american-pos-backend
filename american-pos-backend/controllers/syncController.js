@@ -160,15 +160,19 @@ exports.syncOfflineSales = async (req, res) => {
                         // Disparar Alerta de Auditoría en caso de Sobrevención Concurrente
                         if (isOversell) {
                             try {
-                                await Alert.create({
-                                    id: generateRobustId(),
-                                    type: 'inventory_risk',
-                                    severity: 'high',
-                                    message: `Sobrevención Offline en ${product.name}: Se vendieron ${itemQty} unidades cuando solo quedaban ${currentStock} durante desconexión.`,
-                                    companyId: finalCompanyId,
-                                    resolved: false
-                                }, { transaction: t });
-                            } catch (alertErr) {}
+                                await sequelize.transaction({ transaction: t }, async (sp) => {
+                                    await Alert.create({
+                                        id: generateRobustId(),
+                                        type: 'inventory_risk',
+                                        severity: 'high',
+                                        message: `Sobrevención Offline en ${product.name}: Se vendieron ${itemQty} unidades cuando solo quedaban ${currentStock} durante desconexión.`,
+                                        companyId: finalCompanyId,
+                                        resolved: false
+                                    }, { transaction: sp });
+                                });
+                            } catch (alertErr) {
+                                console.warn('[SyncController] No se pudo registrar alerta de sobreventa:', alertErr.message);
+                            }
                         }
                     }
 
@@ -288,7 +292,9 @@ exports.syncOfflineSales = async (req, res) => {
         if (allSyncedItems.length > 0) {
             LANClusterService.broadcastLANEvent('lan_stock_update', { items: allSyncedItems, timestamp: Date.now() });
         }
-    } catch (lanErr) {}
+    } catch (lanErr) {
+        console.warn('[SyncController] Aviso difundiendo actualización de stock LAN:', lanErr.message);
+    }
 
     return res.json({ success: true, syncedIds, errors });
 };

@@ -10,7 +10,10 @@ const precision = require('../utils/precision');
 // GET /api/stock-intelligence/suggestions
 router.get('/suggestions', async (req, res) => {
     try {
-        const companyId = req.user?.companyId || req.query.companyId || '2';
+        const userRole = String(req.user?.role || '').toLowerCase();
+        const companyId = (userRole === 'superadmin' && req.query.companyId)
+            ? String(req.query.companyId)
+            : String(req.user?.companyId || '2');
 
         // 1. Get all products
         const products = await Product.findAll({
@@ -126,7 +129,10 @@ router.get('/suggestions', async (req, res) => {
 // GET /api/stock-intelligence/status
 router.get('/status', async (req, res) => {
     try {
-        const companyId = req.user?.companyId || req.query.companyId || '2';
+        const userRole = String(req.user?.role || '').toLowerCase();
+        const companyId = (userRole === 'superadmin' && req.query.companyId)
+            ? String(req.query.companyId)
+            : String(req.user?.companyId || '2');
 
         const predictions = await StockIntelligenceService.getStockPredictions(companyId);
         res.json(predictions);

@@ -7,13 +7,15 @@ const multer = require('multer');
 const { PurchaseOrder, Product, StockMovement, BranchStock, Supplier, ProductPresentation } = require('../database/models');
 const { sequelize } = require('../database/connection');
 const { generateRobustId } = require('../utils/helpers');
-const { verifyToken, isSuperAdmin, isAdmin } = require('../middleware/auth');
+const { verifyToken, isSuperAdmin, isAdmin, requirePermission } = require('../middleware/auth');
 const InvoiceService = require('../services/InvoiceService');
 const ScannerService = require('../services/ScannerService');
 const PDFService = require('../services/PDFService');
 const ProductService = require('../services/ProductService');
 const VortexMathEngine = require('../utils/VortexMathEngine');
 const precision = require('../utils/precision');
+
+router.use(requirePermission(['canManagePurchases', 'canManageSuppliers']));
 
 // Multer setup for invoice uploads
 const invoiceUpload = multer({
@@ -301,7 +303,8 @@ async function processOrderReception(orderId, userId, activeBranchId, t, company
     }, { transaction: t });
 
     // Actualizar balance de crédito con el proveedor si aplica
-    if (order.paymentMethod === 'credit' || targetPaymentStatus === 'unpaid') {
+    const effectivePaymentMethod = receptionPayload?.paymentMethod || order.paymentMethod;
+    if (effectivePaymentMethod === 'credit' || targetPaymentStatus === 'unpaid') {
         const supplier = await require('../database/models').Supplier.findOne({ 
             where: { id: order.supplierId, companyId: finalCompanyId }, 
             transaction: t 
@@ -329,27 +332,32 @@ async function processOrderReception(orderId, userId, activeBranchId, t, company
             }
         }
     } else {
-        // Pago contado deducido de turno de caja abierto
-        const { CashShift, CashMovement } = require('../database/models');
-        const currentShift = await CashShift.findOne({
-            where: { companyId: finalCompanyId, status: 'open' },
-            order: [['openedAt', 'DESC']],
-            transaction: t
-        });
-        if (currentShift) {
-            await CashMovement.create({
-                id: generateRobustId(),
-                shiftId: currentShift.id,
-                userId: userId,
-                companyId: finalCompanyId,
-                type: 'out',
-                amount: parseFloat(effectiveTotal),
-                currency: 'USD',
-                paymentMethodId: 'cash',
-                category: 'PURCHASE',
-                reason: `Pago contado Albarán #${orderUpdates.referenceNumber || order.referenceNumber || order.id}`,
-                timestamp: new Date().toISOString()
-            }, { transaction: t });
+        // Pago contado deducido de turno de caja abierto (en edición solo se deduce el delta si aumentó)
+        const cashOutAmount = isAlreadyReceived ? deltaTotal : effectiveTotal;
+        if (parseFloat(cashOutAmount) > 0) {
+            const { CashShift, CashMovement } = require('../database/models');
+            const currentShift = await CashShift.findOne({
+                where: { companyId: finalCompanyId, status: 'open' },
+                order: [['openedAt', 'DESC']],
+                transaction: t
+            });
+            if (currentShift) {
+                await CashMovement.create({
+                    id: generateRobustId(),
+                    shiftId: currentShift.id,
+                    userId: userId,
+                    companyId: finalCompanyId,
+                    type: 'out',
+                    amount: parseFloat(cashOutAmount),
+                    currency: 'USD',
+                    paymentMethodId: 'cash',
+                    category: 'PURCHASE',
+                    reason: isAlreadyReceived
+                        ? `Ajuste pago contado Albarán #${orderUpdates.referenceNumber || order.referenceNumber || order.id}`
+                        : `Pago contado Albarán #${orderUpdates.referenceNumber || order.referenceNumber || order.id}`,
+                    timestamp: new Date().toISOString()
+                }, { transaction: t });
+            }
         }
     }
 }

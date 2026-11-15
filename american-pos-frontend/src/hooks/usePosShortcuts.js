@@ -166,10 +166,10 @@ export const usePosShortcuts = (props) => {
                 }
             }
 
-            // F1: Customer Search / Toggle
+            // F1: Atajo deshabilitado a petición del usuario (previene ayuda por defecto del SO sin disparar acciones)
             if (e.key === 'F1') {
                 e.preventDefault();
-                setIsCustomerDropdownOpen(prev => !prev);
+                return;
             }
 
             // CTRL + S: Save Quotation

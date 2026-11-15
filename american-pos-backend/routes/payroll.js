@@ -3,6 +3,9 @@ const router = express.Router();
 const PayrollService = require('../services/PayrollService');
 const { Employee, PayrollPeriod, PayrollReceipt } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
+const { requirePermission } = require('../middleware/auth');
+
+router.use(requirePermission('canManagePayroll'));
 
 // Listar empleados
 router.get('/employees', async (req, res) => {
@@ -133,12 +136,10 @@ router.post('/periods/:id/calculate', async (req, res) => {
 router.post('/periods/:id/close', async (req, res) => {
     try {
         const { id } = req.params;
-        const { bankAccountId } = req.body;
         const userId = req.user?.id || 'admin';
         const companyId = req.user?.companyId || 'default';
 
         const result = await PayrollService.closeAndDisbursePeriod(id, {
-            bankAccountId,
             userId,
             companyId
         });

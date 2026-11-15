@@ -1,57 +1,33 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { X, Banknote, CreditCard, User, CheckCircle2, Send, DollarSign, Zap, Wallet, Search, Coins, Layers, QrCode, Fingerprint, Copy, Check, Loader2, Smartphone, RefreshCcw, ArrowRight, CornerDownLeft, Sparkles, ChevronDown, CheckCheck, Maximize2, Minimize2, Tag } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { X, CreditCard, CheckCircle2, Zap, Coins, Layers, ChevronDown, Maximize2, Minimize2, Tag, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { db } from '../services/db';
 import VortexMathEngine from '../utils/VortexMathEngine';
-import { formatMoney as utilFormatMoney, formatBs, formatUSD, precisionRound, isSingleCurrencyMode, isUsdOnlyMode, isVesOnlyMode, isDollarOnlyCountry } from '../utils/format';
+import { formatMoney as utilFormatMoney, formatBs, formatUSD, precisionRound, isUsdOnlyMode, isVesOnlyMode, isDollarOnlyCountry } from '../utils/format';
 import { playSuccessSound } from '../utils/sounds';
 import BaseModal from './BaseModal';
 import { useAuth } from '../hooks/AuthContext';
 import { usePos } from '../hooks/PosContext';
 import { useSocket } from '../hooks/SocketContext';
 import { calculatePaymentMethodDiscounts, evaluateCartPromotions, matchesPaymentMethod } from '../utils/promotionsEngine';
-import { 
-    generatePagoMovilQR, 
-    getBankNameByCode, 
-    cleanPhone, 
-    cleanIdNumber, 
-    formatPhoneDisplay, 
-    formatIdDisplay 
+import {
+    generatePagoMovilQR,
+    getBankNameByCode,
+    cleanPhone,
+    cleanIdNumber,
+    formatPhoneDisplay,
+    formatIdDisplay
 } from '../utils/pagoMovilQR';
-import { generateBinanceQR, buildBinancePayString } from '../utils/binanceQR';
+import { generateBinanceQR } from '../utils/binanceQR';
+import { cleanMethodName, DEFAULT_PAYMENT_METHODS } from './checkout/checkoutUtils';
+import CheckoutExpressView from './checkout/CheckoutExpressView';
+import CheckoutSplitView from './checkout/CheckoutSplitView';
+import CheckoutSuccessOverlay from './checkout/CheckoutSuccessOverlay';
+import CheckoutPaymentQrModal from './checkout/CheckoutPaymentQrModal';
 
-export const cleanMethodName = (name) => {
-    if (!name || typeof name !== 'string') return '';
-    return name
-        .replace(/CrÃ©dito/gi, 'Crédito')
-        .replace(/DÃ©bito/gi, 'Débito')
-        .replace(/MÃ³vil/gi, 'Móvil')
-        .replace(/Ã©/g, 'é')
-        .replace(/Ã¡/g, 'á')
-        .replace(/Ã­/g, 'í')
-        .replace(/Ã³/g, 'ó')
-        .replace(/Ãº/g, 'ú')
-        .replace(/Ã±/g, 'ñ')
-        .replace(/Ã‰/g, 'É')
-        .replace(/Ã“/g, 'Ó')
-        .replace(/Ã/g, 'Á')
-        .trim();
-};
-
-const DEFAULT_PAYMENT_METHODS = [
-    { id: 'cash_usd', name: 'Efectivo USD', currency: 'USD', isCash: true, active: true },
-    { id: 'cash_bs', name: 'Efectivo Bs', currency: 'VES', isCash: true, active: true },
-    { id: 'debit', name: 'Punto de Venta', currency: 'VES', isCash: false, active: true },
-    { id: 'pago_movil', name: 'Pago Móvil', currency: 'VES', isCash: false, active: true },
-    { id: 'binance_usdt', name: 'Binance Pay (USDT)', currency: 'USDT', isCash: false, active: true },
-    { id: 'zelle', name: 'Zelle', currency: 'USD', isCash: false, active: true },
-    { id: 'biopago', name: 'Biopago BDV', currency: 'VES', isCash: false, active: true },
-    { id: 'transfer', name: 'Transferencia Bancaria', currency: 'VES', isCash: false, active: true },
-    { id: 'fiado', name: 'Crédito / Fiado', currency: 'USD', type: 'CREDIT', active: true }
-];
+export { cleanMethodName };
 
 export default function CheckoutModal({
     isOpen,
@@ -126,7 +102,7 @@ export default function CheckoutModal({
     const effectivePromotions = posContext?.activePromotions || [];
     const effectiveCart = (Array.isArray(cartItems) && cartItems.length > 0) 
         ? cartItems 
-        : (posContext?.posState?.cart || []);
+        : (posContext?.cart || posContext?.posState?.cart || []);
     
     // Oferta por método de pago seleccionada para la venta
     const [activePaymentPromo, setActivePaymentPromo] = useState(null);
@@ -148,8 +124,10 @@ export default function CheckoutModal({
         return null;
     }, [paymentMethodDiscounts]);
 
+    const wasOpenRef = useRef(false);
     useEffect(() => {
-        if (isOpen) {
+        if (isOpen && !wasOpenRef.current) {
+            wasOpenRef.current = true;
             setLockedExchangeRate(exchangeRate || 1);
             fetchCustomers();
             fetchMethods();
@@ -167,13 +145,14 @@ export default function CheckoutModal({
             setCopiedField(null);
             setActivePaymentPromo(null);
             setFocusedExpressMethodId('');
-        } else {
+        } else if (!isOpen && wasOpenRef.current) {
+            wasOpenRef.current = false;
             setLockedExchangeRate(null);
             setQrModalMethod(null);
             setActivePaymentPromo(null);
             setFocusedExpressMethodId('');
         }
-    }, [isOpen, exchangeRate]);
+    }, [isOpen, exchangeRate, initialCustomerId]);
 
     const fetchCustomers = async () => {
         try {
@@ -423,14 +402,21 @@ export default function CheckoutModal({
         const isBinance = methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance') || (method?.currency || '').toUpperCase() === 'USDT';
 
         if (isBinance) {
+            const methodAppliesIgtf = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
+            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
             const existingUsdt = parseFloat(payments[methodId]?.amount) || 0;
-            const exactUsdt = precisionRound(remUsd + existingUsdt, 2);
+            let exactUsdt = precisionRound(existingUsdt + (remUsd * igtfFactor), methodAppliesIgtf ? 4 : 2);
+            if (methodAppliesIgtf && remUsd > 0 && Math.round(toInt(exactUsdt) / igtfFactor) < toInt((existingUsdt / igtfFactor) + remUsd)) {
+                exactUsdt = precisionRound(exactUsdt + 0.0001, 4);
+            }
             const targetBs = precisionRound(exactUsdt * activeExchangeRate, 2);
 
             setPayments(prev => ({
                 ...prev,
                 [methodId]: {
-                    amount: exactUsdt.toFixed(2),
+                    amount: methodAppliesIgtf
+                        ? exactUsdt.toFixed(4).replace(/(\.\d{2})00$/, '$1')
+                        : exactUsdt.toFixed(2),
                     currency: 'USDT',
                     cryptoRate: activeExchangeRate,
                     coveredBs: targetBs
@@ -442,16 +428,39 @@ export default function CheckoutModal({
         const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(methodId.toLowerCase()) || methodId.toLowerCase().includes('bs') || methodId.toLowerCase().includes('ves') || methodId.toLowerCase().includes('movil'));
         const currency = isSingle ? 'USD' : (method?.currency || method?.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
         const existingVal = parseFloat(payments[methodId]?.amount) || 0;
-        const amount = currency === 'USD' ? (remUsd + existingVal) : (remBs + existingVal);
 
+        if (currency === 'USD') {
+            const methodAppliesIgtf = igtfEnabled && methodId !== 'zelle' && methodId !== 'fiado';
+            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+            let exactAmount = precisionRound(existingVal + (remUsd * igtfFactor), 4);
+            if (methodAppliesIgtf && remUsd > 0) {
+                const targetTotalUsable = toInt((existingVal / igtfFactor) + remUsd);
+                if (Math.round(toInt(exactAmount) / igtfFactor) < targetTotalUsable) {
+                    exactAmount = precisionRound(exactAmount + 0.0001, 4);
+                }
+            }
+            setPayments(prev => ({
+                ...prev,
+                [methodId]: {
+                    amount: exactAmount.toFixed(4).replace(/(\.\d{2})00$/, '$1'),
+                    currency
+                }
+            }));
+            return;
+        }
+
+        const amountVes = precisionRound(remBs + existingVal, 2);
         setPayments(prev => ({
             ...prev,
             [methodId]: {
-                amount: currency === 'USD' ? precisionRound(amount, 4).toFixed(2) : precisionRound(amount, 2).toFixed(2),
+                amount: amountVes.toFixed(2),
                 currency
             }
         }));
-    }, [methods, isSingle, payments, getEffectiveBinanceRate]);
+    }, [methods, isSingle, payments, activeExchangeRate, igtfEnabled, igtfRate, businessSettings]);
+
+    // Bandera determinista para auto-enviar cuando React confirme stats.isInsufficient === false
+    const pendingAutoSubmitRef = useRef(false);
 
     // Ejecutar Pago Exprés en 1-Clic
     const executeExpressPayment = useCallback((typeKey, autoSubmit = true) => {
@@ -471,12 +480,29 @@ export default function CheckoutModal({
         const promoSavings = promo ? promo.savings : 0;
         setActivePaymentPromo(promo || null);
 
-        const netUsd = Math.max(0, totalToPayUsd - promoSavings);
+        // Calcular siempre sobre la base imponible neta del carrito (sin IGTF residual previo)
+        const netUsd = Math.max(0, precisionRound((Number(total) || 0) - promoSavings, 4));
         const netVes = precisionRound(netUsd * activeExchangeRate, 2);
 
         const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
         const currency = isSingle ? 'USD' : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-        const exactAmount = currency === 'USD' ? netUsd : netVes;
+
+        const methodAppliesIgtf = igtfEnabled && currency === 'USD' && targetMethod.id !== 'zelle' && targetMethod.id !== 'fiado';
+        const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+        let exactAmount = currency === 'USD'
+            ? precisionRound(netUsd * igtfFactor, 4)
+            : netVes;
+
+        if (methodAppliesIgtf && netUsd > 0) {
+            const principalInt = toInt(netUsd);
+            if (Math.round(toInt(exactAmount) / igtfFactor) < principalInt) {
+                exactAmount = precisionRound(exactAmount + 0.0001, 4);
+            }
+        }
+
+        if (autoSubmit) {
+            pendingAutoSubmitRef.current = true;
+        }
 
         // Limpiar otros métodos y dejar 100% en el seleccionado
         setPayments({
@@ -485,15 +511,7 @@ export default function CheckoutModal({
                 currency
             }
         });
-
-        if (autoSubmit) {
-            // Se envía de inmediato en el siguiente micro-tick de React
-            setTimeout(() => {
-                const form = document.getElementById('checkout-form');
-                if (form) form.requestSubmit();
-            }, 50);
-        }
-    }, [findMethodKey, isSingle, totalToPayUsd, totalToPayVes, activeExchangeRate, getMethodPromo]);
+    }, [findMethodKey, isSingle, total, activeExchangeRate, getMethodPromo, igtfEnabled, igtfRate]);
 
     const [updatingBinanceRate, setUpdatingBinanceRate] = useState(false);
 
@@ -809,10 +827,9 @@ export default function CheckoutModal({
     const handleKeyDown = useCallback((e) => {
         if (!isOpen) return;
 
-        // Teclas Rápidas de Cobro Directo 1-Clic
+        // Teclas Rápidas de Cobro Directo 1-Clic (F1 deshabilitado a petición del usuario)
         if (e.key === 'F1') {
             e.preventDefault();
-            executeExpressPayment('cash_usd', true);
             return;
         }
         if (e.key === 'F2') {
@@ -1249,8 +1266,14 @@ export default function CheckoutModal({
             }];
         }
 
-        const calculatedFinalTotal = matchedPromo 
-            ? Math.max(0, precisionRound(totalToPayUsd - additionalPromoDiscount, 2))
+        const netPrincipalUsd = matchedPromo
+            ? Math.max(0, precisionRound((Number(total) || 0) - additionalPromoDiscount, 2))
+            : (Number(total) || 0);
+        const finalIgtfUsd = (matchedPromo && currentIgtfUsd > 0 && (Number(total) || 0) > 0)
+            ? precisionRound(Math.min(currentIgtfUsd, netPrincipalUsd * ((Number(igtfRate) || 3) / 100)), 2)
+            : currentIgtfUsd;
+        const calculatedFinalTotal = matchedPromo
+            ? Math.max(0, precisionRound(netPrincipalUsd + finalIgtfUsd, 2))
             : totalToPayUsd;
 
         try {
@@ -1264,14 +1287,14 @@ export default function CheckoutModal({
                 total: calculatedFinalTotal,
                 subtotal: subtotal || total,
                 tax: taxAmount || 0,
-                igtfAmount: currentIgtfUsd,
+                igtfAmount: finalIgtfUsd,
                 discount: discountAmount || 0,
                 promoDiscount: precisionRound((basePromoDiscount || 0) + additionalPromoDiscount, 2),
                 appliedPromotions: [...(baseAppliedPromotions || []), ...additionalAppliedPromos],
                 items: finalItems,
                 taxInfo: {
                     ...taxInfo,
-                    igtfAmount: currentIgtfUsd
+                    igtfAmount: finalIgtfUsd
                 },
                 taxRate: ivaRate,
                 documentType: documentType,
@@ -1315,18 +1338,25 @@ export default function CheckoutModal({
             }, 1500);
         } catch (err) {
             setIsLocalSubmitting(false);
-            setTransactionId(null);
+            // Preservar transactionId ante fallos para garantizar idempotencia en reintentos del mismo cobro
             console.error('Checkout error:', err);
             const errMsg = err?.response?.data?.error || err?.message || 'Error al procesar el cobro.';
             toast.error(errMsg, { id: 'checkout-submit-error', duration: 4000 });
         }
     };
 
-    const DynamicIcon = ({ name, size = 20, className = "" }) => {
-        const icons = { Banknote, CreditCard, User, Send, DollarSign, X, Wallet, Fingerprint, QrCode, Coins };
-        const IconComp = icons[name] || (name === 'Fingerprint' ? Fingerprint : CreditCard);
-        return <IconComp size={size} className={className} />;
-    };
+    useEffect(() => {
+        if (!isOpen) {
+            pendingAutoSubmitRef.current = false;
+            return;
+        }
+        if (!pendingAutoSubmitRef.current || processing || isLocalSubmitting) return;
+        if (!isInsufficient && Object.keys(payments).length > 0) {
+            pendingAutoSubmitRef.current = false;
+            const form = document.getElementById('checkout-form');
+            if (form) form.requestSubmit();
+        }
+    }, [isOpen, payments, isInsufficient, processing, isLocalSubmitting]);
 
     const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, mode, { rate: activeExchangeRate, currencyMode });
 
@@ -1527,12 +1557,12 @@ export default function CheckoutModal({
                                     <span>DESPACHO DIRECTO 1-CLIC</span>
                                 </span>
                                 <span className="font-mono text-[9px] bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-slate-700">
-                                    [F1 - F6]
+                                    [F2 - F6]
                                 </span>
                             </div>
                             <div className="my-0.5">
                                 <p className="text-xs sm:text-[13px] font-semibold text-slate-200 leading-snug">
-                                    Toca una forma de pago abajo o presiona F1 - F6 para liquidar al instante.
+                                    Toca una forma de pago abajo o presiona F2 - F6 para liquidar al instante.
                                 </p>
                                 <p className="text-[10.5px] text-slate-400 mt-0.5">
                                     Para billetes mayores, toca la denominación en el calculador inferior.
@@ -1609,697 +1639,50 @@ export default function CheckoutModal({
                         </div>
                     </div>
 
-                    {/* VISTA 1: MODO EXPRESS 1-CLIC */}
+                    {/* VISTA 1: MODO EXPRESS 1-CLIC | VISTA 2: MODO PAGO MIXTO */}
                     {viewMode === 'express' ? (
-                        <form id="checkout-form" onSubmit={handleSubmit} className="flex flex-col gap-3">
-                            {/* Grilla de Cobro Directo 1-Clic */}
-                            {(() => {
-                                const promoCashUsd = getMethodPromo('cash_usd', 'Efectivo USD');
-                                const promoCashBs = getMethodPromo('cash_bs', 'Efectivo Bs');
-                                const promoDebit = getMethodPromo('debit', 'Punto de Venta');
-                                const promoMovil = getMethodPromo('pago_movil', 'Pago Móvil');
-                                const promoTransfer = getMethodPromo('transfer', 'Transfer / Zelle');
-                                const promoBiopago = getMethodPromo('biopago', 'Biopago');
-                                const promoCredit = getMethodPromo('fiado', 'Crédito / Fiado');
-
-                                const netCashUsd = promoCashUsd ? Math.max(0, totalToPayUsd - promoCashUsd.savings) : totalToPayUsd;
-                                const netCashBs = promoCashBs ? Math.max(0, totalToPayVes - precisionRound(promoCashBs.savings * activeExchangeRate, 2)) : totalToPayVes;
-                                const netDebit = promoDebit ? Math.max(0, totalToPayVes - precisionRound(promoDebit.savings * activeExchangeRate, 2)) : totalToPayVes;
-                                const netMovil = promoMovil ? Math.max(0, totalToPayVes - precisionRound(promoMovil.savings * activeExchangeRate, 2)) : totalToPayVes;
-                                const netBiopago = promoBiopago ? Math.max(0, totalToPayVes - precisionRound(promoBiopago.savings * activeExchangeRate, 2)) : totalToPayVes;
-                                const netTransfer = promoTransfer ? Math.max(0, totalToPayUsd - promoTransfer.savings) : totalToPayUsd;
-                                const netCredit = promoCredit ? Math.max(0, totalToPayUsd - promoCredit.savings) : totalToPayUsd;
-
-                                return (
-                                <div className={`grid grid-cols-2 sm:grid-cols-3 ${isUsdOnly ? 'lg:grid-cols-4' : 'lg:grid-cols-6'} gap-2.5 sm:gap-3`}>
-                                    {/* F1: EFECTIVO $ */}
-                                    <button
-                                        type="button"
-                                        onMouseEnter={() => setFocusedExpressMethodId('cash_usd')}
-                                        onFocus={() => setFocusedExpressMethodId('cash_usd')}
-                                        onClick={() => executeExpressPayment('cash_usd', true)}
-                                        className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoCashUsd ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer`}
-                                    >
-                                        <div className="flex justify-between items-start">
-                                            <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                <Banknote size={17} strokeWidth={2.2} />
-                                            </div>
-                                            <div className="flex items-center gap-1">
-                                                {promoCashUsd && (
-                                                    <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                        -{promoCashUsd.discountPercentage}%
-                                                    </span>
-                                                )}
-                                                <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                    [F1]
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div className="mt-1">
-                                            <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">{isUsdOnly ? 'EFECTIVO' : 'EFECTIVO $'}</h4>
-                                            <div className="flex items-baseline gap-1.5">
-                                                <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoCashUsd ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                    {formatUSD(netCashUsd)}
-                                                </p>
-                                                {promoCashUsd && (
-                                                    <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                        {formatUSD(totalToPayUsd)}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                            {promoCashUsd ? `Ahorras $${promoCashUsd.savings.toFixed(2)}` : 'Cobro Directo 1-Clic'}
-                                        </div>
-                                    </button>
-
-                                    {/* F2: EFECTIVO BS */}
-                                    {isUsdOnly ? (
-                                        <button
-                                            type="button"
-                                            onMouseEnter={() => setFocusedExpressMethodId('debit')}
-                                            onFocus={() => setFocusedExpressMethodId('debit')}
-                                            onClick={() => executeExpressPayment('debit', true)}
-                                            className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoDebit ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer`}
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                    <CreditCard size={17} strokeWidth={2.2} />
-                                                </div>
-                                                <div className="flex items-center gap-1">
-                                                    {promoDebit && (
-                                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                            -{promoDebit.discountPercentage}%
-                                                        </span>
-                                                    )}
-                                                    <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                        [F2]
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="mt-1">
-                                                <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">TARJETA / DÉBITO</h4>
-                                                <div className="flex items-baseline gap-1.5">
-                                                    <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoDebit ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                        {formatUSD(netDebit)}
-                                                    </p>
-                                                    {promoDebit && (
-                                                        <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                            {formatUSD(totalToPayUsd)}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                                {promoDebit ? `Ahorras $${promoDebit.savings.toFixed(2)}` : 'Cobro Directo 1-Clic'}
-                                            </div>
-                                        </button>
-                                    ) : (
-                                        <button
-                                            type="button"
-                                            onMouseEnter={() => setFocusedExpressMethodId('cash_bs')}
-                                            onFocus={() => setFocusedExpressMethodId('cash_bs')}
-                                            onClick={() => executeExpressPayment('cash_bs', true)}
-                                            className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoCashBs ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer`}
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                    <Wallet size={17} strokeWidth={2.2} />
-                                                </div>
-                                                <div className="flex items-center gap-1">
-                                                    {promoCashBs && (
-                                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                            -{promoCashBs.discountPercentage}%
-                                                        </span>
-                                                    )}
-                                                    <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                        [F2]
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="mt-1">
-                                                <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">EFECTIVO BS.</h4>
-                                                <div className="flex items-baseline gap-1.5">
-                                                    <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoCashBs ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                        {formatBs(netCashBs)}
-                                                    </p>
-                                                    {promoCashBs && (
-                                                        <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                            {formatBs(totalToPayVes)}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                                {promoCashBs ? `Ahorras $${promoCashBs.savings.toFixed(2)}` : 'Cobro Directo 1-Clic'}
-                                            </div>
-                                        </button>
-                                    )}
-
-                                    {/* F3: PUNTO DE VENTA */}
-                                    {isUsdOnly ? (
-                                        <button
-                                            type="button"
-                                            onMouseEnter={() => setFocusedExpressMethodId('transfer')}
-                                            onFocus={() => setFocusedExpressMethodId('transfer')}
-                                            onClick={() => executeExpressPayment('transfer', true)}
-                                            className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoTransfer ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer`}
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                    <Send size={17} strokeWidth={2.2} />
-                                                </div>
-                                                <div className="flex items-center gap-1">
-                                                    {promoTransfer && (
-                                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                            -{promoTransfer.discountPercentage}%
-                                                        </span>
-                                                    )}
-                                                    <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                        [F3]
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="mt-1">
-                                                <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">TRANSFER / ZELLE</h4>
-                                                <div className="flex items-baseline gap-1.5">
-                                                    <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoTransfer ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                        {formatUSD(netTransfer)}
-                                                    </p>
-                                                    {promoTransfer && (
-                                                        <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                            {formatUSD(totalToPayUsd)}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                                {promoTransfer ? `Ahorras $${promoTransfer.savings.toFixed(2)}` : 'Cobro Directo 1-Clic'}
-                                            </div>
-                                        </button>
-                                    ) : (
-                                        <button
-                                            type="button"
-                                            onMouseEnter={() => setFocusedExpressMethodId('debit')}
-                                            onFocus={() => setFocusedExpressMethodId('debit')}
-                                            onClick={() => executeExpressPayment('debit', true)}
-                                            className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoDebit ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer`}
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                    <CreditCard size={17} strokeWidth={2.2} />
-                                                </div>
-                                                <div className="flex items-center gap-1">
-                                                    {promoDebit && (
-                                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                            -{promoDebit.discountPercentage}%
-                                                        </span>
-                                                    )}
-                                                    <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                        [F3]
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="mt-1">
-                                                <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">PUNTO DE VENTA</h4>
-                                                <div className="flex items-baseline gap-1.5">
-                                                    <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoDebit ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                        {formatBs(netDebit)}
-                                                    </p>
-                                                    {promoDebit && (
-                                                        <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                            {formatBs(totalToPayVes)}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                                {promoDebit ? `Ahorras $${promoDebit.savings.toFixed(2)}` : 'Cobro Directo 1-Clic'}
-                                            </div>
-                                        </button>
-                                    )}
-
-                                    {/* F4: PAGO MÓVIL */}
-                                    {isUsdOnly ? (
-                                        <button
-                                            type="button"
-                                            onMouseEnter={() => setFocusedExpressMethodId('credit')}
-                                            onFocus={() => setFocusedExpressMethodId('credit')}
-                                            onClick={() => executeExpressPayment('credit', true)}
-                                            className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoCredit ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer`}
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                    <User size={17} strokeWidth={2.2} />
-                                                </div>
-                                                <div className="flex items-center gap-1">
-                                                    {promoCredit && (
-                                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                            -{promoCredit.discountPercentage}%
-                                                        </span>
-                                                    )}
-                                                    <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                        [F4]
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="mt-1">
-                                                <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">CRÉDITO / FIADO</h4>
-                                                <div className="flex items-baseline gap-1.5">
-                                                    <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoCredit ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                        {formatUSD(netCredit)}
-                                                    </p>
-                                                    {promoCredit && (
-                                                        <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                            {formatUSD(totalToPayUsd)}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                                Cobro Directo 1-Clic
-                                            </div>
-                                        </button>
-                                    ) : (
-                                        <div
-                                            role="button"
-                                            tabIndex={0}
-                                            onMouseEnter={() => setFocusedExpressMethodId('pago_movil')}
-                                            onFocus={() => setFocusedExpressMethodId('pago_movil')}
-                                            onClick={() => executeExpressPayment('movil', true)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter' || e.key === ' ') {
-                                                    e.preventDefault();
-                                                    executeExpressPayment('movil', true);
-                                                }
-                                            }}
-                                            className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoMovil ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer select-none`}
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                    <Send size={17} strokeWidth={2.2} />
-                                                </div>
-                                                <div className="flex items-center gap-1.5">
-                                                    {promoMovil && (
-                                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                            -{promoMovil.discountPercentage}%
-                                                        </span>
-                                                    )}
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            openPagoMovilQr(findMethodKey('movil') || { id: 'pago_movil', name: 'Pago Móvil', currency: 'VES' });
-                                                        }}
-                                                        className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded text-[9.5px] font-bold uppercase tracking-wide flex items-center gap-1 border border-slate-200 dark:border-slate-700 cursor-pointer z-10 shadow-2xs"
-                                                        title="Ver Código QR de Pago Móvil"
-                                                    >
-                                                        <QrCode size={11} />
-                                                        <span>QR</span>
-                                                    </button>
-                                                    <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                        [F4]
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="mt-1">
-                                                <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">PAGO MÓVIL</h4>
-                                                <div className="flex items-baseline gap-1.5">
-                                                    <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoMovil ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                        {formatBs(netMovil)}
-                                                    </p>
-                                                    {promoMovil && (
-                                                        <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                            {formatBs(totalToPayVes)}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                                {promoMovil ? `Ahorras $${promoMovil.savings.toFixed(2)}` : 'Cobro Directo 1-Clic'}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* F5: BIOPAGO */}
-                                    {!isUsdOnly && (
-                                        <button
-                                            type="button"
-                                            onMouseEnter={() => setFocusedExpressMethodId('biopago')}
-                                            onFocus={() => setFocusedExpressMethodId('biopago')}
-                                            onClick={() => executeExpressPayment('biopago', true)}
-                                            className={`group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border ${promoBiopago ? 'border-amber-400 dark:border-amber-500/60 ring-1 ring-amber-500/20' : 'border-slate-200 dark:border-slate-700/80'} hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer`}
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                    <Fingerprint size={17} strokeWidth={2.2} />
-                                                </div>
-                                                <div className="flex items-center gap-1">
-                                                    {promoBiopago && (
-                                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9.5px] font-bold rounded border border-amber-500/30 tabular-nums">
-                                                            -{promoBiopago.discountPercentage}%
-                                                        </span>
-                                                    )}
-                                                    <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                        [F5]
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="mt-1">
-                                                <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">BIOPAGO</h4>
-                                                <div className="flex items-baseline gap-1.5">
-                                                    <p className={`text-sm sm:text-base font-black tabular-nums tracking-tight ${promoBiopago ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-white'}`}>
-                                                        {formatBs(netBiopago)}
-                                                    </p>
-                                                    {promoBiopago && (
-                                                        <span className="text-[10px] line-through text-slate-400 font-medium tabular-nums">
-                                                            {formatBs(totalToPayVes)}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="text-[9.5px] font-semibold text-slate-400 dark:text-slate-500">
-                                                {promoBiopago ? `Ahorras $${promoBiopago.savings.toFixed(2)}` : 'Cobro Directo 1-Clic'}
-                                            </div>
-                                        </button>
-                                    )}
-
-                                    {/* F6: BINANCE PAY (USDT) */}
-                                    {(() => {
-                                        const binMethod = findMethodKey('binance') || { id: 'binance_usdt', name: 'Binance Pay', currency: 'USDT' };
-                                        const amountUsdt = precisionRound(totalToPayUsd, 2);
-                                        return (
-                                            <div
-                                                role="button"
-                                                tabIndex={0}
-                                                onMouseEnter={() => setFocusedExpressMethodId(binMethod.id || 'binance_usdt')}
-                                                onFocus={() => setFocusedExpressMethodId(binMethod.id || 'binance_usdt')}
-                                                onClick={() => openBinanceQr(binMethod)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter' || e.key === ' ') {
-                                                        e.preventDefault();
-                                                        openBinanceQr(binMethod);
-                                                    }
-                                                }}
-                                                className="group relative bg-white dark:bg-slate-850 hover:bg-slate-50/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 hover:border-slate-400 dark:hover:border-slate-500 rounded-xl p-3 text-left transition-all shadow-2xs hover:shadow-xs flex flex-col justify-between min-h-[84px] sm:min-h-[88px] cursor-pointer select-none"
-                                            >
-                                                <div className="flex justify-between items-start">
-                                                    <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 group-hover:bg-slate-900 group-hover:text-white dark:group-hover:bg-white dark:group-hover:text-slate-900 flex items-center justify-center border border-slate-200 dark:border-slate-700 transition-colors">
-                                                        <Wallet size={17} strokeWidth={2.2} />
-                                                    </div>
-                                                    <div className="flex items-center gap-1.5">
-                                                        <button
-                                                            type="button"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                openBinanceQr(binMethod);
-                                                            }}
-                                                            className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded text-[9.5px] font-bold uppercase tracking-wide flex items-center gap-1 border border-slate-200 dark:border-slate-700 cursor-pointer z-10 shadow-2xs"
-                                                            title="Ver Código QR de Binance Pay"
-                                                        >
-                                                            <QrCode size={11} />
-                                                            <span>QR</span>
-                                                        </button>
-                                                        <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[10px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
-                                                            [F6]
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                                <div className="mt-1">
-                                                    <h4 className="text-xs font-bold uppercase tracking-tight text-slate-700 dark:text-slate-300">BINANCE PAY</h4>
-                                                    <p className="text-sm sm:text-base font-black tabular-nums tracking-tight text-slate-900 dark:text-white">
-                                                        {amountUsdt.toFixed(2)} USDT
-                                                    </p>
-                                                </div>
-                                                <div className="flex items-center justify-between text-[9.5px] font-medium text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800">
-                                                    <span>Paridad: <strong className="font-mono text-slate-700 dark:text-slate-300">1 USDT = $1.00</strong></span>
-                                                    <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[9px] font-bold border border-slate-200 dark:border-slate-700">
-                                                        1:1 USD
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        );
-                                    })()}
-                                </div>
-                                );
-                            })()}
-
-                            {/* Smart Tender Pad: Selección Rápida de Billetes en USD con Cálculo de Vuelto en Vivo */}
-                            <div className="bg-white dark:bg-slate-900 p-2.5 sm:p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs">
-                                <div className="flex items-center justify-between mb-2">
-                                    <div className="flex items-center gap-2">
-                                        <Banknote size={15} className="text-slate-700 dark:text-slate-300" />
-                                        <span className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
-                                            Billetes Frecuentes · Vuelto Rápido USD
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        {parseFloat(payments[findMethodKey('cash_usd')?.id]?.amount) > 0 && (
-                                            <button
-                                                type="button"
-                                                onClick={handleResetPayment}
-                                                className="text-[10px] font-bold text-slate-400 hover:text-rose-500 transition-colors uppercase tracking-wider flex items-center gap-1 cursor-pointer"
-                                                title="Limpiar billete seleccionado"
-                                            >
-                                                <RefreshCcw size={11} />
-                                                <span>Restablecer</span>
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-2.5">
-                                    {/* Botón Exacto */}
-                                    <button
-                                        type="button"
-                                        onClick={() => handleQuickAmount(totalToPayUsd)}
-                                        className={`p-2.5 sm:p-3 rounded-xl border transition-all text-left shadow-2xs cursor-pointer flex flex-col justify-between min-h-[56px] sm:min-h-[60px] ${
-                                            Math.abs((parseFloat(payments[findMethodKey('cash_usd')?.id]?.amount) || 0) - totalToPayUsd) < 0.005
-                                                ? 'bg-emerald-600 text-white border-emerald-600 ring-2 ring-emerald-400/50 shadow-sm'
-                                                : 'bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100/70 border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300'
-                                        }`}
-                                    >
-                                        <div className="flex items-center justify-between gap-1">
-                                            <span className="text-[10px] font-black uppercase tracking-wider opacity-85">Monto</span>
-                                            <span className="text-[9px] font-mono font-black px-1.5 py-0.2 rounded bg-black/10 dark:bg-white/10 uppercase">Exacto</span>
-                                        </div>
-                                        <div className="mt-1">
-                                            <span className="text-sm sm:text-base font-black tracking-tight tabular-nums block">
-                                                {formatUSD(totalToPayUsd)}
-                                            </span>
-                                            <span className="text-[9.5px] opacity-80 truncate block">Sin cambio</span>
-                                        </div>
-                                    </button>
-
-                                    {/* Billetes Estándar */}
-                                    {[1, 5, 10, 20, 50, 100].map(amt => {
-                                        const currentSelected = parseFloat(payments[findMethodKey('cash_usd')?.id]?.amount) === amt;
-                                        const isExact = Math.abs(amt - totalToPayUsd) < 0.005;
-                                        const isOver = amt > totalToPayUsd;
-                                        const isUnder = amt < totalToPayUsd && !isExact;
-                                        const changeDiff = isOver ? precisionRound(amt - totalToPayUsd, 2) : 0;
-                                        const underDiff = isUnder ? precisionRound(totalToPayUsd - amt, 2) : 0;
-
-                                        return (
-                                            <button
-                                                key={amt}
-                                                type="button"
-                                                onClick={() => handleQuickAmount(amt)}
-                                                className={`p-2.5 sm:p-3 rounded-xl border transition-all text-left shadow-2xs cursor-pointer flex flex-col justify-between min-h-[56px] sm:min-h-[60px] ${
-                                                    currentSelected
-                                                        ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 dark:border-white ring-2 ring-emerald-500 shadow-sm'
-                                                        : isOver
-                                                            ? 'bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 border-slate-200 dark:border-slate-700 hover:border-emerald-400'
-                                                            : 'bg-slate-50/80 dark:bg-slate-850 hover:bg-slate-100 border-slate-200/60 dark:border-slate-750 text-slate-500 opacity-75'
-                                                }`}
-                                            >
-                                                <div className="flex items-baseline justify-between gap-1.5 w-full">
-                                                    <span className="text-sm sm:text-base font-black tracking-tight">${amt}</span>
-                                                    {!isUsdOnly && (
-                                                        <span className="text-[9.5px] font-mono text-slate-400 dark:text-slate-400 tabular-nums shrink-0">
-                                                            {formatBs(precisionRound(amt * activeExchangeRate, 0))}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <div className="mt-1">
-                                                    {isOver ? (
-                                                        <span className={`text-[10px] sm:text-[10.5px] font-bold tabular-nums block ${currentSelected ? 'text-emerald-300 dark:text-emerald-700' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                                                            Vuelto: ${changeDiff.toFixed(2)}
-                                                        </span>
-                                                    ) : isExact ? (
-                                                        <span className="text-[10px] sm:text-[10.5px] font-bold text-sky-500 block">Monto Exacto</span>
-                                                    ) : (
-                                                        <span className="text-[9.5px] text-slate-400 tabular-nums block">Falta ${underDiff.toFixed(2)}</span>
-                                                    )}
-                                                </div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </form>
+                        <CheckoutExpressView
+                            handleSubmit={handleSubmit}
+                            getMethodPromo={getMethodPromo}
+                            total={total}
+                            activeExchangeRate={activeExchangeRate}
+                            findMethodKey={findMethodKey}
+                            igtfEnabled={igtfEnabled}
+                            isSingle={isSingle}
+                            igtfRate={igtfRate}
+                            isUsdOnly={isUsdOnly}
+                            setFocusedExpressMethodId={setFocusedExpressMethodId}
+                            executeExpressPayment={executeExpressPayment}
+                            totalToPayUsd={totalToPayUsd}
+                            totalToPayVes={totalToPayVes}
+                            openPagoMovilQr={openPagoMovilQr}
+                            openBinanceQr={openBinanceQr}
+                            payments={payments}
+                            handleResetPayment={handleResetPayment}
+                            handleQuickAmount={handleQuickAmount}
+                        />
                     ) : (
-                        /* VISTA 2: MODO PAGO MIXTO / MULTI-MÉTODO */
-                        <form id="checkout-form" onSubmit={handleSubmit} className={`grid grid-cols-1 md:grid-cols-2 ${isMaximized ? 'xl:grid-cols-3' : ''} gap-2.5 sm:gap-3`}>
-                            {Array.isArray(methods) && methods.filter(method => {
-                                if (isUsdOnly) {
-                                    const idLower = (method.id || '').toLowerCase();
-                                    const nameLower = (method.name || '').toLowerCase();
-                                    const curr = (method.currency || method.defaultCurrency || '').toUpperCase();
-                                    if (curr === 'VES' || curr === 'BS') return false;
-                                    if (['cash_bs', 'efectivo_bs', 'pago_movil', 'biopago'].includes(idLower)) return false;
-                                    if (nameLower.includes(' bs') || nameLower.includes('ves') || nameLower.includes('pago móvil') || nameLower.includes('pago movil') || nameLower.includes('biopago')) return false;
-                                }
-                                return true;
-                            }).map((method, index) => {
-                                const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(method.id.toLowerCase()) || method.id.toLowerCase().includes('bs') || method.id.toLowerCase().includes('ves') || method.id.toLowerCase().includes('movil'));
-                                const defaultCurrency = isSingle ? 'USD' : (method.currency || method.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-                                const payment = payments[method.id] || { amount: '', currency: defaultCurrency };
-                                const hasAmount = parseFloat(payment.amount) > 0;
-                                const cleanName = cleanMethodName(method.name);
-                                const methodPromo = getMethodPromo(method.id, cleanName);
-                                const isBinanceCard = payment.currency === 'USDT' || (method.id || '').toLowerCase().includes('binance') || (method.name || '').toLowerCase().includes('binance');
-                                const cardBinRate = isBinanceCard ? getEffectiveBinanceRate(method.id, payment.cryptoRate) : 0;
-                                const cardEquivBs = isBinanceCard && hasAmount
-                                    ? (payment.coveredBs && Math.abs(parseFloat(payment.amount) - precisionRound(Number(payment.coveredBs) / cardBinRate, 2)) < 0.001
-                                        ? Number(payment.coveredBs)
-                                        : precisionRound(parseFloat(payment.amount) * cardBinRate, 2))
-                                    : 0;
-
-                                return (
-                                    <div
-                                        key={method.id}
-                                        className={`group relative bg-white dark:bg-slate-800 rounded-xl border transition-all p-3 sm:p-3.5 shadow-2xs ${index === selectedIndex
-                                                ? 'border-sky-500 ring-2 ring-sky-500/30 z-10'
-                                                : methodPromo
-                                                    ? 'border-amber-400/80 dark:border-amber-500/50 hover:border-amber-500'
-                                                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                                            } ${hasAmount ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500/70 dark:border-emerald-600/70' : ''}`}
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div className="flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0">
-                                                <div className={`shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center transition-colors ${hasAmount ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-600/60'}`}>
-                                                    <DynamicIcon name={method.icon} size={18} />
-                                                </div>
-                                                <div className="flex flex-col min-w-0">
-                                                    <h3 className="font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-100 uppercase tracking-tight truncate" title={cleanName}>
-                                                        {cleanName}
-                                                    </h3>
-                                                    <div className="flex items-center flex-wrap gap-1.5 mt-0.5">
-                                                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded uppercase tracking-wider ${payment.currency === 'VES' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200/70 dark:border-emerald-800/60' : isBinanceCard ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200/70 dark:border-amber-800/60' : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 border border-sky-200/70 dark:border-sky-800/60'}`}>
-                                                            {payment.currency}
-                                                        </span>
-                                                        {isBinanceCard && (
-                                                            <span className="text-[9.5px] font-mono font-semibold text-slate-500 dark:text-slate-400">
-                                                                {hasAmount ? `≈ ${formatBs(cardEquivBs)} (1:1 USD)` : 'Paridad 1:1 USD'}
-                                                            </span>
-                                                        )}
-                                                        {methodPromo && (
-                                                            <span className="text-[9.5px] font-bold px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30 tabular-nums">
-                                                                -{methodPromo.discountPercentage}% (-${methodPromo.savings.toFixed(2)})
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-center gap-1.5 shrink-0">
-                                                <div className="relative">
-                                                    <input
-                                                        id={`payment-amount-${method.id}`}
-                                                        type="text"
-                                                        inputMode="decimal"
-                                                        step="any"
-                                                        value={payment.amount}
-                                                        onChange={(e) => handleAmountChange(method.id, e.target.value, payment.currency)}
-                                                        onFocus={() => setSelectedIndex(index)}
-                                                        placeholder="0.00"
-                                                        className="w-28 sm:w-32 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-2 text-right font-mono font-bold text-slate-900 dark:text-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition-all text-sm shadow-2xs"
-                                                    />
-                                                </div>
-
-                                                <button
-                                                    type="button"
-                                                    id={`flash-fill-${method.id}`}
-                                                    onClick={() => handleFlashFill(method.id, method.type, remainingBs, remainingUsd)}
-                                                    disabled={!isInsufficient}
-                                                    className={`min-w-[36px] min-h-[36px] p-2 rounded-lg border transition-all flex items-center justify-center cursor-pointer ${isInsufficient
-                                                        ? 'border-amber-200 dark:border-amber-800/60 text-amber-600 dark:text-amber-400 bg-amber-50/60 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-900/40 active:scale-95'
-                                                        : 'border-slate-200/50 dark:border-slate-800 text-slate-300 dark:text-slate-600 bg-slate-50 dark:bg-slate-850 cursor-not-allowed'}`}
-                                                    title="Auto-liquidar restante"
-                                                    aria-label="Liquidar Restante"
-                                                >
-                                                    <Zap size={16} fill="currentColor" />
-                                                </button>
-
-                                                {/* Botón QR en Fila Mixta si es Binance Pay */}
-                                                {isBinanceCard && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => openBinanceQr(method)}
-                                                        className="min-w-[36px] min-h-[36px] p-2 rounded-lg text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900 border border-amber-200 dark:border-amber-800 transition-all flex items-center justify-center cursor-pointer active:scale-95 shadow-2xs"
-                                                        title="Mostrar Código QR de Binance Pay"
-                                                        aria-label="Ver Código QR Binance"
-                                                    >
-                                                        <QrCode size={16} />
-                                                    </button>
-                                                )}
-
-                                                {/* Botón QR en Fila Mixta si es método VES o Pago Móvil */}
-                                                {!isUsdOnly && !isBinanceCard && (
-                                                    payment.currency === 'VES' || 
-                                                    (method.id || '').toLowerCase().includes('movil') || 
-                                                    (method.name || '').toLowerCase().includes('movil') ||
-                                                    method.pagoMovilPhone || 
-                                                    method.pagoMovilId
-                                                ) && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => openPagoMovilQr(method)}
-                                                        className="min-w-[36px] min-h-[36px] p-2 rounded-lg text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 border border-slate-200 dark:border-slate-600 transition-all flex items-center justify-center cursor-pointer active:scale-95 shadow-2xs"
-                                                        title="Mostrar Código QR y Datos Bancarios"
-                                                        aria-label="Ver Código QR"
-                                                    >
-                                                        <QrCode size={16} />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        {(() => {
-                                            const mIdLower = (method.id || '').toLowerCase();
-                                            const mNameLower = (method.name || '').toLowerCase();
-                                            const needsRef = Boolean(
-                                                method.requiresReference ||
-                                                isBinanceCard ||
-                                                mIdLower.includes('movil') ||
-                                                mIdLower.includes('zelle') ||
-                                                mIdLower.includes('transfer') ||
-                                                mNameLower.includes('móvil') ||
-                                                mNameLower.includes('movil') ||
-                                                mNameLower.includes('zelle') ||
-                                                mNameLower.includes('transfer')
-                                            );
-                                            const currentRef = (paymentReferences[method.id] || payment.reference || '').trim();
-                                            if (!needsRef || !hasAmount) return null;
-                                            return (
-                                                <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/60">
-                                                    <input
-                                                        id={`payment-reference-${method.id}`}
-                                                        type="text"
-                                                        required
-                                                        value={paymentReferences[method.id] ?? payment.reference ?? ''}
-                                                        onChange={(e) => setPaymentReferences(prev => ({ ...prev, [method.id]: e.target.value }))}
-                                                        placeholder={isBinanceCard ? "Nº Order ID / Referencia Binance (Obligatorio) *" : "Nº de Referencia / Comprobante (Obligatorio) *"}
-                                                        className={`w-full bg-slate-50 dark:bg-slate-900 border ${!currentRef ? 'border-amber-400 dark:border-amber-500/70' : 'border-emerald-400 dark:border-emerald-500/70'} rounded-lg px-3 py-1.5 text-xs font-mono text-slate-800 dark:text-slate-200 outline-none focus:border-sky-500 transition-colors`}
-                                                    />
-                                                </div>
-                                            );
-                                        })()}
-                                    </div>
-                                );
-                            })}
-                        </form>
+                        <CheckoutSplitView
+                            handleSubmit={handleSubmit}
+                            isMaximized={isMaximized}
+                            methods={methods}
+                            isUsdOnly={isUsdOnly}
+                            isSingle={isSingle}
+                            payments={payments}
+                            getMethodPromo={getMethodPromo}
+                            getEffectiveBinanceRate={getEffectiveBinanceRate}
+                            selectedIndex={selectedIndex}
+                            setSelectedIndex={setSelectedIndex}
+                            handleAmountChange={handleAmountChange}
+                            handleFlashFill={handleFlashFill}
+                            remainingBs={remainingBs}
+                            remainingUsd={remainingUsd}
+                            isInsufficient={isInsufficient}
+                            openBinanceQr={openBinanceQr}
+                            openPagoMovilQr={openPagoMovilQr}
+                            paymentReferences={paymentReferences}
+                            setPaymentReferences={setPaymentReferences}
+                        />
                     )}
                 </div>
             </div>
@@ -2346,309 +1729,20 @@ export default function CheckoutModal({
                 </button>
             </div>
 
-            {/* Overlay de Venta Exitosa (Sobrio y sin encandilamiento ocular) */}
-            <AnimatePresence>
-                {showSuccess && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-slate-900/85 dark:bg-slate-950/90 backdrop-blur-sm"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            transition={{ duration: 0.2, ease: "easeOut" }}
-                            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-8 py-6 rounded-2xl shadow-xl flex flex-col items-center gap-3"
-                        >
-                            <div className="w-14 h-14 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 flex items-center justify-center">
-                                <CheckCircle2 size={32} className="text-emerald-600 dark:text-emerald-400" strokeWidth={2.5} />
-                            </div>
-                            <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-                                Venta Procesada
-                            </h2>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            <CheckoutSuccessOverlay showSuccess={showSuccess} />
 
-            {/* Modal Emergente de Pago Móvil & Código QR en Caja */}
-            <AnimatePresence>
-                {qrModalMethod && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="absolute inset-0 z-[90] flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md"
-                        onClick={() => setQrModalMethod(null)}
-                    >
-                        <motion.div
-                            initial={{ scale: 0.95, y: 10 }}
-                            animate={{ scale: 1, y: 0 }}
-                            exit={{ scale: 0.95, y: 10 }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-6 shadow-2xl relative flex flex-col gap-4 text-slate-900 dark:text-white font-sans max-h-[92vh] overflow-y-auto custom-scrollbar"
-                        >
-                            {/* Cabecera */}
-                            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-9 h-9 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 flex items-center justify-center shadow-xs">
-                                        <QrCode size={19} />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-sm font-bold uppercase tracking-tight text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                                            {qrModalMethod.isBinance ? 'Binance Pay & Código QR (USDT)' : 'Pago Móvil & Código QR'}
-                                        </h3>
-                                        <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold">
-                                            {qrModalMethod.name || 'Pago Móvil'}
-                                        </p>
-                                    </div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setQrModalMethod(null)}
-                                    className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                                >
-                                    <X size={18} />
-                                </button>
-                            </div>
-
-                            {/* Código QR Central */}
-                            <div className="flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-800/50 p-4 rounded-lg border border-slate-200 dark:border-slate-800">
-                                <div className="relative p-2.5 bg-white rounded-lg border border-slate-200 shadow-sm">
-                                    {generatingQrModal ? (
-                                        <div className="w-44 h-44 flex flex-col items-center justify-center text-slate-800 gap-2">
-                                            <Loader2 size={28} className="animate-spin text-sky-600" />
-                                            <span className="text-[10px] font-bold tracking-wider text-slate-500">GENERANDO QR...</span>
-                                        </div>
-                                    ) : qrModalUrl ? (
-                                        <img 
-                                            src={qrModalUrl} 
-                                            alt="Código QR Pago Móvil" 
-                                            className="w-44 h-44 object-contain rounded-md"
-                                        />
-                                    ) : (
-                                        <div className="w-44 h-44 flex flex-col items-center justify-center text-slate-400 gap-2 text-center p-2">
-                                            <Smartphone size={32} className="text-slate-300" />
-                                            <span className="text-xs font-semibold text-slate-600">Completa teléfono y RIF para generar el QR</span>
-                                        </div>
-                                    )}
-                                </div>
-                                <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-2 text-center">
-                                    Muestra la pantalla al cliente para que escanee con su app bancaria
-                                </p>
-                            </div>
-
-                            {/* Datos de Cobro Binance Pay */}
-                            {qrModalMethod.isBinance ? (
-                                <div className="space-y-2">
-                                    {qrModalMethod.binancePayId && (
-                                        <div className="flex items-center justify-between p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60">
-                                            <span className="text-xs text-amber-900 dark:text-amber-300 font-semibold">Binance Pay ID:</span>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs font-mono font-bold text-slate-900 dark:text-white">
-                                                    {qrModalMethod.binancePayId}
-                                                </span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleCopyText(qrModalMethod.binancePayId, 'payId')}
-                                                    className="p-1 hover:bg-amber-100 dark:hover:bg-amber-900 rounded text-amber-700 dark:text-amber-400 transition-colors cursor-pointer"
-                                                    title="Copiar Pay ID"
-                                                >
-                                                    {copiedField === 'payId' ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {qrModalMethod.binanceEmail && (
-                                        <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                                            <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">Correo Binance:</span>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs font-mono font-bold text-slate-800 dark:text-slate-100">
-                                                    {qrModalMethod.binanceEmail}
-                                                </span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleCopyText(qrModalMethod.binanceEmail, 'email')}
-                                                    className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 transition-colors cursor-pointer"
-                                                    title="Copiar correo"
-                                                >
-                                                    {copiedField === 'email' ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Paridad 1:1 USD */}
-                                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60">
-                                        <span className="text-xs text-amber-900 dark:text-amber-300 font-semibold">Paridad Cambiaria:</span>
-                                        <span className="text-xs font-mono font-bold text-amber-800 dark:text-amber-200">
-                                            1 USDT = $1.00 USD
-                                        </span>
-                                    </div>
-
-                                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                                        <div>
-                                            <span className="text-xs text-emerald-800 dark:text-emerald-300 font-semibold block">Total a Transferir:</span>
-                                            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-                                                Equivalente: {formatBs(qrModalMethod.amountBs || 0)} (${Number(qrModalMethod.amountUsdt || 0).toFixed(2)} USD)
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-base font-mono font-black text-emerald-700 dark:text-emerald-400">
-                                                {Number(qrModalMethod.amountUsdt || 0).toFixed(2)} USDT
-                                            </span>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleCopyText(Number(qrModalMethod.amountUsdt || 0).toFixed(2), 'amount')}
-                                                className="p-1 hover:bg-emerald-100 dark:hover:bg-emerald-900 rounded text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer"
-                                                title="Copiar monto en USDT"
-                                            >
-                                                {copiedField === 'amount' ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    {/* Datos Bancarios con botones de Copiar */}
-                                {qrModalMethod.pagoMovilBank && (
-                                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                                        <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">Banco:</span>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate max-w-[220px]">
-                                                {getBankNameByCode(qrModalMethod.pagoMovilBank)}
-                                            </span>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleCopyText(qrModalMethod.pagoMovilBank, 'bank')}
-                                                className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
-                                                title="Copiar código de banco"
-                                            >
-                                                {copiedField === 'bank' ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {qrModalMethod.pagoMovilPhone && (
-                                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                                        <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">Teléfono:</span>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs font-mono font-bold text-slate-800 dark:text-slate-100">
-                                                {formatPhoneDisplay(qrModalMethod.pagoMovilPhone)}
-                                            </span>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleCopyText(qrModalMethod.pagoMovilPhone, 'phone')}
-                                                className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
-                                                title="Copiar teléfono"
-                                            >
-                                                {copiedField === 'phone' ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {qrModalMethod.pagoMovilId && (
-                                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                                        <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">C.I. / RIF:</span>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-xs font-mono font-bold text-slate-800 dark:text-slate-100">
-                                                {formatIdDisplay(qrModalMethod.pagoMovilId)}
-                                            </span>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleCopyText(qrModalMethod.pagoMovilId, 'id')}
-                                                className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
-                                                title="Copiar documento"
-                                            >
-                                                {copiedField === 'id' ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-
-                                <div className="flex items-center justify-between p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                                    <span className="text-xs text-emerald-800 dark:text-emerald-300 font-semibold">Monto Exacto:</span>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-sm font-mono font-extrabold text-emerald-700 dark:text-emerald-400">
-                                            {formatBs(qrModalMethod.amountBs || 0)}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleCopyText(Number(qrModalMethod.amountBs || 0).toFixed(2), 'amount')}
-                                            className="p-1 hover:bg-emerald-100 dark:hover:bg-emerald-900 rounded text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer"
-                                            title="Copiar monto en Bs"
-                                        >
-                                            {copiedField === 'amount' ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            )}
-
-                            {/* Botón para Copiar Todo para WhatsApp */}
-                            <button
-                                type="button"
-                                onClick={handleCopyAll}
-                                className="w-full py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                            >
-                                {copiedField === 'all' ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                                <span>Copiar Todos los Datos (Para WhatsApp / Chat)</span>
-                            </button>
-
-                            {/* Campo de Referencia y Botón de Cobro */}
-                            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
-                                <div>
-                                    <label htmlFor="qr-modal-reference-input" className="text-[10px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center justify-between mb-1">
-                                        <span>Nº de Referencia / Comprobante <span className="text-rose-500">*</span></span>
-                                        <span className="text-[9.5px] font-mono text-amber-600 dark:text-amber-400">OBLIGATORIO</span>
-                                    </label>
-                                    <input
-                                        id="qr-modal-reference-input"
-                                        type="text"
-                                        required
-                                        autoFocus
-                                        value={qrModalReference}
-                                        onChange={(e) => setQrModalReference(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                                e.preventDefault();
-                                                handleConfirmQrPayment();
-                                            }
-                                        }}
-                                        placeholder="Ej: 123456 (ingrese los dígitos del comprobante)"
-                                        className={`w-full bg-slate-50 dark:bg-slate-900 border ${!qrModalReference.trim() ? 'border-amber-400 dark:border-amber-600 focus:border-amber-500' : 'border-emerald-500 dark:border-emerald-500'} rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-800 dark:text-slate-100 outline-none transition-colors`}
-                                    />
-                                </div>
-
-                                <div className="flex gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setQrModalMethod(null)}
-                                        className="py-2.5 px-4 rounded-lg font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 text-xs transition-colors uppercase tracking-wider cursor-pointer"
-                                    >
-                                        Cerrar
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleConfirmQrPayment}
-                                        disabled={!qrModalReference.trim()}
-                                        title={!qrModalReference.trim() ? 'Ingrese el número de referencia para habilitar el cobro' : 'Confirmar y cobrar venta'}
-                                        className="flex-1 py-2.5 px-4 rounded-lg font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-45 disabled:cursor-not-allowed text-xs transition-colors uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-                                    >
-                                        <CheckCircle2 size={16} />
-                                        <span>Confirmar y Cobrar Venta</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            <CheckoutPaymentQrModal
+                qrModalMethod={qrModalMethod}
+                setQrModalMethod={setQrModalMethod}
+                generatingQrModal={generatingQrModal}
+                qrModalUrl={qrModalUrl}
+                handleCopyText={handleCopyText}
+                copiedField={copiedField}
+                handleCopyAll={handleCopyAll}
+                qrModalReference={qrModalReference}
+                setQrModalReference={setQrModalReference}
+                handleConfirmQrPayment={handleConfirmQrPayment}
+            />
         </BaseModal>
     );
 }

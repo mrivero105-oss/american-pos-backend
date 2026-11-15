@@ -28,13 +28,54 @@ console.log(`[DB] Current Mode: ${!!process.env.USER_DATA_PATH ? 'Packaged/Produ
 console.log('[DB] Database Connection Dialect: postgres');
 console.log(`[DB] Database Target Host: ${activeDbConfig.host}:${activeDbConfig.port} (${activeDbConfig.mode === 'client' ? 'Caja Secundaria / Terminal' : 'Servidor Local'})`);
 
+function attachTenantRlsConnectionHook(sequelizeInstance) {
+    if (!sequelizeInstance || sequelizeInstance.__isaacRlsHookAttached) return sequelizeInstance;
+    if (typeof sequelizeInstance.getDialect === 'function' && sequelizeInstance.getDialect() !== 'postgres') {
+        sequelizeInstance.__isaacRlsHookAttached = true;
+        return sequelizeInstance;
+    }
+    const cm = sequelizeInstance.connectionManager;
+    if (!cm || typeof cm.getConnection !== 'function') return sequelizeInstance;
+
+    const { getCurrentTenantContext } = require('./tenantContext');
+    const originalGetConnection = cm.getConnection.bind(cm);
+
+    cm.getConnection = async function wrappedGetConnection(options) {
+        const connection = await originalGetConnection(options);
+        const ctx = getCurrentTenantContext();
+        try {
+            if (ctx && (ctx.companyId || ctx.isSuperAdmin)) {
+                await connection.query(
+                    "SELECT set_config('role', 'isaac_app', false), set_config('app.current_company_id', $1, false), set_config('app.current_user_id', $2, false), set_config('app.is_superadmin', $3, false)",
+                    [String(ctx.companyId || ''), String(ctx.userId || ''), ctx.isSuperAdmin ? 'true' : 'false']
+                );
+                connection.__isaacRlsDirty = true;
+            } else if (connection.__isaacRlsDirty) {
+                await connection.query(
+                    "SELECT set_config('role', 'none', false), set_config('app.current_company_id', '', false), set_config('app.current_user_id', '', false), set_config('app.is_superadmin', 'false', false)"
+                );
+                connection.__isaacRlsDirty = false;
+            }
+        } catch (rlsErr) {
+            if (cm.releaseConnection) {
+                try { cm.releaseConnection(connection); } catch (_) {}
+            }
+            throw rlsErr;
+        }
+        return connection;
+    };
+
+    sequelizeInstance.__isaacRlsHookAttached = true;
+    return sequelizeInstance;
+}
+
 function initSequelize(customConfig = null) {
     const cfg = customConfig ? { ...customConfig } : DbConfigManager.getConfig();
     const resolvedHost = (cfg.host && (cfg.host.toLowerCase() === os.hostname().toLowerCase() || cfg.host.toLowerCase() === 'localhost'))
         ? '127.0.0.1'
         : (cfg.host || '127.0.0.1');
 
-    return new Sequelize(
+    return attachTenantRlsConnectionHook(new Sequelize(
         cfg.database || 'americanpos',
         cfg.user || 'postgres',
         cfg.password || 'postgres',
@@ -72,7 +113,7 @@ function initSequelize(customConfig = null) {
                 max: 3
             }
         }
-    );
+    ));
 }
 
 let sequelize = initSequelize(activeDbConfig);
@@ -105,6 +146,9 @@ async function ensurePostgresDatabaseExists() {
             connectionTimeoutMillis: 5000
         });
 
+        if (!/^[a-zA-Z0-9_]{1,63}$/.test(String(dbName || ''))) {
+            throw new Error(`Nombre de base de datos inválido o inseguro: '${dbName}'. Solo se permiten letras, números y guión bajo.`);
+        }
         await client.connect();
         const checkRes = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName]);
         if (checkRes.rowCount === 0) {
@@ -178,7 +222,7 @@ const connectDB = async () => {
 function reconfigureDB(customConfig) {
     sequelize = initSequelize(customConfig);
     module.exports.sequelize = sequelize;
-    return sequelize;
+    return attachTenantRlsConnectionHook(sequelize);
 }
 
 module.exports = {

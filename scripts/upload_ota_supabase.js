@@ -2,8 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('../american-pos-backend/node_modules/axios');
 
-const supabaseUrl = 'https://puvqiipussyktfmgafgv.supabase.co';
-const supabaseKey = '';
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
+if (!supabaseUrl || !supabaseKey) {
+    console.error('❌ Define SUPABASE_URL y SUPABASE_SERVICE_KEY en el entorno.');
+    process.exit(1);
+}
 
 async function uploadCurrentOTA() {
   const distZipPath = path.resolve(__dirname, '../american-pos-backend/public/dist.zip');

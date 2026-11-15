@@ -45,8 +45,13 @@ export const getBaseUrl = () => {
     if (typeof window !== 'undefined' && !isNativeCapacitor) {
         const hostname = window.location.hostname;
         const protocol = window.location.protocol;
+        const currentPort = window.location.port;
+        const devPorts = ['5173', '5174', '5175'];
         if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1' || protocol === 'file:' || window.electronAPI) {
-            return 'http://127.0.0.1:3005';
+            const localHost = hostname === 'localhost' ? 'localhost' : '127.0.0.1';
+            const httpProto = protocol === 'https:' ? 'https:' : 'http:';
+            const targetPort = (protocol === 'file:' || !currentPort || devPorts.includes(currentPort)) ? '3005' : currentPort;
+            return `${httpProto}//${localHost}:${targetPort}`;
         }
     }
 

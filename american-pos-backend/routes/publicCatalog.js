@@ -32,17 +32,8 @@ router.get('/display/feed', async (req, res) => {
         const allSettings = cache.get('all_settings') || readJson(SETTINGS_FILE) || {};
 
         let companyId = String(req.query.companyId || '').trim();
-        if (!companyId || companyId === 'default' || companyId === 'admin') {
-            if (allSettings['2']) {
-                companyId = '2';
-            } else {
-                const primaryUser = await User.findOne({
-                    attributes: ['companyId'],
-                    order: [['id', 'ASC']],
-                    raw: true
-                }).catch(() => null);
-                companyId = primaryUser?.companyId || '2';
-            }
+        if (!companyId || companyId === 'admin') {
+            companyId = allSettings['2'] && !allSettings['default'] ? '2' : 'default';
         }
 
         const userSettings = getUserSettings(allSettings, companyId) || {};
@@ -121,17 +112,10 @@ router.get('/display/feed', async (req, res) => {
             name: binMethod.name || 'Binance Pay (USDT)'
         };
 
-        // Consultar productos activos con fotografía y stock disponible (estrictamente sin costos)
-        const primaryUsers = await User.findAll({
-            attributes: ['companyId'],
-            raw: true
-        }).catch(() => []);
-        const dbCompanyIds = primaryUsers.map(u => u.companyId).filter(Boolean);
-        const companyCandidates = [...new Set([companyId, ...dbCompanyIds, '2', '1', 'default'].filter(Boolean))];
-
+        // Consultar productos activos con fotografía y stock disponible de la empresa solicitada (estrictamente sin costos)
         const productsWithImage = await Product.findAll({
             where: {
-                companyId: { [Op.in]: companyCandidates },
+                companyId,
                 status: 'active',
                 [Op.or]: [
                     { stockQuantity: { [Op.gt]: 0 } },
@@ -216,7 +200,9 @@ router.get('/display/feed', async (req, res) => {
                     previewProductPrice: matchedProduct?.price || null
                 };
             });
-        } catch (_promoErr) {}
+        } catch (_promoErr) {
+            console.warn('[PublicCatalog] Aviso cargando promociones activas:', _promoErr.message);
+        }
 
         res.json({
             success: true,

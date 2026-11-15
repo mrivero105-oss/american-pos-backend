@@ -7,31 +7,26 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Generador POS">
-    <title>Generador de Licencias de Bolsillo | Isaac POS</title>
+    <title>Generador de Licencias RSA v2 | Isaac POS</title>
     <link rel="manifest" href="/license/manifest.json">
     <link rel="icon" type="image/png" href="/assets/icon.png">
     <link rel="apple-touch-icon" href="/assets/icon.png">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-primary: #0B0F19;
             --bg-secondary: #111827;
-            --bg-card: rgba(17, 24, 39, 0.75);
-            --bg-card-hover: rgba(31, 41, 55, 0.85);
+            --bg-card: rgba(17, 24, 39, 0.82);
             --border-color: rgba(255, 255, 255, 0.08);
-            --border-glow: rgba(99, 102, 241, 0.4);
+            --border-glow: rgba(99, 102, 241, 0.45);
             --accent-primary: #6366F1;
-            --accent-glow: #4F46E5;
             --accent-emerald: #10B981;
-            --accent-cyan: #06B6D4;
             --accent-amber: #F59E0B;
+            --accent-red: #EF4444;
             --text-primary: #F9FAFB;
             --text-secondary: #9CA3AF;
             --text-muted: #6B7280;
-            --font-main: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            --font-mono: 'JetBrains Mono', monospace;
+            --font-main: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            --font-mono: ui-monospace, 'Cascadia Mono', 'JetBrains Mono', monospace;
         }
 
         * {
@@ -51,26 +46,25 @@
             align-items: center;
             padding: 16px;
             overflow-x: hidden;
-            background-image: 
-                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.12) 0%, transparent 40%),
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.16) 0%, transparent 42%),
+                radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.12) 0%, transparent 42%),
                 radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.08) 0%, transparent 50%);
             background-attachment: fixed;
         }
 
         .container {
             width: 100%;
-            max-width: 460px;
+            max-width: 470px;
             display: flex;
             flex-direction: column;
-            gap: 16px;
-            padding-bottom: 30px;
+            gap: 14px;
+            padding-bottom: 32px;
         }
 
-        /* Top Brand Header */
         .brand-header {
             text-align: center;
-            padding: 12px 0 6px 0;
+            padding: 8px 0 4px 0;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -81,13 +75,13 @@
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            background: rgba(99, 102, 241, 0.15);
-            border: 1px solid rgba(99, 102, 241, 0.3);
+            background: rgba(99, 102, 241, 0.16);
+            border: 1px solid rgba(99, 102, 241, 0.35);
             color: #A5B4FC;
             padding: 4px 12px;
             border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 600;
+            font-size: 0.72rem;
+            font-weight: 700;
             letter-spacing: 0.05em;
             text-transform: uppercase;
         }
@@ -107,7 +101,7 @@
         }
 
         .brand-title {
-            font-size: 1.6rem;
+            font-size: 1.55rem;
             font-weight: 800;
             letter-spacing: -0.02em;
             background: linear-gradient(135deg, #FFFFFF 30%, #A5B4FC 100%);
@@ -116,31 +110,55 @@
         }
 
         .brand-sub {
-            font-size: 0.85rem;
+            font-size: 0.83rem;
             color: var(--text-secondary);
-            font-weight: 400;
         }
 
-        /* Glassmorphic Card */
         .card {
             background: var(--bg-card);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             border: 1px solid var(--border-color);
             border-radius: 20px;
-            padding: 20px;
-            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            padding: 18px;
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
             display: flex;
             flex-direction: column;
-            gap: 16px;
-            transition: border-color 0.2s;
+            gap: 15px;
         }
 
         .card:focus-within {
             border-color: var(--border-glow);
         }
 
-        /* Form Inputs */
+        .mode-switch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            background: rgba(0, 0, 0, 0.35);
+            padding: 4px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .mode-btn {
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            padding: 9px 8px;
+            border-radius: 9px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            background: rgba(99, 102, 241, 0.28);
+            color: #FFFFFF;
+            box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.55);
+        }
+
         .input-group {
             display: flex;
             flex-direction: column;
@@ -148,25 +166,20 @@
         }
 
         .input-label {
-            font-size: 0.82rem;
+            font-size: 0.8rem;
             font-weight: 600;
             color: var(--text-secondary);
             display: flex;
             align-items: center;
             justify-content: space-between;
-        }
-
-        .input-label span {
-            display: flex;
-            align-items: center;
-            gap: 6px;
+            gap: 8px;
         }
 
         .input-box {
             display: flex;
             align-items: center;
-            background: rgba(0, 0, 0, 0.35);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.38);
+            border: 1px solid rgba(255, 255, 255, 0.11);
             border-radius: 12px;
             overflow: hidden;
             transition: all 0.2s;
@@ -175,47 +188,98 @@
         .input-box:focus-within {
             border-color: var(--accent-primary);
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-            background: rgba(0, 0, 0, 0.5);
+            background: rgba(0, 0, 0, 0.55);
         }
 
-        .input-box input {
+        .input-box input,
+        .input-box textarea {
             flex: 1;
+            width: 100%;
             background: transparent;
             border: none;
             outline: none;
-            padding: 12px 14px;
+            padding: 12px 13px;
             color: var(--text-primary);
             font-family: var(--font-mono);
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             font-weight: 500;
+            resize: none;
         }
 
-        .input-box input::placeholder {
+        .input-box textarea {
+            font-size: 0.74rem;
+            line-height: 1.35;
+        }
+
+        .secret-masked {
+            -webkit-text-security: disc;
+            text-security: disc;
+        }
+
+        .input-box input::placeholder,
+        .input-box textarea::placeholder {
             color: var(--text-muted);
             font-family: var(--font-main);
-            font-size: 0.85rem;
+            font-size: 0.82rem;
         }
 
         .input-action-btn {
-            background: transparent;
-            border: none;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
             color: var(--text-secondary);
-            padding: 8px 12px;
+            padding: 6px 10px;
             cursor: pointer;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: 600;
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 4px;
-            transition: color 0.15s;
+            transition: all 0.15s;
+        }
+
+        .input-box .input-action-btn {
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            padding: 10px 12px;
         }
 
         .input-action-btn:hover {
             color: var(--text-primary);
         }
 
-        .input-action-btn:active {
-            transform: scale(0.95);
+        .key-toolbar {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .status-pill {
+            font-size: 0.74rem;
+            padding: 6px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(0, 0, 0, 0.3);
+            color: var(--text-muted);
+        }
+
+        .status-pill.ok {
+            color: #6EE7B7;
+            background: rgba(16, 185, 129, 0.12);
+            border-color: rgba(16, 185, 129, 0.35);
+        }
+
+        .status-pill.warn {
+            color: #FCD34D;
+            background: rgba(245, 158, 11, 0.12);
+            border-color: rgba(245, 158, 11, 0.35);
+        }
+
+        .status-pill.err {
+            color: #FCA5A5;
+            background: rgba(239, 68, 68, 0.12);
+            border-color: rgba(239, 68, 68, 0.35);
         }
 
         .remember-row {
@@ -223,10 +287,9 @@
             align-items: center;
             gap: 8px;
             font-size: 0.78rem;
-            color: var(--text-muted);
+            color: var(--text-secondary);
             cursor: pointer;
             user-select: none;
-            margin-top: -2px;
         }
 
         .remember-row input[type="checkbox"] {
@@ -234,7 +297,6 @@
             cursor: pointer;
         }
 
-        /* Duration Selector Chips */
         .duration-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -255,20 +317,9 @@
             gap: 2px;
         }
 
-        .duration-chip .icon {
-            font-size: 1.1rem;
-        }
-
-        .duration-chip .title {
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-        }
-
-        .duration-chip .sub {
-            font-size: 0.65rem;
-            color: var(--text-muted);
-        }
+        .duration-chip .icon { font-size: 1.05rem; }
+        .duration-chip .title { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); }
+        .duration-chip .sub { font-size: 0.65rem; color: var(--text-muted); }
 
         .duration-chip.active {
             background: rgba(99, 102, 241, 0.18);
@@ -276,15 +327,9 @@
             box-shadow: 0 0 16px rgba(99, 102, 241, 0.3);
         }
 
-        .duration-chip.active .title {
-            color: #FFFFFF;
-        }
+        .duration-chip.active .title { color: #FFFFFF; }
+        .duration-chip.active .sub { color: #C7D2FE; }
 
-        .duration-chip.active .sub {
-            color: #C7D2FE;
-        }
-
-        /* Generate Primary Button */
         .btn-generate {
             background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
             color: #FFFFFF;
@@ -293,7 +338,7 @@
             border-radius: 14px;
             padding: 15px;
             font-family: var(--font-main);
-            font-size: 1.02rem;
+            font-size: 1rem;
             font-weight: 700;
             letter-spacing: 0.02em;
             cursor: pointer;
@@ -303,34 +348,24 @@
             justify-content: center;
             gap: 8px;
             transition: all 0.2s;
-            position: relative;
-            overflow: hidden;
         }
 
-        .btn-generate:hover {
-            box-shadow: 0 10px 28px -2px rgba(79, 70, 229, 0.7);
-            filter: brightness(1.08);
-        }
+        .btn-generate:active { transform: scale(0.98); }
 
-        .btn-generate:active {
-            transform: scale(0.98);
-        }
-
-        /* Result Section */
         .result-card {
             display: none;
-            background: rgba(17, 24, 39, 0.9);
-            border: 1px solid rgba(16, 185, 129, 0.4);
+            background: rgba(17, 24, 39, 0.92);
+            border: 1px solid rgba(16, 185, 129, 0.45);
             border-radius: 20px;
-            padding: 20px;
+            padding: 18px;
             box-shadow: 0 10px 30px -10px rgba(16, 185, 129, 0.2);
             flex-direction: column;
-            gap: 14px;
-            animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            gap: 12px;
+            animation: slide-up 0.25s ease-out;
         }
 
         @keyframes slide-up {
-            from { opacity: 0; transform: translateY(12px); }
+            from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
@@ -338,42 +373,42 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 8px;
         }
 
         .result-badge {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            background: rgba(16, 185, 129, 0.15);
-            border: 1px solid rgba(16, 185, 129, 0.3);
+            background: rgba(16, 185, 129, 0.16);
+            border: 1px solid rgba(16, 185, 129, 0.35);
             color: #6EE7B7;
             padding: 4px 10px;
             border-radius: 9999px;
-            font-size: 0.75rem;
+            font-size: 0.74rem;
             font-weight: 700;
         }
 
         .result-meta {
             font-size: 0.75rem;
-            color: var(--text-muted);
+            color: var(--text-secondary);
         }
 
         .key-display {
-            background: rgba(0, 0, 0, 0.5);
+            background: rgba(0, 0, 0, 0.52);
             border: 1px dashed rgba(16, 185, 129, 0.35);
             border-radius: 12px;
             padding: 12px;
             font-family: var(--font-mono);
-            font-size: 0.78rem;
+            font-size: 0.74rem;
             line-height: 1.4;
             color: #A7F3D0;
             word-break: break-all;
             user-select: all;
-            max-height: 100px;
+            max-height: 115px;
             overflow-y: auto;
         }
 
-        /* Action Buttons Grid */
         .action-buttons {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -393,7 +428,6 @@
             align-items: center;
             justify-content: center;
             gap: 6px;
-            transition: all 0.15s;
         }
 
         .btn-copy {
@@ -402,24 +436,13 @@
             border: 1px solid rgba(255, 255, 255, 0.15);
         }
 
-        .btn-copy:active {
-            transform: scale(0.97);
-            background: rgba(255, 255, 255, 0.2);
-        }
-
         .btn-whatsapp {
             background: #25D366;
             color: #064E3B;
             font-weight: 800;
-            box-shadow: 0 4px 16px rgba(37, 211, 102, 0.35);
+            box-shadow: 0 4px 16px rgba(37, 211, 102, 0.3);
         }
 
-        .btn-whatsapp:active {
-            transform: scale(0.97);
-            background: #1EBE5D;
-        }
-
-        /* Accordion / Tool Tabs */
         .accordion {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
@@ -439,29 +462,21 @@
             user-select: none;
         }
 
-        .accordion-header:hover {
-            background: rgba(255, 255, 255, 0.02);
-            color: var(--text-primary);
-        }
-
         .accordion-content {
             display: none;
             padding: 16px 18px;
             border-top: 1px solid var(--border-color);
             background: rgba(0, 0, 0, 0.2);
             flex-direction: column;
-            gap: 12px;
+            gap: 10px;
         }
 
-        .accordion.open .accordion-content {
-            display: flex;
-        }
+        .accordion.open .accordion-content { display: flex; }
 
-        /* Toast notification */
         .toast {
             position: fixed;
             bottom: 24px;
-            background: rgba(16, 185, 129, 0.95);
+            background: rgba(16, 185, 129, 0.96);
             color: #064E3B;
             font-weight: 700;
             font-size: 0.85rem;
@@ -470,7 +485,7 @@
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
             transform: translateY(100px);
             opacity: 0;
-            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            transition: all 0.25s ease;
             z-index: 9999;
             pointer-events: none;
             display: flex;
@@ -485,67 +500,83 @@
     </style>
 </head>
 <body>
-
     <div class="container">
-        <!-- Header -->
         <header class="brand-header">
             <div class="brand-badge">
                 <span class="dot"></span>
-                <span>Dueño del Sistema &bull; 100% Offline</span>
+                <span>Dueño del Sistema &bull; RSA-2048 v2 Offline</span>
             </div>
             <h1 class="brand-title">Generador de Bolsillo</h1>
-            <p class="brand-sub">Crea llaves de activación desde tu celular al instante</p>
+            <p class="brand-sub">Emite licencias criptográficas RSA-2048 desde tu celular sin internet</p>
         </header>
 
-        <!-- Install Banner / APK Direct Download -->
-        <div id="installBanner" style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(16, 185, 129, 0.15) 100%); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 16px; padding: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+        <div id="installBanner" style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(16, 185, 129, 0.15) 100%); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 16px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
             <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 1.6rem;">📱</span>
+                <span style="font-size: 1.5rem;">📱</span>
                 <div>
-                    <div style="font-size: 0.85rem; font-weight: 700; color: #FFFFFF;">Instalar en este Teléfono</div>
-                    <div style="font-size: 0.72rem; color: #9CA3AF;">Úsalo como App nativa offline</div>
+                    <div style="font-size: 0.84rem; font-weight: 700; color: #FFFFFF;">App Android Generadora</div>
+                    <div style="font-size: 0.72rem; color: #9CA3AF;">Instala o descarga el APK v2 offline</div>
                 </div>
             </div>
             <div style="display: flex; gap: 6px;">
-                <button id="btnPwaInstall" type="button" style="background: #6366F1; color: white; border: none; padding: 8px 12px; border-radius: 10px; font-weight: 700; font-size: 0.78rem; cursor: pointer; display: flex; align-items: center; gap: 4px;">
-                    <span>⚡ Instalar</span>
-                </button>
-                <a href="/license/download-apk" download="Generador-Licencias.apk" style="background: rgba(16, 185, 129, 0.2); border: 1px solid rgba(16, 185, 129, 0.4); color: #6EE7B7; text-decoration: none; padding: 8px 10px; border-radius: 10px; font-weight: 700; font-size: 0.78rem; display: flex; align-items: center; gap: 4px;">
-                    <span>📥 Descargar APK</span>
-                </a>
+                <button id="btnPwaInstall" type="button" style="background: #6366F1; color: white; border: none; padding: 8px 10px; border-radius: 10px; font-weight: 700; font-size: 0.75rem; cursor: pointer;">⚡ Instalar</button>
+                <a href="/license/download-apk" download="Generador-Licencias.apk" style="background: rgba(16, 185, 129, 0.2); border: 1px solid rgba(16, 185, 129, 0.4); color: #6EE7B7; text-decoration: none; padding: 8px 10px; border-radius: 10px; font-weight: 700; font-size: 0.75rem;">📥 APK</a>
             </div>
         </div>
 
-        <!-- Main Card -->
         <main class="card">
-            <!-- Terminal ID -->
+            <div class="mode-switch" role="tablist">
+                <button type="button" class="mode-btn active" id="btnModeV2" data-mode="v2">🔐 RSA-2048 v2 (Actual)</button>
+                <button type="button" class="mode-btn" id="btnModeV1" data-mode="v1">🔑 HMAC v1 (Heredado)</button>
+            </div>
+
             <div class="input-group">
                 <label class="input-label" for="terminalId">
-                    <span>📱 Código de Terminal / Máquina</span>
+                    <span>📱 Código de Terminal / PC</span>
                 </label>
                 <div class="input-box">
-                    <input type="text" id="terminalId" placeholder="Ej: TERM-4819-2041 o POS-XXXX" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
-                    <button class="input-action-btn" type="button" id="btnPaste" title="Pegar del portapapeles">📋 Pegar</button>
+                    <input type="text" id="terminalId" placeholder="Ej: TERM-XQHR-S6HP-DSBN o POS-XXXX" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+                    <button class="input-action-btn" type="button" id="btnPasteTerminal" title="Pegar del portapapeles">📋 Pegar</button>
                 </div>
             </div>
 
-            <!-- Secret Key -->
-            <div class="input-group">
+            <!-- RSA v2 Private Key Section -->
+            <div class="input-group" id="sectionRsaV2">
+                <div class="input-label">
+                    <span>🔐 Clave Privada RSA (private.pem)</span>
+                    <button class="input-action-btn" type="button" id="btnToggleRsaMask">👁️ Ver</button>
+                </div>
+                <div class="key-toolbar">
+                    <button class="input-action-btn" type="button" id="btnLoadPemFile">📁 Cargar .pem</button>
+                    <button class="input-action-btn" type="button" id="btnPastePrivatePem">📋 Pegar clave</button>
+                    <button class="input-action-btn" type="button" id="btnClearPrivatePem">🗑️ Limpiar</button>
+                    <input type="file" id="pemFileInput" accept=".pem,.key,.txt,*/*" style="display:none">
+                </div>
+                <div class="input-box">
+                    <textarea id="privateKeyInput" class="secret-masked" rows="3" placeholder="Pega tu archivo private.pem o carga con 📁 Cargar .pem..." autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+                </div>
+                <div id="rsaStatusPill" class="status-pill">Pega o carga tu archivo private.pem para firmar licencias v2.</div>
+                <label class="remember-row">
+                    <input type="checkbox" id="chkRememberRsa" checked>
+                    <span>Recordar clave privada RSA localmente en este dispositivo</span>
+                </label>
+            </div>
+
+            <!-- Legacy HMAC v1 Section -->
+            <div class="input-group" id="sectionLegacyV1" style="display:none;">
                 <label class="input-label" for="secretKey">
-                    <span>🔐 Clave Secreta de Dueño</span>
-                    <span style="font-weight: 400; font-size: 0.72rem; color: var(--text-muted);">Solo tú la sabes</span>
+                    <span>🔑 Clave Secreta Heredada (OWNER_SECRET_KEY)</span>
                 </label>
                 <div class="input-box">
-                    <input type="password" id="secretKey" placeholder="Tu clave maestra" autocomplete="off" spellcheck="false">
-                    <button class="input-action-btn" type="button" id="btnToggleSecret" title="Mostrar/Ocultar">👁️</button>
+                    <input type="password" id="secretKey" placeholder="Solo para PCs antiguos con v1 habilitado" autocomplete="off" spellcheck="false">
+                    <button class="input-action-btn" type="button" id="btnToggleSecret">👁️</button>
                 </div>
                 <label class="remember-row">
-                    <input type="checkbox" id="chkRemember" checked>
-                    <span>Recordar mi clave secreta en este teléfono</span>
+                    <input type="checkbox" id="chkRememberV1" checked>
+                    <span>Recordar secreto v1 en este dispositivo</span>
                 </label>
             </div>
 
-            <!-- Duration Selector -->
             <div class="input-group">
                 <label class="input-label">
                     <span>⏳ Duración de la Licencia</span>
@@ -584,114 +615,510 @@
                 </div>
             </div>
 
-            <!-- Generate Button -->
             <button class="btn-generate" type="button" id="btnGenerate">
-                <span>⚡ GENERAR LLAVE DE ACTIVACIÓN</span>
+                <span>⚡ GENERAR LLAVE RSA v2</span>
             </button>
         </main>
 
-        <!-- Result Card -->
         <section class="result-card" id="resultCard">
             <div class="result-header">
-                <div class="result-badge">
-                    <span>✅ Llave Criptográfica Válida</span>
+                <div class="result-badge" id="resultBadge">
+                    <span>✅ Llave RSA-2048 v2 Válida</span>
                 </div>
                 <div class="result-meta" id="resultMeta">Vitalicia</div>
             </div>
-
             <div class="key-display" id="keyDisplay" title="Toca para seleccionar"></div>
-
             <div class="action-buttons">
-                <button class="btn-action btn-copy" type="button" id="btnCopyKey">
-                    <span>📋 Copiar Llave</span>
-                </button>
-                <button class="btn-action btn-whatsapp" type="button" id="btnWhatsApp">
-                    <span>📲 WhatsApp</span>
-                </button>
+                <button class="btn-action btn-copy" type="button" id="btnCopyKey">📋 Copiar Llave</button>
+                <button class="btn-action btn-whatsapp" type="button" id="btnWhatsApp">📲 WhatsApp</button>
             </div>
         </section>
 
-        <!-- Key Decoder / Inspector Accordion -->
         <div class="accordion" id="accordionInspect">
             <div class="accordion-header" id="accordionInspectHeader">
-                <span>🔍 Inspeccionar / Verificar una Llave</span>
+                <span>🔍 Inspeccionar / Verificar Firma de una Llave</span>
                 <span id="accordionArrow">▼</span>
             </div>
             <div class="accordion-content">
                 <div class="input-box">
                     <input type="text" id="inspectInput" placeholder="Pega una llave Base64 aquí...">
+                    <button class="input-action-btn" type="button" id="btnPasteInspect">📋</button>
                 </div>
-                <button class="btn-action btn-copy" type="button" id="btnInspect" style="width: 100%;">
-                    <span>Analizar Contenido</span>
-                </button>
-                <div id="inspectResult" style="display: none; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 10px; font-family: var(--font-mono); font-size: 0.75rem; color: #9CA3AF; word-break: break-all;"></div>
+                <button class="btn-action btn-copy" type="button" id="btnInspect" style="width: 100%;">Analizar y Verificar</button>
+                <div id="inspectResult" style="display: none; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 10px; font-family: var(--font-mono); font-size: 0.74rem; color: #9CA3AF; word-break: break-all; line-height: 1.5;"></div>
             </div>
         </div>
 
-        <!-- Phone Tip -->
-        <footer style="text-align: center; color: var(--text-muted); font-size: 0.72rem; line-height: 1.4; padding: 6px 12px;">
-            💡 <strong>Consejo:</strong> En tu celular, pulsa en el menú del navegador y selecciona <em>"Agregar a la pantalla de inicio"</em> para tenerlo siempre como una app nativa.
+        <footer style="text-align: center; color: var(--text-muted); font-size: 0.72rem; line-height: 1.4; padding: 4px 10px;">
+            🔐 Firma asimétrica local RSA-2048 PKCS#1 v1.5 (SHA-256). Tu clave privada nunca sale de tu dispositivo.
         </footer>
     </div>
 
-    <!-- Toast Notification -->
     <div class="toast" id="toast">
         <span>✅</span>
-        <span id="toastMsg">Copiado al portapapeles</span>
+        <span id="toastMsg">Listo</span>
     </div>
 
     <script>
-        // Default Master Secret configured in .env
-        const DEFAULT_OWNER_SECRET = "MasterOwnerSecret2026";
-        let selectedDurationDays = -1;
+        // Clave PUBLICA oficial SPKI (solo verifica firmas, nunca firma). Sincronizada con utils/keys/public.pem
+        const EMBEDDED_PUBLIC_KEY_PEM = [
+            '-----BEGIN PUBLIC KEY-----',
+            'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnZYPc3WHQCv38UDckbZw',
+            'mfjZP+lP6gLSP6X+nlX5l2O/G3B8H9v5cM/ZgMe2OXL+vR/G6HwA024WDiHoAvY6',
+            'HOmR3zbJZ6zXmaYcv2fcMEz62hlfolcUQh/QDR5/r1bdyXu+ISfqs56kctxHxoZ+',
+            'HJXj/8qAO5tBaOpUf3YfJWizPMa7xEWSHLVug9RMTxxF6UH6BaoT8/TQRllNfSHW',
+            'fjKlqc2B3y6f9lfl6HBcf/lSPbHE/nJ4YF7Y27KyNk8c2K/bcSLpKCdbKE6YCezQ',
+            'YZ8XySA1JySuHbLCOGUGDwUY+bXdZrGP4P/apnEaWKHG4NXRJfyZUE3Qg6dv6nMB',
+            'hQIDAQAB',
+            '-----END PUBLIC KEY-----'
+        ].join('\n');
 
-        // DOM Elements
+        // =========================================================================
+        // Motor RSA-2048 SHA-256 PKCS#1 v1.5 100% autocontenido (compatible file:// & HTTP)
+        // =========================================================================
+        const SHA256_K = new Uint32Array([
+            0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+            0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+            0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+            0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+            0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+            0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+            0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+            0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+        ]);
+        const SHA256_DIGEST_PREFIX = [0x30,0x31,0x30,0x0d,0x06,0x09,0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x02,0x01,0x05,0x00,0x04,0x20];
+
+        function utf8Bytes(str) {
+            return new TextEncoder().encode(String(str || ''));
+        }
+
+        function b64ToBytes(b64) {
+            let clean = String(b64 || '').replace(/-/g, '+').replace(/_/g, '/').replace(/[^A-Za-z0-9+/=]/g, '');
+            while (clean.length % 4 !== 0) clean += '=';
+            const bin = atob(clean);
+            const out = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+            return out;
+        }
+
+        function bytesToB64(bytes) {
+            let bin = '';
+            for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            return btoa(bin);
+        }
+
+        function utf8ToBase64(str) {
+            return bytesToB64(utf8Bytes(str));
+        }
+
+        function base64ToUtf8(b64) {
+            return new TextDecoder().decode(b64ToBytes(b64));
+        }
+
+        function sha256Bytes(bytes) {
+            const H = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+            const len = bytes.length;
+            const bitLen = BigInt(len) * 8n;
+            const paddedLen = Math.ceil((len + 9) / 64) * 64;
+            const buf = new Uint8Array(paddedLen);
+            buf.set(bytes);
+            buf[len] = 0x80;
+            const dv = new DataView(buf.buffer);
+            dv.setBigUint64(paddedLen - 8, bitLen, false);
+            const w = new Uint32Array(64);
+            const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+            for (let off = 0; off < paddedLen; off += 64) {
+                for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
+                for (let i = 16; i < 64; i++) {
+                    const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+                    const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+                    w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+                }
+                let [a, b, c, d, e, f, g, h] = H;
+                for (let i = 0; i < 64; i++) {
+                    const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+                    const ch = (e & f) ^ (~e & g);
+                    const temp1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+                    const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+                    const maj = (a & b) ^ (a & c) ^ (b & c);
+                    const temp2 = (S0 + maj) >>> 0;
+                    h = g; g = f; f = e; e = (d + temp1) >>> 0;
+                    d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+                }
+                H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+                H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+            }
+            const out = new Uint8Array(32);
+            const odv = new DataView(out.buffer);
+            for (let i = 0; i < 8; i++) odv.setUint32(i * 4, H[i], false);
+            return out;
+        }
+
+        function readAsn1(bytes, offset = 0) {
+            if (offset >= bytes.length) throw new Error('ASN.1 truncado');
+            const tag = bytes[offset++];
+            let len = bytes[offset++];
+            if (len & 0x80) {
+                const n = len & 0x7f;
+                if (n === 0 || offset + n > bytes.length) throw new Error('Longitud ASN.1 invalida');
+                len = 0;
+                for (let i = 0; i < n; i++) len = (len << 8) | bytes[offset++];
+            }
+            const start = offset;
+            const end = offset + len;
+            if (end > bytes.length) throw new Error('Longitud ASN.1 excede el buffer');
+            const isConstructed = (tag & 0x20) !== 0;
+            const children = [];
+            if (isConstructed) {
+                let p = start;
+                while (p < end) {
+                    const child = readAsn1(bytes, p);
+                    children.push(child);
+                    p = child.end;
+                }
+            }
+            return { tag, start, end, value: bytes.subarray(start, end), children };
+        }
+
+        function bytesToBigInt(bytes) {
+            let hex = '';
+            for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+            return hex ? BigInt('0x' + hex) : 0n;
+        }
+
+        function bigIntToBytes(n, len) {
+            let hex = n.toString(16);
+            if (hex.length % 2) hex = '0' + hex;
+            const out = new Uint8Array(len);
+            const byteLen = hex.length / 2;
+            const start = len - byteLen;
+            if (start < 0) throw new Error('Resultado excede tamaño RSA');
+            for (let i = 0; i < byteLen; i++) {
+                out[start + i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+            }
+            return out;
+        }
+
+        function modPow(base, exp, mod) {
+            let res = 1n;
+            let b = ((base % mod) + mod) % mod;
+            let e = exp;
+            while (e > 0n) {
+                if (e & 1n) res = (res * b) % mod;
+                e >>= 1n;
+                b = (b * b) % mod;
+            }
+            return res;
+        }
+
+        function normalizePemInput(pem) {
+            return String(pem || '').replace(/\\n/g, '\n').trim();
+        }
+
+        function parsePrivatePem(rawPem) {
+            const txt = normalizePemInput(rawPem);
+            const isPkcs8 = /-----BEGIN PRIVATE KEY-----/.test(txt) && /-----END PRIVATE KEY-----/.test(txt);
+            const isPkcs1 = /-----BEGIN RSA PRIVATE KEY-----/.test(txt) && /-----END RSA PRIVATE KEY-----/.test(txt);
+            if (!isPkcs8 && !isPkcs1) {
+                throw new Error('Encabezado PEM inválido (se esperaba BEGIN PRIVATE KEY o BEGIN RSA PRIVATE KEY)');
+            }
+            const b64 = txt.replace(/-----BEGIN [^-]+-----/g, '').replace(/-----END [^-]+-----/g, '').replace(/\s+/g, '');
+            const der = b64ToBytes(b64);
+            let rsaSeq = readAsn1(der);
+            if (isPkcs8) {
+                const oct = rsaSeq.children.find(c => c.tag === 0x04);
+                if (!oct) throw new Error('PKCS#8 no contiene clave privada RSA');
+                rsaSeq = readAsn1(oct.value);
+            }
+            if (!rsaSeq.children || rsaSeq.children.length < 9) {
+                throw new Error('Estructura RSA privada incompleta');
+            }
+            const ints = rsaSeq.children.map(c => bytesToBigInt(c.value));
+            const k = Math.ceil(ints[1].toString(16).length / 2);
+            if (k < 128) throw new Error('Módulo RSA demasiado corto');
+            return { n: ints[1], e: ints[2], d: ints[3], p: ints[4], q: ints[5], dp: ints[6], dq: ints[7], qinv: ints[8], k, bits: k * 8 };
+        }
+
+        function parsePublicSpkiPem(pem) {
+            const b64 = normalizePemInput(pem).replace(/-----BEGIN PUBLIC KEY-----/g, '').replace(/-----END PUBLIC KEY-----/g, '').replace(/\s+/g, '');
+            const der = b64ToBytes(b64);
+            const seq = readAsn1(der);
+            const bitStr = seq.children.find(c => c.tag === 0x03);
+            const inner = readAsn1(bitStr.value.subarray(1));
+            const n = bytesToBigInt(inner.children[0].value);
+            const e = bytesToBigInt(inner.children[1].value);
+            return { n, e, k: Math.ceil(n.toString(16).length / 2) };
+        }
+
+        function rsaSignSha256Base64(payloadStr, privatePem) {
+            const key = parsePrivatePem(privatePem);
+            const hash = sha256Bytes(utf8Bytes(payloadStr));
+            const psLen = key.k - SHA256_DIGEST_PREFIX.length - hash.length - 3;
+            if (psLen < 8) throw new Error('Módulo RSA demasiado pequeño');
+            const em = new Uint8Array(key.k);
+            em[0] = 0x00;
+            em[1] = 0x01;
+            em.fill(0xff, 2, 2 + psLen);
+            em[2 + psLen] = 0x00;
+            em.set(SHA256_DIGEST_PREFIX, 3 + psLen);
+            em.set(hash, 3 + psLen + SHA256_DIGEST_PREFIX.length);
+            const m = bytesToBigInt(em);
+            const s1 = modPow(m, key.dp, key.p);
+            const s2 = modPow(m, key.dq, key.q);
+            const h = (key.qinv * (((s1 - s2) % key.p + key.p) % key.p)) % key.p;
+            const s = s2 + h * key.q;
+            return bytesToB64(bigIntToBytes(s, key.k));
+        }
+
+        function rsaVerifySha256Base64(payloadStr, sigB64, publicPem) {
+            try {
+                const pub = parsePublicSpkiPem(publicPem);
+                const sigBytes = b64ToBytes(sigB64);
+                if (sigBytes.length !== pub.k) return false;
+                const em = bigIntToBytes(modPow(bytesToBigInt(sigBytes), pub.e, pub.n), pub.k);
+                const hash = sha256Bytes(utf8Bytes(payloadStr));
+                const psLen = pub.k - SHA256_DIGEST_PREFIX.length - hash.length - 3;
+                if (psLen < 8 || em[0] !== 0x00 || em[1] !== 0x01 || em[2 + psLen] !== 0x00) return false;
+                for (let i = 2; i < 2 + psLen; i++) if (em[i] !== 0xff) return false;
+                for (let i = 0; i < SHA256_DIGEST_PREFIX.length; i++) if (em[3 + psLen + i] !== SHA256_DIGEST_PREFIX[i]) return false;
+                for (let i = 0; i < hash.length; i++) if (em[3 + psLen + SHA256_DIGEST_PREFIX.length + i] !== hash[i]) return false;
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        // HMAC-SHA256 puro en JS (compatible tambien offline/file:// para modo v1 heredado)
+        function hmacSha256Hex(secret, message) {
+            const keyBytes = utf8Bytes(secret);
+            const blockSize = 64;
+            let k = keyBytes.length > blockSize ? sha256Bytes(keyBytes) : keyBytes;
+            const padded = new Uint8Array(blockSize);
+            padded.set(k);
+            const oKey = new Uint8Array(blockSize);
+            const iKey = new Uint8Array(blockSize);
+            for (let i = 0; i < blockSize; i++) {
+                oKey[i] = padded[i] ^ 0x5c;
+                iKey[i] = padded[i] ^ 0x36;
+            }
+            const msgBytes = utf8Bytes(message);
+            const inner = new Uint8Array(blockSize + msgBytes.length);
+            inner.set(iKey);
+            inner.set(msgBytes, blockSize);
+            const innerHash = sha256Bytes(inner);
+            const outer = new Uint8Array(blockSize + 32);
+            outer.set(oKey);
+            outer.set(innerHash, blockSize);
+            const finalHash = sha256Bytes(outer);
+            return Array.from(finalHash).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // =========================================================================
+        // UI State & Handlers
+        // =========================================================================
+        let activeMode = 'v2';
+        let selectedDurationDays = -1;
+        let lastGeneratedKey = '';
+        let lastTargetMid = '';
+        let lastDurationLabel = 'Vitalicia';
+
+        const installBanner = document.getElementById('installBanner');
+        const btnModeV2 = document.getElementById('btnModeV2');
+        const btnModeV1 = document.getElementById('btnModeV1');
+        const sectionRsaV2 = document.getElementById('sectionRsaV2');
+        const sectionLegacyV1 = document.getElementById('sectionLegacyV1');
         const terminalIdInput = document.getElementById('terminalId');
+        const btnPasteTerminal = document.getElementById('btnPasteTerminal');
+        const privateKeyInput = document.getElementById('privateKeyInput');
+        const btnToggleRsaMask = document.getElementById('btnToggleRsaMask');
+        const btnLoadPemFile = document.getElementById('btnLoadPemFile');
+        const btnPastePrivatePem = document.getElementById('btnPastePrivatePem');
+        const btnClearPrivatePem = document.getElementById('btnClearPrivatePem');
+        const pemFileInput = document.getElementById('pemFileInput');
+        const rsaStatusPill = document.getElementById('rsaStatusPill');
+        const chkRememberRsa = document.getElementById('chkRememberRsa');
         const secretKeyInput = document.getElementById('secretKey');
-        const chkRemember = document.getElementById('chkRemember');
-        const btnPaste = document.getElementById('btnPaste');
         const btnToggleSecret = document.getElementById('btnToggleSecret');
-        const btnGenerate = document.getElementById('btnGenerate');
+        const chkRememberV1 = document.getElementById('chkRememberV1');
         const durationChips = document.querySelectorAll('.duration-chip');
+        const btnGenerate = document.getElementById('btnGenerate');
         const resultCard = document.getElementById('resultCard');
+        const resultBadge = document.getElementById('resultBadge');
         const resultMeta = document.getElementById('resultMeta');
         const keyDisplay = document.getElementById('keyDisplay');
         const btnCopyKey = document.getElementById('btnCopyKey');
         const btnWhatsApp = document.getElementById('btnWhatsApp');
         const toast = document.getElementById('toast');
         const toastMsg = document.getElementById('toastMsg');
-
-        // Inspector Elements
         const accordionInspect = document.getElementById('accordionInspect');
         const accordionInspectHeader = document.getElementById('accordionInspectHeader');
         const accordionArrow = document.getElementById('accordionArrow');
         const inspectInput = document.getElementById('inspectInput');
+        const btnPasteInspect = document.getElementById('btnPasteInspect');
         const btnInspect = document.getElementById('btnInspect');
         const inspectResult = document.getElementById('inspectResult');
 
-        let lastGeneratedKey = '';
-        let lastTargetMid = '';
-        let lastDurationLabel = 'Vitalicia';
-
-        // Load remembered secret or set default
-        const savedSecret = localStorage.getItem('pos_owner_secret');
-        if (savedSecret) {
-            secretKeyInput.value = savedSecret;
-        } else {
-            secretKeyInput.value = DEFAULT_OWNER_SECRET;
+        // Ocultar banner de descarga web cuando se ejecuta dentro del APK Android
+        if (window.location.protocol === 'file:' || Boolean(window.AndroidBridge)) {
+            installBanner.style.display = 'none';
         }
 
-        // Duration selector
-        durationChips.forEach(chip => {
-            chip.addEventListener('click', () => {
-                durationChips.forEach(c => c.classList.remove('active'));
-                chip.classList.add('active');
-                selectedDurationDays = parseInt(chip.getAttribute('data-days'), 10);
-                lastDurationLabel = chip.querySelector('.title').textContent;
-            });
+        function showToast(msg) {
+            toastMsg.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2300);
+        }
+
+        async function readClipboardSafe() {
+            if (window.AndroidBridge && typeof window.AndroidBridge.readClipboard === 'function') {
+                const txt = window.AndroidBridge.readClipboard();
+                if (txt) return txt;
+            }
+            if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                return await navigator.clipboard.readText();
+            }
+            return '';
+        }
+
+        async function copyTextSafe(text) {
+            if (window.AndroidBridge && typeof window.AndroidBridge.copyText === 'function') {
+                if (window.AndroidBridge.copyText(text)) return true;
+            }
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (_) {}
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        }
+
+        function refreshRsaStatus() {
+            const raw = privateKeyInput.value.trim();
+            if (!raw) {
+                rsaStatusPill.className = 'status-pill';
+                rsaStatusPill.textContent = 'Pega o carga tu archivo private.pem para firmar licencias v2.';
+                return false;
+            }
+            try {
+                const parsed = parsePrivatePem(raw);
+                const pub = parsePublicSpkiPem(EMBEDDED_PUBLIC_KEY_PEM);
+                const matchesEmbedded = parsed.n === pub.n && parsed.e === pub.e;
+                if (matchesEmbedded) {
+                    rsaStatusPill.className = 'status-pill ok';
+                    rsaStatusPill.textContent = `✅ RSA-${parsed.bits} auténtica y emparejada con Isaac POS.`;
+                } else {
+                    rsaStatusPill.className = 'status-pill warn';
+                    rsaStatusPill.textContent = `⚠️ Clave RSA-${parsed.bits} válida, pero pertenece a otra public.pem.`;
+                }
+                return true;
+            } catch (err) {
+                rsaStatusPill.className = 'status-pill err';
+                rsaStatusPill.textContent = `❌ ${err.message}`;
+                return false;
+            }
+        }
+
+        function setMode(mode) {
+            activeMode = mode;
+            btnModeV2.classList.toggle('active', mode === 'v2');
+            btnModeV1.classList.toggle('active', mode === 'v1');
+            sectionRsaV2.style.display = mode === 'v2' ? 'flex' : 'none';
+            sectionLegacyV1.style.display = mode === 'v1' ? 'flex' : 'none';
+            btnGenerate.innerHTML = mode === 'v2'
+                ? '<span>⚡ GENERAR LLAVE RSA v2</span>'
+                : '<span>🔑 GENERAR LLAVE HEREDADA v1</span>';
+        }
+
+        btnModeV2.addEventListener('click', () => setMode('v2'));
+        btnModeV1.addEventListener('click', () => setMode('v1'));
+
+        // Cargar credenciales solo si el dueño decidió guardarlas en su dispositivo
+        const savedRsa = localStorage.getItem('pos_owner_rsa_private_pem');
+        if (savedRsa) {
+            privateKeyInput.value = savedRsa;
+        }
+        refreshRsaStatus();
+
+        const savedV1 = localStorage.getItem('pos_owner_secret');
+        if (savedV1) {
+            secretKeyInput.value = savedV1;
+        }
+
+        privateKeyInput.addEventListener('input', () => {
+            if (chkRememberRsa.checked && privateKeyInput.value.trim()) {
+                localStorage.setItem('pos_owner_rsa_private_pem', normalizePemInput(privateKeyInput.value));
+            } else if (!privateKeyInput.value.trim()) {
+                localStorage.removeItem('pos_owner_rsa_private_pem');
+            }
+            refreshRsaStatus();
         });
 
-        // Toggle secret visibility
+        chkRememberRsa.addEventListener('change', () => {
+            if (!chkRememberRsa.checked) {
+                localStorage.removeItem('pos_owner_rsa_private_pem');
+            } else if (privateKeyInput.value.trim()) {
+                localStorage.setItem('pos_owner_rsa_private_pem', normalizePemInput(privateKeyInput.value));
+            }
+        });
+
+        btnToggleRsaMask.addEventListener('click', () => {
+            const masked = privateKeyInput.classList.toggle('secret-masked');
+            btnToggleRsaMask.textContent = masked ? '👁️ Ver' : '🔒 Ocultar';
+        });
+
+        btnLoadPemFile.addEventListener('click', () => pemFileInput.click());
+        pemFileInput.addEventListener('change', (e) => {
+            const file = e.target?.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                const txt = normalizePemInput(reader.result || '');
+                privateKeyInput.value = txt;
+                if (chkRememberRsa.checked && txt) {
+                    localStorage.setItem('pos_owner_rsa_private_pem', txt);
+                }
+                if (refreshRsaStatus()) showToast('🔐 Clave RSA cargada correctamente');
+            };
+            reader.readAsText(file);
+            pemFileInput.value = '';
+        });
+
+        btnPastePrivatePem.addEventListener('click', async () => {
+            try {
+                const txt = await readClipboardSafe();
+                if (txt) {
+                    privateKeyInput.value = normalizePemInput(txt);
+                    if (chkRememberRsa.checked) {
+                        localStorage.setItem('pos_owner_rsa_private_pem', privateKeyInput.value);
+                    }
+                    refreshRsaStatus();
+                    showToast('📋 Clave privada pegada');
+                } else {
+                    privateKeyInput.focus();
+                    showToast('Pega el archivo PEM manualmente');
+                }
+            } catch (_) {
+                privateKeyInput.focus();
+                showToast('Pega el archivo PEM manualmente');
+            }
+        });
+
+        btnClearPrivatePem.addEventListener('click', () => {
+            privateKeyInput.value = '';
+            localStorage.removeItem('pos_owner_rsa_private_pem');
+            refreshRsaStatus();
+            showToast('🗑️ Clave eliminada de este dispositivo');
+        });
+
         btnToggleSecret.addEventListener('click', () => {
             if (secretKeyInput.type === 'password') {
                 secretKeyInput.type = 'text';
@@ -702,154 +1129,104 @@
             }
         });
 
-        // Paste button
-        btnPaste.addEventListener('click', async () => {
+        chkRememberV1.addEventListener('change', () => {
+            if (!chkRememberV1.checked) localStorage.removeItem('pos_owner_secret');
+            else if (secretKeyInput.value) localStorage.setItem('pos_owner_secret', secretKeyInput.value);
+        });
+        secretKeyInput.addEventListener('input', () => {
+            if (chkRememberV1.checked && secretKeyInput.value) localStorage.setItem('pos_owner_secret', secretKeyInput.value);
+        });
+
+        durationChips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                durationChips.forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+                selectedDurationDays = parseInt(chip.getAttribute('data-days'), 10);
+                lastDurationLabel = chip.querySelector('.title').textContent;
+            });
+        });
+
+        btnPasteTerminal.addEventListener('click', async () => {
             try {
-                const text = await navigator.clipboard.readText();
+                const text = await readClipboardSafe();
                 if (text) {
                     terminalIdInput.value = text.trim();
                     showToast('Código pegado');
+                } else {
+                    terminalIdInput.focus();
+                    showToast('Pega el código manualmente');
                 }
-            } catch (e) {
+            } catch (_) {
                 terminalIdInput.focus();
                 showToast('Pega el código manualmente');
             }
         });
 
-        // Remember checkbox change
-        chkRemember.addEventListener('change', () => {
-            if (!chkRemember.checked) {
-                localStorage.removeItem('pos_owner_secret');
-            } else if (secretKeyInput.value) {
-                localStorage.setItem('pos_owner_secret', secretKeyInput.value);
-            }
-        });
-
-        secretKeyInput.addEventListener('input', () => {
-            if (chkRemember.checked && secretKeyInput.value) {
-                localStorage.setItem('pos_owner_secret', secretKeyInput.value);
-            }
-        });
-
-        // Show toast helper
-        function showToast(msg) {
-            toastMsg.textContent = msg;
-            toast.classList.add('show');
-            setTimeout(() => toast.classList.remove('show'), 2200);
-        }
-
-        // Web Crypto HMAC-SHA256
-        async function hmacSha256(secret, message) {
-            const encoder = new TextEncoder();
-            const keyData = encoder.encode(secret);
-            const cryptoKey = await window.crypto.subtle.importKey(
-                'raw',
-                keyData,
-                { name: 'HMAC', hash: 'SHA-256' },
-                false,
-                ['sign']
-            );
-            const signatureBuffer = await window.crypto.subtle.sign(
-                'HMAC',
-                cryptoKey,
-                encoder.encode(message)
-            );
-            return Array.from(new Uint8Array(signatureBuffer))
-                .map(b => b.toString(16).padStart(2, '0'))
-                .join('');
-        }
-
-        // UTF-8 safe Base64 encoding
-        function utf8ToBase64(str) {
-            return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => {
-                return String.fromCharCode('0x' + p1);
-            }));
-        }
-
-        // Base64 to UTF-8 decoding
-        function base64ToUtf8(str) {
-            return decodeURIComponent(Array.prototype.map.call(atob(str), c => {
-                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-            }).join(''));
-        }
-
-        // Generate License
-        btnGenerate.addEventListener('click', async () => {
+        btnGenerate.addEventListener('click', () => {
             const terminalId = terminalIdInput.value.trim();
-            const secret = secretKeyInput.value.trim();
-
             if (!terminalId) {
                 showToast('⚠️ Ingresa el código de terminal');
                 terminalIdInput.focus();
                 return;
             }
 
-            if (!secret) {
-                showToast('⚠️ Ingresa tu clave secreta de dueño');
-                secretKeyInput.focus();
-                return;
-            }
-
-            // Haptic vibration
             if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
 
             try {
-                let exp = selectedDurationDays === -1 
-                    ? 'never' 
+                const exp = selectedDurationDays === -1
+                    ? 'never'
                     : Date.now() + (selectedDurationDays * 86400000);
 
-                const payloadObj = {
-                    mid: terminalId,
-                    exp: exp,
-                    v: 1
-                };
-
-                const payloadStr = JSON.stringify(payloadObj);
-                const sigHex = await hmacSha256(secret, payloadStr);
-                const rawToken = payloadStr + '.' + sigHex;
-                const base64Key = utf8ToBase64(rawToken);
+                let base64Key = '';
+                if (activeMode === 'v2') {
+                    const privPem = normalizePemInput(privateKeyInput.value);
+                    if (!privPem) {
+                        showToast('⚠️ Carga o pega tu archivo private.pem');
+                        privateKeyInput.focus();
+                        return;
+                    }
+                    const payloadObj = { mid: terminalId, exp, v: 2, iat: Date.now() };
+                    const payloadStr = JSON.stringify(payloadObj);
+                    const signatureB64 = rsaSignSha256Base64(payloadStr, privPem);
+                    base64Key = utf8ToBase64(`${payloadStr}.${signatureB64}`);
+                    resultBadge.innerHTML = '<span>✅ Llave RSA-2048 v2 Válida</span>';
+                } else {
+                    const secret = secretKeyInput.value.trim();
+                    if (!secret) {
+                        showToast('⚠️ Ingresa tu secreto v1');
+                        secretKeyInput.focus();
+                        return;
+                    }
+                    const payloadStr = JSON.stringify({ mid: terminalId, exp, v: 1 });
+                    const sigHex = hmacSha256Hex(secret, payloadStr);
+                    base64Key = utf8ToBase64(`${payloadStr}.${sigHex}`);
+                    resultBadge.innerHTML = '<span>🔑 Llave HMAC v1 Generada</span>';
+                }
 
                 lastGeneratedKey = base64Key;
                 lastTargetMid = terminalId;
-
-                // Update UI
                 keyDisplay.textContent = base64Key;
-                resultMeta.textContent = selectedDurationDays === -1 
-                    ? '🌟 Vitalicia' 
+                resultMeta.textContent = selectedDurationDays === -1
+                    ? '🌟 Vitalicia'
                     : `⏳ Vence: ${new Date(exp).toLocaleDateString()}`;
-
                 resultCard.style.display = 'flex';
                 resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
                 showToast('⚡ ¡Llave generada con éxito!');
-
             } catch (err) {
                 console.error(err);
-                alert('Error al generar la llave: ' + err.message);
+                showToast('❌ ' + (err.message || 'Error al generar'));
             }
         });
 
-        // Copy Key Action
         btnCopyKey.addEventListener('click', async () => {
             if (!lastGeneratedKey) return;
-            try {
-                await navigator.clipboard.writeText(lastGeneratedKey);
-                showToast('📋 Llave copiada al portapapeles');
-            } catch (e) {
-                const textarea = document.createElement('textarea');
-                textarea.value = lastGeneratedKey;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-                showToast('📋 Llave copiada');
-            }
+            const ok = await copyTextSafe(lastGeneratedKey);
+            showToast(ok ? '📋 Llave copiada al portapapeles' : 'Mantén presionada la llave para copiar');
         });
 
-        // WhatsApp Share Action
         btnWhatsApp.addEventListener('click', () => {
             if (!lastGeneratedKey) return;
-            const message = `*🔐 LLAVE DE ACTIVACIÓN - ISAAC POS*
+            const message = `*🔐 LLAVE DE ACTIVACIÓN RSA v2 - ISAAC POS*
 ----------------------------------------
 📍 *Terminal:* \`${lastTargetMid}\`
 ⏳ *Duración:* *${lastDurationLabel}*
@@ -862,73 +1239,104 @@
 _Generada de forma segura por el Dueño del Sistema._`;
 
             const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
-            window.open(url, '_blank');
+            if (window.AndroidBridge) {
+                window.location.href = url;
+            } else {
+                window.open(url, '_blank');
+            }
         });
 
-        // Inspector Accordion Toggle
         accordionInspectHeader.addEventListener('click', () => {
             accordionInspect.classList.toggle('open');
             accordionArrow.textContent = accordionInspect.classList.contains('open') ? '▲' : '▼';
         });
 
-        // Inspect Button
+        btnPasteInspect.addEventListener('click', async () => {
+            try {
+                const txt = await readClipboardSafe();
+                if (txt) inspectInput.value = txt.trim();
+            } catch (_) {}
+        });
+
         btnInspect.addEventListener('click', () => {
             const val = inspectInput.value.trim();
             if (!val) return;
-
             try {
-                let decoded = val;
-                if (!val.includes('{')) {
-                    decoded = base64ToUtf8(val);
+                let payloadRaw = '';
+                let sigRaw = '';
+                if (!val.includes('{') && val.includes('.')) {
+                    const lastDot = val.lastIndexOf('.');
+                    payloadRaw = base64ToUtf8(val.substring(0, lastDot));
+                    sigRaw = val.substring(lastDot + 1);
+                } else {
+                    const decoded = val.includes('{') ? val : base64ToUtf8(val);
+                    const lastDot = decoded.lastIndexOf('.');
+                    if (lastDot === -1) throw new Error('Sin separador de firma');
+                    payloadRaw = decoded.substring(0, lastDot);
+                    sigRaw = decoded.substring(lastDot + 1);
                 }
-                const parts = decoded.split('.');
-                const payload = JSON.parse(parts[0]);
+                const payload = JSON.parse(payloadRaw);
+                const version = Number(payload.v || 1);
                 const expDate = payload.exp === 'never' ? 'Vitalicia (Nunca expira)' : new Date(payload.exp).toLocaleString();
 
-                inspectResult.innerHTML = `
-                    <div><strong>Terminal:</strong> <span style="color:#A7F3D0">${payload.mid || payload.hwid}</span></div>
-                    <div><strong>Expiración:</strong> <span style="color:#FDE68A">${expDate}</span></div>
-                    <div><strong>Versión:</strong> v${payload.v || 1}</div>
-                    <div style="margin-top:6px; font-size:0.68rem; color:#6B7280;">Firma: ${parts[1]?.substring(0, 16)}...</div>
-                `;
+                inspectResult.textContent = '';
+                const addRow = (label, value, color) => {
+                    const row = document.createElement('div');
+                    const strong = document.createElement('strong');
+                    strong.textContent = label + ' ';
+                    const span = document.createElement('span');
+                    if (color) span.style.color = color;
+                    span.textContent = String(value);
+                    row.appendChild(strong);
+                    row.appendChild(span);
+                    inspectResult.appendChild(row);
+                };
+                addRow('Terminal:', payload.mid || payload.hwid || 'N/A', '#A7F3D0');
+                addRow('Expiración:', expDate, '#FDE68A');
+                addRow('Versión:', version >= 2 ? `v${version} (RSA-2048)` : `v${version} (HMAC Heredado)`, version >= 2 ? '#93C5FD' : '#FCA5A5');
+                if (payload.iat) addRow('Emitida:', new Date(payload.iat).toLocaleString(), '#D1D5DB');
+                if (version >= 2) {
+                    const isAuthentic = rsaVerifySha256Base64(payloadRaw, sigRaw, EMBEDDED_PUBLIC_KEY_PEM) ||
+                        (!val.includes('{') && val.includes('.') && rsaVerifySha256Base64(val.substring(0, val.lastIndexOf('.')), sigRaw, EMBEDDED_PUBLIC_KEY_PEM));
+                    addRow(
+                        'Firma RSA:',
+                        isAuthentic ? '✅ Auténtica (coincide con este Isaac POS)' : '❌ No coincide con public.pem actual',
+                        isAuthentic ? '#6EE7B7' : '#FCA5A5'
+                    );
+                }
                 inspectResult.style.display = 'block';
-            } catch (err) {
-                inspectResult.innerHTML = `<span style="color:#EF4444">Llave corrupta o formato inválido</span>`;
+            } catch (_) {
+                inspectResult.textContent = '';
+                const errSpan = document.createElement('span');
+                errSpan.style.color = '#EF4444';
+                errSpan.textContent = 'Llave corrupta o formato inválido';
+                inspectResult.appendChild(errSpan);
                 inspectResult.style.display = 'block';
             }
         });
 
-        // Service Worker registration for PWA installability
-        if ('serviceWorker' in navigator) {
+        // Service Worker para modo web PWA (ignorado en file:// dentro de APK)
+        if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
             window.addEventListener('load', () => {
                 const swUrl = window.location.pathname.startsWith('/license') ? '/license/sw.js' : '/sw.js';
-                navigator.serviceWorker.register(swUrl).then(reg => {
-                    console.log('ServiceWorker registrado:', reg.scope);
-                }).catch(err => {
-                    console.log('SW offline mode:', err.message);
-                });
+                navigator.serviceWorker.register(swUrl).catch(() => {});
             });
         }
 
-        // PWA Install prompt handling
         let deferredPrompt = null;
         const btnPwaInstall = document.getElementById('btnPwaInstall');
-
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
             deferredPrompt = e;
-            console.log('beforeinstallprompt capturado');
         });
-
         if (btnPwaInstall) {
             btnPwaInstall.addEventListener('click', async () => {
                 if (deferredPrompt) {
                     deferredPrompt.prompt();
-                    const { outcome } = await deferredPrompt.userChoice;
-                    console.log('User choice:', outcome);
+                    await deferredPrompt.userChoice;
                     deferredPrompt = null;
                 } else {
-                    alert('Para instalar en tu teléfono:\n1. Toca los 3 puntos (⋮) de Chrome arriba a la derecha.\n2. Toca "Crear acceso directo" o "Instalar aplicación".\n\n¡O toca "📥 Descargar APK" para descargar el instalador directo de Android!');
+                    alert('Para instalar en tu teléfono:\n1. Toca el menú (⋮) de Chrome.\n2. Selecciona "Instalar aplicación" o descarga el APK directo.');
                 }
             });
         }

@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # ISAAC POS - Compilador de Instalador Especial para Windows 7, 8 y 8.1
 # ==============================================================================
 # Genera:
@@ -36,7 +36,7 @@ if (Test-Path "$backendDir\dist_final_installer") {
 Write-Host "`n[2/3] Compilando instalador NSIS con motor Electron 22.3.27..." -ForegroundColor Yellow
 Push-Location $backendDir
 try {
-    cmd.exe /c "npx electron-builder --win nsis"
+    cmd.exe /c "npx electron-builder --config electron-builder.legacy.json --win nsis"
     if ($LASTEXITCODE -ne 0 -and !(Test-Path "$backendDir\dist_final_installer\$installerName")) {
         Write-Error "Fallo durante la compilacion con electron-builder."
         exit 1

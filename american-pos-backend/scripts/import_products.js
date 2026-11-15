@@ -1,18 +1,38 @@
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
 
 const EXCEL_FILE = 'productos_exportacion_20251125.xlsx';
 const DB_FILE = 'db.json';
 
+async function readExcelRows(filePath) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(filePath);
+    const ws = wb.worksheets[0];
+    if (!ws || ws.rowCount < 2) return [];
+    const headers = [];
+    ws.getRow(1).eachCell({ includeEmpty: true }, (c, col) => {
+        headers[col] = String(c?.text ?? c?.value ?? '').trim();
+    });
+    const rows = [];
+    for (let r = 2; r <= ws.rowCount; r++) {
+        const obj = {};
+        let anyVal = false;
+        ws.getRow(r).eachCell({ includeEmpty: false }, (c, col) => {
+            const h = headers[col];
+            if (!h || h === '__proto__' || h === 'constructor' || h === 'prototype') return;
+            obj[h] = (c.value && typeof c.value === 'object' && 'result' in c.value) ? c.value.result : c.value;
+            anyVal = true;
+        });
+        if (anyVal) rows.push(obj);
+    }
+    return rows;
+}
+
+(async () => {
 try {
     console.log(`Leyendo archivo Excel: ${EXCEL_FILE}...`);
-    const workbook = XLSX.readFile(EXCEL_FILE);
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-
-    // Convert to JSON
-    const rawData = XLSX.utils.sheet_to_json(sheet);
+    const rawData = await readExcelRows(EXCEL_FILE);
     console.log(`Filas encontradas: ${rawData.length}`);
 
     if (rawData.length === 0) {
@@ -69,4 +89,6 @@ try {
 
 } catch (error) {
     console.error('Error al importar:', error);
+    process.exitCode = 1;
 }
+})();

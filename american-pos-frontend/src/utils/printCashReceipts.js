@@ -83,7 +83,7 @@ const resolveWidthCols = (widthMm, effSettings) => {
  * sin abrir jamás diálogos nativos de Windows (window.print).
  */
 const executeReceiptPrint = async (htmlContent, printerName = '', options = {}) => {
-    const { rawContent = null, settings = null, businessSettings = null, kickDrawer = false } = options;
+    const { rawContent = null, settings = null, businessSettings = null, kickDrawer = false, autoPrint = false } = options;
     const effSettings = resolveEffectiveSettings(settings, businessSettings);
     const targetPrinter = printerName || effSettings.printerName || '';
     const preferRaw = (effSettings.printMode || 'RAW') !== 'HTML' && Boolean(rawContent);
@@ -138,16 +138,21 @@ const executeReceiptPrint = async (htmlContent, printerName = '', options = {}) 
             const { data } = await api.post('/settings/print-raw', {
                 content: rawContent,
                 printerName: targetPrinter,
-                printMode: effSettings.printMode
+                printMode: effSettings.printMode,
+                autoPrint: Boolean(autoPrint)
             });
-            if (kickDrawer) {
+            if (kickDrawer && data?.success) {
                 await api.post('/settings/open-drawer', {
                     printerName: data?.printerName || targetPrinter,
-                    sequence: effSettings.drawerSequence
+                    sequence: effSettings.drawerSequence,
+                    autoPrint: Boolean(autoPrint)
                 }).catch(() => {});
             }
             if (data && data.success) {
                 return { success: true, printerName: data.printerName || targetPrinter };
+            }
+            if (data && data.skipped) {
+                return { success: false, skipped: true };
             }
         } catch (err) {
             console.warn('[PrintCashReceipts] Backend print-raw notice:', err?.message);
@@ -304,7 +309,7 @@ const isVesMethodKey = (key = '') => {
 /**
  * 1. Comprobante de Apertura de Turno
  */
-export const printOpeningReceipt = async ({ shift, user, settings, businessSettings, widthMm = 80, kickDrawer = false }) => {
+export const printOpeningReceipt = async ({ shift, user, settings, businessSettings, widthMm = 80, kickDrawer = false, autoPrint = false }) => {
     if (!shift) return { success: false };
     const effSettings = resolveEffectiveSettings(settings, businessSettings);
     const { widthMm: effWidth, cols } = resolveWidthCols(widthMm, effSettings);
@@ -352,47 +357,6 @@ export const printOpeningReceipt = async ({ shift, user, settings, businessSetti
             raw += padLine('Base Total (Ref $):', totalBaseUsd, cols);
         }
     }
-    if (shouldPrintItemsInZ) {
-        raw += divider(cols, '=');
-        raw += CMD.BOLD_ON + CMD.ALIGN_CENTER + 'MERCANCIA VENDIDA Y STOCK' + CMD.LF + CMD.BOLD_OFF;
-        raw += divider(cols, '-');
-        raw += CMD.ALIGN_LEFT;
-        let totalSoldUnits = 0;
-        if (cols >= 40) {
-            raw += padLine('PRODUCTO / PRESENTACION', 'VEND.   QUEDAN', cols);
-            raw += divider(cols, '-');
-            resolvedItems.forEach(item => {
-                const presText = item.presentationName ? ` (${item.presentationName})` : '';
-                const label = `${item.name}${presText}`;
-                const sold = Number(item.quantitySold || 0).toFixed(2);
-                const stock = Number(item.stockInPresentations !== undefined ? item.stockInPresentations : (item.currentStock || 0)).toFixed(2);
-                totalSoldUnits += Number(item.quantitySold || 0);
-
-                const values = `${sold.padStart(7)}  ${stock.padStart(7)}`;
-                if (label.length + values.length >= cols - 1) {
-                    raw += cleanEscText(label).substring(0, cols) + CMD.LF;
-                    raw += ' '.repeat(Math.max(0, cols - values.length)) + values + CMD.LF;
-                } else {
-                    raw += padLine(label, values, cols);
-                }
-            });
-        } else {
-            raw += padLine('PRODUCTO / PRES.', 'CANT.', cols);
-            raw += divider(cols, '-');
-            resolvedItems.forEach(item => {
-                const presText = item.presentationName ? ` (${item.presentationName})` : '';
-                const label = `${item.name}${presText}`;
-                const sold = Number(item.quantitySold || 0).toFixed(2);
-                const stock = Number(item.stockInPresentations !== undefined ? item.stockInPresentations : (item.currentStock || 0)).toFixed(2);
-                totalSoldUnits += Number(item.quantitySold || 0);
-
-                raw += cleanEscText(label).substring(0, cols) + CMD.LF;
-                raw += padLine('  Vend:', `${sold} | Quedan: ${stock}`, cols);
-            });
-        }
-        raw += divider(cols, '-');
-        raw += padLine(`Renglones: ${resolvedItems.length}`, `Tot. Vend: ${totalSoldUnits.toFixed(2)}`, cols);
-    }
 
     raw += divider(cols, '=');
     raw += CMD.LF + CMD.LF;
@@ -430,14 +394,15 @@ export const printOpeningReceipt = async ({ shift, user, settings, businessSetti
     return await executeReceiptPrint(html, effSettings?.printerName, {
         rawContent: raw,
         settings: effSettings,
-        kickDrawer
+        kickDrawer,
+        autoPrint
     });
 };
 
 /**
  * 2. Vale de Movimiento de Caja (Ingreso / Egreso / Sangría)
  */
-export const printCashMovementReceipt = async ({ movement, shift, user, settings, businessSettings, widthMm = 80, kickDrawer = false }) => {
+export const printCashMovementReceipt = async ({ movement, shift, user, settings, businessSettings, widthMm = 80, kickDrawer = false, autoPrint = false }) => {
     if (!movement) return { success: false };
     const effSettings = resolveEffectiveSettings(settings, businessSettings);
     const { widthMm: effWidth, cols } = resolveWidthCols(widthMm, effSettings);
@@ -519,7 +484,8 @@ export const printCashMovementReceipt = async ({ movement, shift, user, settings
     return await executeReceiptPrint(html, effSettings?.printerName, {
         rawContent: raw,
         settings: effSettings,
-        kickDrawer
+        kickDrawer,
+        autoPrint
     });
 };
 
@@ -671,7 +637,8 @@ export const printZReportReceipt = async ({
     exchangeRate,
     widthMm = 80,
     kickDrawer = false,
-    itemsSummary = null
+    itemsSummary = null,
+    autoPrint = false
 }) => {
     const effSettings = resolveEffectiveSettings(settings, businessSettings);
     if (currencyMode) effSettings.currencyMode = currencyMode;
@@ -1066,7 +1033,8 @@ export const printZReportReceipt = async ({
     return await executeReceiptPrint(html, effSettings?.printerName, {
         rawContent: raw,
         settings: effSettings,
-        kickDrawer
+        kickDrawer,
+        autoPrint
     });
 };
 
@@ -1079,7 +1047,8 @@ export const printShiftInventoryReceipt = async ({
     itemsSummary = null,
     settings = null,
     businessSettings = null,
-    widthMm = 80
+    widthMm = 80,
+    autoPrint = false
 }) => {
     const effSettings = resolveEffectiveSettings(settings, businessSettings);
     const { widthMm: effWidth, cols } = resolveWidthCols(widthMm, effSettings);
@@ -1201,6 +1170,7 @@ export const printShiftInventoryReceipt = async ({
 
     return await executeReceiptPrint(html, effSettings?.printerName, {
         rawContent: raw,
-        settings: effSettings
+        settings: effSettings,
+        autoPrint
     });
 };

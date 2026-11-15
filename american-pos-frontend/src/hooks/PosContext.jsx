@@ -6,6 +6,7 @@ import { useAuth } from './AuthContext';
 import { db } from '../services/db';
 import { isDollarOnlyCountry, isUsdOnlyMode } from '../utils/format';
 import { evaluateCartPromotions } from '../utils/promotionsEngine';
+import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
 
 const PosContext = globalThis.__ISAAC_POS_CONTEXT__ || (globalThis.__ISAAC_POS_CONTEXT__ = createContext());
 
@@ -54,7 +55,7 @@ export function PosProvider({ children }) {
             return {};
         }
     });
-    const { socket } = useSocket();
+    const { socket, isConnected } = useSocket();
 
     useEffect(() => {
         const handleModeChange = () => {
@@ -297,15 +298,16 @@ export function PosProvider({ children }) {
                     }
                 }
                 
-                // Resiliencia ante Apagones: Si no hay carrito local activo, consultar borrador persistente en PostgreSQL
+                // Resiliencia ante Apagones: Si no hay carrito local activo y existe sesión iniciada, consultar borrador persistente en PostgreSQL
                 const currentRegId = localStorage.getItem('isaac_pos_register_id') || localStorage.getItem('pos_register_id') || 'Caja_1';
-                if ((!sessionDoc?.value?.cart || sessionDoc.value.cart.length === 0) && currentRegId) {
+                const hasAuthToken = Boolean(localStorage.getItem('auth_token'));
+                if (hasAuthToken && (!sessionDoc?.value?.cart || sessionDoc.value.cart.length === 0) && currentRegId) {
                     try {
                         const { data: resDraft } = await api.get(`/sales/register-draft/${currentRegId}`, { timeout: 3500 });
                         if (resDraft?.success && resDraft?.draft && Array.isArray(resDraft.draft.items) && resDraft.draft.items.length > 0) {
                             setPendingRecoveryDraft(resDraft.draft);
                         }
-                    } catch (_) {}
+                    } catch (_draftErr) {}
                 }
                 
                 // Background: Held Sales
@@ -552,13 +554,11 @@ export function PosProvider({ children }) {
             } else {
                 // Servidor local no disponible (Ej: teléfono en Internet/Datos Móviles). Consultar Supabase Cloud 24/7
                 let cloudLoaded = false;
-                try {
-                    const cloudRes = await fetch('https://puvqiipussyktfmgafgv.supabase.co/rest/v1/cloud_configuracion?id=eq.general&select=*', {
-                        headers: {
-                            'apikey': 'sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6',
-                            'Authorization': 'Bearer sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6'
-                        }
-                    });
+                if (hasSupabaseConfig()) {
+                    try {
+                        const cloudRes = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general&select=*'), {
+                            headers: getSupabaseHeaders()
+                        });
                     if (cloudRes.ok) {
                         const cloudRows = await cloudRes.json();
                         if (Array.isArray(cloudRows) && cloudRows.length > 0 && cloudRows[0].tasa_cambio) {
@@ -574,8 +574,9 @@ export function PosProvider({ children }) {
                             console.log(`[PosContext] ☁️ Tasa sincronizada desde Supabase Cloud 24/7: ${cloudRate} Bs/$`);
                         }
                     }
-                } catch (cloudErr) {
-                    console.warn('[PosContext] Cloud rate fetch error:', cloudErr?.message || cloudErr);
+                    } catch (cloudErr) {
+                        console.warn('[PosContext] Cloud rate fetch error:', cloudErr?.message || cloudErr);
+                    }
                 }
 
                 if (!cloudLoaded) {
@@ -606,6 +607,11 @@ export function PosProvider({ children }) {
     }, []);
 
     const fetchShiftStatus = useCallback(async () => {
+        if (!user || !localStorage.getItem('auth_token')) {
+            setIsShiftOpen(false);
+            setCurrentShift(null);
+            return;
+        }
         try {
             const response = await api.get(`/cash/current?registerId=${registerId}`);
             const shiftData = response.data || null;
@@ -616,7 +622,7 @@ export function PosProvider({ children }) {
             setIsShiftOpen(false);
             setCurrentShift(null);
         }
-    }, [registerId]);
+    }, [registerId, user]);
 
     useEffect(() => {
         const handleShiftChanged = (e) => {
@@ -666,7 +672,9 @@ export function PosProvider({ children }) {
     useEffect(() => {
         const handlePosDataSynced = () => {
             fetchExchangeRate();
-            fetchShiftStatus();
+            if (user && localStorage.getItem('auth_token')) {
+                fetchShiftStatus();
+            }
         };
 
         const handleRateUpdated = (e) => {
@@ -683,19 +691,33 @@ export function PosProvider({ children }) {
         window.addEventListener('pos-data-synced', handlePosDataSynced);
         window.addEventListener('pos-exchange-rate-updated', handleRateUpdated);
 
-        // Polling de tasa en la nube si estamos desconectados del socket local (modo Internet / 4G)
+        // Polling de respaldo solo si el usuario inició sesión y el WebSocket no está conectado
         const cloudInterval = setInterval(() => {
-            if (!socket || !socket.connected) {
+            if (!user || !localStorage.getItem('auth_token')) return;
+            if (!isConnected && !socket?.connected) {
                 fetchExchangeRate();
             }
-        }, 15000);
+        }, 30000);
 
         return () => {
             window.removeEventListener('pos-data-synced', handlePosDataSynced);
             window.removeEventListener('pos-exchange-rate-updated', handleRateUpdated);
             clearInterval(cloudInterval);
         };
-    }, [fetchExchangeRate, fetchShiftStatus, socket]);
+    }, [fetchExchangeRate, fetchShiftStatus, socket, isConnected, user]);
+
+    // Resiliencia ante Apagones tras Login: recuperar borrador pendiente si no hay carrito local
+    useEffect(() => {
+        if (!user?.id || !localStorage.getItem('auth_token') || isHydrating || !registerId) return;
+        if (Array.isArray(posState.cart) && posState.cart.length > 0) return;
+        let cancelled = false;
+        api.get(`/sales/register-draft/${registerId}`, { timeout: 3500 }).then(({ data: resDraft }) => {
+            if (!cancelled && resDraft?.success && resDraft?.draft && Array.isArray(resDraft.draft.items) && resDraft.draft.items.length > 0) {
+                setPendingRecoveryDraft(resDraft.draft);
+            }
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, [user?.id, registerId, isHydrating]);
 
     // Sincronización Local -> IndexedDB
     useEffect(() => {
@@ -703,9 +725,9 @@ export function PosProvider({ children }) {
         db.put('metadata', { key: 'pos_active_session', value: posState }).catch(e => console.error("Error saving session", e));
     }, [posState, isHydrating]);
 
-    // Resiliencia ante Apagones: Auto-guardado en caliente (Debounced 1200ms) en PostgreSQL
+    // Resiliencia ante Apagones: Auto-guardado en caliente (Debounced 1200ms) en PostgreSQL solo con sesión activa
     useEffect(() => {
-        if (!isReady.current || isHydrating || !registerId) return;
+        if (!isReady.current || isHydrating || !registerId || !user || !localStorage.getItem('auth_token')) return;
 
         const timer = setTimeout(async () => {
             try {
@@ -779,7 +801,9 @@ export function PosProvider({ children }) {
                         } : prev));
                     }
                 }
-            } catch (_) {}
+            } catch (_custErr) {
+                if (!cancelled) console.warn('[PosContext] Error resolviendo datos del cliente:', _custErr?.message || _custErr);
+            }
         };
         resolveCust();
         return () => { cancelled = true; };

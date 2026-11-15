@@ -6,10 +6,12 @@ import api from '../services/api';
 import { X, Send, User as UserIcon, MessageSquare, Smile, BellRing, Paperclip, Check, CheckCheck, Trash2, Lock, ChevronDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { playSendSound, playReceiveSound, playUrgentSound } from '../utils/soundUtils';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 const InternalChatPanel = ({ isOpen, onClose }) => {
     const { socket } = useSocket();
     const { user } = useAuth();
+    const { confirm, confirmDialog } = useConfirmDialog();
     const [messages, setMessages] = useState([]);
     const [newMessage, setNewMessage] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -253,7 +255,13 @@ const InternalChatPanel = ({ isOpen, onClose }) => {
     const typingUsersList = Object.values(typingUsers);
 
     const handleClearChat = async () => {
-        if (!window.confirm('¿Estás seguro de que quieres vaciar todo el historial del chat para todos los usuarios? Esta acción no se puede deshacer.')) {
+        const confirmed = await confirm({
+            title: 'Vaciar historial de chat',
+            message: '¿Estás seguro de que quieres vaciar todo el historial del chat para todos los usuarios? Esta acción no se puede deshacer.',
+            confirmText: 'Vaciar chat',
+            variant: 'danger'
+        });
+        if (!confirmed) {
             return;
         }
         try {
@@ -505,6 +513,7 @@ const InternalChatPanel = ({ isOpen, onClose }) => {
                     </motion.div>
                 </>
             )}
+            {confirmDialog}
         </AnimatePresence>
     );
 };

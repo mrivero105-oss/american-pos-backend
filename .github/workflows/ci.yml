@@ -1,0 +1,285 @@
+name: Isaac POS CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  frontend-lint-and-build:
+    name: Frontend Lint, Unit & Bundle Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: american-pos-frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: american-pos-frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run ESLint strict checks
+        run: |
+          npx eslint src --quiet
+          npx eslint src -c eslint.undef-check.config.js
+
+      - name: Run frontend UnifiedDB local tests
+        run: node tests/test_unified_db.cjs
+
+      - name: Build production web & mobile bundles (Chromium 108+)
+        run: npm run build
+
+      - name: Verify built entry chunk budget (< 350 KB)
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const assetsDir = path.resolve('dist/assets');
+            const entry = fs.readdirSync(assetsDir).find(f => /^index-.*\.js$/.test(f));
+            if (!entry) throw new Error('Missing built index entry bundle');
+            const sizeKb = fs.statSync(path.join(assetsDir, entry)).size / 1024;
+            console.log('Entry chunk:', entry, sizeKb.toFixed(2), 'KB');
+            if (sizeKb >= 350) throw new Error('Entry chunk exceeded 350 KB limit: ' + sizeKb.toFixed(2));
+          "
+
+      - name: Upload built frontend dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: |
+            american-pos-frontend/dist
+            american-pos-backend/public
+          retention-days: 3
+
+  backend-tests-postgres:
+    name: Backend Integrity, Security & Integration (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_pg16_ephemeral_password
+          POSTGRES_DB: americanpos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ISAAC_TEST_ISOLATED: '1'
+      NODE_ENV: test
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_USER: postgres
+      DB_PASSWORD: ci_pg16_ephemeral_password
+      DB_NAME_FORCE: americanpos_test
+      DISABLE_BACKGROUND_WORKERS: 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: american-pos-backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: american-pos-backend
+        run: npm ci
+
+      - name: Generate ephemeral CI test secrets
+        run: |
+          {
+            echo "JWT_SECRET=$(openssl rand -hex 32)"
+            echo "LEGACY_HMAC_SECRET=$(openssl rand -hex 32)"
+            echo "SYNC_SECRET_KEY=$(openssl rand -hex 32)"
+            echo "BACKUP_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "AUDIT_HMAC_SECRET=$(openssl rand -hex 32)"
+            echo "OWNER_SECRET_KEY=$(openssl rand -hex 16)"
+          } >> "$GITHUB_ENV"
+
+      - name: Run Vortex Math & Legacy Security/Auth suites
+        working-directory: american-pos-backend
+        run: |
+          node test_vortex_engine.js
+          node tests/test_security_audit_remediation.js
+          node tests/test_auth_security.js
+
+      - name: Run Blocks 1-4 & PosIntegrity unit/integration tests
+        working-directory: american-pos-backend
+        run: |
+          node --test \
+            tests/test_block1_security_fixes.test.mjs \
+            tests/test_block1_integrity_remediation.test.mjs \
+            tests/test_block2_financial_integrity.test.mjs \
+            tests/test_block3_associations_and_routes.test.mjs \
+            tests/test_block4_offline_sync_and_resilience.test.mjs \
+            tests/pos-integrity.test.mjs
+
+      - name: Run Real Express + PG16 + Socket.IO & Block 2 Security Hardening E2E
+        working-directory: american-pos-backend
+        run: |
+          node --test \
+            tests/test_e2e_api_and_socket.test.mjs \
+            tests/test_block2_security_hardening.test.mjs
+
+  e2e-playwright:
+    name: Full-Stack Real Browser E2E (Playwright + PG16)
+    runs-on: ubuntu-latest
+    needs: [frontend-lint-and-build, backend-tests-postgres]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_pg16_ephemeral_password
+          POSTGRES_DB: americanpos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ISAAC_TEST_ISOLATED: '1'
+      NODE_ENV: test
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_USER: postgres
+      DB_PASSWORD: ci_pg16_ephemeral_password
+      DB_NAME_FORCE: americanpos_test
+      DISABLE_BACKGROUND_WORKERS: 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: american-pos-backend/package-lock.json
+
+      - name: Restore built frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+
+      - name: Install backend & frontend dependencies
+        run: |
+          npm --prefix american-pos-backend ci
+          npm --prefix american-pos-frontend ci
+
+      - name: Install Playwright Chromium browser
+        working-directory: american-pos-frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate ephemeral CI test secrets
+        run: |
+          {
+            echo "JWT_SECRET=$(openssl rand -hex 32)"
+            echo "LEGACY_HMAC_SECRET=$(openssl rand -hex 32)"
+            echo "SYNC_SECRET_KEY=$(openssl rand -hex 32)"
+            echo "BACKUP_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "AUDIT_HMAC_SECRET=$(openssl rand -hex 32)"
+            echo "OWNER_SECRET_KEY=$(openssl rand -hex 16)"
+          } >> "$GITHUB_ENV"
+
+      - name: Run Playwright Real UI E2E suite
+        working-directory: american-pos-frontend
+        run: npx playwright test
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-artifacts
+          path: american-pos-frontend/test-results
+          retention-days: 3
+
+  windows-dual-packaging-check:
+    name: Windows Dual Electron (22 Legacy + 31 Modern) & Scripts Verification
+    runs-on: windows-latest
+    needs: [frontend-lint-and-build, backend-tests-postgres]
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: american-pos-backend/package-lock.json
+
+      - name: Restore built frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+
+      - name: Validate PowerShell build scripts AST syntax
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'compilar_todo.ps1',
+            'compilar_instalador_win7_8.ps1',
+            'compilar_instalador_moderno_win10_11.ps1',
+            'american-pos-backend/build_legacy.ps1',
+            'american-pos-backend/build_release.ps1',
+            'build_ultra/sync_and_compile.ps1',
+            'build_ultra/compilar_ambos_instaladores.ps1'
+          )
+          foreach ($s in $scripts) {
+            if (Test-Path $s) {
+              $tokens = $null; $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $s), [ref]$tokens, [ref]$errors) | Out-Null
+              if ($errors -and $errors.Count -gt 0) {
+                throw "PowerShell syntax errors in $s : $($errors | Out-String)"
+              }
+              Write-Host "AST OK: $s"
+            }
+          }
+
+      - name: Install backend dependencies
+        working-directory: american-pos-backend
+        run: npm ci
+
+      - name: Verify Electron 22 (Win7/8.1) & Electron 31 (Win10/11) unpacked builds
+        working-directory: american-pos-backend
+        run: |
+          npm run pack:legacy
+          npm run pack:modern
+          node -e "
+            const fs = require('fs');
+            for (const dir of ['dist_final_installer/win-unpacked', 'dist_modern/win-unpacked']) {
+              const res = fs.readdirSync(dir + '/resources');
+              if (!res.includes('app.asar')) throw new Error('Missing app.asar in ' + dir);
+              if (res.some(f => f.startsWith('.env'))) throw new Error('Secret leak .env in ' + dir);
+              console.log('Verified clean unpacked build:', dir);
+            }
+          "

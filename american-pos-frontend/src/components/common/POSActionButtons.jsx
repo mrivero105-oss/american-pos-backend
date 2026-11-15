@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Trash2, Clock, FileText, Loader2, Pause } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 
 export default function POSActionButtons({ 
     cartItems, setCartItems, 
@@ -11,10 +12,17 @@ export default function POSActionButtons({
     onQuotationSaved
 }) {
     const [processing, setProcessing] = useState(false);
+    const { confirm, confirmDialog } = useConfirmDialog();
 
-    const handleClearCart = () => {
+    const handleClearCart = async () => {
         if (cartItems.length === 0) return;
-        if (window.confirm('¿Estás seguro de vaciar el carrito actual?')) {
+        const confirmed = await confirm({
+            title: 'Vaciar carrito',
+            message: '¿Estás seguro de vaciar el carrito actual?',
+            confirmText: 'Vaciar carrito',
+            variant: 'danger'
+        });
+        if (confirmed) {
             setCartItems([]);
         }
     };
@@ -118,6 +126,7 @@ export default function POSActionButtons({
                 {processing ? <Loader2 size={20} className="animate-spin mb-1.5" /> : <FileText size={20} className="mb-1.5" />}
                 <span className="text-[9px] font-black uppercase tracking-[0.2em]">Cotizar</span>
             </button>
+            {confirmDialog}
         </div>
     );
 }

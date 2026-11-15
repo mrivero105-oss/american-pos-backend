@@ -26,7 +26,10 @@ async function main() {
             process.exit(0);
         }
 
-        const secret = process.env.AUDIT_HMAC_SECRET || process.env.JWT_SECRET || 'isaac_secure_audit_ledger_2026';
+        const secret = process.env.AUDIT_HMAC_SECRET ? String(process.env.AUDIT_HMAC_SECRET).trim() : '';
+        if (!secret) {
+            throw new Error('Define AUDIT_HMAC_SECRET en el entorno antes de verificar la cadena de auditoría (prohibido reutilizar JWT_SECRET).');
+        }
         let totalAllLogs = 0;
         let totalHashedLogs = 0;
         let totalTampered = 0;

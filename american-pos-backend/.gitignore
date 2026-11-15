@@ -2,7 +2,9 @@ node_modules
 serviceAccountKey.json
 .env
 .env.*
+!.env.caja_secundaria_ejemplo
 backups/
+*.dump
 
 *.sqlite
 *.sqlite*
@@ -11,17 +13,30 @@ database/*.sqlite*
 
 .terraform/
 dist_release/
-product_images/
+dist_modern/
 dist_final_installer/
+dist_legacy_installer/
+product_images/
 build/*
 !build/*.nsh
+!build/icon.ico
+!build/instalar_postgresql.ps1
 build_temp/
 auto-backups/
 .wwebjs_auth/
 .wwebjs_cache/
+.test_wwebjs_auth/
 logs/
 *.log
 scratch/
 *.bat
 settings.json
 !settings.example.json
+db-config.json
+*.pfx
+*.p12
+*.key
+*private*.pem
+test-results/
+playwright-report/
+blob-report/

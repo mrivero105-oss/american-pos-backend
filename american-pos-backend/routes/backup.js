@@ -234,13 +234,48 @@ const restoreExtractedSnapshotDir = async (tempExtractPath, mediaRootDir) => {
 
 router.use(requirePermission('canManageSettings'));
 
+const getAllowedBackupRoots = () => {
+    const os = require('os');
+    const userDataPath = process.env.USER_DATA_PATH || path.join(__dirname, '..');
+    const roots = [
+        backupDir,
+        path.join(userDataPath, 'auto-backups'),
+        path.join(userDataPath, 'backups'),
+        'C:\\IsaacPOS_Respaldos',
+        path.join(os.homedir(), 'Documents', 'IsaacPOS_Backups')
+    ];
+    try {
+        const cloudMirrorService = require('../services/CloudMirrorService');
+        const mirrorCfg = cloudMirrorService.getConfig();
+        if (mirrorCfg?.mirrorPath) roots.push(mirrorCfg.mirrorPath);
+    } catch (_) {}
+    return roots.filter(Boolean).map(r => path.resolve(r));
+};
+
+const isPathInsideRoots = (candidatePath, roots, allowExactRoot = false) => {
+    if (typeof candidatePath !== 'string' || !candidatePath.trim() || candidatePath.includes('\0')) return false;
+    const resolved = path.resolve(candidatePath.trim());
+    return roots.some((root) => {
+        const left = process.platform === 'win32' ? root.toLowerCase() : root;
+        const right = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+        const rel = path.relative(left, right);
+        if (allowExactRoot && rel === '') return true;
+        return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
+    });
+};
+
 // Ruta para abrir la carpeta de respaldos en el explorador de archivos
 router.post('/explore', (req, res) => {
     console.log('[Backup Route] POST /explore triggered');
     try {
         const cloudMirrorService = require('../services/CloudMirrorService');
         const mirrorCfg = cloudMirrorService.getConfig();
-        const customDir = req.body?.customPath || mirrorCfg?.mirrorPath || 'C:\\IsaacPOS_Respaldos';
+        const allowedRoots = getAllowedBackupRoots();
+        const requestedDir = req.body?.customPath;
+        if (requestedDir && !isPathInsideRoots(requestedDir, allowedRoots, true)) {
+            return res.status(403).json({ error: 'Directorio fuera de las carpetas de respaldo autorizadas.' });
+        }
+        const customDir = requestedDir ? path.resolve(String(requestedDir)) : (mirrorCfg?.mirrorPath || 'C:\\IsaacPOS_Respaldos');
 
         if (process.platform === 'win32') {
             if (!fs.existsSync(customDir)) {
@@ -251,11 +286,11 @@ router.post('/explore', (req, res) => {
                 }
             }
             const targetDir = fs.existsSync(customDir) ? customDir : backupDir;
-            exec(`explorer "${targetDir}"`);
+            execFile('explorer.exe', [targetDir]);
         } else if (process.platform === 'darwin') {
-            exec(`open "${backupDir}"`);
+            execFile('open', [backupDir]);
         } else {
-            exec(`xdg-open "${backupDir}"`);
+            execFile('xdg-open', [backupDir]);
         }
         res.status(200).json({ success: true, message: 'Carpeta de respaldos abierta.' });
     } catch (error) {
@@ -561,8 +596,11 @@ router.post('/encrypt', async (req, res) => {
         }
 
         const sourcePath = existingPaths[0];
-        const outputPath = sourcePath.endsWith('.enc') ? sourcePath : `${sourcePath}.enc`;
         const backupEncryptionService = require('../services/BackupEncryptionService');
+        if (sourcePath.toLowerCase().endsWith('.enc') || backupEncryptionService.isEncrypted(sourcePath)) {
+            return res.status(400).json({ error: 'Este archivo ya se encuentra cifrado (.enc).' });
+        }
+        const outputPath = `${sourcePath}.enc`;
         const result = backupEncryptionService.encryptFile(sourcePath, outputPath, password);
 
         res.json({
@@ -583,15 +621,25 @@ router.post('/restore-path', async (req, res) => {
     try {
         const { filePath } = req.body;
 
-        if (!filePath) {
-            return res.status(400).json({ error: 'No se especificó la ruta del archivo.' });
+        if (!filePath || typeof filePath !== 'string' || filePath.includes('\0')) {
+            return res.status(400).json({ error: 'No se especificó una ruta válida de archivo.' });
         }
 
-        if (!fs.existsSync(filePath)) {
+        const resolvedRestorePath = path.resolve(filePath);
+        const allowedRestoreExts = ['.sql', '.dump', '.zip', '.sqlite', '.db', '.backup', '.enc'];
+        if (
+            !isPathInsideRoots(resolvedRestorePath, getAllowedBackupRoots(), false) ||
+            (!isValidBackupFilename(path.basename(resolvedRestorePath)) &&
+             !allowedRestoreExts.includes(path.extname(resolvedRestorePath).toLowerCase()))
+        ) {
+            return res.status(403).json({ error: 'Ruta de restauración fuera de los directorios de respaldo autorizados.' });
+        }
+
+        if (!fs.existsSync(resolvedRestorePath)) {
             return res.status(404).json({ error: 'El archivo de respaldo especificado no existe.' });
         }
 
-        let effectivePath = filePath;
+        let effectivePath = resolvedRestorePath;
         let tempDecryptedPath = null;
         const backupEncryptionService = require('../services/BackupEncryptionService');
 

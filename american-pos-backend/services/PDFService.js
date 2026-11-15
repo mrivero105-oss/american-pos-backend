@@ -1,18 +1,7 @@
 const fs = require('fs');
 
-if (typeof globalThis.fetch === 'undefined') {
-    try {
-        const nodeFetch = require('node-fetch');
-        globalThis.fetch = nodeFetch;
-        global.fetch = nodeFetch;
-        if (!globalThis.Headers) globalThis.Headers = nodeFetch.Headers;
-        if (!global.Headers) global.Headers = nodeFetch.Headers;
-        if (!globalThis.Request) globalThis.Request = nodeFetch.Request;
-        if (!global.Request) global.Request = nodeFetch.Request;
-        if (!globalThis.Response) globalThis.Response = nodeFetch.Response;
-        if (!global.Response) global.Response = nodeFetch.Response;
-    } catch (e) {}
-}
+const { ensureFetchPolyfill } = require('../utils/ensureFetchPolyfill');
+ensureFetchPolyfill();
 
 const AIService = require('./AIService');
 const precision = require('../utils/precision');

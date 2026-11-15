@@ -5,7 +5,7 @@ const SupabaseSyncService = require('../services/SupabaseSyncService');
 const { Sale, CreditHistory } = require('../database/models');
 const { customerSchema } = require('../schemas/customerSchema');
 const validate = require('../middleware/validate');
-const { isAdmin } = require('../middleware/auth');
+const { isAdmin, requirePermission } = require('../middleware/auth');
 
 const emitCustomersChanged = (req, payload = {}) => {
     try {
@@ -14,9 +14,10 @@ const emitCustomersChanged = (req, payload = {}) => {
             const companyId = String(req.user?.companyId || '2');
             const eventData = { companyId, timestamp: Date.now(), ...payload };
             io.to(companyId).emit('customers_changed', eventData);
-            io.emit('customers_changed', eventData);
         }
-    } catch (_) {}
+    } catch (emitErr) {
+        console.warn('[Customers] Error emitiendo evento Socket.IO customers_changed:', emitErr.message);
+    }
 };
 
 /**
@@ -149,7 +150,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /export - Export customer database to CSV
-router.get('/export', async (req, res) => {
+router.get('/export', requirePermission(['canManageCustomers', 'canViewReports']), async (req, res) => {
     try {
         const { Customer } = require('../database/models');
         const customers = await Customer.findAll({
@@ -331,7 +332,7 @@ router.post('/:id/redeem-points', async (req, res) => {
 });
 
 // POST /import - Bulk Import Customers
-router.post('/import', async (req, res) => {
+router.post('/import', requirePermission('canManageCustomers'), async (req, res) => {
     try {
         const { customers } = req.body;
         const result = await customerService.importCustomersBulk(req.user, customers);

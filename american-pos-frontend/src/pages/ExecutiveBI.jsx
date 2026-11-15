@@ -9,6 +9,7 @@ import {
 import api from '../services/api';
 import { usePos } from '../hooks/PosContext';
 import { formatBs, formatUSD } from '../utils/format';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 const MONTHS = [
     { value: 1, label: 'Enero' },
@@ -27,6 +28,7 @@ const MONTHS = [
 
 export default function ExecutiveBI() {
     const { exchangeRate } = usePos();
+    const { confirm, confirmDialog } = useConfirmDialog();
     const effRate = Number(exchangeRate) || 1;
 
     const currentDate = new Date();
@@ -166,7 +168,13 @@ export default function ExecutiveBI() {
     };
 
     const handleSettleCommission = async (comm) => {
-        if (!window.confirm(`¿Confirmar liquidación de comisión para ${comm.userName} por ${formatUSD(comm.commissionAmount)}?`)) return;
+        const confirmed = await confirm({
+            title: 'Liquidar comisión',
+            message: `¿Confirmar liquidación de comisión para ${comm.userName} por ${formatUSD(comm.commissionAmount)}?`,
+            confirmText: 'Liquidar',
+            variant: 'primary'
+        });
+        if (!confirmed) return;
         try {
             await api.post(`/bi/commissions/${comm.id}/settle`, {
                 notes: `Liquidado en cierre mensual ${selectedMonth}/${selectedYear}`
@@ -1058,6 +1066,7 @@ export default function ExecutiveBI() {
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </div>
     );
 }

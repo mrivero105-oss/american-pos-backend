@@ -86,11 +86,27 @@ class ProductService {
      */
     async getAllProducts(reqUser, queryParams) {
         const { companyId, activeBranchId } = reqUser;
-        const { category, search, minimal, page = 1, limit = 0, supplierId, stockFilter, stockStatus, minPrice, maxPrice, status, es_controlado, expirationFilter } = queryParams;
+        const { category, search, minimal, page = 1, limit = 0, supplierId, stockFilter, stockStatus, minPrice, maxPrice, status, es_controlado, expirationFilter, branchScoped, branchId: queryBranchId, missingCost } = queryParams;
         const currentStockFilter = stockFilter || stockStatus; 
         const isMinimal = minimal === 'true';
 
         const whereClause = { companyId };
+
+        // Resolver sucursal activa solo cuando se solicita vista por sucursal (evita alterar sync móvil global)
+        let scopedBranch = null;
+        if (branchScoped === 'true' || queryBranchId) {
+            const candidateBranch = String(queryBranchId || activeBranchId || '').trim();
+            if (candidateBranch && !['1', 'null', 'undefined', 'global'].includes(candidateBranch.toLowerCase())) {
+                const branchCompanyCond = (companyId === '2' || companyId === 'default')
+                    ? { [Op.or]: ['2', 'default', null] }
+                    : companyId;
+                scopedBranch = await Branch.findOne({
+                    where: { id: candidateBranch, companyId: branchCompanyCond },
+                    attributes: ['id'],
+                    raw: true
+                }).catch(() => null);
+            }
+        }
 
         // Handle Status filtering (keep out-of-stock products active and visible in catalog)
         if (status) {
@@ -100,7 +116,13 @@ class ProductService {
         }
 
         if (category && category !== 'Todas') {
-            whereClause.category = category;
+            whereClause[Op.and] = [
+                ...(whereClause[Op.and] || []),
+                sequelize.where(
+                    sequelize.fn('LOWER', sequelize.fn('TRIM', sequelize.col('Product.category'))),
+                    String(category).trim().toLowerCase()
+                )
+            ];
         }
 
         if (supplierId) {
@@ -133,17 +155,21 @@ class ProductService {
 
         const notServiceSql = "LOWER(TRIM(COALESCE(\"Product\".\"category\", ''))) <> 'servicios'";
         const isServiceSql = "LOWER(TRIM(COALESCE(\"Product\".\"category\", ''))) = 'servicios'";
+        const stockSqlExpr = scopedBranch
+            ? `COALESCE((SELECT bs."quantity" FROM "BranchStocks" bs WHERE bs."productId" = "Product"."id" AND bs."branchId" = ${sequelize.escape(scopedBranch.id)} LIMIT 1), 0)`
+            : `COALESCE((SELECT SUM(bs."quantity") FROM "BranchStocks" bs WHERE bs."productId" = "Product"."id"), "Product"."stockQuantity", 0)`;
+
         if (currentStockFilter === 'low') {
             whereClause[Op.and] = [
                 ...(whereClause[Op.and] || []),
                 sequelize.literal(notServiceSql),
-                sequelize.literal('"Product"."stockQuantity" <= COALESCE("Product"."minStock", 0) AND "Product"."stockQuantity" > 0')
+                sequelize.literal(`(${stockSqlExpr}) <= COALESCE("Product"."minStock", 0) AND (${stockSqlExpr}) > 0`)
             ];
         } else if (currentStockFilter === 'out') {
             whereClause[Op.and] = [
                 ...(whereClause[Op.and] || []),
                 sequelize.literal(notServiceSql),
-                { stockQuantity: { [Op.lte]: 0 } }
+                sequelize.literal(`(${stockSqlExpr}) <= 0`)
             ];
         } else if (currentStockFilter === 'in') {
             whereClause[Op.and] = [
@@ -151,9 +177,18 @@ class ProductService {
                 {
                     [Op.or]: [
                         sequelize.literal(isServiceSql),
-                        sequelize.literal('"Product"."stockQuantity" > COALESCE("Product"."minStock", 0)')
+                        sequelize.literal(`(${stockSqlExpr}) > COALESCE("Product"."minStock", 0)`)
                     ]
                 }
+            ];
+        }
+
+        if (missingCost === 'true' || missingCost === true) {
+            whereClause[Op.and] = [
+                ...(whereClause[Op.and] || []),
+                sequelize.literal(notServiceSql),
+                sequelize.literal(`(${stockSqlExpr}) > 0`),
+                sequelize.literal('COALESCE("Product"."cost", 0) <= 0')
             ];
         }
 
@@ -211,20 +246,26 @@ class ProductService {
         const allowCosts = this.canUserViewCosts(reqUser);
         const products = productInstances.map(p => p.get({ plain: true }));
 
-        // Precise Stock Aggregation (Crucial for Mobile Sync accuracy)
+        // Precise Stock Aggregation (por sucursal activa si branchScoped, o consolidado global)
         products.forEach(p => {
-            let totalPhysicalStock = 0;
-            
-            // Sum all branch records
-            if (p.BranchStocks && p.BranchStocks.length > 0) {
-                totalPhysicalStock = precision.add(p.BranchStocks.map(s => Number(s.quantity) || 0));
-            }
+            if (scopedBranch) {
+                const branchRow = Array.isArray(p.BranchStocks)
+                    ? p.BranchStocks.find(s => String(s.branchId) === String(scopedBranch.id))
+                    : null;
+                p.stockQuantity = Number(branchRow ? branchRow.quantity : 0);
+            } else {
+                let totalPhysicalStock = 0;
 
-            const masterStock = Number(p.stockQuantity || p.stock || 0);
-            const hasBranchStocks = p.BranchStocks && p.BranchStocks.length > 0;
-            
-            // CRITICAL: Ensure stockQuantity is ALWAYS a number and correctly named for the mobile client
-            p.stockQuantity = Number(hasBranchStocks ? totalPhysicalStock : (p.stockQuantity || p.stock || 0));
+                // Sum all branch records
+                if (p.BranchStocks && p.BranchStocks.length > 0) {
+                    totalPhysicalStock = precision.add(p.BranchStocks.map(s => Number(s.quantity) || 0));
+                }
+
+                const hasBranchStocks = p.BranchStocks && p.BranchStocks.length > 0;
+
+                // CRITICAL: Ensure stockQuantity is ALWAYS a number and correctly named for the mobile client
+                p.stockQuantity = Number(hasBranchStocks ? totalPhysicalStock : (p.stockQuantity || p.stock || 0));
+            }
             if (String(p.category || '').trim().toLowerCase() === 'servicios') {
                 p.isService = true;
                 p.isSoldByWeight = false;
@@ -237,8 +278,8 @@ class ProductService {
             this.sanitizeProductForUser(p, allowCosts);
         });
 
-        // Debug Log (will be visible in backend console)
-        if (products.length > 0) {
+        // Debug Log (only enabled when DEBUG_VERBOSE=true)
+        if (process.env.DEBUG_VERBOSE === 'true' && products.length > 0) {
             console.log(`[SYNC DEBUG] Sample Product: ${products[0].name} | Stock: ${products[0].stockQuantity}`);
         }
 
@@ -580,40 +621,73 @@ class ProductService {
      * Bulk price adjustment.
      */
     async bulkPriceAdjustment(reqUser, params) {
-        const { target, productIds, adjustmentType, direction, value } = params;
+        const { target, category, supplierId, productIds, adjustmentType, direction, value } = params;
         const whereClause = { companyId: reqUser.companyId };
+        const numericValue = precision.parseNumericInput(value);
 
         if (target === 'selected' && productIds?.length > 0) {
             whereClause.id = { [Op.in]: productIds };
+        } else if (target === 'category' && category) {
+            whereClause.category = category;
+        } else if (target === 'supplier' && supplierId) {
+            whereClause.supplierId = supplierId;
         }
 
+        const allSettings = await readJsonAsync(SETTINGS_FILE);
+        const userSettings = getUserSettings(allSettings, reqUser.companyId);
+        const posRate = precision.parseNumericInput(userSettings?.exchangeRate || userSettings?.bcvRate || 0);
+
         const products = await Product.findAll({ where: whereClause });
+        let updatedCount = 0;
         const updates = products.map(p => {
-            let newPrice = p.price || 0;
-            
+            const currentPrice = precision.parseNumericInput(p.price || 0);
+            const currentCost = precision.parseNumericInput(p.cost || 0);
+            let newPrice = currentPrice;
+            let nextMargin = precision.parseNumericInput(p.margin || 0);
+
             if (adjustmentType === 'percentage') {
-                const percentVal = precision.divide(value, 100);
+                const percentVal = precision.divide(numericValue, 100);
                 if (direction === 'increase') {
                     const multiplier = precision.add([1, percentVal]);
-                    newPrice = precision.multiply(p.price || 0, multiplier);
+                    newPrice = precision.multiply(currentPrice, multiplier);
                 } else {
                     const multiplier = precision.subtract(1, percentVal);
-                    newPrice = precision.multiply(p.price || 0, multiplier);
+                    newPrice = precision.multiply(currentPrice, multiplier);
                 }
+                if (currentCost > 0) {
+                    nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
+                }
+            } else if (adjustmentType === 'margin') {
+                // Estandarizado a Markup sobre Costo: Precio = Costo * (1 + margen% / 100)
+                if (currentCost <= 0) {
+                    return Promise.resolve(null);
+                }
+                const safeMargin = Math.max(0, numericValue);
+                const multiplier = precision.add([1, precision.divide(safeMargin, 100)]);
+                newPrice = precision.multiply(currentCost, multiplier);
+                nextMargin = precision.round(safeMargin, 4);
             } else {
-                newPrice = direction === 'increase' 
-                    ? precision.add([p.price || 0, value]) 
-                    : precision.subtract(p.price || 0, value);
+                newPrice = direction === 'increase'
+                    ? precision.add([currentPrice, numericValue])
+                    : precision.subtract(currentPrice, numericValue);
+                if (currentCost > 0) {
+                    nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
+                }
             }
-            
-            newPrice = Math.max(0, precision.round(newPrice, 6));
-            return p.update({ price: newPrice });
+
+            newPrice = Math.max(0, newPrice < 0.10 ? precision.round(newPrice, 4) : precision.round(newPrice, 2));
+            const patch = { price: newPrice, margin: nextMargin };
+            if (posRate > 0) {
+                patch.priceBs = precision.round(precision.multiply(newPrice, posRate), 2);
+            }
+            updatedCount += 1;
+            return p.update(patch);
         });
 
         await Promise.all(updates);
-        await this._logAudit(reqUser, 'PRODUCT_BULK_PRICE_ADJUST', `Ajuste masivo: ${direction} de ${value}${adjustmentType === 'percentage' ? '%' : '$'} para ${products.length} productos.`, 'BULK', null, null);
-        
-        return products.length;
+        await this._logAudit(reqUser, 'PRODUCT_BULK_PRICE_ADJUST', `Ajuste masivo (${adjustmentType}): ${direction || 'set'} de ${numericValue}${adjustmentType === 'fixed' ? '$' : '%'} para ${updatedCount} productos.`, 'BULK', null, null);
+
+        return updatedCount;
     }
 
     /**
@@ -1232,6 +1306,7 @@ class ProductService {
                         quantity = 1,
                         purchasedQuantity,
                         margin,
+                        allowZeroMargin = false,
                         newPrice,
                         isNew,
                         initialStock,
@@ -1241,6 +1316,10 @@ class ProductService {
                         isExempt,
                         taxRate
                     } = map;
+
+                    if (margin !== undefined && margin !== null && margin !== '' && !isNaN(parseFloat(margin)) && parseFloat(margin) < 0) {
+                        throw new Error(`El margen de utilidad no puede ser negativo para "${externalName || 'producto'}".`);
+                    }
 
                     const isNewProduct = isNew === true || String(isNew) === 'true';
                     const finalSupplierId = (supplierId && supplierId !== 'null' && supplierId !== '')
@@ -1259,13 +1338,26 @@ class ProductService {
                     const stockToAdd = isInvoiceMode ? Math.max(0, precision.round(precision.parseNumericInput(initialStock), 6)) : 0;
                     const packsPurchased = Math.max(0, precision.parseNumericInput(purchasedQuantity ?? (isInvoiceMode ? 1 : 0)));
 
+                    const allowZero = allowZeroMargin === true || String(allowZeroMargin) === 'true';
+                    const hasExplicitMargin = margin !== undefined && margin !== null && margin !== '' && !isNaN(parseFloat(margin));
+                    const parsedExplicitMargin = hasExplicitMargin ? precision.round(parseFloat(margin), 4) : null;
+
                     const computeSalesPrice = (effMargin, fallbackPrice = 0) => {
                         if (newPrice !== undefined && newPrice !== null && precision.parseNumericInput(newPrice) > 0) {
                             const explicitPvp = precision.parseNumericInput(newPrice);
                             return explicitPvp < 0.10 ? precision.round(explicitPvp, 4) : precision.round(explicitPvp, 2);
                         }
                         if (unitCost > 0) {
-                            const multiplier = precision.add([1, precision.divide(effMargin, 100)]);
+                            const safeMargin = precision.parseNumericInput(effMargin);
+                            if (safeMargin <= 0 && !allowZero) {
+                                if (fallbackPrice > unitCost) {
+                                    return fallbackPrice < 0.10 ? precision.round(fallbackPrice, 4) : precision.round(fallbackPrice, 2);
+                                }
+                                const defaultMarkupPvp = precision.multiply(unitCost, 1.30);
+                                return defaultMarkupPvp < 0.10 ? precision.round(defaultMarkupPvp, 4) : precision.round(defaultMarkupPvp, 2);
+                            }
+                            const effectiveSafeMargin = Math.max(0, safeMargin);
+                            const multiplier = precision.add([1, precision.divide(effectiveSafeMargin, 100)]);
                             const rawPvp = precision.multiply(unitCost, multiplier);
                             return rawPvp < 0.10 ? precision.round(rawPvp, 4) : precision.round(rawPvp, 2);
                         }
@@ -1275,8 +1367,8 @@ class ProductService {
                     // RAMA A: Producto Nuevo (creación limpia sin doble suma de stock)
                     if (isNewProduct) {
                         const newId = generateRobustId();
-                        const updatedMargin = (margin !== undefined && margin !== null && !isNaN(parseFloat(margin)))
-                            ? precision.round(parseFloat(margin), 4)
+                        const updatedMargin = (hasExplicitMargin && (parsedExplicitMargin > 0 || allowZero))
+                            ? parsedExplicitMargin
                             : 30;
                         const updatedPrice = computeSalesPrice(updatedMargin, 0);
                         const updatedPriceBs = precision.round(precision.multiply(updatedPrice, posRate), 2);
@@ -1368,16 +1460,28 @@ class ProductService {
                     });
 
                     if (product) {
-                        const oldCost = product.cost;
-                        const oldPrice = product.price;
+                        const oldCost = precision.parseNumericInput(product.cost);
+                        const oldPrice = precision.parseNumericInput(product.price);
                         const oldPriceBs = product.priceBs;
                         const oldMargin = product.margin;
                         const oldTaxStatus = product.taxStatus;
 
-                        const updatedMargin = (margin !== undefined && margin !== null && !isNaN(parseFloat(margin)))
-                            ? precision.round(parseFloat(margin), 4)
-                            : Number(product.margin || 0);
-                        const updatedPrice = computeSalesPrice(updatedMargin, Number(product.price || 0));
+                        let updatedMargin;
+                        if (hasExplicitMargin && (parsedExplicitMargin > 0 || allowZero)) {
+                            updatedMargin = parsedExplicitMargin;
+                        } else if (precision.parseNumericInput(product.margin) > 0) {
+                            updatedMargin = precision.round(precision.parseNumericInput(product.margin), 4);
+                        } else if (oldCost > 0 && oldPrice > oldCost) {
+                            updatedMargin = precision.round(precision.multiply(precision.divide(precision.subtract(oldPrice, oldCost), oldCost), 100), 4);
+                        } else if (unitCost > 0 && oldPrice > unitCost) {
+                            updatedMargin = precision.round(precision.multiply(precision.divide(precision.subtract(oldPrice, unitCost), unitCost), 100), 4);
+                        } else {
+                            updatedMargin = 30;
+                        }
+                        const updatedPrice = computeSalesPrice(updatedMargin, oldPrice);
+                        if (unitCost > 0 && updatedPrice > 0 && (!hasExplicitMargin || (parsedExplicitMargin === 0 && !allowZero))) {
+                            updatedMargin = precision.round(precision.multiply(precision.divide(precision.subtract(updatedPrice, unitCost), unitCost), 100), 4);
+                        }
                         const updatedPriceBs = precision.round(precision.multiply(updatedPrice, posRate), 2);
 
                         const updateData = { 
@@ -1920,10 +2024,12 @@ class ProductService {
                 factor = parseFloat(body.factorConversion) || 1;
             }
 
-            const baseUnits = qtyNum * factor;
-            const currentStock = parseFloat(product.stockQuantity ?? product.stock ?? 0);
+            const baseUnits = precision.round(precision.multiply(qtyNum, factor), 4);
+            const currentStock = precision.parseNumericInput(product.stockQuantity ?? product.stock ?? 0);
             const isPositive = reason === 'ajuste_positivo';
-            const newStock = isPositive ? (currentStock + baseUnits) : Math.max(-999999, currentStock - baseUnits);
+            const newStock = isPositive
+                ? precision.round(precision.add([currentStock, baseUnits]), 4)
+                : Math.max(-999999, precision.round(precision.subtract(currentStock, baseUnits), 4));
 
             // 1. Actualizar Producto maestro
             await product.update({
@@ -1946,8 +2052,10 @@ class ProductService {
                         },
                         transaction: t
                     });
-                    const currBranchQty = parseFloat(bStock.quantity || 0);
-                    const nextBranchQty = isPositive ? (currBranchQty + baseUnits) : (currBranchQty - baseUnits);
+                    const currBranchQty = precision.parseNumericInput(bStock.quantity || 0);
+                    const nextBranchQty = isPositive
+                        ? precision.round(precision.add([currBranchQty, baseUnits]), 4)
+                        : precision.round(precision.subtract(currBranchQty, baseUnits), 4);
                     await bStock.update({ quantity: nextBranchQty }, { transaction: t });
                 }
             }
@@ -1965,14 +2073,16 @@ class ProductService {
                     },
                     transaction: t
                 });
-                const currWQty = parseFloat(wStock.quantity || 0);
-                const nextWQty = isPositive ? (currWQty + baseUnits) : (currWQty - baseUnits);
+                const currWQty = precision.parseNumericInput(wStock.quantity || 0);
+                const nextWQty = isPositive
+                    ? precision.round(precision.add([currWQty, baseUnits]), 4)
+                    : precision.round(precision.subtract(currWQty, baseUnits), 4);
                 await wStock.update({ quantity: nextWQty }, { transaction: t });
             }
 
             // 4. Registrar StockMovement
-            const unitCost = parseFloat(product.cost || 0);
-            const totalCost = parseFloat((unitCost * baseUnits).toFixed(4));
+            const unitCost = precision.parseNumericInput(product.cost || 0);
+            const totalCost = precision.round(precision.multiply(unitCost, baseUnits), 4);
             const presentationTag = factor > 1 ? ` [Empaque: ${presentation?.name || body.presentationName || 'Presentación'} x${factor}]` : '';
             const fullNotes = `${notes || ''}${presentationTag}`.trim();
 
@@ -1995,24 +2105,23 @@ class ProductService {
                 date: new Date().toISOString()
             }, { transaction: t });
 
-            // 5. Asiento Contable Automático (PUC) para mermas reales
+            // 5. Asiento Contable Automático (PUC) síncrono y obligatorio dentro de la transacción para mermas reales
             let accountingEntry = null;
             if (!isPositive && totalCost > 0) {
-                try {
-                    const AccountingEngineService = require('./AccountingEngineService');
-                    accountingEntry = await AccountingEngineService.recordWasteMovement({
-                        companyId,
-                        product,
-                        quantityBaseUnits: baseUnits,
-                        reason,
-                        notes: fullNotes,
-                        responsibleName,
-                        userId: reqUser.id,
-                        movementId: movement.id,
-                        transaction: t
-                    });
-                } catch (accErr) {
-                    console.error('[Accounting Engine] Error generando asiento de merma:', accErr.message);
+                const AccountingEngineService = require('./AccountingEngineService');
+                accountingEntry = await AccountingEngineService.recordWasteMovement({
+                    companyId,
+                    product,
+                    quantityBaseUnits: baseUnits,
+                    reason,
+                    notes: fullNotes,
+                    responsibleName,
+                    userId: reqUser.id,
+                    movementId: movement.id,
+                    transaction: t
+                });
+                if (!accountingEntry) {
+                    throw new Error(`No se pudo generar el asiento contable obligatorio para la merma del producto ${product.name}.`);
                 }
             }
 
@@ -2055,39 +2164,70 @@ class ProductService {
             where.productId = productId;
         }
 
-        const offset = (Math.max(1, parseInt(page)) - 1) * parseInt(limit);
+        const cleanSearch = search && typeof search === 'string' ? search.trim() : '';
+        if (cleanSearch) {
+            const likeOp = sequelize.getDialect() === 'postgres' ? Op.iLike : Op.like;
+            const pattern = `%${cleanSearch}%`;
+            where[Op.or] = [
+                { notes: { [likeOp]: pattern } },
+                { responsibleName: { [likeOp]: pattern } },
+                { reason: { [likeOp]: pattern } },
+                { '$Product.name$': { [likeOp]: pattern } },
+                { '$Product.barcode$': { [likeOp]: pattern } }
+            ];
+        }
+
+        const parsedLimit = Math.max(1, parseInt(limit, 10) || 100);
+        const offset = (Math.max(1, parseInt(page, 10) || 1) - 1) * parsedLimit;
+
+        const includeProduct = [
+            {
+                model: Product,
+                as: 'Product',
+                attributes: ['id', 'name', 'barcode', 'cost', 'price', 'imageUri', 'stockUnit'],
+                required: false
+            }
+        ];
 
         const { count, rows } = await StockMovement.findAndCountAll({
             where,
-            include: [
-                {
-                    model: Product,
-                    attributes: ['id', 'name', 'barcode', 'sku', 'cost', 'price', 'imageUri', 'stockUnit']
-                }
-            ],
+            include: includeProduct,
             order: [['date', 'DESC'], ['createdAt', 'DESC']],
-            limit: parseInt(limit),
-            offset
+            limit: parsedLimit,
+            offset,
+            ...(cleanSearch ? { subQuery: false } : {})
         });
 
         let totalUnits = 0;
         let totalCostUSD = 0;
         const byCategory = {};
 
-        rows.forEach(mov => {
-            const q = parseFloat(mov.quantity || 0);
-            const c = parseFloat(mov.totalCost || 0);
-            totalUnits += q;
-            totalCostUSD += c;
+        // Si existen más registros fuera de la página actual, sumar totales globales sobre el filtro completo
+        let summaryRows = rows;
+        if (count > rows.length || offset > 0) {
+            summaryRows = await StockMovement.findAll({
+                where,
+                include: cleanSearch ? [{ model: Product, as: 'Product', attributes: [], required: false }] : [],
+                attributes: ['quantity', 'totalCost', 'category'],
+                raw: true,
+                ...(cleanSearch ? { subQuery: false } : {})
+            });
+        }
+
+        summaryRows.forEach(mov => {
+            const q = precision.parseNumericInput(mov.quantity || 0);
+            const c = precision.parseNumericInput(mov.totalCost || 0);
+            totalUnits = precision.add([totalUnits, q]);
+            totalCostUSD = precision.add([totalCostUSD, c]);
             const cat = mov.category || 'otros';
-            byCategory[cat] = (byCategory[cat] || 0) + c;
+            byCategory[cat] = precision.round(precision.add([byCategory[cat] || 0, c]), 4);
         });
 
         return {
             movements: rows,
             summary: {
-                totalUnits,
-                totalCostUSD,
+                totalUnits: precision.round(totalUnits, 4),
+                totalCostUSD: precision.round(totalCostUSD, 4),
                 totalRecords: count,
                 byCategory
             }
@@ -2099,28 +2239,43 @@ class ProductService {
      */
     async exportWasteExcel(reqUser, queryParams = {}) {
         const { movements } = await this.getWasteHistory(reqUser, { ...queryParams, limit: 10000 });
-        const XLSX = require('xlsx');
+        const ExcelJS = require('exceljs');
 
         const rows = movements.map(m => ({
-            'Fecha y Hora': m.date ? new Date(m.date).toLocaleString('es-VE') : '',
-            'Producto': m.Product?.name || 'N/A',
-            'Código de Barras': m.Product?.barcode || '',
-            'SKU': m.Product?.sku || '',
-            'Motivo / Categoría': m.category || m.reason || '',
-            'Tipo de Movimiento': m.type || '',
-            'Unidades Base Dadas de Baja': parseFloat(m.quantity || 0),
-            'Stock Antes': parseFloat(m.stockBefore || 0),
-            'Stock Resultante': parseFloat(m.stockAfter || 0),
-            'Costo Unitario ($)': parseFloat(m.costPrice || 0),
-            'Pérdida Total ($)': parseFloat(m.totalCost || 0),
-            'Responsable': m.responsibleName || '',
-            'Justificación / Notas': m.notes || ''
+            fecha: m.date ? new Date(m.date).toLocaleString('es-VE') : '',
+            producto: m.Product?.name || 'N/A',
+            barcode: m.Product?.barcode || '',
+            sku: m.Product?.sku || '',
+            motivo: m.category || m.reason || '',
+            tipo: m.type || '',
+            cantidad: parseFloat(m.quantity || 0),
+            stockAntes: parseFloat(m.stockBefore || 0),
+            stockResultante: parseFloat(m.stockAfter || 0),
+            costoUnitario: parseFloat(m.costPrice || 0),
+            perdidaTotal: parseFloat(m.totalCost || 0),
+            responsable: m.responsibleName || '',
+            notas: m.notes || ''
         }));
 
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.json_to_sheet(rows);
-        XLSX.utils.book_append_sheet(wb, ws, 'Mermas y Ajustes');
-        return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Mermas y Ajustes');
+        ws.columns = [
+            { header: 'Fecha y Hora', key: 'fecha', width: 22 },
+            { header: 'Producto', key: 'producto', width: 32 },
+            { header: 'Código de Barras', key: 'barcode', width: 18 },
+            { header: 'SKU', key: 'sku', width: 16 },
+            { header: 'Motivo / Categoría', key: 'motivo', width: 24 },
+            { header: 'Tipo de Movimiento', key: 'tipo', width: 18 },
+            { header: 'Unidades Base Dadas de Baja', key: 'cantidad', width: 24 },
+            { header: 'Stock Antes', key: 'stockAntes', width: 14 },
+            { header: 'Stock Resultante', key: 'stockResultante', width: 16 },
+            { header: 'Costo Unitario ($)', key: 'costoUnitario', width: 18 },
+            { header: 'Pérdida Total ($)', key: 'perdidaTotal', width: 16 },
+            { header: 'Responsable', key: 'responsable', width: 22 },
+            { header: 'Justificación / Notas', key: 'notas', width: 32 }
+        ];
+        ws.addRows(rows);
+        return Buffer.from(await wb.xlsx.writeBuffer());
     }
 
     /**

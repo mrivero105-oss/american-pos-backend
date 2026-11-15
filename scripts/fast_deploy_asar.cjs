@@ -7,10 +7,10 @@ async function main() {
     console.log('🚀 [DEPLOY] Iniciando empaquetado directo de Isaac POS Modern...');
     const startTime = Date.now();
 
-    // 1. Cerrar cualquier instancia previa
+    // 1. Cerrar cualquier instancia previa de Isaac POS (sin matar otros procesos electron.exe del host)
     try { execSync('taskkill /F /IM "Isaac POS Modern.exe" /T', { stdio: 'ignore' }); } catch (_) {}
     try { execSync('taskkill /F /IM "Isaac POS.exe" /T', { stdio: 'ignore' }); } catch (_) {}
-    try { execSync('taskkill /F /IM "electron.exe" /T', { stdio: 'ignore' }); } catch (_) {}
+    try { execSync('taskkill /F /IM "Isaac POS Ultra.exe" /T', { stdio: 'ignore' }); } catch (_) {}
 
     const ROOT = path.resolve(__dirname, '..');
     const FRONTEND_DIST = path.join(ROOT, 'american-pos-frontend', 'dist');
@@ -49,8 +49,8 @@ async function main() {
         fs.cpSync(srcNm, destNm, { recursive: true });
     }
 
-    // Copiar archivos raíz del backend
-    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.json', '.env'];
+    // Copiar archivos raíz del backend (excluyendo .env por seguridad: main.js gestiona .env en UserData)
+    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.json'];
     for (const f of backendRootFiles) {
         const srcF = path.join(BACKEND_DIR, f);
         const destF = path.join(STAGING, f);
@@ -89,6 +89,17 @@ async function main() {
             }
         }
         fs.renameSync(TEMP_ASAR, TARGET_ASAR);
+        const tempUnpacked = `${TEMP_ASAR}.unpacked`;
+        const targetUnpacked = `${TARGET_ASAR}.unpacked`;
+        if (fs.existsSync(tempUnpacked)) {
+            if (fs.existsSync(targetUnpacked)) {
+                try { fs.rmSync(targetUnpacked, { recursive: true, force: true }); } catch (_) {}
+            }
+            try { fs.renameSync(tempUnpacked, targetUnpacked); } catch (_) {
+                fs.cpSync(tempUnpacked, targetUnpacked, { recursive: true, force: true });
+                fs.rmSync(tempUnpacked, { recursive: true, force: true });
+            }
+        }
     } catch (e) {
         console.error('Error durante el reemplazo:', e.message);
         throw e;

@@ -1,8 +1,11 @@
 const axios = require('axios');
 
 async function testAnonRead() {
-    const url = 'https://puvqiipussyktfmgafgv.supabase.co';
-    const anonKey = 'sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6';
+    const url = process.env.SUPABASE_URL;
+    const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    if (!url || !anonKey) {
+        throw new Error('Define SUPABASE_URL y VITE_SUPABASE_ANON_KEY en el entorno.');
+    }
 
     try {
         const salesRes = await axios.get(`${url}/rest/v1/cloud_ventas?limit=5`, {

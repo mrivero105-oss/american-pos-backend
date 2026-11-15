@@ -12,6 +12,31 @@
  * @param {object} transaction Transacción activa de Sequelize
  * @param {object} context Objeto con companyId, userId, isSuperAdmin
  */
+const { AsyncLocalStorage } = require('async_hooks');
+
+const tenantStorage = new AsyncLocalStorage();
+
+/**
+ * Ejecuta una función/middleware dentro del contexto aislado de tenant/usuario.
+ * Propaga el companyId, userId e isSuperAdmin a través de AsyncLocalStorage
+ * hacia el pool de conexiones PostgreSQL para activar RLS real.
+ */
+function runWithTenantContext(context, fn) {
+    if (!context || typeof fn !== 'function') {
+        return typeof fn === 'function' ? fn() : undefined;
+    }
+    const normalized = {
+        companyId: context.companyId != null ? String(context.companyId) : '',
+        userId: context.userId != null ? String(context.userId) : '',
+        isSuperAdmin: Boolean(context.isSuperAdmin)
+    };
+    return tenantStorage.run(normalized, fn);
+}
+
+function getCurrentTenantContext() {
+    return tenantStorage.getStore() || null;
+}
+
 async function setTenantContext(sequelizeInstance, transaction, { companyId, userId, isSuperAdmin = false } = {}) {
     if (!transaction) {
         throw new Error('[TenantContext] Se requiere una transacción activa para aplicar SET LOCAL en PostgreSQL.');
@@ -201,7 +226,7 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
 
                 RETURN NULL;
             END;
-            $$ LANGUAGE plpgsql;
+            $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
         `);
 
         // 3. Triggers en tablas de negocio críticas
@@ -221,10 +246,52 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
             }
         }
 
-        // 4. Políticas de Row-Level Security (RLS) graduales y no bloqueantes
-        const rlsTables = ['Products', 'Sales', 'Customers', 'Branches', 'CashShifts'];
+        try {
+            await sequelizeInstance.query('GRANT USAGE ON SCHEMA public TO isaac_app;');
+            await sequelizeInstance.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO isaac_app;');
+            await sequelizeInstance.query('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO isaac_app;');
+            await sequelizeInstance.query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO isaac_app;');
+            await sequelizeInstance.query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO isaac_app;');
+        } catch (grantErr) {
+            console.warn('[Security] Aviso asignando permisos base a isaac_app:', grantErr.message);
+        }
+
+        // 4. Políticas de Row-Level Security (RLS) reales y fail-closed por tenant
+        const excludedGlobalTables = new Set([
+            'Companies',
+            'Licenses',
+            'AuditLogs',
+            'SequelizeMeta',
+            'Roles'
+        ]);
+        const [tenantColRows] = await sequelizeInstance.query(`
+            SELECT table_name, data_type, udt_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND column_name = 'companyId'
+            ORDER BY table_name
+        `);
+        const typeByTable = new Map();
+        const baseRlsTables = ['Products', 'Sales', 'Customers', 'Branches', 'CashShifts', 'Users'];
+        const discoveredTables = [];
+        for (const r of (tenantColRows || [])) {
+            if (!r || !r.table_name || excludedGlobalTables.has(r.table_name)) continue;
+            discoveredTables.push(r.table_name);
+            typeByTable.set(r.table_name, r.udt_name || r.data_type || 'text');
+        }
+        const rlsTables = Array.from(new Set([...baseRlsTables, ...discoveredTables]));
         for (const tbl of rlsTables) {
             try {
+                const colType = String(typeByTable.get(tbl) || 'text').toLowerCase();
+                let settingExpr = "NULLIF(current_setting('app.current_company_id', true), '')";
+                if (colType === 'uuid') {
+                    settingExpr = "NULLIF(current_setting('app.current_company_id', true), '')::uuid";
+                } else if (colType === 'int4' || colType === 'integer') {
+                    settingExpr = "NULLIF(current_setting('app.current_company_id', true), '')::integer";
+                } else if (colType === 'int8' || colType === 'bigint') {
+                    settingExpr = "NULLIF(current_setting('app.current_company_id', true), '')::bigint";
+                }
+
                 await sequelizeInstance.query(`ALTER TABLE "${tbl}" ENABLE ROW LEVEL SECURITY;`);
                 await sequelizeInstance.query(`ALTER TABLE "${tbl}" FORCE ROW LEVEL SECURITY;`);
 
@@ -234,18 +301,18 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
                     CREATE POLICY "${polName}" ON "${tbl}"
                     FOR ALL
                     USING (
-                        COALESCE(current_setting('app.current_company_id', true), '') = ''
-                        OR "companyId" = current_setting('app.current_company_id', true)
+                        "companyId" = ${settingExpr}
                         OR current_setting('app.is_superadmin', true) = 'true'
                     )
                     WITH CHECK (
-                        COALESCE(current_setting('app.current_company_id', true), '') = ''
-                        OR "companyId" = current_setting('app.current_company_id', true)
+                        "companyId" = ${settingExpr}
                         OR current_setting('app.is_superadmin', true) = 'true'
                     );
                 `);
             } catch (rlsErr) {
-                // La tabla puede no existir aún en frío
+                if (!/does not exist/i.test(String(rlsErr.message || ''))) {
+                    console.warn(`[Security] Error aplicando política RLS en "${tbl}":`, rlsErr.message);
+                }
             }
         }
 
@@ -258,6 +325,9 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
 }
 
 module.exports = {
+    tenantStorage,
+    runWithTenantContext,
+    getCurrentTenantContext,
     setTenantContext,
     withTenantTransaction,
     initializeDatabaseSecurity

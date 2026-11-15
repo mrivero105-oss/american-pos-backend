@@ -16,10 +16,16 @@ dist/
 dist-mobile/
 dist_installers/
 dist_modern/
-build/
+dist_final_installer/
+dist_legacy_installer/
+dist_release/
+/build/
+**/android/**/build/
+generator_apk_project/**/build/
 build_temp/
 build-temp/
-build_ultra/
+build_ultra/app_files/
+build_ultra/*.exe
 archive/
 american-pos-backend/public/assets/
 american-pos-backend/public/dist.zip
@@ -63,10 +69,19 @@ logs/
 .env
 .env.*
 !.env.example
+!.env.caja_secundaria_ejemplo
 settings.json
 **/settings.json
+!settings.example.json
+!**/settings.example.json
+db-config.json
+**/db-config.json
 cloud_mirror_config.json
 **/cloud_mirror_config.json
+*.pfx
+*.p12
+*.key
+*private*.pem
 
 # Sistema Operativo y Editores
 .DS_Store
@@ -80,7 +95,13 @@ Desktop.ini
 local.properties
 **/local.properties
 
-# Archivos de Pruebas y Prerrequisitos
+# Reportes de Pruebas E2E y Prerrequisitos
+playwright-report/
+**/playwright-report/
+test-results/
+**/test-results/
+blob-report/
+**/blob-report/
 prerequisites/
 *.tmp
 *.temp

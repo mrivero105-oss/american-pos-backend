@@ -412,10 +412,12 @@ export const usePOSHandlers = ({
                 // Encolar acción en syncQueue para sincronización REST
                 try {
                     await db.put('syncQueue', {
+                        id: `sq_cust_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
                         endpoint: '/customers',
                         method: 'POST',
                         payload: data,
                         tempId: tempId,
+                        tempLocalId: tempId,
                         timestamp: Date.now()
                     });
                 } catch {}
@@ -469,7 +471,7 @@ export const usePOSHandlers = ({
 
                 // Actualizar en IndexedDB primaria
                 try {
-                    const existing = await db.get('customers', id);
+                    const existing = await db.getById('customers', id);
                     await db.put('customers', { ...existing, ...updatedC });
                 } catch (dbErr) {
                     console.error('Error actualizando cliente en db.customers:', dbErr);

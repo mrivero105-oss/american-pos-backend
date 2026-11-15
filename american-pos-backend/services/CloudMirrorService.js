@@ -262,6 +262,13 @@ class CloudMirrorService {
      * Replica un archivo de respaldo específico hacia la carpeta espejo Cloud configurada
      */
     mirrorBackupFile(sourceFilePath, { force = false } = {}) {
+        if (
+            process.env.ISAAC_TEST_ISOLATED === '1' ||
+            process.env.DISABLE_EXTERNAL_BACKUPS === 'true' ||
+            (process.env.NODE_ENV === 'test' && process.env.FORCE_MIRROR_IN_TEST !== 'true')
+        ) {
+            return { skipped: true, reason: 'Replicación externa deshabilitada en modo test/aislado' };
+        }
         const config = this.getConfig();
         if (!force && (!config.enabled || !config.autoSyncOnBackup)) {
             return { skipped: true, reason: 'Sincronización automática desactivada' };

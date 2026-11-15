@@ -25,12 +25,17 @@ router.get('/', verifyToken, async (req, res) => {
     }
 });
 
-// PUT /:id/resolve - Resolver alerta de stock
+// PUT /:id/resolve - Resolver alerta de stock (aislado por tenant)
 router.put('/:id/resolve', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
+        const userRole = String(req.user?.role || '').toLowerCase();
+        const userCompanyId = String(req.user?.companyId || '');
         const alert = await StockAlert.findByPk(id);
         if (!alert) return res.status(404).json({ error: 'Alerta no encontrada' });
+        if (userRole !== 'superadmin' && String(alert.companyId || '') !== userCompanyId) {
+            return res.status(403).json({ error: 'Acceso denegado: esta alerta pertenece a otra empresa' });
+        }
 
         alert.resolved = true;
         await alert.save();

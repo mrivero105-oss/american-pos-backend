@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const AIService = require('../services/AIService');
+const { requirePermission } = require('../middleware/auth');
 
 // POST /api/ai/query
 router.post('/query', async (req, res) => {
@@ -21,7 +22,7 @@ router.post('/query', async (req, res) => {
 });
 
 // POST /api/ai/manager/analyze
-router.post('/manager/analyze', async (req, res) => {
+router.post('/manager/analyze', requirePermission('canViewReports'), async (req, res) => {
     try {
         const { companyId } = req.user;
         const result = await AIService.runSilentInventoryManager(companyId, req.user);
@@ -35,10 +36,10 @@ router.post('/manager/analyze', async (req, res) => {
 // Ruta publica extraída a publicAi.js
 
 // GET /api/ai/predictive-analytics (Estricto Modo SOLO LECTURA)
-router.get('/predictive-analytics', async (req, res) => {
+router.get('/predictive-analytics', requirePermission('canViewReports'), async (req, res) => {
     try {
-        const companyId = req.user?.companyId || '2';
-        const result = await AIService.getPredictiveAnalytics(companyId, req.user || { role: 'admin', companyId: '2' }, req.query);
+        const companyId = String(req.user.companyId);
+        const result = await AIService.getPredictiveAnalytics(companyId, req.user, req.query);
         res.json(result);
     } catch (error) {
         console.error('[AI_PREDICTIVE_ERROR]', error);

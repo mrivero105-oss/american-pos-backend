@@ -43,7 +43,7 @@ const SETTINGS_TABS = [
 
 export default function Settings() {
     const { user } = useAuth();
-    const isOwnerUser = ['owner', 'superadmin'].includes((user?.role || '').toLowerCase()) || ['mrivero105@gmail.com', 'mrivero1051@gmail.com'].includes((user?.email || '').toLowerCase());
+    const isOwnerUser = ['owner', 'dueño', 'dueno', 'superadmin'].includes((user?.role || '').toLowerCase());
     const [searchParams, setSearchParams] = useSearchParams();
     const tabFromUrl = searchParams.get('tab');
     const [loading, setLoading] = useState(true);
@@ -325,7 +325,7 @@ export default function Settings() {
             if (result.status === 'complete') {
                 if (result.synced > 0) toast.success(`Sincronización completa: ${result.synced} ventas subidas`);
                 else if (result.errors > 0) toast.error(`Error al sincronizar: ${result.errors} fallidos`);
-                else toast.info('No hay ventas pendientes');
+                else toast('No hay ventas pendientes');
             }
             fetchOfflineSales();
         } catch (_err) { toast.error('Error durante la sincronización'); } finally { setSyncingOffline(false); }
@@ -343,6 +343,7 @@ export default function Settings() {
             setGeneratingBackup(true);
             toast.loading('Generando snapshot en bóveda (Base de datos + imágenes)... Por favor espere.', { id: 'pg_backup' });
             await api.post('/backup/generate', {}, { timeout: 600000 });
+            localStorage.setItem('isaac_pos_last_backup', new Date().toISOString());
             toast.success('¡Instantánea en bóveda generada exitosamente!', { id: 'pg_backup' });
             fetchPgBackups();
         } catch (error) {
@@ -360,6 +361,7 @@ export default function Settings() {
             setGeneratingBackup(true);
             toast.loading('Empaquetando base de datos completa con imágenes (.zip)... Esto puede tomar 1 minuto.', { id: 'export_db' });
             const res = await api.post('/backup/generate', {}, { timeout: 600000 });
+            localStorage.setItem('isaac_pos_last_backup', new Date().toISOString());
             const filename = res.data?.file;
             if (filename) {
                 toast.loading('Descargando archivo ZIP a tu equipo / USB...', { id: 'export_db' });

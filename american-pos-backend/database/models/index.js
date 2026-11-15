@@ -28,9 +28,6 @@ const PrincipioActivo = require('./PrincipioActivo');
 const VarianteProducto = require('./VarianteProducto');
 const ProductPresentation = require('./ProductPresentation');
 const QuarantineSale = require('./QuarantineSale');
-const BankAccount = require('./BankAccount');
-const BankTransaction = require('./BankTransaction');
-const BankTransfer = require('./BankTransfer');
 const ExchangeDifferenceLog = require('./ExchangeDifferenceLog');
 const FiscalBookRecord = require('./FiscalBookRecord');
 const TaxRetention = require('./TaxRetention');
@@ -62,12 +59,9 @@ const FiscalSequence = require('./FiscalSequence');
 const TelecomRecharge = require('./TelecomRecharge');
 const DailyRegisterSequence = require('./DailyRegisterSequence');
 const RegisterDraft = require('./RegisterDraft');
+const SyncOutbox = require('./SyncOutbox');
 
 // --- Relationships ---
-
-// Banking
-BankAccount.hasMany(BankTransaction, { foreignKey: 'bankAccountId', as: 'Transactions', onDelete: 'RESTRICT', onUpdate: 'CASCADE' });
-BankTransaction.belongsTo(BankAccount, { foreignKey: 'bankAccountId', as: 'Account', onDelete: 'RESTRICT', onUpdate: 'CASCADE' });
 
 // Warehouses & Stock Breakdown
 Warehouse.hasMany(WarehouseStock, { foreignKey: 'warehouseId', as: 'Stocks', onDelete: 'CASCADE', onUpdate: 'CASCADE' });
@@ -232,9 +226,6 @@ module.exports = {
     PrincipioActivo,
     VarianteProducto,
     QuarantineSale,
-    BankAccount,
-    BankTransaction,
-    BankTransfer,
     ExchangeDifferenceLog,
     FiscalBookRecord,
     TaxRetention,
@@ -266,5 +257,6 @@ module.exports = {
     FiscalSequence,
     TelecomRecharge,
     DailyRegisterSequence,
-    RegisterDraft
+    RegisterDraft,
+    SyncOutbox
 };

@@ -134,14 +134,14 @@ class SemanticSearchService {
                             principio_activo,
                             ROUND((1 - (embedding <=> :vectorStr::vector))::numeric, 4) AS score
                         FROM "Products"
-                        WHERE ("companyId" = :companyId OR :companyId IS NULL OR :companyId = '' OR "companyId" = '2' OR "companyId" = 'default-company')
+                        WHERE "companyId" = :companyId
                           AND embedding IS NOT NULL
                         ORDER BY embedding <=> :vectorStr::vector ASC
                         LIMIT :limit;
                     `, {
                         replacements: {
                             vectorStr,
-                            companyId: String(companyId),
+                            companyId: String(companyId || 'default'),
                             limit: parseInt(limit, 10) || 10
                         }
                     });
@@ -171,7 +171,7 @@ class SemanticSearchService {
                     principio_activo,
                     ROUND(similarity(public.immutable_unaccent(lower(name)), public.immutable_unaccent(lower(:query)))::numeric, 4) AS score
                 FROM "Products"
-                WHERE ("companyId" = :companyId OR :companyId IS NULL OR :companyId = '' OR "companyId" = '2' OR "companyId" = 'default-company')
+                WHERE "companyId" = :companyId
                   AND (
                       public.immutable_unaccent(lower(name)) % public.immutable_unaccent(lower(:query))
                       OR public.immutable_unaccent(lower(COALESCE(principio_activo, ''))) % public.immutable_unaccent(lower(:query))
@@ -184,7 +184,7 @@ class SemanticSearchService {
                 replacements: {
                     query: cleanQuery,
                     wildcard: `%${cleanQuery}%`,
-                    companyId: String(companyId),
+                    companyId: String(companyId || 'default'),
                     limit: parseInt(limit, 10) || 10
                 }
             });

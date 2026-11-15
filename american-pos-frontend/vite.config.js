@@ -107,7 +107,6 @@ export default defineConfig({
       '/backup': 'http://localhost:3005',
       '/license': 'http://localhost:3005',
       '/expenses': 'http://localhost:3005',
-      '/banks': 'http://localhost:3005',
       '/fiscal': 'http://localhost:3005',
       '/warehouses': 'http://localhost:3005',
       '/bi': 'http://localhost:3005',
@@ -126,23 +125,45 @@ export default defineConfig({
       '/version.json': 'http://localhost:3005',
       '/api/app-update-info': 'http://localhost:3005',
       '/dist.zip': 'http://localhost:3005',
-      '/Isaac-POS-Mobile.apk': 'http://localhost:3005'
+      '/Isaac-POS-Mobile.apk': 'http://localhost:3005',
+      '/audit': 'http://localhost:3005',
+      '/catalog': 'http://localhost:3005',
+      '/ai': 'http://localhost:3005',
+      '/public-catalog': 'http://localhost:3005',
+      '/promotions': 'http://localhost:3005',
+      '/stock-alerts': 'http://localhost:3005',
+      '/services': 'http://localhost:3005',
+      '/messages': 'http://localhost:3005',
+      '/lan': 'http://localhost:3005',
+      '/scanner': 'http://localhost:3005',
+      '/recharges': 'http://localhost:3005',
+      '/api': 'http://localhost:3005',
+      '/lots': 'http://localhost:3005',
+      '/whatsapp': 'http://localhost:3005',
+      '/display_ads': 'http://localhost:3005',
+      '/socket.io': { target: 'http://localhost:3005', ws: true }
     }
   },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: false,
-    chunkSizeWarningLimit: 1000,
+    target: ['es2020', 'chrome108'],
+    cssTarget: 'chrome108',
+    chunkSizeWarningLimit: 500,
     rollupOptions: {
       output: {
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-icons': ['lucide-react'],
           'vendor-docs': ['jspdf', 'html2canvas-pro'],
+          'vendor-charts': ['recharts'],
           'vendor-motion': ['framer-motion'],
-          'vendor-db': ['dexie'],
           'vendor-zxing': ['@zxing/library'],
+          'vendor-realtime': ['socket.io-client'],
+          'vendor-capacitor': ['@capacitor/core', '@capacitor/clipboard', '@capgo/capacitor-updater'],
+          'vendor-qr': ['qrcode', 'jsbarcode'],
+          'vendor-state': ['zustand', 'dexie'],
           'vendor-utils': ['axios', 'date-fns', 'uuid', 'fuse.js']
         }
       }

@@ -28,6 +28,9 @@ class BCVAutoSyncService {
      * Inicializa el servicio con la instancia de Socket.IO del servidor
      */
     init(io) {
+        if (process.env.ISAAC_TEST_ISOLATED === '1' || process.env.NODE_ENV === 'test' || process.env.DISABLE_BACKGROUND_WORKERS === 'true') {
+            return;
+        }
         this.io = io;
         console.log('[BCVAutoSync] 🚀 Inicializando servicio de actualización automática de tasa BCV...');
 
@@ -51,6 +54,9 @@ class BCVAutoSyncService {
      * Ejecuta la sincronización de la tasa oficial contra el BCV
      */
     async syncRate({ force = false, reason = 'MANUAL' } = {}) {
+        if (!force && (process.env.ISAAC_TEST_ISOLATED === '1' || process.env.NODE_ENV === 'test' || process.env.DISABLE_BACKGROUND_WORKERS === 'true')) {
+            return { success: false, skipped: true, reason: 'TEST_ISOLATED' };
+        }
         if (this.isSyncing) {
             console.log('[BCVAutoSync] ⏳ Sincronización ya en progreso, omitiendo...');
             return { success: false, inProgress: true };
@@ -136,8 +142,11 @@ class BCVAutoSyncService {
                         syncedAt: this.lastSyncTime,
                         reason
                     };
-                    io.to(companyId).emit('settings_changed', payload);
-                    io.emit('settings_changed', payload);
+                    const roomsToNotify = new Set([String(companyId || '2')]);
+                    if (allSettings['default']) roomsToNotify.add('default');
+                    for (const room of roomsToNotify) {
+                        io.to(room).emit('settings_changed', payload);
+                    }
                     console.log(`[BCVAutoSync] 📡 Evento WebSocket emitido a terminales: ${newRate} Bs/$`);
                 }
 

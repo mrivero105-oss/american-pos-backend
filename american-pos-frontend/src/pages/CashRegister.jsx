@@ -241,7 +241,7 @@ export default function CashRegister() {
             toast.success('¡Caja abierta exitosamente!');
 
             if (printOpeningOnStart) {
-                printOpeningReceipt({ shift: data, user, settings, kickDrawer: kickDrawerOnStart });
+                printOpeningReceipt({ shift: data, user, settings, kickDrawer: kickDrawerOnStart, autoPrint: true });
             } else if (kickDrawerOnStart) {
                 handleKickDrawer();
             }
@@ -272,6 +272,7 @@ export default function CashRegister() {
         try {
             const { data } = await api.post('/cash/movement', {
                 ...movementForm,
+                shiftId: shift?.id,
                 amount: Number(movementForm.amount),
                 currency: cur,
                 paymentMethodId: finalMethod,
@@ -287,7 +288,8 @@ export default function CashRegister() {
                     shift,
                     user,
                     settings,
-                    kickDrawer: true
+                    kickDrawer: true,
+                    autoPrint: true
                 });
             } else {
                 handleKickDrawer();
@@ -307,6 +309,9 @@ export default function CashRegister() {
         setClosedShiftData(closedShift);
         setZReportModalOpen(true);
         toast.success('Turno de caja cerrado e impreso exitosamente');
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('shift_status_changed', { detail: { isOpen: false, shift: null } }));
+        }
         loadShift();
         fetchLastClosedShift();
         fetchHistory();
@@ -1248,7 +1253,7 @@ export default function CashRegister() {
             )}
 
             {/* Close Shift Modal */}
-            {shift && (
+            {(shift || closeModal) && (
                 <CloseShiftModal
                     isOpen={closeModal}
                     onClose={() => setCloseModal(false)}

@@ -112,22 +112,17 @@ export default function InvoiceViewerModal({ isOpen, onClose, invoiceUrl, title 
         } else {
             const printWindow = window.open('', '_blank');
             if (printWindow) {
-                printWindow.document.write(`
-                    <html>
-                        <head>
-                            <title>Imprimir Factura - Isaac POS</title>
-                            <style>
-                                body { margin: 0; display: flex; align-items: center; justify-content: center; background: #fff; }
-                                img { max-width: 100%; height: auto; }
-                                @page { margin: 5mm; }
-                            </style>
-                        </head>
-                        <body>
-                            <img src="${fullUrl}" onload="window.print(); window.close();" />
-                        </body>
-                    </html>
-                `);
-                printWindow.document.close();
+                const doc = printWindow.document;
+                doc.open();
+                doc.write('<html><head><title>Imprimir Factura - Isaac POS</title><style>body{margin:0;display:flex;align-items:center;justify-content:center;background:#fff;}img{max-width:100%;height:auto;}@page{margin:5mm;}</style></head><body></body></html>');
+                doc.close();
+                const img = doc.createElement('img');
+                img.src = fullUrl;
+                img.onload = () => {
+                    printWindow.print();
+                    printWindow.close();
+                };
+                doc.body.appendChild(img);
             }
         }
     };

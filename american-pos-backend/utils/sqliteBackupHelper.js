@@ -71,20 +71,27 @@ async function performPostgresBackup(userDataPath) {
             }
         }
 
-        // Ejecutar pg_dump vía execFile parametrizado (sin interpolación de shell)
+        // Ejecutar pg_dump vía execFile parametrizado hacia archivo temporal .tmp y renombrar atómicamente al concluir
+        const tmpBackupPath = `${backupPath}.tmp`;
         await new Promise((resolve, reject) => {
             const env = { ...process.env, PGPASSWORD: dbPassword };
-            const args = ['-h', String(dbHost), '-p', String(dbPort), '-U', String(dbUser), '-F', 'p', '-b', '-f', backupPath, String(dbName)];
+            const args = ['-h', String(dbHost), '-p', String(dbPort), '-U', String(dbUser), '-F', 'p', '-b', '-f', tmpBackupPath, String(dbName)];
             execFile(pgDumpBin, args, { env, timeout: 120000 }, (error) => {
                 if (error) {
                     logMsg(`pg_dump failed: ${error.message}. Falling back to Sequelize JSON export.`);
                     try {
+                        if (fs.existsSync(tmpBackupPath)) fs.unlinkSync(tmpBackupPath);
                         if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
                     } catch (_unlinkErr) {
                         // Ignore cleanup error
                     }
                     reject(error);
                 } else {
+                    try {
+                        fs.renameSync(tmpBackupPath, backupPath);
+                    } catch (renErr) {
+                        return reject(renErr);
+                    }
                     logMsg(`pg_dump completed successfully: ${backupPath}`);
                     resolve();
                 }

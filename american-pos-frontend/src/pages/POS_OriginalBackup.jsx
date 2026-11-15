@@ -21,7 +21,7 @@ const ReceiptModal = lazy(() => import('../components/ReceiptModal'));
 const CustomerModal = lazy(() => import('../components/CustomerModal'));
 const HeldSalesModal = lazy(() => import('../components/HeldSalesModal'));
 const ProductModal = lazy(() => import('../components/ProductModal'));
-const SupervisorPinModal = lazy(() => import('../components/SupervisorPinModal'));
+import SupervisorPinModal from '../components/SupervisorPinModal';
 import { useTheme } from '../hooks/ThemeContext';
 import { toast } from 'react-hot-toast';
 import { useCartCalculation } from '../hooks/useCartCalculation';
@@ -1130,6 +1130,11 @@ export default function POS() {
                 onlineProduct = res.data?.product || res.data;
                 toast.success(isCreating ? 'Producto creado y vinculado al código' : 'Producto actualizado');
             } catch (netErr) {
+                if (netErr.response && netErr.response.status >= 400 && netErr.response.status < 500) {
+                    const errorMsg = netErr.response?.data?.error || netErr.response?.data?.message || 'Error de validación al guardar producto';
+                    toast.error(errorMsg);
+                    return;
+                }
                 console.warn('Online quick product save failed, saving locally:', netErr);
             }
 
@@ -1234,29 +1239,44 @@ export default function POS() {
     });
 
     // Backup Safety Monitoring
+    const canManageBackups = hasPermission('canManageSettings');
     const [lastBackup, setLastBackup] = useState(localStorage.getItem('isaac_pos_last_backup') || localStorage.getItem('american_pos_last_backup'));
+    const isBackingUpRef = useRef(false);
     const needsBackup = useMemo(() => {
+        if (!canManageBackups) return false;
         if (!lastBackup) return true;
         const last = new Date(lastBackup);
+        if (Number.isNaN(last.getTime())) return true;
         const now = new Date();
         return (now - last) > (24 * 60 * 60 * 1000); // 24 hours
-    }, [lastBackup]);
+    }, [lastBackup, canManageBackups]);
 
     const handleQuickBackup = async () => {
+        if (isBackingUpRef.current) return;
+        const toastId = 'quick-backup-toast';
+        isBackingUpRef.current = true;
         try {
-            toast.loading('Generando respaldo de seguridad...');
-            const res = await api.post('/backup/generate');
-            if (res.data.success) {
+            toast.loading('Generando respaldo de seguridad...', { id: toastId });
+            // El respaldo completo (pg_dump + imágenes + espejo cloud) supera el timeout global de 8s
+            const res = await api.post('/backup/generate', {}, { timeout: 600000 });
+            if (res.data?.success) {
                 const now = new Date().toISOString();
                 localStorage.setItem('isaac_pos_last_backup', now);
                 setLastBackup(now);
-                toast.dismiss();
-                toast.success('¡Respaldo local guardado con éxito!');
+                toast.success('¡Respaldo local guardado con éxito!', { id: toastId });
                 playNotificationSound();
+            } else {
+                toast.error(res.data?.error || 'No se pudo confirmar el respaldo local', { id: toastId });
             }
-        } catch (_err) {
-            toast.dismiss();
-            toast.error('Error al generar respaldo local');
+        } catch (err) {
+            const isTimeout = err.code === 'ECONNABORTED' || err.message?.toLowerCase().includes('timeout');
+            const detail = err.response?.data?.details || err.response?.data?.error;
+            const msg = isTimeout
+                ? 'El respaldo tardó demasiado en responder; verifique en Configuración > Respaldos'
+                : (detail || 'Error al generar respaldo local');
+            toast.error(msg, { id: toastId });
+        } finally {
+            isBackingUpRef.current = false;
         }
     };
 

@@ -39,23 +39,23 @@ async function registerCashMovementForRecharge(recharge, user, req) {
     const regId = String(recharge.registerId || req.headers['x-station-id'] || '1');
     const userId = String(user?.id || recharge.userId || '');
 
-    // Buscar turno de caja abierto para este cajero o estación
+    // Buscar turno de caja abierto para este cajero o estación dentro de la misma empresa
     let openShift = null;
     if (userId) {
         openShift = await CashShift.findOne({
-            where: { userId, status: 'open', registerId: regId },
+            where: { userId, companyId: compId, status: 'open', registerId: regId },
             order: [['openedAt', 'DESC']]
         });
         if (!openShift) {
             openShift = await CashShift.findOne({
-                where: { userId, status: 'open' },
+                where: { userId, companyId: compId, status: 'open' },
                 order: [['openedAt', 'DESC']]
             });
         }
     }
     if (!openShift) {
         openShift = await CashShift.findOne({
-            where: { registerId: regId, status: 'open' },
+            where: { registerId: regId, companyId: compId, status: 'open' },
             order: [['openedAt', 'DESC']]
         });
     }
@@ -275,8 +275,12 @@ router.post('/', async (req, res) => {
         const registerId = String(body.registerId || req.headers['x-station-id'] || '1');
         const registerName = String(body.registerName || `Caja ${registerId}`);
 
+        const userRole = String(req.user?.role || '').toLowerCase();
         let recharge = await TelecomRecharge.findByPk(id);
         if (recharge) {
+            if (userRole !== 'superadmin' && String(recharge.companyId || '2') !== compId) {
+                return res.status(403).json({ error: 'Acceso denegado: esta recarga pertenece a otra empresa.' });
+            }
             await recharge.update({
                 operator,
                 phoneNumber,
@@ -353,10 +357,14 @@ router.put('/:id/complete', async (req, res) => {
         const { id } = req.params;
         const body = req.body || {};
         const compId = String(req.user?.companyId || '2');
+        const userRole = String(req.user?.role || '').toLowerCase();
 
         const recharge = await TelecomRecharge.findByPk(id);
         if (!recharge) {
             return res.status(404).json({ error: 'Registro de recarga no encontrado.' });
+        }
+        if (userRole !== 'superadmin' && String(recharge.companyId || '2') !== compId) {
+            return res.status(403).json({ error: 'Acceso denegado: esta recarga pertenece a otra empresa.' });
         }
 
         const providerRef = String(body.providerRef || body.refMovilway || recharge.providerRef || `MW-${Date.now().toString().slice(-6)}`).trim();
@@ -413,14 +421,19 @@ router.put('/:id/cancel', async (req, res) => {
     try {
         await ensureTableReady();
         const { id } = req.params;
+        const compId = String(req.user?.companyId || '2');
+        const userRole = String(req.user?.role || '').toLowerCase();
         const recharge = await TelecomRecharge.findByPk(id);
         if (!recharge) {
             return res.status(404).json({ error: 'Registro de recarga no encontrado.' });
         }
+        if (userRole !== 'superadmin' && String(recharge.companyId || '2') !== compId) {
+            return res.status(403).json({ error: 'Acceso denegado: esta recarga pertenece a otra empresa.' });
+        }
 
         if (recharge.cashMovementId) {
             try {
-                await CashMovement.destroy({ where: { id: recharge.cashMovementId } });
+                await CashMovement.destroy({ where: { id: recharge.cashMovementId, companyId: String(recharge.companyId || compId) } });
             } catch (e) {
                 console.warn('[Recharges] Notice removing cash movement on cancel:', e.message);
             }

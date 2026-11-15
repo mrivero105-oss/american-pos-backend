@@ -451,7 +451,8 @@ class ProductionService {
      * Hook para ventas de Kits / Combos en el mostrador del POS:
      * Si el producto vendido es un combo rápido (`isKit === true`), rebaja sus componentes.
      */
-    static async processKitSaleDeduction(saleItem, transaction, companyId = 'default') {
+    static async processKitSaleDeduction(saleItem, transaction, companyId = 'default', options = {}) {
+        const precision = require('../utils/VortexMathEngine');
         try {
             const bom = await BillOfMaterials.findOne({
                 where: { targetProductId: saleItem.productId, isKit: true, isActive: true, companyId },
@@ -461,19 +462,30 @@ class ProductionService {
 
             if (!bom || !bom.Items || bom.Items.length === 0) return false;
 
-            const saleQty = parseFloat(saleItem.quantity) || 1;
-            const yieldQty = parseFloat(bom.yieldQuantity) || 1;
-            const mult = saleQty / yieldQty;
+            const saleQty = precision.parseNumericInput(saleItem.quantity) || 1;
+            const yieldQty = precision.parseNumericInput(bom.yieldQuantity) || 1;
+            const mult = precision.divide(saleQty, yieldQty);
 
             for (const item of bom.Items) {
-                const compProduct = await Product.findByPk(item.componentProductId, { transaction });
-                if (!compProduct) continue;
+                const compProduct = await Product.findByPk(item.componentProductId, {
+                    transaction,
+                    lock: transaction?.LOCK?.UPDATE
+                });
+                if (!compProduct) {
+                    throw new Error(`BOM_ERROR: Componente de combo no encontrado (${item.componentProductId}).`);
+                }
 
-                const qtyToDeduct = (parseFloat(item.quantityRequired) || 0) * mult;
-                const currentStock = parseFloat(compProduct.stockQuantity) || 0;
+                const qtyToDeduct = precision.round(precision.multiply(item.quantityRequired || 0, mult), 4);
+                const currentStock = precision.parseNumericInput(compProduct.stockQuantity);
+                const newStock = precision.round(precision.subtract(currentStock, qtyToDeduct), 4);
+
+                if (newStock < 0 && !compProduct.allowNegative && !options.bypassStockCheck) {
+                    throw new Error(`STOCK_ERROR: Insumo "${compProduct.name}" insuficiente para el combo "${bom.recipeName}". Requerido: ${qtyToDeduct}, Disponible: ${currentStock}.`);
+                }
 
                 await compProduct.update({
-                    stockQuantity: currentStock - qtyToDeduct
+                    stockQuantity: newStock,
+                    stock: newStock
                 }, { transaction });
 
                 await StockMovement.create({
@@ -482,7 +494,7 @@ class ProductionService {
                     type: 'OUT',
                     quantity: qtyToDeduct,
                     stockBefore: String(currentStock),
-                    stockAfter: String(currentStock - qtyToDeduct),
+                    stockAfter: String(newStock),
                     referenceId: saleItem.id,
                     reason: `Descuento automático por combo POS: ${bom.recipeName}`,
                     date: new Date().toISOString(),
@@ -493,7 +505,7 @@ class ProductionService {
             return true;
         } catch (err) {
             console.error('[Production] Error al procesar descuento de Kit en POS:', err.message);
-            return false;
+            throw err;
         }
     }
 }

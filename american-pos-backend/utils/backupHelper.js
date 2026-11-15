@@ -186,7 +186,10 @@ function cleanupOldBackups(backupDir, keepCount = 10) {
  * Non-blocking automatic backup triggered on shift closing
  */
 function autoBackupOnShiftClose(shiftId) {
-    setTimeout(async () => {
+    if (process.env.ISAAC_TEST_ISOLATED === '1' || process.env.NODE_ENV === 'test' || process.env.DISABLE_BACKGROUND_WORKERS === 'true') {
+        return;
+    }
+    const timer = setTimeout(async () => {
         try {
             console.log(`[Backup System] 🛡️ Disparando auto-respaldo de cierre para turno: ${shiftId}`);
             const zipPath = await createPostgresBackup();
@@ -195,6 +198,7 @@ function autoBackupOnShiftClose(shiftId) {
             console.warn(`[Backup System] ⚠️ Error no fatal en auto-respaldo de cierre:`, err.message);
         }
     }, 2000); // 2 second delay so closing response completes immediately
+    if (typeof timer.unref === 'function') timer.unref();
 }
 
 module.exports = { 

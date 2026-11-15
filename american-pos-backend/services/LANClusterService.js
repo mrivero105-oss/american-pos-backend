@@ -88,7 +88,10 @@ class LANClusterService {
      */
     computePacketSignature({ type, nodeId, ip, httpPort, role, timestamp }) {
         const crypto = require('crypto');
-        const secret = process.env.LAN_CLUSTER_SECRET || 'isaac_pos_lan_cluster_hmac_v1';
+        const secret = process.env.LAN_CLUSTER_SECRET || process.env.SYNC_SECRET_KEY;
+        if (!secret) {
+            throw new Error('LAN_CLUSTER_SECRET o SYNC_SECRET_KEY requerido para autenticar paquetes del cluster LAN.');
+        }
         const canonical = `${type}|${nodeId}|${ip}|${httpPort}|${role}|${timestamp}`;
         return crypto.createHmac('sha256', secret).update(canonical).digest('hex');
     }
@@ -145,7 +148,14 @@ class LANClusterService {
             if (!data.nodeId || typeof data.nodeId !== 'string' || data.nodeId.length > 128) return;
             if (data.nodeId === this.nodeId) return; // Ignorar propio latido
 
-            // Verificar firma HMAC-SHA256 del paquete UDP para prevenir Server Spoofing en LAN
+            // Validar ventana temporal anti-replay (máx 5 minutos de desfase)
+            const packetTs = Number(data.timestamp || 0);
+            if (!Number.isFinite(packetTs) || Math.abs(Date.now() - packetTs) > 5 * 60 * 1000) {
+                logger.warn(`[LAN_CLUSTER] Paquete UDP rechazado desde ${rinfo.address}: timestamp expirado o inválido.`);
+                return;
+            }
+
+            // Verificar firma HMAC-SHA256 del paquete UDP con timingSafeEqual para prevenir Server Spoofing en LAN
             const expectedSig = this.computePacketSignature({
                 type: data.type,
                 nodeId: data.nodeId,
@@ -154,7 +164,10 @@ class LANClusterService {
                 role: data.role,
                 timestamp: data.timestamp
             });
-            if (!data.sig || data.sig !== expectedSig) {
+            const crypto = require('crypto');
+            const sigBuf = typeof data.sig === 'string' ? Buffer.from(data.sig, 'utf8') : null;
+            const expBuf = Buffer.from(expectedSig, 'utf8');
+            if (!sigBuf || sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
                 logger.warn(`[LAN_CLUSTER] Paquete UDP rechazado desde ${rinfo.address}: firma HMAC inválida.`);
                 return;
             }
@@ -213,17 +226,25 @@ class LANClusterService {
     notifyTopologyChange() {
         if (!this.io) return;
         const peersList = this.getPeers();
-        this.io.emit('lan_peer_list_changed', {
-            clusterSize: peersList.length + 1, // Peers + local node
-            peers: peersList,
-            localNode: {
-                nodeId: this.nodeId,
-                nodeName: this.nodeName,
-                ip: this.getLocalIP(),
-                httpPort: this.httpPort,
-                role: this.role
-            }
-        });
+        const rooms = new Set(['2', 'default']);
+        for (const p of peersList) {
+            if (p && p.companyId) rooms.add(String(p.companyId));
+        }
+        const localNodeInfo = {
+            nodeId: this.nodeId,
+            nodeName: this.nodeName,
+            ip: this.getLocalIP(),
+            httpPort: this.httpPort,
+            role: this.role
+        };
+        for (const room of rooms) {
+            const roomPeers = peersList.filter(p => !p.companyId || String(p.companyId) === room);
+            this.io.to(room).emit('lan_peer_list_changed', {
+                clusterSize: roomPeers.length + 1,
+                peers: roomPeers,
+                localNode: localNodeInfo
+            });
+        }
     }
 
     /**
@@ -263,7 +284,8 @@ class LANClusterService {
                 sourceNodeId: this.nodeId,
                 broadcastTimestamp: Date.now()
             };
-            this.io.emit(eventName, enrichedPayload);
+            const targetRoom = payload?.companyId ? String(payload.companyId) : String(process.env.DEFAULT_COMPANY_ID || '2');
+            this.io.to(targetRoom).emit(eventName, enrichedPayload);
             logger.info(`[LAN_CLUSTER] 📡 Evento P2P propagado a LAN -> ${eventName}`);
         } catch (err) {
             logger.error(`[LAN_CLUSTER] Error emitiendo evento P2P ${eventName}: ${err.message}`);

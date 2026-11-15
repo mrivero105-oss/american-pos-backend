@@ -1,12 +1,70 @@
 const express = require('express');
 const router = express.Router();
-const { License } = require('../database/models');
+const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
+const { License, User } = require('../database/models');
 const { Op } = require('sequelize');
 const licenseUtils = require('../utils/licenseUtils');
-const { verifyToken, isMaster } = require('../middleware/auth');
+const { verifyToken, verifyJwtResilient, isMaster } = require('../middleware/auth');
 const { clearLicenseCache } = require('../middleware/licenseMiddleware');
 const path = require('path');
 const fs = require('fs');
+
+const activateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 15,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        error: 'Demasiados intentos de activación de licencia desde esta IP. Espera 15 minutos.'
+    }
+});
+
+const safeEqualSecret = (candidate, secret) => {
+    if (typeof candidate !== 'string' || typeof secret !== 'string' || !candidate || !secret) {
+        return false;
+    }
+    const hA = crypto.createHash('sha256').update(candidate, 'utf8').digest();
+    const hB = crypto.createHash('sha256').update(secret, 'utf8').digest();
+    return crypto.timingSafeEqual(hA, hB);
+};
+
+const isLoopbackRequest = (req) => {
+    const rawIp = String(req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '').trim();
+    const cleanIp = rawIp.replace('::ffff:', '');
+    return cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost';
+};
+
+async function resolveOptionalLicenseOperator(req) {
+    try {
+        const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+        let token = null;
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+            token = authHeader.slice(7).trim();
+        } else if (req.cookies && req.cookies.authToken) {
+            token = req.cookies.authToken;
+        }
+        if (!token) return null;
+
+        const decoded = verifyJwtResilient(token);
+        if (!decoded || decoded.isSyncNode) return null;
+
+        const dbUser = await User.findByPk(decoded.id, {
+            attributes: ['id', 'role', 'status', 'companyId', 'currentSessionId', 'email']
+        });
+        if (!dbUser || dbUser.status !== 'active') return null;
+        if (dbUser.currentSessionId && (!decoded.sessionId || dbUser.currentSessionId !== decoded.sessionId)) {
+            return null;
+        }
+
+        const role = String(dbUser.role || '').toLowerCase();
+        const isMasterUser = ['superadmin', 'owner', 'dueño'].includes(role);
+        const isAdminUser = isMasterUser || role === 'admin';
+        return { user: dbUser, isMasterUser, isAdminUser };
+    } catch (_) {
+        return null;
+    }
+}
 
 /**
  * GET /license/generator or /license/pocket or /license/generador
@@ -14,10 +72,8 @@ const fs = require('fs');
  */
 router.get(['/generator', '/pocket', '/generador'], verifyToken, isMaster, (req, res) => {
     const candidates = [
-        path.join(__dirname, '../public/pocket-license.html'),
-        path.join(__dirname, 'public/pocket-license.html'),
-        path.join(__dirname, '../../Generador_Movil_Licencias.html'),
-        path.join(process.cwd(), 'Generador_Movil_Licencias.html')
+        path.join(__dirname, '../private/pocket-license.html'),
+        path.join(__dirname, 'private/pocket-license.html')
     ];
     for (const p of candidates) {
         if (fs.existsSync(p)) {
@@ -203,18 +259,56 @@ router.get('/status', async (req, res) => {
  * POST /license/activate
  * Activates a specific terminal with a key
  */
-router.post('/activate', async (req, res) => {
+router.post('/activate', activateLimiter, async (req, res) => {
     try {
         const { key } = req.body;
-        if (!key) return res.status(400).json({ error: 'Llave requerida' });
+        if (!key || typeof key !== 'string' || !key.trim() || key.length > 4096) {
+            return res.status(400).json({ error: 'Llave requerida con formato válido' });
+        }
 
         const serverMachineId = await licenseUtils.getMachineId();
-        const terminalId = req.body.machineId || req.headers['x-terminal-id'] || serverMachineId;
+        const rawTerminalId = req.body.machineId || req.headers['x-terminal-id'] || serverMachineId;
+        const terminalId = String(rawTerminalId).trim().slice(0, 128);
+        if (!terminalId) {
+            return res.status(400).json({ error: 'Machine ID inválido' });
+        }
 
-        // 1. Desbloqueo directo con Clave Maestra de Dueño (si coincide con OWNER_SECRET_KEY explícita en entorno)
+        const authCtx = await resolveOptionalLicenseOperator(req);
+        const isLoopback = isLoopbackRequest(req);
+
+        // Si ya existe una licencia activa y válida en esta terminal, exigir administrador autenticado para reemplazar/revocar
+        const existingLicense = await License.findOne({
+            where: {
+                machineId: terminalId,
+                status: 'active'
+            },
+            order: [['createdAt', 'DESC']]
+        });
+        if (existingLicense) {
+            const existingValidation = await licenseUtils.validateKey(existingLicense.licenseKey, terminalId);
+            if (existingValidation.valid && !authCtx?.isAdminUser) {
+                return res.status(403).json({
+                    error: 'La terminal ya cuenta con una licencia activa válida. Se requiere sesión de Administrador para reemplazarla.'
+                });
+            }
+        }
+
+        // 1. Desbloqueo directo con Clave Maestra de Dueño (protegido contra timing attack, restringido a loopback o Master)
         const ownerSecret = process.env.OWNER_SECRET_KEY ? process.env.OWNER_SECRET_KEY.trim() : null;
-        if (ownerSecret && ownerSecret.length >= 8 && key.trim() === ownerSecret) {
-            const masterKey = licenseUtils.generateKey(terminalId, -1);
+        if (ownerSecret && ownerSecret.length >= 8 && safeEqualSecret(key.trim(), ownerSecret)) {
+            if (!isLoopback && !authCtx?.isMasterUser) {
+                return res.status(403).json({
+                    error: 'El desbloqueo directo con clave maestra solo está permitido desde el equipo servidor o sesión Master.'
+                });
+            }
+
+            let masterKey;
+            try {
+                masterKey = licenseUtils.generateKey(terminalId, -1);
+            } catch (genErr) {
+                return res.status(400).json({ error: genErr.message });
+            }
+
             await License.update({ status: 'revoked' }, { 
                 where: { 
                     machineId: terminalId,
@@ -228,7 +322,7 @@ router.post('/activate', async (req, res) => {
                 activatedAt: new Date().toISOString(),
                 expiresAt: null,
                 status: 'active',
-                meta: { activatedBy: 'OWNER_SECRET_DIRECT', activatedByIp: req.ip, userAgent: req.headers['user-agent'] }
+                meta: { activatedBy: authCtx?.user?.email || 'OWNER_SECRET_DIRECT', activatedByIp: req.ip, userAgent: req.headers['user-agent'] }
             });
 
             if (typeof clearLicenseCache === 'function') {
@@ -327,6 +421,9 @@ router.post('/generate', verifyToken, isMaster, async (req, res) => {
  * Master-only key generation (same protection as /generate)
  */
 router.post('/test-generate', verifyToken, isMaster, async (req, res) => {
+    if (process.env.NODE_ENV === 'production') {
+        return res.status(404).json({ error: 'Ruta no disponible en producción' });
+    }
     try {
         const { machineId, duration, unit = 'days' } = req.body;
         if (!machineId) return res.status(400).json({ error: 'Machine ID requerido' });

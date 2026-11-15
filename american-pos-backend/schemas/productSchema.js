@@ -1,6 +1,7 @@
 const { z } = require('zod');
 
 const numeric = z.coerce.number().nonnegative().default(0);
+const numericAllowNegative = z.coerce.number().default(0);
 
 const productSchema = z.object({
     body: z.object({
@@ -8,7 +9,7 @@ const productSchema = z.object({
         price: numeric,
         priceBs: numeric.optional(),
         cost: numeric,
-        stockQuantity: numeric,
+        stockQuantity: numericAllowNegative,
         minStock: numeric,
         category: z.string().optional(),
         barcode: z.string().optional(),
@@ -18,7 +19,7 @@ const productSchema = z.object({
         supplierId: z.string().nullable().optional(),
         bulkUnitName: z.string().optional(),
         unitsPerBulk: numeric,
-        margin: numeric,
+        margin: numericAllowNegative,
         bulkCost: numeric,
         bulkPrice: numeric.optional(),
         bulkPriceBs: numeric.optional(),

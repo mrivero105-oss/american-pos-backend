@@ -9,7 +9,9 @@
     "build:mobile": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build --config vite.mobile.config.js && node sync-mobile-ota.cjs",
     "lint": "eslint .",
     "preview": "vite preview",
-    "dev:mobile": "vite --config vite.mobile.config.js --port 5174 --host"
+    "dev:mobile": "vite --config vite.mobile.config.js --port 5174 --host",
+    "test:e2e": "playwright test",
+    "test:all": "node ../american-pos-backend/scripts/run_all_tests.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",
@@ -42,6 +44,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/postcss": "^4.2.1",
     "@tailwindcss/vite": "^4.2.1",
     "@types/react": "^18.3.12",

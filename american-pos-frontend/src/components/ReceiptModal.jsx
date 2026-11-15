@@ -425,20 +425,26 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
             // Entorno Web/Navegador en PC con backend local (auto-resuelve impresora si activePrinter está vacío)
             try {
                 const escPosContent = buildEscPosTicket();
-                await api.post('/settings/print-raw', {
+                const resp = await api.post('/settings/print-raw', {
                     content: escPosContent,
                     printerName: activePrinter,
-                    printMode: businessSettings?.printMode
+                    printMode: businessSettings?.printMode,
+                    autoPrint: Boolean(isAutoPrint)
                 });
-                if (shouldKickDrawer) {
-                    try {
-                        await api.post('/settings/open-drawer', {
-                            printerName: activePrinter,
-                            sequence: businessSettings.drawerSequence
-                        });
-                    } catch (e) {}
+                if (resp?.data?.success) {
+                    if (shouldKickDrawer) {
+                        try {
+                            await api.post('/settings/open-drawer', {
+                                printerName: resp.data?.printerName || activePrinter,
+                                sequence: businessSettings.drawerSequence,
+                                autoPrint: Boolean(isAutoPrint)
+                            });
+                        } catch (e) {}
+                    }
+                    toast.success('Comprobante enviado a la impresora');
+                } else if (!isAutoPrint) {
+                    toast.error(resp?.data?.message || 'No se detectó una impresora térmica conectada');
                 }
-                toast.success('Comprobante enviado a la impresora');
             } catch (err) {
                 console.error("Backend print-raw failed:", err);
                 if (!isAutoPrint) {
@@ -907,7 +913,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
 
         if (!imageCopied) {
             handleDownloadImage();
-            toast.info('⬇️ Imagen descargada. Puedes adjuntarla en WhatsApp.', { duration: 5000 });
+            toast('⬇️ Imagen descargada. Puedes adjuntarla en WhatsApp.', { duration: 5000 });
         }
 
         const waDeepLink = clean ? `whatsapp://send?phone=${clean}&text=${encodeURIComponent(textReceipt)}` : `whatsapp://send?text=${encodeURIComponent(textReceipt)}`;

@@ -3,8 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { Rocket, Download, Loader2, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
+import { useAuth } from '../../hooks/AuthContext';
 
 export default function UpdateAlertBadge() {
+    const { user, hasPermission } = useAuth();
+    const canCheckUpdates = Boolean(user && hasPermission('canManageSettings'));
     const [updateStatus, setUpdateStatus] = useState(null);
     const [downloading, setDownloading] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState(0);
@@ -12,6 +15,7 @@ export default function UpdateAlertBadge() {
     const navigate = useNavigate();
 
     const checkUpdateStatus = async () => {
+        if (!canCheckUpdates) return;
         try {
             const { data } = await api.get('/system/updater/status');
             if (data && data.success) {
@@ -23,6 +27,10 @@ export default function UpdateAlertBadge() {
     };
 
     useEffect(() => {
+        if (!canCheckUpdates) {
+            setUpdateStatus(null);
+            return;
+        }
         checkUpdateStatus();
         const interval = setInterval(checkUpdateStatus, 5 * 60 * 1000); // Verificación periódica cada 5 minutos
 
@@ -53,9 +61,9 @@ export default function UpdateAlertBadge() {
             clearInterval(interval);
             if (unsubscribe && typeof unsubscribe === 'function') unsubscribe();
         };
-    }, []);
+    }, [canCheckUpdates]);
 
-    if (!updateStatus || !updateStatus.isUpdateAvailable) {
+    if (!canCheckUpdates || !updateStatus || !updateStatus.isUpdateAvailable) {
         return null;
     }
 

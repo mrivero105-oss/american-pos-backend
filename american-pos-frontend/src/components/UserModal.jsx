@@ -74,7 +74,6 @@ export const PERMISSION_CATEGORIES = [
         badgeColor: 'bg-rose-500/10 text-rose-500 border-rose-500/20',
         permissions: [
             { key: 'canManageExpenses', title: 'Gastos Operativos y Vales', desc: 'Registro de egresos extraordinarios y salidas de caja menor' },
-            { key: 'canManageBanking', title: 'Bancos y Conciliación', desc: 'Cuentas bancarias, registro de transferencias y conciliación' },
             { key: 'canManageFiscal', title: 'Gestión Fiscal SENIAT', desc: 'Libros de compras/ventas y correlativos de facturación fiscal' }
         ]
     },
@@ -148,7 +147,6 @@ const ROLE_PRESET_PERMISSIONS = {
         canManagePayables: true,
         canImportCatalog: true,
         canManageExpenses: true,
-        canManageBanking: true,
         canManageFiscal: true,
         canAccessBI: true,
         canViewReports: true,

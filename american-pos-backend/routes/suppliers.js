@@ -9,6 +9,26 @@ const https = require('https');
 const http = require('http');
 const { Supplier } = require('../database/models');
 const { Op } = require('sequelize');
+const { requirePermission } = require('../middleware/auth');
+
+const READ_ONLY_SUPPLIER_AUX_PATHS = new Set(['/public-list', '/bcv-rate']);
+const PAYABLE_SUPPLIER_PATHS = ['/invoices', '/analyze-invoice-data'];
+router.use((req, res, next) => {
+    if (READ_ONLY_SUPPLIER_AUX_PATHS.has(req.path)) {
+        return next();
+    }
+    if (
+        PAYABLE_SUPPLIER_PATHS.includes(req.path) ||
+        req.path.endsWith('/credit-history') ||
+        req.path.endsWith('/payment')
+    ) {
+        return requirePermission(['canManageSuppliers', 'canManagePayables', 'canManagePurchases', 'canImportCatalog'])(req, res, next);
+    }
+    if (req.method === 'GET' && req.path === '/') {
+        return requirePermission(['canManageSuppliers', 'canManagePayables', 'canManagePurchases', 'canImportCatalog'])(req, res, next);
+    }
+    return requirePermission(['canManageSuppliers', 'canManagePurchases'])(req, res, next);
+});
 
 // Helper para obtener todos los directorios de almacenamiento de logotipos donde Express los sirve
 const getCandidateLogoDirs = () => {
@@ -82,7 +102,7 @@ const upload = multer({
     storage: storage,
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
     fileFilter: (req, file, cb) => {
-        const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'];
+        const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
         const ext = path.extname(file.originalname).toLowerCase();
         if (allowedExts.includes(ext)) {
             cb(null, true);
@@ -393,17 +413,14 @@ router.post('/download-logo', async (req, res) => {
                 ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }, { companyId: null }] }
                 : { companyId: finalCompanyId };
 
-            let targetSupplier = await Supplier.findOne({ where: { id: String(supplierId), ...companyCondition } });
-            if (!targetSupplier) {
-                targetSupplier = await Supplier.findByPk(String(supplierId));
-            }
+            const targetSupplier = await Supplier.findOne({ where: { id: String(supplierId), ...companyCondition } });
 
             if (targetSupplier) {
                 targetSupplier.logoUri = logoUri;
                 await targetSupplier.save();
                 console.log(`[Suppliers] Logo asignado y guardado exitosamente para proveedor ${targetSupplier.id} (${targetSupplier.name}): ${logoUri}`);
             } else {
-                console.warn(`[Suppliers] No se encontró proveedor con id ${supplierId} para asociar logo`);
+                return res.status(404).json({ error: 'Proveedor no encontrado en esta empresa' });
             }
         }
 
@@ -575,7 +592,7 @@ router.get('/bcv-rate', async (req, res) => {
             source: rateInfo.source
         });
     } catch (err) {
-        console.error('[SUPPLIER BCV] Error consultando tasa:', err);
+        console.error('[SUPPLIER BCV] Error consultando tasa:', err?.message || String(err));
         res.status(500).json({ error: 'Error al consultar tasa oficial BCV: ' + err.message });
     }
 });
@@ -595,19 +612,53 @@ router.post('/analyze-invoice-data', invoiceUpload.single('file'), async (req, r
             buffer = fs.readFileSync(req.file.path);
             try { fs.unlinkSync(req.file.path); } catch (e) {}
         } else if (invoiceUrl) {
-            // Resolver ruta local de la factura ya guardada
-            let cleanUrl = invoiceUrl.replace(/^\//, '');
+            const rawUrl = String(invoiceUrl || '').trim();
+            if (!rawUrl || rawUrl.includes('\0') || /^([a-zA-Z]:|\\\\)/.test(rawUrl)) {
+                return res.status(400).json({ error: 'Ruta de factura inválida' });
+            }
+            let cleanUrl = rawUrl.replace(/^\/+/, '');
             if (cleanUrl.startsWith('api/')) cleanUrl = cleanUrl.replace(/^api\//, '');
-            
-            const localPaths = [
-                path.join(__dirname, '..', cleanUrl),
-                path.join(__dirname, '..', 'invoices', path.basename(cleanUrl)),
-                path.join(process.env.USER_DATA_PATH || '', cleanUrl),
-                path.join(process.env.USER_DATA_PATH || '', 'invoices', path.basename(cleanUrl))
-            ];
 
-            for (const p of localPaths) {
-                if (p && fs.existsSync(p)) {
+            const allowedRoots = [
+                path.resolve(__dirname, '..', 'invoices'),
+                path.resolve(__dirname, '..', 'uploads'),
+                process.env.USER_DATA_PATH ? path.resolve(process.env.USER_DATA_PATH, 'invoices') : null,
+                process.env.USER_DATA_PATH ? path.resolve(process.env.USER_DATA_PATH, 'uploads') : null
+            ].filter(Boolean);
+
+            const isPathInsideRoot = (rootDir, targetFile) => {
+                const rel = path.relative(rootDir, targetFile);
+                return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+            };
+
+            const fileNameOnly = path.basename(cleanUrl);
+            const candidatePaths = [];
+            for (const rootDir of allowedRoots) {
+                if (cleanUrl.startsWith('invoices/') || cleanUrl.startsWith('uploads/')) {
+                    const parentOfRoot = path.dirname(rootDir);
+                    const directCandidate = path.resolve(parentOfRoot, cleanUrl);
+                    if (isPathInsideRoot(rootDir, directCandidate)) {
+                        candidatePaths.push(directCandidate);
+                    }
+                }
+                if (fileNameOnly && fileNameOnly !== '.' && fileNameOnly !== '..') {
+                    const baseCandidate = path.resolve(rootDir, fileNameOnly);
+                    if (isPathInsideRoot(rootDir, baseCandidate)) {
+                        candidatePaths.push(baseCandidate);
+                    }
+                }
+            }
+
+            if (candidatePaths.length === 0) {
+                return res.status(403).json({ error: 'Ruta de factura fuera de los directorios permitidos' });
+            }
+
+            const accessCheck = await InvoiceService.assertInvoiceAccess(req.user, rawUrl);
+            if (!accessCheck.allowed) {
+                return res.status(accessCheck.status || 403).json({ error: accessCheck.error || 'Acceso denegado a factura de otra empresa' });
+            }
+            for (const p of candidatePaths) {
+                if (p && fs.existsSync(p) && fs.statSync(p).isFile()) {
                     buffer = fs.readFileSync(p);
                     break;
                 }
@@ -993,6 +1044,75 @@ router.get('/invoices/history', async (req, res) => {
     } catch (err) {
         console.error('Error fetching invoice history:', err);
         res.status(500).json({ error: 'Error al consultar historial de facturas: ' + err.message });
+    }
+});
+
+// POST /suppliers/import - Importación masiva de proveedores
+router.post('/import', requirePermission('canManageSuppliers'), async (req, res) => {
+    try {
+        const companyId = req.user.companyId || 'default';
+        const suppliersList = Array.isArray(req.body?.suppliers)
+            ? req.body.suppliers
+            : (Array.isArray(req.body) ? req.body : []);
+
+        if (suppliersList.length === 0) {
+            return res.status(400).json({ error: 'No se recibieron proveedores válidos para importar.' });
+        }
+
+        const results = { imported: 0, updated: 0, errors: [] };
+        for (const item of suppliersList) {
+            try {
+                if (!item || !item.name) continue;
+                let existing = null;
+                if (item.rif) {
+                    existing = await Supplier.findOne({ where: { rif: item.rif, companyId } });
+                }
+                if (!existing && item.id) {
+                    existing = await Supplier.findOne({ where: { id: String(item.id), companyId } });
+                }
+
+                if (existing) {
+                    await existing.update({
+                        name: item.name || existing.name,
+                        contactName: item.contactName ?? existing.contactName,
+                        phone: item.phone ?? existing.phone,
+                        email: item.email ?? existing.email,
+                        address: item.address ?? existing.address,
+                        rif: item.rif ?? existing.rif,
+                        category: item.category ?? existing.category,
+                        notes: item.notes ?? existing.notes
+                    });
+                    results.updated++;
+                } else {
+                    await Supplier.create({
+                        id: (item.id && !String(item.id).startsWith('local-')) ? String(item.id) : generateRobustId(),
+                        companyId,
+                        name: String(item.name).trim(),
+                        contactName: item.contactName || '',
+                        phone: item.phone || '',
+                        email: item.email || '',
+                        address: item.address || '',
+                        rif: item.rif || '',
+                        category: item.category || 'General',
+                        debt: Number(item.debt) || 0,
+                        creditBalance: Number(item.creditBalance) || 0,
+                        notes: item.notes || ''
+                    });
+                    results.imported++;
+                }
+            } catch (rowErr) {
+                results.errors.push({ name: item?.name, error: rowErr.message });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Importación completada: ${results.imported} creados, ${results.updated} actualizados.`,
+            ...results
+        });
+    } catch (err) {
+        console.error('Error importing suppliers:', err);
+        res.status(500).json({ error: 'Error al importar proveedores: ' + err.message });
     }
 });
 

@@ -32,6 +32,7 @@
     "!test_backup.zip",
     "!.wwebjs_auth/**",
     "!.wwebjs_cache/**",
+    "!.test_wwebjs_auth/**",
     "!dist*/**",
     "!backups/**",
     "!build_temp/**",
@@ -45,6 +46,9 @@
     "!**/*.log",
     "!**/*.log.gz",
     "!db.json",
+    "!db-config.json",
+    "!settings.json",
+    "!cloud_mirror_config.json",
     "!.git/**",
     "!**/*.md",
     "!LICENSE",
@@ -58,6 +62,8 @@
     "!node_modules/builder-util/**",
     "!node_modules/typescript/**",
     "!tests/**",
+    "!test-results/**",
+    "!playwright-report/**",
     "!*.apk",
     "!**/*.apk",
     "!test_*.js",
@@ -68,7 +74,13 @@
     "!scratch*.js",
     "!*.bat",
     "!tailwind.config.js",
-    "!backup_debug.log"
+    "!backup_debug.log",
+    "!build/cert.pfx",
+    "!**/*.pfx",
+    "!**/*.p12",
+    "!**/*.key",
+    "!**/keys/*private*",
+    "!**/*private*.pem"
   ],
   "win": {
     "target": [
@@ -79,7 +91,7 @@
         ]
       }
     ],
-    "icon": "public/favicon.ico",
+    "icon": "build/icon.ico",
     "requestedExecutionLevel": "highestAvailable",
     "artifactName": "4_IsaacPOS_Windows10_11_Modern_Setup.${ext}"
   },

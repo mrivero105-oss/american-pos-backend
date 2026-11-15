@@ -288,6 +288,25 @@ class BatchTraceabilityService {
             if (product) {
                 await product.decrement(['stockQuantity', 'stock'], { by: deductQty, transaction: t });
 
+                // Sincronizar también BranchStock si existen registros multi-sede para este producto
+                if (BranchStock) {
+                    const branchStocks = await BranchStock.findAll({
+                        where: { productId: product.id, companyId },
+                        order: [['stockQuantity', 'DESC']],
+                        transaction: t,
+                        lock: t.LOCK.UPDATE
+                    });
+                    let pendingBranchDeduct = deductQty;
+                    for (const bs of branchStocks) {
+                        if (pendingBranchDeduct <= 0) break;
+                        const avail = Math.max(0, Number(bs.stockQuantity) || 0);
+                        if (avail <= 0) continue;
+                        const take = Math.min(avail, pendingBranchDeduct);
+                        await bs.update({ stockQuantity: Number((avail - take).toFixed(4)) }, { transaction: t });
+                        pendingBranchDeduct -= take;
+                    }
+                }
+
                 // Registrar movimiento formal en StockMovement
                 const movementId = `waste_lot_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
                 const unitCost = Number(lot.cost || product.cost || 0);
@@ -303,6 +322,7 @@ class BatchTraceabilityService {
                     costPrice: unitCost,
                     totalCost: deductQty * unitCost,
                     responsibleName: responsibleName || 'Control de Lotes',
+                    date: new Date().toISOString(),
                     notes: `Baja de lote por caducidad: Lote #${lot.lotNumber} (Vence: ${lot.expirationDate || 'N/A'}). Motivo: ${reason}. ${notes}`.trim()
                 }, { transaction: t });
             }
@@ -369,6 +389,7 @@ class BatchTraceabilityService {
             targetProductIds: [lot.productId],
             startDate,
             endDate,
+            isActive: true,
             status: 'ACTIVE'
         });
 

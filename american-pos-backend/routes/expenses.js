@@ -10,9 +10,10 @@ const emitExpensesChanged = (req, payload = {}) => {
             const companyId = String(req.user?.companyId || '2');
             const eventData = { companyId, timestamp: Date.now(), ...payload };
             io.to(companyId).emit('expenses_changed', eventData);
-            io.emit('expenses_changed', eventData);
         }
-    } catch (_) {}
+    } catch (emitErr) {
+        console.warn('[Expenses] Error emitiendo evento Socket.IO expenses_changed:', emitErr.message);
+    }
 };
 
 // GET / - Search and list expenses

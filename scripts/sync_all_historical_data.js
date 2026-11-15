@@ -4,8 +4,12 @@ const dotenv = require('../american-pos-backend/node_modules/dotenv');
 const path = require('path');
 dotenv.config({ path: path.join(__dirname, '../american-pos-backend/.env') });
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://puvqiipussyktfmgafgv.supabase.co';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
+if (!SUPABASE_URL || !SERVICE_KEY) {
+    console.error('❌ Define SUPABASE_URL y SUPABASE_SERVICE_KEY en el entorno.');
+    process.exit(1);
+}
 
 const pgClient = new Client({ connectionString: 'postgresql://postgres:postgres@127.0.0.1:5432/americanpos' });
 

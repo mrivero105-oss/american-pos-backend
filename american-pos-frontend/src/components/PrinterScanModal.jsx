@@ -60,7 +60,7 @@ export default function PrinterScanModal({ isOpen, onClose, onScan, isScanning }
         <BaseModal
             isOpen={isOpen}
             onClose={onClose}
-            zIndex="z-[99999]"
+            zIndex="z-[100020]"
             maxWidth="max-w-lg"
             className="overflow-hidden flex flex-col p-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl max-h-[92dvh]"
         >

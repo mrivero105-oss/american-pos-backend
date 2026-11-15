@@ -1,23 +1,39 @@
 const { sequelize, AccountCatalog, JournalEntry, JournalEntryLine, User } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
 const { Op } = require('sequelize');
+const precision = require('../utils/VortexMathEngine');
+
+const BANK_METHOD_KEYWORDS = [
+    'card', 'pos', 'punto', 'pago_movil', 'pagomovil',
+    'transfer', 'zelle', 'biopago', 'binance', 'mobile_payment',
+    'bank', 'digital', 'debit', 'tarjeta'
+];
 
 class AccountingEngineService {
+    static _isBankMethod(methodStr) {
+        const mKey = String(methodStr || '').toLowerCase().trim();
+        if (!mKey || mKey === 'credit' || mKey === 'fiado' || mKey === 'credit_usd') return false;
+        if (mKey.includes('cash') || mKey.includes('efectivo')) return false;
+        return BANK_METHOD_KEYWORDS.some(k => mKey.includes(k));
+    }
+
     /**
      * Alias de compatibilidad para inicializar catálogo
      */
-    static async seedDefaultCatalog(companyId = 'default') {
-        return this.seedDefaultChartOfAccounts(companyId);
+    static async seedDefaultCatalog(companyId = 'default', transaction = null) {
+        return this.seedDefaultChartOfAccounts(companyId, transaction);
     }
 
     /**
      * Siembra el catálogo contable base (PUC estándar para Venezuela / NIIF)
      */
-    static async seedDefaultChartOfAccounts(companyId = 'default') {
-        const count = await AccountCatalog.count({ where: { companyId } });
-        if (count > 0) {
-            return { success: true, message: 'El catálogo ya contiene cuentas registradas.', count };
-        }
+    static async seedDefaultChartOfAccounts(companyId = 'default', transaction = null) {
+        const existingRows = await AccountCatalog.findAll({
+            attributes: ['code'],
+            where: { companyId },
+            ...(transaction ? { transaction } : {})
+        });
+        const existingCodes = new Set(existingRows.map(r => r.code));
 
         const defaultAccounts = [
             // 1. Activo
@@ -105,24 +121,36 @@ class AccountingEngineService {
             { code: '6.3.1.01.001', name: 'Pérdida en Diferencial Cambiario', accountType: 'EXPENSE', nature: 'DEBIT', level: 5, isSelectable: true }
         ];
 
-        const created = [];
-        for (const acc of defaultAccounts) {
-            const item = await AccountCatalog.create({
-                id: generateRobustId(),
-                companyId,
-                ...acc
-            });
-            created.push(item);
+        const missingAccounts = defaultAccounts.filter(acc => !existingCodes.has(acc.code));
+        if (missingAccounts.length === 0) {
+            return { success: true, message: 'El catálogo ya contiene cuentas registradas.', count: existingRows.length };
         }
 
-        return { success: true, message: `Se sembraron ${created.length} cuentas en el PUC.`, count: created.length };
+        const recordsToInsert = missingAccounts.map(acc => ({
+            id: generateRobustId(),
+            companyId,
+            ...acc
+        }));
+
+        if (transaction) {
+            await AccountCatalog.bulkCreate(recordsToInsert, { transaction });
+        } else {
+            await sequelize.transaction(async (tx) => {
+                await AccountCatalog.bulkCreate(recordsToInsert, { transaction: tx });
+            });
+        }
+
+        return { success: true, message: `Se sembraron ${recordsToInsert.length} cuentas en el PUC.`, count: recordsToInsert.length };
     }
 
     /**
      * Busca una cuenta por su código contable
      */
-    static async findAccountByCode(code, companyId = 'default') {
-        return await AccountCatalog.findOne({ where: { code, companyId } });
+    static async findAccountByCode(code, companyId = 'default', transaction = null) {
+        return await AccountCatalog.findOne({
+            where: { code, companyId },
+            ...(transaction ? { transaction } : {})
+        });
     }
 
     /**
@@ -145,36 +173,54 @@ class AccountingEngineService {
             throw new Error('Un asiento contable requiere al menos 2 líneas para cumplir la partida doble.');
         }
 
-        const dateStr = entryDate || new Date().toISOString().split('T')[0];
+        const dateStr = (entryDate ? String(entryDate).split('T')[0] : new Date().toISOString().split('T')[0]);
         const year = dateStr.substring(0, 4);
 
-        // Validar sumatorias de Debe y Haber
+        // Validar sumatorias de Debe y Haber con aritmética exacta BigInt (patrón Fowler)
         let sumDebit = 0;
         let sumCredit = 0;
 
         for (const line of lines) {
-            const d = parseFloat(line.debit) || 0;
-            const c = parseFloat(line.credit) || 0;
-            sumDebit += d;
-            sumCredit += c;
+            const d = precision.round(line.debit || 0, 2);
+            const c = precision.round(line.credit || 0, 2);
+            sumDebit = precision.add(sumDebit, d);
+            sumCredit = precision.add(sumCredit, c);
         }
+        sumDebit = precision.round(sumDebit, 2);
+        sumCredit = precision.round(sumCredit, 2);
 
-        const diff = Math.abs(sumDebit - sumCredit);
+        const diff = Math.abs(precision.subtract(sumDebit, sumCredit));
         if (diff > 0.005) {
             throw new Error(`Asiento descuadrado: Debe ($${sumDebit.toFixed(2)}) != Haber ($${sumCredit.toFixed(2)}). Diferencia: $${diff.toFixed(2)}.`);
         }
 
-        // Generar correlativo
-        const countEntries = await JournalEntry.count({
-            where: {
-                companyId,
-                entryDate: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] }
-            },
-            transaction: transaction || undefined
-        });
-        const entryNumber = `AS-${year}-${String(countEntries + 1).padStart(5, '0')}`;
-
         const executeOperations = async (t) => {
+            // Serializar correlativo del año por empresa evitando colisiones y huecos
+            if (typeof sequelize.getDialect === 'function' && sequelize.getDialect() === 'postgres') {
+                await sequelize.query('SELECT pg_advisory_xact_lock(hashtext(:lockKey))', {
+                    replacements: { lockKey: `je_seq_${companyId}_${year}` },
+                    transaction: t
+                });
+            }
+
+            const lastEntry = await JournalEntry.findOne({
+                where: {
+                    companyId,
+                    entryNumber: { [Op.like]: `AS-${year}-%` }
+                },
+                order: [['entryNumber', 'DESC']],
+                attributes: ['entryNumber'],
+                transaction: t
+            });
+            const lastSeq = lastEntry?.entryNumber
+                ? (parseInt(String(lastEntry.entryNumber).split('-').pop(), 10) || 0)
+                : 0;
+            const entryNumber = `AS-${year}-${String(lastSeq + 1).padStart(5, '0')}`;
+
+            const rate = precision.parseNumericInput(exchangeRate) > 0
+                ? precision.parseNumericInput(exchangeRate)
+                : 1;
+
             const entryId = generateRobustId();
             const entry = await JournalEntry.create({
                 id: entryId,
@@ -187,7 +233,7 @@ class AccountingEngineService {
                 totalDebit: sumDebit,
                 totalCredit: sumCredit,
                 currency,
-                exchangeRate: parseFloat(exchangeRate) || 1,
+                exchangeRate: rate,
                 referenceType,
                 referenceId,
                 userId
@@ -210,8 +256,8 @@ class AccountingEngineService {
                     throw new Error(`La cuenta contable ${account.code} (${account.name}) es de agrupación y no admite cargos directos.`);
                 }
 
-                const debitVal = parseFloat(line.debit) || 0;
-                const creditVal = parseFloat(line.credit) || 0;
+                const debitVal = precision.round(line.debit || 0, 2);
+                const creditVal = precision.round(line.credit || 0, 2);
 
                 await JournalEntryLine.create({
                     id: generateRobustId(),
@@ -223,17 +269,14 @@ class AccountingEngineService {
                     lineOrder: line._origIdx + 1
                 }, { transaction: t });
 
-                // Actualizar saldos acumulados de la cuenta
-                const rate = parseFloat(exchangeRate) || 1;
-                let deltaUSD = 0;
-                if (account.nature === 'DEBIT') {
-                    deltaUSD = debitVal - creditVal;
-                } else {
-                    deltaUSD = creditVal - debitVal;
-                }
+                // Actualizar saldos acumulados de la cuenta en USD y VES exactos
+                const deltaUSD = account.nature === 'DEBIT'
+                    ? precision.subtract(debitVal, creditVal)
+                    : precision.subtract(creditVal, debitVal);
+                const deltaVES = precision.round(precision.multiply(deltaUSD, rate), 2);
 
-                const newBalanceUSD = (parseFloat(account.balanceUSD) || 0) + deltaUSD;
-                const newBalanceVES = (parseFloat(account.balanceVES) || 0) + (deltaUSD * rate);
+                const newBalanceUSD = precision.round(precision.add(account.balanceUSD || 0, deltaUSD), 2);
+                const newBalanceVES = precision.round(precision.add(account.balanceVES || 0, deltaVES), 2);
 
                 await account.update({
                     balanceUSD: newBalanceUSD,
@@ -254,67 +297,91 @@ class AccountingEngineService {
     /**
      * Generador automático de Asiento Contable por Venta
      */
-    static async generateSaleEntry(sale, companyId = 'default') {
+    static async generateSaleEntry(sale, companyId = 'default', transaction = null) {
         try {
-            const total = parseFloat(sale.total) || 0;
+            const round2 = (n) => precision.round(n || 0, 2);
+            const total = round2(sale.total);
             if (total <= 0) return null;
 
-            const tax = parseFloat(sale.tax) || 0;
-            const discount = parseFloat(sale.discount) || 0;
-            const igtf = parseFloat(sale.igtfAmount) || 0;
-            const subtotal = parseFloat(sale.subtotal) || (total - tax - igtf + discount);
-            const rate = parseFloat(sale.exchangeRate) || 1;
+            const tax = round2(sale.tax);
+            const discount = round2(sale.discount);
+            const promoDiscount = round2(sale.promoDiscount);
+            const totalDiscount = round2(precision.add(discount, promoDiscount));
+            const igtf = round2(sale.igtfAmount);
+            const rateRaw = precision.parseNumericInput(sale.exchangeRate);
+            const rate = rateRaw > 0 ? rateRaw : 1;
 
-            // Calcular Costo de Mercancía Vendida (CMV) si hay items
+            // Calcular Costo de Mercancía Vendida (CMV) exacto si hay items
             let totalCost = 0;
             if (Array.isArray(sale.SaleItems)) {
-                totalCost = sale.SaleItems.reduce((acc, item) => {
-                    const c = parseFloat(item.cost) || 0;
-                    const q = parseFloat(item.quantity) || 1;
-                    return acc + (c * q);
-                }, 0);
+                let rawCostSum = 0;
+                for (const item of sale.SaleItems) {
+                    const c = precision.parseNumericInput(item.cost);
+                    const q = (item.quantity !== undefined && item.quantity !== null)
+                        ? precision.parseNumericInput(item.quantity)
+                        : 1;
+                    rawCostSum = precision.add(rawCostSum, precision.multiply(c, q));
+                }
+                totalCost = round2(rawCostSum);
             }
 
-            // Buscar cuentas (auto-inicializando el catálogo NIIF si aún no existe para la empresa)
-            let accCaja = await this.findAccountByCode('1.1.1.01.001', companyId);
-            if (!accCaja) {
-                await this.seedDefaultChartOfAccounts(companyId);
-                accCaja = await this.findAccountByCode('1.1.1.01.001', companyId);
+            // Resolver catálogo contable (sembrando cuentas PUC faltantes en la transacción si aplica)
+            let accCaja = await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
+            let accBanco = await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
+            let accCxC = await this.findAccountByCode('1.1.2.01.001', companyId, transaction);
+            let accVentas = await this.findAccountByCode('4.1.1.01.001', companyId, transaction);
+            let accIvaDebito = await this.findAccountByCode('2.1.2.01.001', companyId, transaction);
+            let accIgtf = await this.findAccountByCode('2.1.2.04.001', companyId, transaction);
+            let accDescuentos = await this.findAccountByCode('4.1.2.01.001', companyId, transaction);
+            let accCostoVenta = await this.findAccountByCode('5.1.1.01.001', companyId, transaction);
+            let accInventario = await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
+
+            const missingNeeded = !accCaja || !accVentas || !accBanco || !accCxC
+                || (totalDiscount > 0 && !accDescuentos)
+                || (tax > 0 && !accIvaDebito)
+                || (igtf > 0 && !accIgtf)
+                || (totalCost > 0 && (!accCostoVenta || !accInventario));
+
+            if (missingNeeded) {
+                await this.seedDefaultChartOfAccounts(companyId, transaction);
+                accCaja = accCaja || await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
+                accBanco = accBanco || await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
+                accCxC = accCxC || await this.findAccountByCode('1.1.2.01.001', companyId, transaction);
+                accVentas = accVentas || await this.findAccountByCode('4.1.1.01.001', companyId, transaction);
+                accIvaDebito = accIvaDebito || await this.findAccountByCode('2.1.2.01.001', companyId, transaction);
+                accIgtf = accIgtf || await this.findAccountByCode('2.1.2.04.001', companyId, transaction);
+                accDescuentos = accDescuentos || await this.findAccountByCode('4.1.2.01.001', companyId, transaction);
+                accCostoVenta = accCostoVenta || await this.findAccountByCode('5.1.1.01.001', companyId, transaction);
+                accInventario = accInventario || await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
             }
-            const accBanco = await this.findAccountByCode('1.1.1.02.001', companyId);
-            const accCxC = await this.findAccountByCode('1.1.2.01.001', companyId);
-            const accVentas = await this.findAccountByCode('4.1.1.01.001', companyId);
-            const accIvaDebito = await this.findAccountByCode('2.1.2.01.001', companyId);
-            const accIgtf = await this.findAccountByCode('2.1.2.04.001', companyId);
-            const accDescuentos = await this.findAccountByCode('4.1.2.01.001', companyId);
-            const accCostoVenta = await this.findAccountByCode('5.1.1.01.001', companyId);
-            const accInventario = await this.findAccountByCode('1.1.3.01.001', companyId);
 
             if (!accCaja || !accVentas) {
-                console.warn('[Accounting] No se encontraron las cuentas básicas de venta. Omitiendo asiento.');
-                return null;
+                throw new Error('Cuentas contables base de venta (Caja 1.1.1.01.001 / Ventas 4.1.1.01.001) no encontradas.');
             }
 
             const isCredit = sale.paymentStatus === 'pending' || sale.paymentStatus === 'credit' || sale.paymentStatus === 'unpaid';
             const lines = [];
             const invRef = `Venta Factura #${sale.invoiceNumber || String(sale.id).substring(0, 8)}`;
 
-            // 1. Debe: Desglose entre Efectivo (Caja), Medios Bancarios (POS/Transferencia/Pago Móvil/Zelle) y Crédito (CxC)
+            // 1. Debe: Desglose entre Efectivo (Caja), Medios Bancarios (Bancos) y Crédito (CxC)
             let pms = [];
             if (Array.isArray(sale.paymentMethods)) {
                 pms = sale.paymentMethods;
             } else if (typeof sale.paymentMethods === 'string') {
-                try { pms = JSON.parse(sale.paymentMethods) || []; } catch (e) {}
+                try { pms = JSON.parse(sale.paymentMethods) || []; } catch (_) { pms = []; }
             }
 
-            if (isCredit && accCxC && pms.length <= 1) {
+            if (isCredit && pms.length === 0) {
+                if (!accCxC) {
+                    throw new Error('Cuenta contable CxC (1.1.2.01.001) no encontrada para registrar venta a crédito.');
+                }
                 lines.push({
                     accountId: accCxC.id,
                     description: invRef,
                     debit: total,
                     credit: 0
                 });
-            } else if (pms.length > 0 && accBanco) {
+            } else if (pms.length > 0) {
                 let cashUsd = 0;
                 let bankUsd = 0;
                 let creditUsd = 0;
@@ -322,33 +389,66 @@ class AccountingEngineService {
                 for (const pm of pms) {
                     const mKey = String(pm.method || '').toLowerCase();
                     const cur = String(pm.currency || (mKey.includes('ves') || mKey.includes('bs') ? 'VES' : 'USD')).toUpperCase();
-                    const rawAmt = parseFloat(pm.amount) || 0;
-                    const eqUsd = parseFloat(pm.convertedAmountUsd) > 0
-                        ? parseFloat(pm.convertedAmountUsd)
-                        : (cur === 'VES' && rate > 0 ? (rawAmt / rate) : rawAmt);
+                    const rawAmt = precision.parseNumericInput(pm.amount);
+                    const convUsd = precision.parseNumericInput(pm.convertedAmountUsd);
+                    const eqUsd = convUsd > 0
+                        ? convUsd
+                        : ((cur === 'VES' || cur === 'BS') && rate > 0 ? precision.divide(rawAmt, rate) : rawAmt);
 
-                    if (mKey === 'fiado' || mKey === 'credit') {
-                        creditUsd += eqUsd;
-                    } else if (['card', 'pos', 'punto', 'pago_movil', 'pagomovil', 'transfer', 'zelle', 'biopago', 'binance'].some(k => mKey.includes(k))) {
-                        bankUsd += eqUsd;
+                    if (mKey === 'fiado' || mKey === 'credit' || mKey === 'credit_usd') {
+                        creditUsd = precision.add(creditUsd, eqUsd);
+                    } else if (this._isBankMethod(mKey)) {
+                        bankUsd = precision.add(bankUsd, eqUsd);
                     } else {
-                        cashUsd += eqUsd;
+                        cashUsd = precision.add(cashUsd, eqUsd);
                     }
                 }
 
-                const sumBreakdown = cashUsd + bankUsd + creditUsd;
-                const scale = sumBreakdown > 0 ? (total / sumBreakdown) : 1;
-                cashUsd = Math.round(cashUsd * scale * 100) / 100;
-                bankUsd = Math.round(bankUsd * scale * 100) / 100;
-                creditUsd = Math.round((total - cashUsd - bankUsd) * 100) / 100;
+                const hadCredit = creditUsd > 0;
+                const sumBreakdown = precision.add([cashUsd, bankUsd, creditUsd]);
+                if (sumBreakdown <= 0) {
+                    if (isCredit) {
+                        creditUsd = total;
+                    } else if (this._isBankMethod(sale.paymentMethod)) {
+                        bankUsd = total;
+                    } else {
+                        cashUsd = total;
+                    }
+                } else {
+                    const scale = precision.divide(total, sumBreakdown);
+                    cashUsd = round2(precision.multiply(cashUsd, scale));
+                    bankUsd = round2(precision.multiply(bankUsd, scale));
+                    if (hadCredit) {
+                        creditUsd = Math.max(0, round2(precision.subtract(total, precision.add(cashUsd, bankUsd))));
+                    } else {
+                        creditUsd = 0;
+                        const residual = round2(precision.subtract(total, precision.add(cashUsd, bankUsd)));
+                        if (residual !== 0) {
+                            if (bankUsd > 0) bankUsd = round2(precision.add(bankUsd, residual));
+                            else cashUsd = round2(precision.add(cashUsd, residual));
+                        }
+                    }
+                }
+
+                if (bankUsd > 0 && !accBanco) {
+                    throw new Error('Cuenta contable Bancos (1.1.1.02.001) no encontrada para cobro bancario.');
+                }
+                if (creditUsd > 0 && !accCxC) {
+                    throw new Error('Cuenta contable CxC (1.1.2.01.001) no encontrada para porción fiada.');
+                }
 
                 if (cashUsd > 0) lines.push({ accountId: accCaja.id, description: `${invRef} (Efectivo)`, debit: cashUsd, credit: 0 });
                 if (bankUsd > 0) lines.push({ accountId: accBanco.id, description: `${invRef} (Bancos/Digital)`, debit: bankUsd, credit: 0 });
-                if (creditUsd > 0) lines.push({ accountId: (accCxC || accCaja).id, description: `${invRef} (CxC)`, debit: creditUsd, credit: 0 });
+                if (creditUsd > 0) lines.push({ accountId: accCxC.id, description: `${invRef} (CxC)`, debit: creditUsd, credit: 0 });
             } else {
-                const mKey = String(sale.paymentMethod || 'cash').toLowerCase();
-                const isBankMethod = accBanco && ['card', 'pos', 'punto', 'pago_movil', 'pagomovil', 'transfer', 'zelle', 'biopago', 'binance'].some(k => mKey.includes(k));
-                const accReceiving = isCredit && accCxC ? accCxC : (isBankMethod ? accBanco : accCaja);
+                const isBankMethod = this._isBankMethod(sale.paymentMethod);
+                if (isCredit && !accCxC) {
+                    throw new Error('Cuenta contable CxC (1.1.2.01.001) no encontrada para venta a crédito.');
+                }
+                if (!isCredit && isBankMethod && !accBanco) {
+                    throw new Error('Cuenta contable Bancos (1.1.1.02.001) no encontrada para venta bancaria.');
+                }
+                const accReceiving = isCredit ? accCxC : (isBankMethod ? accBanco : accCaja);
                 lines.push({
                     accountId: accReceiving.id,
                     description: invRef,
@@ -357,91 +457,131 @@ class AccountingEngineService {
                 });
             }
 
-            // Si hubo descuento, registrar al Debe
-            if (discount > 0 && accDescuentos) {
+            // Descuentos concedidos al Debe (sin omitir ni maquillar si existen)
+            if (totalDiscount > 0) {
+                if (!accDescuentos) {
+                    throw new Error('Cuenta contable Descuentos en Ventas (4.1.2.01.001) no encontrada.');
+                }
                 lines.push({
                     accountId: accDescuentos.id,
-                    description: `Descuento concedido Factura #${sale.invoiceNumber || sale.id.substring(0, 8)}`,
-                    debit: discount,
+                    description: `Descuento concedido Factura #${sale.invoiceNumber || String(sale.id).substring(0, 8)}`,
+                    debit: totalDiscount,
                     credit: 0
                 });
             }
 
-            // 2. Haber: Venta Bruta (subtotal ya representa el valor bruto de los renglones)
-            const grossSale = subtotal;
-            lines.push({
-                accountId: accVentas.id,
-                description: `Ingreso por Venta Factura #${sale.invoiceNumber || sale.id.substring(0, 8)}`,
-                debit: 0,
-                credit: grossSale
-            });
+            // Validar existencia estricta de cuentas fiscales si aplican impuestos
+            if (tax > 0 && !accIvaDebito) {
+                throw new Error('Cuenta contable IVA Débito Fiscal (2.1.2.01.001) no encontrada.');
+            }
+            if (igtf > 0 && !accIgtf) {
+                throw new Error('Cuenta contable IGTF por Enterar (2.1.2.04.001) no encontrada.');
+            }
 
-            // 3. Haber: IVA Débito Fiscal si aplica
-            if (tax > 0 && accIvaDebito) {
+            // 2. Haber: Venta Bruta Neta de Impuestos (total + totalDiscount - tax - igtf)
+            const grossSale = round2(precision.subtract(precision.add(total, totalDiscount), precision.add(tax, igtf)));
+            if (grossSale < 0) {
+                throw new Error(`Descuadre contable en venta #${sale.invoiceNumber || sale.id}: impuestos (${tax} + ${igtf}) exceden monto bruto (${precision.add(total, totalDiscount)}).`);
+            }
+            if (grossSale > 0) {
+                lines.push({
+                    accountId: accVentas.id,
+                    description: `Ingreso por Venta Factura #${sale.invoiceNumber || String(sale.id).substring(0, 8)}`,
+                    debit: 0,
+                    credit: grossSale
+                });
+            }
+
+            // 3. Haber: IVA Débito Fiscal
+            if (tax > 0) {
                 lines.push({
                     accountId: accIvaDebito.id,
-                    description: `IVA Débito Fiscal Factura #${sale.invoiceNumber || sale.id.substring(0, 8)}`,
+                    description: `IVA Débito Fiscal Factura #${sale.invoiceNumber || String(sale.id).substring(0, 8)}`,
                     debit: 0,
                     credit: tax
                 });
             }
 
-            // 3b. Haber: IGTF por Enterar (3%) si aplica
-            if (igtf > 0 && accIgtf) {
+            // 3b. Haber: IGTF por Enterar (3%)
+            if (igtf > 0) {
                 lines.push({
                     accountId: accIgtf.id,
-                    description: `IGTF por Enterar Factura #${sale.invoiceNumber || sale.id.substring(0, 8)}`,
+                    description: `IGTF por Enterar Factura #${sale.invoiceNumber || String(sale.id).substring(0, 8)}`,
                     debit: 0,
                     credit: igtf
                 });
             }
 
-            // 4. Asiento de Costo de Venta si tenemos costo registrado
-            if (totalCost > 0 && accCostoVenta && accInventario) {
+            // 4. Costo de Mercancía Vendida (CMV) vs Inventario
+            if (totalCost > 0) {
+                if (!accCostoVenta || !accInventario) {
+                    throw new Error('Cuentas contables de Costo de Venta (5.1.1.01.001) o Inventario (1.1.3.01.001) no encontradas.');
+                }
                 lines.push({
                     accountId: accCostoVenta.id,
-                    description: `Costo de Mercancía Vendida Factura #${sale.invoiceNumber || sale.id.substring(0, 8)}`,
+                    description: `Costo de Mercancía Vendida Factura #${sale.invoiceNumber || String(sale.id).substring(0, 8)}`,
                     debit: totalCost,
                     credit: 0
                 });
                 lines.push({
                     accountId: accInventario.id,
-                    description: `Descarga de Inventario Factura #${sale.invoiceNumber || sale.id.substring(0, 8)}`,
+                    description: `Descarga de Inventario Factura #${sale.invoiceNumber || String(sale.id).substring(0, 8)}`,
                     debit: 0,
                     credit: totalCost
                 });
             }
 
+            const entryDateNormalized = sale.date
+                ? (sale.date instanceof Date ? sale.date.toISOString().split('T')[0] : String(sale.date).split('T')[0])
+                : new Date().toISOString().split('T')[0];
+
             return await this.createEntry({
                 companyId,
-                entryDate: sale.date ? sale.date.split('T')[0] : new Date().toISOString().split('T')[0],
-                description: `Contabilización Venta #${sale.invoiceNumber || sale.id.substring(0, 8)} - ${sale.customerName || 'Cliente General'}`,
+                entryDate: entryDateNormalized,
+                description: `Contabilización Venta #${sale.invoiceNumber || String(sale.id).substring(0, 8)} - ${sale.customerName || 'Cliente General'}`,
                 entryType: 'AUTOMATIC',
                 currency: 'USD',
                 exchangeRate: rate,
                 referenceType: 'SALE',
                 referenceId: sale.id,
                 userId: sale.userId,
-                lines
+                lines,
+                transaction
             });
         } catch (err) {
-            console.error('[Accounting] Error al generar asiento de venta:', err.message);
-            return null;
+            console.error('[Accounting] Error crítico al generar asiento de venta:', err.message);
+            throw err;
         }
     }
 
     /**
      * Generador automático de Asiento Contable por Gasto
      */
-    static async generateExpenseEntry(expense, companyId = 'default') {
+    static async generateExpenseEntry(expense, companyId = 'default', transaction = null) {
         try {
-            const amount = parseFloat(expense.amount) || 0;
+            const amount = precision.round(expense.amount || 0, 2);
             if (amount <= 0) return null;
 
-            const accGasto = await this.findAccountByCode('6.1.2.01.001', companyId) || await this.findAccountByCode('6.1.1.01.001', companyId);
-            const accCaja = await this.findAccountByCode('1.1.1.01.001', companyId);
+            let accGasto = await this.findAccountByCode('6.1.2.01.001', companyId, transaction)
+                || await this.findAccountByCode('6.1.1.01.001', companyId, transaction);
+            const useBank = this._isBankMethod(expense.paymentMethod);
+            let accSalida = useBank
+                ? await this.findAccountByCode('1.1.1.02.001', companyId, transaction)
+                : await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
 
-            if (!accGasto || !accCaja) return null;
+            if (!accGasto || !accSalida) {
+                await this.seedDefaultChartOfAccounts(companyId, transaction);
+                accGasto = accGasto
+                    || await this.findAccountByCode('6.1.2.01.001', companyId, transaction)
+                    || await this.findAccountByCode('6.1.1.01.001', companyId, transaction);
+                accSalida = useBank
+                    ? (accSalida || await this.findAccountByCode('1.1.1.02.001', companyId, transaction))
+                    : (accSalida || await this.findAccountByCode('1.1.1.01.001', companyId, transaction));
+            }
+
+            if (!accGasto || !accSalida) {
+                throw new Error('Cuentas contables de Gasto (6.1.2.01.001) o Caja/Bancos no encontradas.');
+            }
 
             const lines = [
                 {
@@ -451,8 +591,8 @@ class AccountingEngineService {
                     credit: 0
                 },
                 {
-                    accountId: accCaja.id,
-                    description: `Desembolso Gasto: ${expense.description || 'Operativo'}`,
+                    accountId: accSalida.id,
+                    description: `Desembolso Gasto (${useBank ? 'Bancos' : 'Caja'}): ${expense.description || 'Operativo'}`,
                     debit: 0,
                     credit: amount
                 }
@@ -460,17 +600,244 @@ class AccountingEngineService {
 
             return await this.createEntry({
                 companyId,
-                entryDate: expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0],
+                entryDate: expense.date ? String(expense.date).split('T')[0] : new Date().toISOString().split('T')[0],
                 description: `Contabilización Gasto: ${expense.description || expense.category || 'Operativo'}`,
                 entryType: 'AUTOMATIC',
                 currency: 'USD',
+                exchangeRate: precision.parseNumericInput(expense.exchangeRate) > 0 ? precision.parseNumericInput(expense.exchangeRate) : 1,
                 referenceType: 'EXPENSE',
                 referenceId: expense.id,
-                lines
+                userId: expense.userId || null,
+                lines,
+                transaction
             });
         } catch (err) {
             console.error('[Accounting] Error al generar asiento de gasto:', err.message);
-            return null;
+            throw err;
+        }
+    }
+
+    /**
+     * Generador automático de Asiento Contable por Devolución / Nota de Crédito
+     */
+    static async generateRefundEntry(refund, sale = null, companyId = 'default', transaction = null) {
+        try {
+            const round2 = (n) => precision.round(n || 0, 2);
+            const totalRefund = round2(refund.amount);
+            if (totalRefund <= 0) return null;
+
+            const taxRefund = round2(refund.taxAmount ?? refund.tax ?? 0);
+            const igtfRefund = round2(refund.igtfAmount ?? refund.igtf ?? 0);
+            const netSalesReversal = round2(precision.subtract(totalRefund, precision.add(taxRefund, igtfRefund)));
+            if (netSalesReversal < 0) {
+                throw new Error(`Descuadre en devolución #${refund.id}: impuestos reversados exceden el monto devuelto.`);
+            }
+
+            const returnedCost = round2(refund.returnedCost || 0);
+            const rateRaw = precision.parseNumericInput(refund.exchangeRate || sale?.exchangeRate);
+            const rate = rateRaw > 0 ? rateRaw : 1;
+
+            let accCaja = await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
+            let accBanco = await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
+            let accCxC = await this.findAccountByCode('1.1.2.01.001', companyId, transaction);
+            let accVentas = await this.findAccountByCode('4.1.1.01.001', companyId, transaction);
+            let accIvaDebito = await this.findAccountByCode('2.1.2.01.001', companyId, transaction);
+            let accIgtf = await this.findAccountByCode('2.1.2.04.001', companyId, transaction);
+            let accCostoVenta = await this.findAccountByCode('5.1.1.01.001', companyId, transaction);
+            let accInventario = await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
+
+            if (!accCaja || !accVentas || !accBanco || !accCxC || (taxRefund > 0 && !accIvaDebito) || (igtfRefund > 0 && !accIgtf) || (returnedCost > 0 && (!accCostoVenta || !accInventario))) {
+                await this.seedDefaultChartOfAccounts(companyId, transaction);
+                accCaja = accCaja || await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
+                accBanco = accBanco || await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
+                accCxC = accCxC || await this.findAccountByCode('1.1.2.01.001', companyId, transaction);
+                accVentas = accVentas || await this.findAccountByCode('4.1.1.01.001', companyId, transaction);
+                accIvaDebito = accIvaDebito || await this.findAccountByCode('2.1.2.01.001', companyId, transaction);
+                accIgtf = accIgtf || await this.findAccountByCode('2.1.2.04.001', companyId, transaction);
+                accCostoVenta = accCostoVenta || await this.findAccountByCode('5.1.1.01.001', companyId, transaction);
+                accInventario = accInventario || await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
+            }
+
+            if (!accCaja || !accVentas) {
+                throw new Error('Cuentas base de venta no encontradas para asiento de devolución.');
+            }
+
+            const lines = [];
+            const refLabel = `Devolución Venta #${sale?.invoiceNumber || refund.saleId || String(refund.id).substring(0, 8)}`;
+
+            if (netSalesReversal > 0) {
+                lines.push({
+                    accountId: accVentas.id,
+                    description: `Reverso Ingreso ${refLabel}`,
+                    debit: netSalesReversal,
+                    credit: 0
+                });
+            }
+            if (taxRefund > 0) {
+                if (!accIvaDebito) throw new Error('Cuenta IVA Débito Fiscal (2.1.2.01.001) no encontrada para devolución.');
+                lines.push({
+                    accountId: accIvaDebito.id,
+                    description: `Reverso IVA ${refLabel}`,
+                    debit: taxRefund,
+                    credit: 0
+                });
+            }
+            if (igtfRefund > 0) {
+                if (!accIgtf) throw new Error('Cuenta IGTF por Enterar (2.1.2.04.001) no encontrada para devolución.');
+                lines.push({
+                    accountId: accIgtf.id,
+                    description: `Reverso IGTF ${refLabel}`,
+                    debit: igtfRefund,
+                    credit: 0
+                });
+            }
+
+            let pms = [];
+            if (Array.isArray(refund.paymentMethods)) pms = refund.paymentMethods;
+            else if (typeof refund.paymentMethods === 'string') {
+                try { pms = JSON.parse(refund.paymentMethods) || []; } catch (_) { pms = []; }
+            }
+
+            if (pms.length > 0) {
+                let cashUsd = 0;
+                let bankUsd = 0;
+                let creditUsd = 0;
+                for (const pm of pms) {
+                    const mKey = String(pm.method || '').toLowerCase();
+                    const cur = String(pm.currency || (mKey.includes('ves') || mKey.includes('bs') ? 'VES' : 'USD')).toUpperCase();
+                    const rawAmt = precision.parseNumericInput(pm.amount);
+                    const convUsd = precision.parseNumericInput(pm.convertedAmountUsd);
+                    const eqUsd = convUsd > 0 ? convUsd : ((cur === 'VES' || cur === 'BS') && rate > 0 ? precision.divide(rawAmt, rate) : rawAmt);
+                    if (mKey === 'fiado' || mKey === 'credit' || mKey === 'credit_usd') creditUsd = precision.add(creditUsd, eqUsd);
+                    else if (this._isBankMethod(mKey)) bankUsd = precision.add(bankUsd, eqUsd);
+                    else cashUsd = precision.add(cashUsd, eqUsd);
+                }
+                const sumPms = precision.add([cashUsd, bankUsd, creditUsd]);
+                if (sumPms > 0) {
+                    const scale = precision.divide(totalRefund, sumPms);
+                    cashUsd = round2(precision.multiply(cashUsd, scale));
+                    bankUsd = round2(precision.multiply(bankUsd, scale));
+                    creditUsd = round2(precision.subtract(totalRefund, precision.add(cashUsd, bankUsd)));
+                } else {
+                    cashUsd = totalRefund;
+                }
+                if (cashUsd > 0) lines.push({ accountId: accCaja.id, description: `Reembolso Efectivo ${refLabel}`, debit: 0, credit: cashUsd });
+                if (bankUsd > 0) {
+                    if (!accBanco) throw new Error('Cuenta Bancos (1.1.1.02.001) no encontrada para reembolso bancario.');
+                    lines.push({ accountId: accBanco.id, description: `Reembolso Bancos ${refLabel}`, debit: 0, credit: bankUsd });
+                }
+                if (creditUsd > 0) {
+                    if (!accCxC) throw new Error('Cuenta CxC (1.1.2.01.001) no encontrada para abono crédito en devolución.');
+                    lines.push({ accountId: accCxC.id, description: `Reverso CxC ${refLabel}`, debit: 0, credit: creditUsd });
+                }
+            } else {
+                const isCreditSale = sale?.paymentStatus === 'pending' || sale?.paymentStatus === 'credit' || sale?.paymentStatus === 'unpaid';
+                const isBankSale = this._isBankMethod(sale?.paymentMethod);
+                const accOut = isCreditSale ? accCxC : (isBankSale ? accBanco : accCaja);
+                lines.push({ accountId: accOut.id, description: `Salida ${refLabel}`, debit: 0, credit: totalRefund });
+            }
+
+            if (returnedCost > 0 && !refund.isQuarantine) {
+                if (!accCostoVenta || !accInventario) {
+                    throw new Error('Cuentas CMV / Inventario no encontradas para reingreso por devolución.');
+                }
+                lines.push({ accountId: accInventario.id, description: `Reingreso Inventario ${refLabel}`, debit: returnedCost, credit: 0 });
+                lines.push({ accountId: accCostoVenta.id, description: `Reverso CMV ${refLabel}`, debit: 0, credit: returnedCost });
+            }
+
+            return await this.createEntry({
+                companyId,
+                entryDate: refund.date ? String(refund.date).split('T')[0] : new Date().toISOString().split('T')[0],
+                description: refLabel,
+                entryType: 'AUTOMATIC',
+                currency: 'USD',
+                exchangeRate: rate,
+                referenceType: 'REFUND',
+                referenceId: refund.id,
+                userId: refund.userId || null,
+                lines,
+                transaction
+            });
+        } catch (err) {
+            console.error('[Accounting] Error al generar asiento de devolución:', err.message);
+            throw err;
+        }
+    }
+
+    /**
+     * Generador automático de Asiento Contable por Compra / Recepción de Mercancía
+     */
+    static async generatePurchaseEntry(purchase, companyId = 'default', transaction = null) {
+        try {
+            const round2 = (n) => precision.round(n || 0, 2);
+            const total = round2(purchase.total);
+            if (total <= 0) return null;
+
+            const tax = round2(purchase.tax ?? purchase.iva ?? 0);
+            const netInventory = round2(precision.subtract(total, tax));
+            if (netInventory < 0) {
+                throw new Error(`Descuadre en compra #${purchase.referenceNumber || purchase.id}: IVA (${tax}) excede total (${total}).`);
+            }
+            const rateRaw = precision.parseNumericInput(purchase.exchangeRate);
+            const rate = rateRaw > 0 ? rateRaw : 1;
+
+            let accInventario = await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
+            let accIvaCredito = await this.findAccountByCode('1.1.4.01.001', companyId, transaction);
+            let accProveedores = await this.findAccountByCode('2.1.1.01.001', companyId, transaction);
+            let accCaja = await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
+            let accBanco = await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
+
+            if (!accInventario || !accProveedores || !accCaja || !accBanco || (tax > 0 && !accIvaCredito)) {
+                await this.seedDefaultChartOfAccounts(companyId, transaction);
+                accInventario = accInventario || await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
+                accIvaCredito = accIvaCredito || await this.findAccountByCode('1.1.4.01.001', companyId, transaction);
+                accProveedores = accProveedores || await this.findAccountByCode('2.1.1.01.001', companyId, transaction);
+                accCaja = accCaja || await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
+                accBanco = accBanco || await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
+            }
+
+            if (!accInventario || !accProveedores) {
+                throw new Error('Cuentas de Inventario (1.1.3.01.001) o Proveedores (2.1.1.01.001) no encontradas.');
+            }
+
+            const ref = `Compra #${purchase.referenceNumber || String(purchase.id).substring(0, 8)}`;
+            const lines = [];
+            if (netInventory > 0) {
+                lines.push({ accountId: accInventario.id, description: `Ingreso Inventario ${ref}`, debit: netInventory, credit: 0 });
+            }
+            if (tax > 0) {
+                if (!accIvaCredito) throw new Error('Cuenta IVA Crédito Fiscal (1.1.4.01.001) no encontrada.');
+                lines.push({ accountId: accIvaCredito.id, description: `IVA Crédito Fiscal ${ref}`, debit: tax, credit: 0 });
+            }
+
+            const isPaid = String(purchase.paymentStatus || '').toLowerCase() === 'paid';
+            const accHaber = isPaid
+                ? (this._isBankMethod(purchase.paymentMethod) ? accBanco : accCaja)
+                : accProveedores;
+
+            lines.push({
+                accountId: accHaber.id,
+                description: isPaid ? `Pago ${ref}` : `Cuenta por Pagar ${ref}`,
+                debit: 0,
+                credit: total
+            });
+
+            return await this.createEntry({
+                companyId,
+                entryDate: purchase.date ? String(purchase.date).split('T')[0] : new Date().toISOString().split('T')[0],
+                description: `Contabilización ${ref}`,
+                entryType: 'AUTOMATIC',
+                currency: 'USD',
+                exchangeRate: rate,
+                referenceType: 'PURCHASE',
+                referenceId: purchase.id,
+                userId: purchase.userId || null,
+                lines,
+                transaction
+            });
+        } catch (err) {
+            console.error('[Accounting] Error al generar asiento de compra:', err.message);
+            throw err;
         }
     }
 
@@ -491,12 +858,12 @@ class AccountingEngineService {
         transaction = null
     }) {
         try {
-            const costPerUnit = parseFloat(product?.cost || 0);
-            const totalCost = parseFloat((costPerUnit * quantityBaseUnits).toFixed(4));
+            const costPerUnit = precision.parseNumericInput(product?.cost);
+            const totalCost = precision.round(precision.multiply(costPerUnit, quantityBaseUnits), 2);
             if (totalCost <= 0) return null;
 
             // 1. Buscar o inicializar la cuenta de gasto por mermas (6.1.7.01.001)
-            let accGastoMerma = await this.findAccountByCode('6.1.7.01.001', companyId);
+            let accGastoMerma = await this.findAccountByCode('6.1.7.01.001', companyId, transaction);
             if (!accGastoMerma) {
                 accGastoMerma = await AccountCatalog.create({
                     id: generateRobustId(),
@@ -511,17 +878,18 @@ class AccountingEngineService {
             }
 
             // 2. Buscar la cuenta de inventario (1.1.3.01.001)
-            let accInventario = await this.findAccountByCode('1.1.3.01.001', companyId);
+            let accInventario = await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
             if (!accInventario) {
-                accInventario = await AccountCatalog.findOne({
-                    where: { companyId, code: { [Op.like]: '1.1.3%' }, isSelectable: true },
-                    transaction: transaction || undefined
-                });
+                await this.seedDefaultChartOfAccounts(companyId, transaction);
+                accInventario = await this.findAccountByCode('1.1.3.01.001', companyId, transaction)
+                    || await AccountCatalog.findOne({
+                        where: { companyId, code: { [Op.like]: '1.1.3%' }, isSelectable: true },
+                        transaction: transaction || undefined
+                    });
             }
 
             if (!accInventario) {
-                console.warn('[Accounting] No se encontró cuenta de inventario para registrar asiento de merma.');
-                return null;
+                throw new Error('Cuenta contable de inventario (1.1.3.01.001) no encontrada para registrar merma.');
             }
 
             const description = `Baja de Inventario por Merma: ${product?.name || 'Producto'} (${quantityBaseUnits} unds - Motivo: ${reason})${notes ? ' - ' + notes : ''}`;
@@ -556,6 +924,7 @@ class AccountingEngineService {
             });
         } catch (err) {
             console.error('[Accounting] Error al generar asiento de merma:', err.message);
+            if (transaction) throw err;
             return null;
         }
     }
@@ -629,14 +998,13 @@ class AccountingEngineService {
 
         let runningBalance = 0;
         const movements = lines.map(line => {
-            const debit = parseFloat(line.debit) || 0;
-            const credit = parseFloat(line.credit) || 0;
+            const debit = precision.round(line.debit || 0, 2);
+            const credit = precision.round(line.credit || 0, 2);
 
-            if (account.nature === 'DEBIT') {
-                runningBalance += (debit - credit);
-            } else {
-                runningBalance += (credit - debit);
-            }
+            const movementDelta = account.nature === 'DEBIT'
+                ? precision.subtract(debit, credit)
+                : precision.subtract(credit, debit);
+            runningBalance = precision.round(precision.add(runningBalance, movementDelta), 2);
 
             return {
                 id: line.id,
@@ -684,8 +1052,8 @@ class AccountingEngineService {
                 if (!deltaMap[line.accountId]) {
                     deltaMap[line.accountId] = { debit: 0, credit: 0 };
                 }
-                deltaMap[line.accountId].debit += parseFloat(line.debit) || 0;
-                deltaMap[line.accountId].credit += parseFloat(line.credit) || 0;
+                deltaMap[line.accountId].debit = precision.add(deltaMap[line.accountId].debit, line.debit || 0);
+                deltaMap[line.accountId].credit = precision.add(deltaMap[line.accountId].credit, line.credit || 0);
             }
         }
         return deltaMap;
@@ -709,14 +1077,16 @@ class AccountingEngineService {
         let totalCredits = 0;
 
         const report = accounts.map(acc => {
-            let bal = parseFloat(acc.balanceUSD) || 0;
+            let bal = precision.parseNumericInput(acc.balanceUSD);
             const post = postDeltas[acc.id];
             if (post) {
                 const postDelta = acc.nature === 'DEBIT'
-                    ? (post.debit - post.credit)
-                    : (post.credit - post.debit);
-                bal -= postDelta;
+                    ? precision.subtract(post.debit, post.credit)
+                    : precision.subtract(post.credit, post.debit);
+                bal = precision.subtract(bal, postDelta);
             }
+            bal = precision.round(bal, 2);
+
             let debitBalance = 0;
             let creditBalance = 0;
 
@@ -728,8 +1098,8 @@ class AccountingEngineService {
                 else debitBalance = Math.abs(bal);
             }
 
-            totalDebits += debitBalance;
-            totalCredits += creditBalance;
+            totalDebits = precision.add(totalDebits, debitBalance);
+            totalCredits = precision.add(totalCredits, creditBalance);
 
             return {
                 id: acc.id,
@@ -742,14 +1112,17 @@ class AccountingEngineService {
             };
         });
 
-        const isBalanced = Math.abs(totalDebits - totalCredits) < 0.01;
+        totalDebits = precision.round(totalDebits, 2);
+        totalCredits = precision.round(totalCredits, 2);
+        const difference = precision.round(Math.abs(precision.subtract(totalDebits, totalCredits)), 2);
+        const isBalanced = difference < 0.01;
 
         return {
             asOfDate: dateFilter,
             accounts: report,
             totalDebits,
             totalCredits,
-            difference: Math.abs(totalDebits - totalCredits),
+            difference,
             isBalanced
         };
     }
@@ -778,46 +1151,53 @@ class AccountingEngineService {
         let totalExpense = 0;
 
         for (const acc of accounts) {
-            let bal = parseFloat(acc.balanceUSD) || 0;
+            let bal = precision.parseNumericInput(acc.balanceUSD);
             const post = postDeltas[acc.id];
             if (post) {
                 const postDelta = acc.nature === 'DEBIT'
-                    ? (post.debit - post.credit)
-                    : (post.credit - post.debit);
-                bal -= postDelta;
+                    ? precision.subtract(post.debit, post.credit)
+                    : precision.subtract(post.credit, post.debit);
+                bal = precision.subtract(bal, postDelta);
             }
+            bal = precision.round(bal, 2);
 
             if (acc.accountType === 'ASSET') {
                 assets.push({ code: acc.code, name: acc.name, balance: bal });
-                totalAssets += (acc.nature === 'DEBIT' ? bal : -bal);
+                totalAssets = precision.add(totalAssets, acc.nature === 'DEBIT' ? bal : -bal);
             } else if (acc.accountType === 'LIABILITY') {
                 liabilities.push({ code: acc.code, name: acc.name, balance: bal });
-                totalLiabilities += (acc.nature === 'CREDIT' ? bal : -bal);
+                totalLiabilities = precision.add(totalLiabilities, acc.nature === 'CREDIT' ? bal : -bal);
             } else if (acc.accountType === 'EQUITY') {
                 equity.push({ code: acc.code, name: acc.name, balance: bal });
-                totalEquity += (acc.nature === 'CREDIT' ? bal : -bal);
+                totalEquity = precision.add(totalEquity, acc.nature === 'CREDIT' ? bal : -bal);
             } else if (acc.accountType === 'REVENUE') {
-                totalRevenue += (acc.nature === 'CREDIT' ? bal : -bal);
+                totalRevenue = precision.add(totalRevenue, acc.nature === 'CREDIT' ? bal : -bal);
             } else if (acc.accountType === 'COST') {
-                totalCost += (acc.nature === 'DEBIT' ? bal : -bal);
+                totalCost = precision.add(totalCost, acc.nature === 'DEBIT' ? bal : -bal);
             } else if (acc.accountType === 'EXPENSE') {
-                totalExpense += (acc.nature === 'DEBIT' ? bal : -bal);
+                totalExpense = precision.add(totalExpense, acc.nature === 'DEBIT' ? bal : -bal);
             }
         }
 
         // Incorporar el Resultado del Período / Ejercicio al Patrimonio
-        const periodNetResult = totalRevenue - (totalCost + totalExpense);
+        const periodNetResult = precision.round(
+            precision.subtract(totalRevenue, precision.add(totalCost, totalExpense)),
+            2
+        );
         if (Math.abs(periodNetResult) > 0.0001) {
             equity.push({
                 code: '3.1.4.01.001',
                 name: 'Resultado del Ejercicio Actual (Utilidad / Pérdida)',
                 balance: periodNetResult
             });
-            totalEquity += periodNetResult;
+            totalEquity = precision.add(totalEquity, periodNetResult);
         }
 
-        const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
-        const discrepancy = Math.abs(totalAssets - totalLiabilitiesAndEquity);
+        totalAssets = precision.round(totalAssets, 2);
+        totalLiabilities = precision.round(totalLiabilities, 2);
+        totalEquity = precision.round(totalEquity, 2);
+        const totalLiabilitiesAndEquity = precision.round(precision.add(totalLiabilities, totalEquity), 2);
+        const discrepancy = precision.round(Math.abs(precision.subtract(totalAssets, totalLiabilitiesAndEquity)), 2);
 
         return {
             assets,
@@ -828,7 +1208,7 @@ class AccountingEngineService {
             totalEquity,
             totalLiabilitiesAndEquity,
             periodNetResult,
-            isBalanced: discrepancy < 0.05,
+            isBalanced: discrepancy < 0.01,
             discrepancy
         };
     }

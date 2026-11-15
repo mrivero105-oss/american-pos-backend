@@ -2,6 +2,7 @@ import api, { checkServerHealth } from './api';
 import { db } from './db';
 import localDb from '../db/localDb';
 import { cacheAllProductImages } from './imageCache';
+import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
 
 const SYNC_METADATA_KEY = 'last_sync_timestamp';
 let inFlightAutoSyncPromise = null;
@@ -39,14 +40,18 @@ async function getPendingOfflineStockDeductions() {
     try {
         const primaryPending = await db.getByIndex('sales', 'status', 'pending_sync').catch(() => []);
         accumulateFromSales(primaryPending);
-    } catch (_) {}
+    } catch (e1) {
+        console.warn('[SyncService] Aviso leyendo ventas pendientes en UnifiedDB:', e1?.message || e1);
+    }
 
     try {
         if (localDb && localDb.sales) {
             const dexiePending = await localDb.sales.where('status').equals('pending_sync').toArray();
             accumulateFromSales(dexiePending);
         }
-    } catch (_) {}
+    } catch (e2) {
+        console.warn('[SyncService] Aviso leyendo ventas pendientes en Dexie:', e2?.message || e2);
+    }
 
     return deductions;
 }
@@ -247,7 +252,9 @@ export const syncService = {
                         try {
                             const pullRes = await api.get('/sync/pull');
                             if (pullRes.data?.customers) rawCustomers = pullRes.data.customers;
-                        } catch (_e2) {}
+                        } catch (_e2) {
+                            console.warn('[SyncService] Fallback /sync/pull de clientes no disponible:', _e2?.message || _e2);
+                        }
                     }
                 } else {
                     throw err;
@@ -366,13 +373,11 @@ export const syncService = {
                 }
             } else {
                 // Fallback Supabase Cloud para tasa 24/7 en Internet
-                try {
-                    const cloudRes = await fetch('https://puvqiipussyktfmgafgv.supabase.co/rest/v1/cloud_configuracion?id=eq.general&select=*', {
-                        headers: {
-                            'apikey': 'sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6',
-                            'Authorization': 'Bearer sb_publishable_qphH7VeJGgcTsgMp6NZjDw_zmGnOAi6'
-                        }
-                    });
+                if (hasSupabaseConfig()) {
+                    try {
+                        const cloudRes = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general&select=*'), {
+                            headers: getSupabaseHeaders()
+                        });
                     if (cloudRes.ok) {
                         const cloudRows = await cloudRes.json();
                         if (Array.isArray(cloudRows) && cloudRows.length > 0 && cloudRows[0].tasa_cambio) {
@@ -384,7 +389,10 @@ export const syncService = {
                             console.log('Sync: Tasa de cambio sincronizada desde Supabase Cloud:', finalRate);
                         }
                     }
-                } catch (_cloudErr) {}
+                    } catch (_cloudErr) {
+                        console.warn('[SyncService] Fallback tasa Supabase Cloud no disponible:', _cloudErr?.message || _cloudErr);
+                    }
+                }
             }
 
             if (payRes.status === 'fulfilled' && payRes.value?.data) {
@@ -413,7 +421,9 @@ export const syncService = {
                 try {
                     const initRes = await api.get('/sync/initial-adoption');
                     if (initRes.data?.cashiers) cashiers = initRes.data.cashiers;
-                } catch (_e2) {}
+                } catch (_e2) {
+                    console.warn('[SyncService] Fallback cajeros initial-adoption no disponible:', _e2?.message || _e2);
+                }
             }
 
             if (cashiers.length > 0) {

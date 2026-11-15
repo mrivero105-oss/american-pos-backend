@@ -1,66 +1,62 @@
 # ==============================================================================
-# Script de Compilacion Legacy - Isaac POS (Windows 7 / 8.1)
+# Script de Compilacion Legacy - Isaac POS (Windows 7 / 8 / 8.1)
+# Motor: Electron 22.3.27 (Chromium 108 + Node.js 16.17.1 embebidos)
 # ==============================================================================
+param(
+    [ValidateSet('x64', 'ia32', 'all')]
+    [string]$Arch = 'x64'
+)
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "       ISAAC POS - LEGACY BUILD PIPELINE (Windows 7/8.1)              " -ForegroundColor Cyan
+Write-Host "       ISAAC POS - LEGACY BUILD PIPELINE (Windows 7 / 8 / 8.1)        " -ForegroundColor Cyan
+Write-Host "       Motor: Electron 22.3.27 | Arquitectura: $Arch                  " -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 
 $BackendDir = $PSScriptRoot
+$BaseDir = Split-Path $BackendDir -Parent
+$FrontendDir = Join-Path $BaseDir "american-pos-frontend"
+$InstallerDist = Join-Path $BackendDir "dist_final_installer"
 
-Write-Host "`n[1/6] Limpiando temporales y respaldando configuracion..." -ForegroundColor Yellow
-$InstallerDist = Join-Path $BackendDir "dist_legacy_installer"
+Write-Host "`n[1/4] Limpiando artefactos previos en dist_final_installer..." -ForegroundColor Yellow
 if (Test-Path $InstallerDist) {
-    Write-Host "-> Removiendo dist_legacy_installer anterior..." -ForegroundColor Gray
-    Remove-Item -Path "$InstallerDist\*" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$InstallerDist\*.exe" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$InstallerDist\*.blockmap" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$InstallerDist\win-unpacked" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$InstallerDist\win-ia32-unpacked" -Recurse -Force -ErrorAction SilentlyContinue
 }
-$PackagePath = Join-Path $BackendDir "package.json"
-$BackupPath = Join-Path $BackendDir "package.json.bak"
-Copy-Item -Path $PackagePath -Destination $BackupPath -Force
 
+Write-Host "`n[2/4] Verificando bundle frontend compilado para Chromium 108..." -ForegroundColor Yellow
+Push-Location $FrontendDir
 try {
-    Write-Host "`n[2/6] Configurando Electron 22 (Legacy) al vuelo..." -ForegroundColor Yellow
-    $content = Get-Content -Raw $PackagePath
-    $content = $content -replace '"electron": "\^28\.3\.3"', '"electron": "22.3.27"'
-    $content = $content -replace '"productName": "Isaac POS.*?"', '"productName": "Isaac POS Legacy"'
-    $content = $content -replace '"output": "dist_final_installer"', '"output": "dist_legacy_installer"'
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $False
-    [System.IO.File]::WriteAllText($PackagePath, $content, $utf8NoBom)
+    npm.cmd run build
+    if ($LASTEXITCODE -ne 0) { throw "npm run build en frontend fallo con codigo $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}
 
-    Write-Host "`n[3/6] Instalando dependencias legacy..." -ForegroundColor Yellow
-    $ElectronModPath = Join-Path $BackendDir "node_modules\electron"
-    if (Test-Path $ElectronModPath) {
-        Remove-Item -Path $ElectronModPath -Recurse -Force
+Write-Host "`n[3/4] Verificando dependencias backend..." -ForegroundColor Yellow
+Push-Location $BackendDir
+try {
+    if (!(Test-Path (Join-Path $BackendDir "node_modules"))) {
+        npm.cmd ci --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { throw "npm ci en backend fallo con codigo $LASTEXITCODE" }
     }
-    npm install --no-audit --no-fund
 
-    Write-Host "`n[4/6] Recompilando dependencias nativas de C++ (SQLite3) para Electron 22..." -ForegroundColor Yellow
-    npx electron-rebuild -v 22.3.27 --only sqlite3 --force
+    Write-Host "`n[4/4] Empaquetando instalador Legacy con electron-builder.legacy.json..." -ForegroundColor Yellow
+    $archArgs = @('--config', 'electron-builder.legacy.json', '--win', 'nsis')
+    if ($Arch -eq 'x64') { $archArgs += '--x64' }
+    elseif ($Arch -eq 'ia32') { $archArgs += '--ia32' }
+    else { $archArgs += @('--x64', '--ia32') }
 
-    Write-Host "`n[5/6] Empaquetando la aplicacion Legacy con Electron-Builder..." -ForegroundColor Yellow
-    npm run dist
-    
-    $InstallerDir = Join-Path $BackendDir "dist_legacy_installer"
+    & npx.cmd electron-builder @archArgs
+    if ($LASTEXITCODE -ne 0) { throw "electron-builder (legacy) fallo con codigo $LASTEXITCODE" }
+
     Write-Host "`n======================================================================" -ForegroundColor Green
     Write-Host "PROCESO DE DISTRIBUCION LEGACY COMPLETADO CON EXITO!" -ForegroundColor Green
-    Write-Host "Directory: $InstallerDir" -ForegroundColor Cyan
+    Write-Host "Directorio: $InstallerDist" -ForegroundColor Cyan
     Write-Host "======================================================================" -ForegroundColor Green
-
-} catch {
-    Write-Host "Error fatal en proceso Legacy: $_" -ForegroundColor Red
 } finally {
-    Write-Host "`n[6/6] Restaurando entorno moderno (Electron 28)..." -ForegroundColor Yellow
-    Copy-Item -Path $BackupPath -Destination $PackagePath -Force
-    Remove-Item -Path $BackupPath -Force
-    
-    $ElectronModPath = Join-Path $BackendDir "node_modules\electron"
-    if (Test-Path $ElectronModPath) {
-        Remove-Item -Path $ElectronModPath -Recurse -Force
-    }
-    npm install --no-audit --no-fund
-    
-    npx electron-rebuild -v 28.3.3 --only sqlite3 --force
-    Write-Host "Entorno moderno restaurado correctamente." -ForegroundColor Green
+    Pop-Location
 }

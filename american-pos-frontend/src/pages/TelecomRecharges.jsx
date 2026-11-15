@@ -732,7 +732,18 @@ export default function TelecomRecharges() {
     };
 
     const handleGuardarUrl = () => {
-        const clean = movilwayUrl.trim() || DEFAULT_MOVILWAY_URL;
+        const clean = (movilwayUrl || '').trim() || DEFAULT_MOVILWAY_URL;
+        try {
+            const parsed = new URL(clean);
+            const host = parsed.hostname.toLowerCase();
+            if (parsed.protocol !== 'https:' || (!host.endsWith('.movilway.net') && host !== 'movilway.net' && !host.endsWith('.movilway.com') && host !== 'movilway.com')) {
+                toast.error('Por seguridad, solo se permiten URLs HTTPS oficiales de Movilway (.movilway.net / .movilway.com)');
+                return;
+            }
+        } catch (_) {
+            toast.error('URL de portal Movilway inválida');
+            return;
+        }
         setMovilwayUrl(clean);
         localStorage.setItem('pos_movilway_url', clean);
         setIsEditingUrl(false);

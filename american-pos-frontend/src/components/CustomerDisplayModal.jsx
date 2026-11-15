@@ -63,6 +63,7 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
         primaryIp: typeof window !== 'undefined' ? window.location.hostname : 'localhost',
         port: typeof window !== 'undefined' ? (window.location.port || '3005') : '3005'
     });
+    const [displayPairing, setDisplayPairing] = useState({ companyId: user?.companyId || '2', registerId: '1', displayToken: '' });
 
     // Estado del Carrusel Publicitario
     const [config, setConfig] = useState(DEFAULT_CONFIG);
@@ -110,6 +111,18 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
             .then(res => {
                 if (isMounted && res.data?.rate > 0) {
                     setExchangeRate(Number(res.data.rate));
+                }
+            })
+            .catch(() => {});
+
+        api.get('/settings/customer-display/pairing')
+            .then(res => {
+                if (isMounted && res.data?.displayToken) {
+                    setDisplayPairing({
+                        companyId: res.data.companyId || user?.companyId || '2',
+                        registerId: res.data.registerId || '1',
+                        displayToken: res.data.displayToken
+                    });
                 }
             })
             .catch(() => {});
@@ -183,9 +196,13 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
         ? (typeof window !== 'undefined' && window.location.hostname !== 'localhost' ? window.location.hostname : networkInfo.primaryIp)
         : networkInfo.primaryIp;
 
+    const pairingQuery = displayPairing.displayToken
+        ? `?companyId=${encodeURIComponent(displayPairing.companyId || '2')}&registerId=${encodeURIComponent(displayPairing.registerId || '1')}&dt=${encodeURIComponent(displayPairing.displayToken)}`
+        : '';
+
     const lanUrl = typeof window !== 'undefined'
-        ? `${window.location.protocol}//${lanIp}:${networkInfo.port}/#/display`
-        : `http://${lanIp}:3005/#/display`;
+        ? `${window.location.protocol}//${lanIp}:${networkInfo.port}/#/display${pairingQuery}`
+        : `http://${lanIp}:3005/#/display${pairingQuery}`;
 
     useEffect(() => {
         if (!isOpen || !lanUrl) return;
@@ -379,8 +396,9 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
         const left = (window.screen.width - width) / 2;
         const top = (window.screen.height - height) / 2;
 
+        const displayTarget = `/#/display${pairingQuery}`;
         const popup = window.open(
-            '/#/display',
+            displayTarget,
             'IsaacCustomerDisplay',
             `width=${width},height=${height},top=${top},left=${left},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`
         );
@@ -388,13 +406,13 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
         if (popup) {
             toast.success('Visor abierto. Arrástrelo al monitor secundario y pulse F11.');
         } else {
-            window.open('/#/display', '_blank');
+            window.open(displayTarget, '_blank');
             toast.success('Visor abierto en pestaña nueva.');
         }
     };
 
     const handleOpenTab = () => {
-        window.open('/#/display', '_blank');
+        window.open(`/#/display${pairingQuery}`, '_blank');
         toast.success('Visor abierto en nueva pestaña.');
     };
 
