@@ -1,8 +1,14 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 async function testAllModels() {
-    const key = process.env.GOOGLE_API_KEY || '';
+    const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    if (!key) {
+        console.error('❌ Define GOOGLE_API_KEY o GEMINI_API_KEY en .env antes de ejecutar este script.');
+        process.exit(1);
+    }
     const genAI = new GoogleGenerativeAI(key);
     const imgBuffer = fs.readFileSync('test_canon_scan.jpg');
     
