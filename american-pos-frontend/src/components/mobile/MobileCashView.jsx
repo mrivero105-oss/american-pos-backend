@@ -1,15 +1,26 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  ArrowLeft, Wallet, DollarSign, CreditCard, Smartphone, 
-  Clock, ShieldCheck, CheckCircle, RefreshCw, AlertCircle, Share2,
-  Lock, Unlock, ArrowDownRight, ArrowUpRight, FileText, Printer,
-  Coins, Plus, Minus, Check, X, AlertTriangle, Shield
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  ArrowLeft, 
+  Wallet, 
+  DollarSign, 
+  CreditCard, 
+  Smartphone, 
+  RefreshCw, 
+  Share2, 
+  Lock, 
+  Unlock, 
+  ArrowDownRight, 
+  ArrowUpRight, 
+  FileText, 
+  Printer, 
+  Coins, 
+  Check, 
+  X
 } from 'lucide-react';
 import api from '../../services/api';
 import localDb from '../../db/localDb';
 import { db as primaryDb } from '../../services/db';
 import mobilePrinterService from '../../services/mobilePrinterService';
-import biometricService from '../../services/biometricService';
 import SupervisorAuthModal from './SupervisorAuthModal';
 
 // Helper para normalizar el nombre del método de pago proveniente de la base de datos
@@ -115,10 +126,10 @@ export default function MobileCashView({
       const res = await api.get('/cash/current', { timeout: 3500 });
       if (res.data && res.data.id) {
         setCurrentShift(res.data);
-        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(res.data)); } catch (_) {}
+        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(res.data)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       } else {
         setCurrentShift(null);
-        try { localStorage.removeItem('pos_mobile_current_shift'); } catch (_) {}
+        try { localStorage.removeItem('pos_mobile_current_shift'); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       }
     } catch (_err) {
       // Fallback a almacenamiento local / offline
@@ -195,7 +206,7 @@ export default function MobileCashView({
       if (Array.isArray(s.paymentMethods)) {
         splitMethods = s.paymentMethods;
       } else if (typeof s.paymentMethods === 'string' && s.paymentMethods.trim().startsWith('[')) {
-        try { splitMethods = JSON.parse(s.paymentMethods); } catch (_) {}
+        try { splitMethods = JSON.parse(s.paymentMethods); } catch (caughtErr) { console.warn('[MobileCashView] Error parseando JSON local:', caughtErr?.message || caughtErr); }
       }
 
       if (splitMethods && splitMethods.length > 0) {
@@ -303,7 +314,7 @@ export default function MobileCashView({
       const res = await api.post('/cash/open', payload, { timeout: 4000 });
       const created = res.data?.shift || res.data || { ...payload, id: Date.now(), openedAt: new Date().toISOString(), movements: [] };
       setCurrentShift(created);
-      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(created)); } catch (_) {}
+      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(created)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       setIsOpenShiftModalOpen(false);
       showToast('✅ ¡Turno de caja abierto exitosamente!');
     } catch (_err) {
@@ -316,7 +327,7 @@ export default function MobileCashView({
         isOffline: true
       };
       setCurrentShift(offlineShift);
-      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(offlineShift)); } catch (_) {}
+      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(offlineShift)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       try {
         await primaryDb.put('syncQueue', {
           id: `cash_open_${Date.now()}`,
@@ -325,7 +336,7 @@ export default function MobileCashView({
           payload,
           createdAt: new Date().toISOString()
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       setIsOpenShiftModalOpen(false);
       showToast('⚡ Turno abierto offline (se sincronizará al conectar con PC).');
     } finally {
@@ -370,7 +381,7 @@ export default function MobileCashView({
           ...prev,
           movements: [localMovObj, ...(Array.isArray(prev.movements) ? prev.movements : [])]
         };
-        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (_) {}
+        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         return updated;
       });
       showToast(`✅ Movimiento registrado: ${movementType === 'in' ? 'Entrada' : 'Salida'} de ${movementCurrency} ${amountNum}`);
@@ -393,7 +404,7 @@ export default function MobileCashView({
           ...baseShift,
           movements: [localMovObj, ...(Array.isArray(baseShift.movements) ? baseShift.movements : [])]
         };
-        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (_) {}
+        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         return updated;
       });
       try {
@@ -413,7 +424,7 @@ export default function MobileCashView({
             status: 'pending_sync'
           });
         }
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       showToast('⚡ Movimiento aplicado en caja local (pendiente de sincronizar).');
       setIsMovementModalOpen(false);
       setMovementAmount('');
@@ -436,7 +447,7 @@ export default function MobileCashView({
         user: user?.name || user?.username || 'Cajero Móvil'
       });
       setCurrentShift(null);
-      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (_) {}
+      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       setIsCloseShiftModalOpen(false);
       setReportType('Z');
       setIsReportModalOpen(true);
@@ -451,7 +462,7 @@ export default function MobileCashView({
           payload,
           createdAt: new Date().toISOString()
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       setLastZReportData({
         ...payload,
         countedUSD: cUSD,
@@ -462,7 +473,7 @@ export default function MobileCashView({
         user: user?.name || user?.username || 'Cajero Móvil'
       });
       setCurrentShift(null);
-      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (_) {}
+      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       setIsCloseShiftModalOpen(false);
       setReportType('Z');
       setIsReportModalOpen(true);
@@ -638,7 +649,7 @@ export default function MobileCashView({
       let printerCfg = {};
       try {
         printerCfg = JSON.parse(localStorage.getItem('pos_printer_config') || '{}');
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error parseando JSON local:', caughtErr?.message || caughtErr); }
 
       if (printerCfg.type === 'network' && printerCfg.ip) {
         await mobilePrinterService.printNetwork(printerCfg.ip, printerCfg.port || 9100, escposData);

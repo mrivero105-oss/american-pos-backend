@@ -1,20 +1,40 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../hooks/AuthContext';
-import { 
-    DollarSign, ArrowUpRight, ArrowDownRight, RefreshCcw, Lock, X, 
-    Banknote, User, CreditCard, Clock, FileText, History, CheckCircle, 
-    Coins, Receipt, Plus, Calculator, Shield, Zap, AlertCircle, ArrowRight,
-    Store, Monitor, Printer, Unlock, ArrowDownLeft, Building2, Check, RotateCcw
+import {
+    DollarSign, 
+    ArrowUpRight, 
+    ArrowDownRight, 
+    RefreshCcw, 
+    Lock, 
+    X, 
+    Banknote, 
+    User, 
+    CreditCard, 
+    Clock, 
+    FileText, 
+    History, 
+    CheckCircle, 
+    Coins, 
+    Receipt, 
+    Plus, 
+    Calculator, 
+    Store, 
+    Monitor, 
+    Printer, 
+    Unlock, 
+    ArrowDownLeft, 
+    Building2, 
+    Check
 } from 'lucide-react';
 import CashShiftDetails from './CashShiftDetails';
 import ZReportModal from './ZReportModal';
 import BaseModal from './BaseModal';
 import CloseShiftModal from './CloseShiftModal';
 import StationConfigPanel from './StationConfigPanel';
-import { formatDate as formatDateSafe, formatBs, formatUSD, isSingleCurrencyMode, isUsdOnlyMode, isVesOnlyMode, isDollarOnlyCountry } from '../utils/format';
+import { formatDate as formatDateSafe, formatBs, formatUSD, isUsdOnlyMode, isVesOnlyMode, isDollarOnlyCountry } from '../utils/format';
 import { printOpeningReceipt, printXReportReceipt, printCashMovementReceipt } from '../utils/printCashReceipts';
 import { usePos } from '../hooks/PosContext';
 
@@ -29,15 +49,14 @@ const isVesMethod = (m, isSingle = false) => {
     return false;
 };
 export default function CashRegisterModal({ isOpen, onClose, businessSettings = {} }) {
-    const { 
-        registerId, 
-        setRegisterId, 
-        registerDisplayName, 
-        setRegisterDisplayName, 
-        allowedCategories, 
+    const {
+        registerId,
+        registerDisplayName,
+        setRegisterDisplayName,
+        allowedCategories,
         setAllowedCategories,
         allowedProducts,
-        setAllowedProducts 
+        setAllowedProducts
     } = usePos();
     const [registerNameInput, setRegisterNameInput] = useState(registerDisplayName || '');
     const [showStationConfig, setShowStationConfig] = useState(false);
@@ -66,9 +85,9 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
         '0.50': 0, '0.25': 0, '0.10': 0, '0.05': 0, '0.01': 0,
         looseCoins: 0
     });
-    const [openDenomsVes, setOpenDenomsVes] = useState({
+    const openDenomsVes = {
         '100': 0, '50': 0, '20': 0, '10': 0, '5': 0
-    });
+    };
 
     const [processing, setProcessing] = useState(false);
     const [exchangeRate, setExchangeRate] = useState(1);
@@ -110,6 +129,76 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
         }
     }, [user, cashierNameInput]);
 
+    const fetchLastClosedShift = useCallback(async () => {
+        try {
+            const { data } = await api.get('/cash/last-closed', { params: { registerId } });
+            setLastClosedShift(data || null);
+        } catch (e) {
+            console.error('Error fetching last shift summary', e);
+        }
+    }, [registerId]);
+
+    const fetchXReport = useCallback(async () => {
+        try {
+            setLoading(true);
+            const { data } = await api.get('/cash/x-report', { params: { registerId } });
+            setXReport(data);
+        } catch (error) {
+            console.error('Error fetching X report:', error);
+            toast.error('Error al cargar Corte X');
+        } finally {
+            setLoading(false);
+        }
+    }, [registerId]);
+
+    const fetchHistory = useCallback(async () => {
+        try {
+            setHistoryLoading(true);
+            const params = { registerId };
+            if (startDate && endDate) {
+                params.startDate = startDate;
+                params.endDate = endDate;
+            }
+            const { data } = await api.get('/cash/history', { params });
+            setHistoryShifts(data);
+        } catch (error) {
+            console.error('Error fetching history:', error);
+            toast.error('Error al cargar historial');
+        } finally {
+            setHistoryLoading(false);
+        }
+    }, [registerId, startDate, endDate]);
+
+    const fetchPaymentMethods = useCallback(async () => {
+        try {
+            const { data } = await api.get('/settings/payment-methods');
+            setPaymentMethods(data);
+        } catch (e) { console.error('Error fetching methods', e); }
+    }, []);
+
+    const fetchRate = useCallback(async () => {
+        try {
+            const res = await api.get('/settings/rate');
+            setExchangeRate(res.data.rate || 1);
+            setCurrencyMode(res.data.currencyMode || 'BOTH');
+        } catch (e) { console.error('Error fetching rate', e); }
+    }, []);
+
+    const fetchCurrentShift = useCallback(async (silent = false) => {
+        try {
+            setLoading(true);
+            const { data } = await api.get('/cash/current', { params: { registerId } });
+            setCurrentShift(data);
+            if (!silent && typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('shift_status_changed', { detail: { isOpen: !!data, shift: data || null } }));
+            }
+        } catch (error) {
+            console.error('Error fetching shift:', error);
+        } finally {
+            setLoading(false);
+        }
+    }, [registerId]);
+
     useEffect(() => {
         const handleShiftChanged = (e) => {
             if (e && e.detail && typeof e.detail.isOpen === 'boolean') {
@@ -135,87 +224,18 @@ export default function CashRegisterModal({ isOpen, onClose, businessSettings = 
             setSelectedHistoryShift(null);
         }
         return () => window.removeEventListener('shift_status_changed', handleShiftChanged);
-    }, [isOpen, registerId]);
+    }, [isOpen, registerId, fetchCurrentShift, fetchRate, fetchPaymentMethods, fetchLastClosedShift]);
 
     useEffect(() => {
+        if (!isOpen) return;
         if (activeTab === 'corte_x') {
             fetchXReport();
         } else if (activeTab === 'historial') {
             fetchHistory();
         }
-    }, [activeTab, startDate, endDate]);
+    }, [isOpen, activeTab, fetchXReport, fetchHistory]);
 
     if (!isOpen) return null;
-
-    const fetchLastClosedShift = async () => {
-        try {
-            const { data } = await api.get('/cash/last-closed', { params: { registerId } });
-            setLastClosedShift(data || null);
-        } catch (e) {
-            console.error('Error fetching last shift summary', e);
-        }
-    };
-
-    const fetchXReport = async () => {
-        try {
-            setLoading(true);
-            const { data } = await api.get('/cash/x-report', { params: { registerId } });
-            setXReport(data);
-        } catch (error) {
-            console.error('Error fetching X report:', error);
-            toast.error('Error al cargar Corte X');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const fetchHistory = async () => {
-        try {
-            setHistoryLoading(true);
-            const params = { registerId };
-            if (startDate && endDate) {
-                params.startDate = startDate;
-                params.endDate = endDate;
-            }
-            const { data } = await api.get('/cash/history', { params });
-            setHistoryShifts(data);
-        } catch (error) {
-            console.error('Error fetching history:', error);
-            toast.error('Error al cargar historial');
-        } finally {
-            setHistoryLoading(false);
-        }
-    };
-
-    const fetchPaymentMethods = async () => {
-        try {
-            const { data } = await api.get('/settings/payment-methods');
-            setPaymentMethods(data);
-        } catch (e) { console.error('Error fetching methods', e); }
-    };
-
-    const fetchRate = async () => {
-        try {
-            const res = await api.get('/settings/rate');
-            setExchangeRate(res.data.rate || 1);
-            setCurrencyMode(res.data.currencyMode || 'BOTH');
-        } catch (e) { console.error('Error fetching rate', e); }
-    };
-
-    const fetchCurrentShift = async (silent = false) => {
-        try {
-            setLoading(true);
-            const { data } = await api.get('/cash/current', { params: { registerId } });
-            setCurrentShift(data);
-            if (!silent && typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('shift_status_changed', { detail: { isOpen: !!data, shift: data || null } }));
-            }
-        } catch (error) {
-            console.error('Error fetching shift:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     // Calculate USD from denominations in opening
     const denomsUsdTotal = () => {

@@ -1,20 +1,30 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { 
-    Search, Users, Star, Banknote, X, 
-    History as HistoryIcon, Download,
-    TrendingUp, DollarSign, MessageCircle,
-    AlertCircle, FileText, CheckCircle2,
-    Eye, RefreshCw, Copy, Check, Clock,
-    AlertTriangle, ShieldCheck
+import {
+    Search, 
+    Users, 
+    Star, 
+    Banknote, 
+    X, 
+    History as HistoryIcon, 
+    Download, 
+    TrendingUp, 
+    DollarSign, 
+    MessageCircle, 
+    FileText, 
+    CheckCircle2, 
+    Eye, 
+    RefreshCw, 
+    Copy, 
+    Check
 } from 'lucide-react';
 import AbonoModal from '../components/AbonoModal';
 import CreditHistoryModal from '../components/CreditHistoryModal';
 import ReceiptModal from '../components/ReceiptModal';
 import AccountStatementModal from '../components/AccountStatementModal';
 import Customer360Modal from '../components/Customer360Modal';
-import { formatMoney, fetchGlobalSettings, isUsdOnlyMode } from '../utils/format';
+import { fetchGlobalSettings, isUsdOnlyMode } from '../utils/format';
 import { triggerHaptic } from '../utils/haptics';
 
 export default function AccountsReceivable() {
@@ -191,7 +201,7 @@ export default function AccountsReceivable() {
         const debtUsd = parseFloat(customer.creditBalance) || 0;
         const rate = settings.rate || 1;
         const debtBs = (debtUsd * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        const bizName = businessSettings.name || 'American POS';
+        const bizName = businessSettings.name || 'Isaac POS';
         
         let msg = `Estimado(a) *${customer.name}*, le contactamos de *${bizName}*.\n\n`;
         msg += `Le recordamos amablemente que mantiene un saldo pendiente de *$${debtUsd.toFixed(2)} USD* (${debtBs} Bs).\n`;
@@ -265,7 +275,6 @@ export default function AccountsReceivable() {
 
     const isUsd = isUsdOnlyMode(settings);
     const criticalCount = customers.filter(c => c.agingBracket === 'CRITICAL').length;
-    const warningCount = customers.filter(c => c.agingBracket === 'WARNING' || c.agingBracket === 'OVERDUE').length;
 
     return (
         <div className="space-y-5 pb-24 pb-safe animate-in fade-in duration-300">

@@ -1,14 +1,13 @@
 {
   "appId": "com.isaacpos.frontend",
-  "productName": "Isaac POS Modern",
+  "productName": "Isaac POS",
   "electronVersion": "31.4.0",
   "compression": "normal",
   "npmRebuild": false,
   "asar": true,
   "asarUnpack": [
     "**/node_modules/**/*.node",
-    "**/bin/**/*",
-    "**/scripts/**/*"
+    "**/bin/**/*"
   ],
   "extraResources": [
     {
@@ -16,17 +15,38 @@
       "to": "scripts"
     }
   ],
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "mrivero105-oss",
+      "repo": "american-pos-backend",
+      "channel": "modern"
+    }
+  ],
   "directories": {
     "output": "dist_modern"
   },
   "files": [
     "**/*",
+    "!scripts/**",
+    "!private/**",
+    "!audit_*.json",
+    "!coverage/**",
+    "!**/*.zip",
+    "!**/*.tar.gz",
     "!**/*.sqlite",
     "!**/*.sqlite*",
     "!**/*.bak",
     "!**/*.dev_backup",
     "!**/serviceAccountKey.json",
     "!**/.env*",
+    "!**/.dbcfg.key.dpapi",
+    "!**/.dbcfg.key.dpapi.ess",
+    "!**/.secrets.key.dpapi",
+    "!**/.secrets.key.dpapi.ess",
+    "!**/*.dpapi.ess",
+    "!**/secrets.vault.json",
+    "!**/*.vault.json",
     "!env_backup.txt",
     "!app_fixed.asar",
     "!test_backup.zip",
@@ -49,6 +69,8 @@
     "!db-config.json",
     "!settings.json",
     "!cloud_mirror_config.json",
+    "!cloud_license_config.json",
+    "!**/cloud_license_config.json",
     "!.git/**",
     "!**/*.md",
     "!LICENSE",
@@ -61,6 +83,10 @@
     "!node_modules/@electron/rebuild/**",
     "!node_modules/builder-util/**",
     "!node_modules/typescript/**",
+    "!node_modules/**/*.map",
+    "!node_modules/**/*.d.ts",
+    "!node_modules/**/*.d.mts",
+    "!node_modules/**/*.d.cts",
     "!tests/**",
     "!test-results/**",
     "!playwright-report/**",

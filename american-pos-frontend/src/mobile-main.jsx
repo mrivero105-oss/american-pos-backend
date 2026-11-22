@@ -1,12 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter } from 'react-router-dom';
 import MobileApp from './MobileApp.jsx';
 import './index.css';
-import { ThemeProvider } from './hooks/ThemeContext';
-import { AuthProvider } from './hooks/AuthContext';
-import { SocketProvider } from './hooks/SocketContext';
-import { PosProvider } from './hooks/PosContext';
+import { ThemeProvider } from './providers/ThemeProvider';
+import { AuthProvider } from './providers/AuthProvider';
+import { SocketProvider } from './providers/SocketProvider';
+import { PosProvider } from './providers/PosProvider';
 import { ensureStoragePersistence } from './services/storagePersistence';
 import ErrorBoundary from './components/ErrorBoundary';
 

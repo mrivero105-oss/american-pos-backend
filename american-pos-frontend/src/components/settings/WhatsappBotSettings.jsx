@@ -1,12 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { MessageCircle, QrCode, LogOut, Loader2, Play, Bell, Save, SendHorizontal } from 'lucide-react';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
+import { useSocket } from '../../hooks/SocketContext';
 
 export default function WhatsappBotSettings() {
     const [status, setStatus] = useState('DISCONNECTED');
     const [qrCodeUrl, setQrCodeUrl] = useState(null);
+    const [lastError, setLastError] = useState(null);
     const [loading, setLoading] = useState(true);
+    const { socket } = useSocket() || {};
     const [ownerConfig, setOwnerConfig] = useState({
         ownerWhatsappPhone: '',
         ownerTelegramChatId: '',
@@ -15,17 +18,23 @@ export default function WhatsappBotSettings() {
     const [savingAlerts, setSavingAlerts] = useState(false);
     const [testingAlert, setTestingAlert] = useState(false);
 
-    const fetchStatus = async () => {
+    const applyStatusData = useCallback((data) => {
+        if (!data || !data.status) return;
+        setStatus(data.status);
+        setQrCodeUrl(data.qrCodeUrl || null);
+        setLastError(data.lastError || null);
+    }, []);
+
+    const fetchStatus = useCallback(async () => {
         try {
             const { data } = await api.get('/whatsapp/status');
-            setStatus(data.status);
-            setQrCodeUrl(data.qrCodeUrl);
+            applyStatusData(data);
         } catch (error) {
             console.error('Error fetching WhatsApp status:', error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [applyStatusData]);
 
     const fetchAlertConfig = async () => {
         try {
@@ -45,17 +54,36 @@ export default function WhatsappBotSettings() {
     useEffect(() => {
         fetchStatus();
         fetchAlertConfig();
-        const interval = setInterval(fetchStatus, 3000);
-        return () => clearInterval(interval);
-    }, []);
+    }, [fetchStatus]);
 
-    const handleStart = async () => {
+    useEffect(() => {
+        if (!socket) return;
+        socket.on('whatsapp_status', applyStatusData);
+        return () => socket.off('whatsapp_status', applyStatusData);
+    }, [socket, applyStatusData]);
+
+    useEffect(() => {
+        const pollMs = status === 'INITIALIZING' ? 1000 : 4000;
+        const interval = setInterval(fetchStatus, pollMs);
+        return () => clearInterval(interval);
+    }, [status, fetchStatus]);
+
+    const handleStart = async (forceRestart = false) => {
         try {
-            setLoading(true);
-            await api.post('/whatsapp/start');
-            toast.success('Iniciando servicio de WhatsApp...');
-        } catch (_error) {
-            toast.error('Error al iniciar servicio');
+            setLastError(null);
+            setStatus('INITIALIZING');
+            setLoading(false);
+            const { data } = await api.post('/whatsapp/start', { forceRestart });
+            applyStatusData(data);
+            if (!forceRestart && data?.status !== 'QR_READY' && data?.status !== 'CONNECTED') {
+                toast.success('Iniciando servicio de WhatsApp...');
+            }
+            setTimeout(fetchStatus, 800);
+        } catch (error) {
+            const errMsg = error?.response?.data?.error || 'Error al iniciar servicio';
+            toast.error(errMsg);
+            setLastError(errMsg);
+            setStatus('DISCONNECTED');
             setLoading(false);
         }
     };
@@ -67,6 +95,7 @@ export default function WhatsappBotSettings() {
             toast.success('Sesión cerrada');
             setStatus('DISCONNECTED');
             setQrCodeUrl(null);
+            setLastError(null);
         } catch (_error) {
             toast.error('Error al cerrar sesión');
         } finally {
@@ -143,10 +172,15 @@ export default function WhatsappBotSettings() {
                                 <QrCode size={28} />
                             </div>
                             <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-1">Servicio Desconectado</h3>
-                            <p className="text-slate-500 dark:text-slate-400 text-xs mb-5">Inicia el servicio para generar el código QR y vincular el WhatsApp de tu negocio.</p>
+                            <p className="text-slate-500 dark:text-slate-400 text-xs mb-4">Inicia el servicio para generar el código QR y vincular el WhatsApp de tu negocio.</p>
+                            {lastError && (
+                                <p className="text-amber-600 dark:text-amber-400 text-xs mb-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 rounded-lg px-3 py-2">
+                                    {lastError}
+                                </p>
+                            )}
                             <button 
                                 type="button"
-                                onClick={handleStart} 
+                                onClick={() => handleStart(false)} 
                                 className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl font-semibold text-xs transition-colors shadow-xs cursor-pointer"
                             >
                                 <Play size={14} /> Iniciar Servicio
@@ -156,10 +190,10 @@ export default function WhatsappBotSettings() {
                         <div className="flex flex-col items-center gap-3 text-slate-500 text-center max-w-sm text-xs font-medium">
                             <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
                             <p className="font-semibold text-slate-700 dark:text-slate-300">Inicializando navegador y esperando código QR...</p>
-                            <p className="text-slate-400">Esto suele tomar unos 5 a 10 segundos.</p>
+                            <p className="text-slate-400">Esto suele tomar unos 4 a 12 segundos.</p>
                             <button
                                 type="button"
-                                onClick={handleStart}
+                                onClick={() => handleStart(true)}
                                 className="text-primary-600 dark:text-primary-400 font-semibold hover:underline cursor-pointer mt-1"
                             >
                                 ¿Tarda demasiado? Reintentar

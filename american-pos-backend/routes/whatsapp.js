@@ -11,6 +11,11 @@ router.use(verifyToken);
 // GET /api/whatsapp/status
 router.get('/status', (req, res) => {
     try {
+        res.set({
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        });
         const data = WhatsappBotService.getStatus();
         res.json(data);
     } catch (error) {
@@ -23,8 +28,12 @@ router.get('/status', (req, res) => {
 router.post('/start', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const companyId = req.user?.companyId || '2';
-        WhatsappBotService.init(companyId);
-        res.json({ success: true, message: 'Inicializando WhatsApp Bot...' });
+        const forceRestart = Boolean(req.body?.forceRestart);
+        const current = await WhatsappBotService.init(companyId, { forceRestart });
+        if (current?.status === 'DISCONNECTED' && current?.lastError) {
+            return res.status(500).json({ success: false, error: current.lastError, ...current });
+        }
+        res.json({ success: true, message: 'Inicializando WhatsApp Bot...', ...current });
     } catch (error) {
         console.error('[WHATSAPP_ROUTE] Error start:', error);
         res.status(500).json({ error: 'Error al iniciar bot' });

@@ -1,6 +1,6 @@
 Add-Type -AssemblyName System.Drawing
 
-$projectRoot = "c:\AndroidStudioProjects\American POS PC"
+$projectRoot = Split-Path -Parent $PSScriptRoot
 $logoPath = "$projectRoot\american-pos-frontend\public\logo.png"
 $outputDir = "$projectRoot\build_ultra\assets"
 

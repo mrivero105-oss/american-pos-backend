@@ -1,5 +1,4 @@
-import React from 'react';
-import { DollarSign, Package, Plus, Trash2, Info, Barcode, Check } from 'lucide-react';
+import { DollarSign, Package, Plus, Trash2, Barcode } from 'lucide-react';
 import { precisionRound } from '../../utils/format';
 
 export default function ProductPricingDetail({
@@ -367,22 +366,7 @@ export default function ProductPricingDetail({
         updatePresentationsWithLegacySync(list);
     };
 
-    const handleSuggestCost = (index) => {
-        const pres = presentations[index];
-        if (!pres) return;
-        const factor = Number(pres.factorConversion) || 1;
-        const calculated = unitCost * factor;
-        handleUpdatePresentation(index, 'cost', calculated > 0 ? calculated.toFixed(2) : '');
-    };
 
-    const handleUpdateUnitEquivalent = (index, newUnitVal) => {
-        const pres = presentations[index];
-        if (!pres) return;
-        const factor = Number(pres.factorConversion) || 1;
-        const val = parseFloat(newUnitVal) || 0;
-        const totalPrice = val * factor;
-        handleUpdatePresentation(index, 'price', totalPrice > 0 ? totalPrice.toFixed(2) : '');
-    };
 
     const handleGenerateBarcode = (index) => {
         const randomDigits = Math.floor(Math.random() * 90000000000) + 10000000000;

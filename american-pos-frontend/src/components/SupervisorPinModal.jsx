@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Shield, X, AlertTriangle, Fingerprint, Eye, EyeOff, Lock, CornerDownLeft } from 'lucide-react';
 import api from '../services/api';
 import BaseModal from './BaseModal';
@@ -15,6 +15,21 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
     const [error, setError] = useState('');
     const inputRef = useRef(null);
 
+    const fetchSupervisors = useCallback(async () => {
+        try {
+            const res = await api.get('/auth/supervisors');
+            const list = res.data || [];
+            setSupervisors(list);
+            if (currentUser && list.some(s => String(s.id) === String(currentUser.id))) {
+                setSelectedSupervisor(String(currentUser.id));
+            } else if (list.length > 0) {
+                setSelectedSupervisor(String(list[0].id));
+            }
+        } catch (_e) {
+            setError('No se pudieron cargar los supervisores');
+        }
+    }, [currentUser]);
+
     useEffect(() => {
         if (isOpen) {
             setPin('');
@@ -27,7 +42,7 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
                 inputRef.current?.select();
             }, 100);
         }
-    }, [isOpen]);
+    }, [isOpen, fetchSupervisors]);
 
     // Atajo global de teclado para cerrar con Escape
     useEffect(() => {
@@ -43,21 +58,6 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, onClose]);
-
-    const fetchSupervisors = async () => {
-        try {
-            const res = await api.get('/auth/supervisors');
-            const list = res.data || [];
-            setSupervisors(list);
-            if (currentUser && list.some(s => String(s.id) === String(currentUser.id))) {
-                setSelectedSupervisor(String(currentUser.id));
-            } else if (list.length > 0) {
-                setSelectedSupervisor(String(list[0].id));
-            }
-        } catch (_e) {
-            setError('No se pudieron cargar los supervisores');
-        }
-    };
 
     const canUseBiometric = Boolean(
         currentUser &&

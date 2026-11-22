@@ -20,7 +20,9 @@ export default function RateSettings({ rate, setRate, currencyMode, setCurrencyM
                 if (data && data.success && data.rate) {
                     bcvRate = data.rate;
                 }
-            } catch (_backendErr) {}
+            } catch (backendErr) {
+                console.warn('[RateSettings] Falló endpoint BCV backend, intentando fallback:', backendErr?.message);
+            }
 
             // 2. Fallback PyDolarVenezuela API
             if (!bcvRate) {
@@ -32,7 +34,9 @@ export default function RateSettings({ rate, setRate, currencyMode, setCurrencyM
                             bcvRate = data.monitors.bcv.price;
                         }
                     }
-                } catch (_pyErr) {}
+                } catch (pyErr) {
+                    console.warn('[RateSettings] Falló fallback PyDolarVenezuela:', pyErr?.message);
+                }
             }
 
             // 3. Fallback DolarAPI

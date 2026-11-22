@@ -4,6 +4,7 @@ const SaleService = require('../services/SaleService');
 const { Sale, SaleItem, RegisterDraft } = require('../database/models');
 const { Op } = require('sequelize');
 const { sequelize } = require('../database/connection');
+const cacheService = require('../utils/cacheService');
 const validate = require('../middleware/validate');
 const { saleSchema } = require('../schemas/saleSchema');
 
@@ -137,8 +138,8 @@ router.get('/', async (req, res) => {
         } = req.query;
 
         const whereClause = {};
-        const userRole = (req.user.role || '').toLowerCase();
-        const isUserAdmin = ['admin', 'superadmin', 'owner', 'supervisor'].includes(userRole);
+        const { isSupervisorOrAboveRole } = require('../constants/roles');
+        const isUserAdmin = isSupervisorOrAboveRole(req.user.role);
 
         // IDOR FIX: Always enforce companyId with fallback for company '2' / 'default'
         const compId = req.user.companyId || '2';
@@ -322,6 +323,14 @@ router.get('/daily-count', async (req, res) => {
         const endOfDayIso = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
         const localDateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
+        const dailyCacheKey = process.env.ISAAC_TEST_ISOLATED !== '1'
+            ? `daily_count_${compId}_${effRegisterId || effRegisterName || userId}_${localDateKey}`
+            : null;
+        if (dailyCacheKey) {
+            const cachedPayload = cacheService.get(dailyCacheKey);
+            if (cachedPayload) return res.json(cachedPayload);
+        }
+
         const todayCount = await Sale.count({
             where: {
                 companyId: companyWhere,
@@ -330,14 +339,18 @@ router.get('/daily-count', async (req, res) => {
             }
         });
 
-        res.json({
+        const payload = {
             success: true,
             date: localDateKey,
             registerName: effRegisterName || 'Caja Principal',
             registerId: effRegisterId || '1',
             count: todayCount,
             nextTicketNumber: todayCount + 1
-        });
+        };
+        if (dailyCacheKey) {
+            cacheService.set(dailyCacheKey, payload, 120);
+        }
+        res.json(payload);
     } catch (error) {
         console.error('Error in GET /sales/daily-count:', error);
         res.status(500).json({ error: 'Error al consultar conteo diario de tickets' });
@@ -738,20 +751,14 @@ router.post('/:id/email', async (req, res) => {
             return res.status(400).json({ error: 'Email del destinatario inválido' });
         }
 
-        // Load sale with items
-        let sale = null;
-        if (req.user?.companyId) {
-            sale = await Sale.findOne({
-                where: { id: req.params.id, companyId: req.user.companyId },
-                include: [{ model: SaleItem, as: 'SaleItems' }]
-            });
+        // Load sale with items strictly scoped to authenticated tenant
+        if (!req.user?.companyId) {
+            return res.status(403).json({ error: 'Contexto de empresa requerido.' });
         }
-        if (!sale) {
-            sale = await Sale.findOne({
-                where: { id: req.params.id },
-                include: [{ model: SaleItem, as: 'SaleItems' }]
-            });
-        }
+        const sale = await Sale.findOne({
+            where: { id: req.params.id, companyId: String(req.user.companyId) },
+            include: [{ model: SaleItem, as: 'SaleItems' }]
+        });
         if (!sale) return res.status(404).json({ error: 'Venta no encontrada' });
 
         // Load business settings
@@ -880,12 +887,7 @@ router.post('/', validate(saleSchema), async (req, res) => {
 
         res.status(201).json(safeSale);
     } catch (error) {
-        console.error('Create sale error:', error);
-        try {
-            const logDir = process.env.USER_DATA_PATH || require('path').join(__dirname, '..', 'logs');
-            if (!require('fs').existsSync(logDir)) require('fs').mkdirSync(logDir, { recursive: true });
-            require('fs').appendFileSync(require('path').join(logDir, 'zod_error_sales.txt'), `\n[${new Date().toISOString()}] SALE ERROR: ${error.message}\n${error.stack}\n`);
-        } catch (e) { }
+        console.error('Create sale error:', error.message);
         const lowerMsg = error.message.toLowerCase();
         const isBusinessError = lowerMsg.includes('crédito') || 
                                 lowerMsg.includes('cliente') || 
@@ -968,10 +970,14 @@ router.post('/remote-held-sale', async (req, res) => {
         const reg = global.__remoteHeldSalesRegistry || (global.__remoteHeldSalesRegistry = { items: new Map(), recentBroadcasts: new Map() });
         const now = Date.now();
         const saleId = String(payload.id || payload.code || `presale_${now}`);
+        const requesterRole = String(req.user?.role || '').toLowerCase();
+        const effectiveCompanyId = (requesterRole === 'superadmin' && payload.companyId)
+            ? String(payload.companyId)
+            : String(req.user?.companyId || 'default');
         const enriched = {
             ...payload,
             id: saleId,
-            companyId: String(payload.companyId || req.user?.companyId || '2'),
+            companyId: effectiveCompanyId,
             timestamp: payload.timestamp || now
         };
         reg.items.set(saleId, enriched);

@@ -2,16 +2,15 @@ import { X, Clock, ShoppingCart, Trash2, ArrowRight, Smartphone, User, Utensils 
 import BaseModal from './BaseModal';
 import { triggerHaptic } from '../utils/haptics';
 
-export default function HeldSalesModal({ 
-    isOpen, 
-    onClose, 
-    heldSales, 
-    onRestore, 
-    onRemove, 
+export default function HeldSalesModal({
+    isOpen,
+    onClose,
+    heldSales,
+    onRestore,
+    onRemove,
     onResume,
-    currencyMode = 'USD', 
-    exchangeRate = 1, 
-    formatMoney 
+    currencyMode = 'USD',
+    formatMoney
 }) {
     if (!isOpen) return null;
 
@@ -151,7 +150,7 @@ export default function HeldSalesModal({
                             try {
                                 const d = new Date(sale.timestamp);
                                 dateStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                            } catch (_) {}
+                            } catch { /* Timestamp inválido, manteniendo cadena vacía */ }
                         }
 
                         return (
@@ -243,7 +242,7 @@ export default function HeldSalesModal({
                                             )}
                                             {cleanNote && (
                                                 <span className="truncate italic text-slate-600 dark:text-slate-300 font-medium">
-                                                    • "{cleanNote}"
+                                                    • &ldquo;{cleanNote}&rdquo;
                                                 </span>
                                             )}
                                         </div>

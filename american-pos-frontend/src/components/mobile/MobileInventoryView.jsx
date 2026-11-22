@@ -1,15 +1,25 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  Search, ArrowLeft, Box, AlertTriangle, CheckCircle, 
-  Edit3, Plus, Minus, Save, X, RefreshCw, DollarSign, Layers,
-  ClipboardList, CheckCircle2, Scan, Check, AlertCircle, Sparkles,
-  Trash2, Camera, Percent, ScanBarcode, Eye, Tag, Package
+import { useState, useEffect, useMemo, useRef } from 'react';
+import {
+  Search, 
+  ArrowLeft, 
+  Box, 
+  Edit3, 
+  Plus, 
+  Save, 
+  X, 
+  RefreshCw, 
+  ClipboardList, 
+  CheckCircle2, 
+  Scan, 
+  Trash2, 
+  Camera, 
+  Percent, 
+  Package
 } from 'lucide-react';
 import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
 import localDb from '../../db/localDb';
 import lanSyncService from '../../services/lanSyncService';
-import { getImageUrl } from '../../utils/imageUtils';
 import CachedImage from '../CachedImage';
 import MobileImageSearchModal from './MobileImageSearchModal';
 import { triggerHaptic } from '../../utils/haptics';
@@ -23,7 +33,6 @@ export default function MobileInventoryView({
   exchangeRate = 950,
   T,
   isLight,
-  user,
   onBackToPOS,
   onProductUpdated,
   onProductCreated,
@@ -385,7 +394,7 @@ export default function MobileInventoryView({
           await localDb.products.put(savedProd);
         }
         await primaryDb.put('products', savedProd);
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileInventoryView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
       // Emitir eventos en tiempo real al Socket.IO
       try {
@@ -393,7 +402,7 @@ export default function MobileInventoryView({
           lanSyncService.socket.emit('product_updated', savedProd);
           lanSyncService.socket.emit('inventory_changed', { timestamp: Date.now() });
         }
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileInventoryView] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
       setIsProductModalOpen(false);
       setEditingProduct(null);
@@ -420,7 +429,7 @@ export default function MobileInventoryView({
           payload,
           createdAt: new Date().toISOString()
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileInventoryView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
 
       showToast?.(`⚡ Guardado offline en teléfono. Se sincronizará con la PC.`);
       setIsProductModalOpen(false);
@@ -454,13 +463,13 @@ export default function MobileInventoryView({
           await localDb.products.delete(prodId);
         }
         await primaryDb.delete('products', prodId);
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileInventoryView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
       try {
         if (lanSyncService && lanSyncService.socket) {
           lanSyncService.socket.emit('inventory_changed', { timestamp: Date.now() });
         }
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileInventoryView] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
       showToast?.(`✅ Producto "${p.name || p.nombre}" eliminado`);
       setDeleteConfirm(null);
@@ -563,6 +572,7 @@ export default function MobileInventoryView({
         await api.put(`/products/${id}`, { stockQuantity: newStock }, { timeout: 3500 });
         successCount++;
       } catch (err) {
+        console.warn('[MobileInventoryView] Error capturado en operación:', err?.message || err);
         try {
           await primaryDb.put('syncQueue', {
             id: `audit_${Date.now()}_${id}`,
@@ -572,7 +582,7 @@ export default function MobileInventoryView({
             createdAt: new Date().toISOString()
           });
           successCount++;
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[MobileInventoryView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       }
 
       try {
@@ -580,7 +590,7 @@ export default function MobileInventoryView({
         if (localDb && localDb.products) {
           await localDb.products.put(updatedProd);
         }
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileInventoryView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
       onProductUpdated?.(updatedProd);
     }
@@ -776,7 +786,7 @@ export default function MobileInventoryView({
           <div className="h-full min-h-[200px] flex flex-col items-center justify-center p-6 text-center space-y-2">
             <Box size={36} className={T.textMuted} />
             <p className={`font-bold text-xs sm:text-sm ${T.textPrimary}`}>No se encontraron productos</p>
-            <p className={`text-[11px] ${T.textMuted}`}>Usa el botón "+ Nuevo" para agregar un producto</p>
+            <p className={`text-[11px] ${T.textMuted}`}>Usa el botón &ldquo;+ Nuevo&rdquo; para agregar un producto</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">

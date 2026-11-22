@@ -1,16 +1,21 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  Printer, Bluetooth, CheckCircle2, AlertCircle, RefreshCw, 
-  Settings2, FileText, X, ShieldCheck, Smartphone, Zap
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Printer, 
+  Bluetooth, 
+  CheckCircle2, 
+  AlertCircle, 
+  RefreshCw, 
+  Settings2, 
+  X, 
+  Zap
 } from 'lucide-react';
 import mobilePrinterService from '../../services/mobilePrinterService';
-import { cleanAscii, formatCenter, formatLine, ESC_INIT, ESC_BOLD_ON, ESC_BOLD_OFF, ESC_ALIGN_CENTER, GS_CUT } from '../../utils/escposFormatter';
+import { formatCenter, formatLine, ESC_INIT, ESC_BOLD_ON, ESC_BOLD_OFF, ESC_ALIGN_CENTER, GS_CUT } from '../../utils/escposFormatter';
 
 export default function MobileThermalPrinterModal({
   isOpen,
   onClose,
   T,
-  isLight,
   showToast,
   businessInfo = {}
 }) {

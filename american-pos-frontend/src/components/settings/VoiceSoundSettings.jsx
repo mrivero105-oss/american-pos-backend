@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Volume2, VolumeX, Mic, Bell, Play } from 'lucide-react';
+import { Volume2, Mic, Bell, Play } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useTheme } from '../../hooks/ThemeContext';
 import { stopAI, testVoiceAI } from '../../utils/tts';

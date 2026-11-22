@@ -11,14 +11,13 @@
 
   ; Opción 1: Servidor Principal (PostgreSQL 16 Local)
   CreateDirectory "$APPDATA\isaac-pos"
-  FileOpen $0 "$APPDATA\isaac-pos\db-config.json" w
-  FileWrite $0 '{"mode":"server","dialect":"postgres","host":"127.0.0.1","port":5432,"database":"americanpos","user":"postgres","password":"postgres"}'
-  FileClose $0
+  ; Nota: instalar_postgresql.ps1 inicializa db-config.json solo si no existe, usando la contraseña aleatoria fuerte generada
   Goto config_done
 
   config_client:
   ; Opción 2: Caja Terminal (Cliente LAN)
   CreateDirectory "$APPDATA\isaac-pos"
+  IfFileExists "$APPDATA\isaac-pos\db-config.json" config_done 0
   FileOpen $0 "$APPDATA\isaac-pos\db-config.json" w
   FileWrite $0 '{"mode":"client","dialect":"postgres","host":"","port":5432,"database":"americanpos","user":"postgres","password":"postgres"}'
   FileClose $0
@@ -29,7 +28,8 @@
 !macro customInstall
   DetailPrint "Verificando configuracion de base de datos PostgreSQL..."
   
-  IfFileExists "$APPDATA\isaac-pos\db-config.json" 0 install_done
+  IfFileExists "$APPDATA\isaac-pos\db-config.json" check_existing_mode run_server_setup
+  check_existing_mode:
     ; Comprobar si el modo seleccionado fue "server"
     nsExec::Exec 'powershell.exe -NoProfile -Command "if ((Get-Content -Raw \"$APPDATA\isaac-pos\db-config.json\" -ErrorAction SilentlyContinue | ConvertFrom-Json).mode -eq ''server'') { exit 0 } else { exit 1 }"'
     Pop $0
@@ -40,26 +40,26 @@
     
     ; Localizar y ejecutar instalar_postgresql.ps1
     ${if} ${FileExists} "$INSTDIR\resources\scripts\instalar_postgresql.ps1"
-      nsExec::Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\scripts\instalar_postgresql.ps1"'
+      nsExec::Exec 'powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\scripts\instalar_postgresql.ps1"'
     ${elseIf} ${FileExists} "$INSTDIR\resources\app.asar.unpacked\scripts\instalar_postgresql.ps1"
-      nsExec::Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\app.asar.unpacked\scripts\instalar_postgresql.ps1"'
+      nsExec::Exec 'powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\app.asar.unpacked\scripts\instalar_postgresql.ps1"'
     ${elseIf} ${FileExists} "$INSTDIR\scripts\instalar_postgresql.ps1"
-      nsExec::Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\instalar_postgresql.ps1"'
+      nsExec::Exec 'powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\instalar_postgresql.ps1"'
     ${endIf}
 
-    ; Reglas de Firewall para Servidor Principal (Puertos 3005 y 5432)
-    DetailPrint "Configurando Firewall de Windows para Servidor (puertos 3005 y 5432)..."
+    ; Reglas de Firewall para Servidor Principal restringidas a subred local privada (Puertos 3005 y 5432)
+    DetailPrint "Configurando Firewall de Windows para red privada local (puertos 3005 y 5432)..."
     nsExec::Exec 'netsh advfirewall firewall delete rule name="Isaac POS Backend"'
-    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 profile=private,public'
+    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 remoteip=localsubnet profile=private'
     nsExec::Exec 'netsh advfirewall firewall delete rule name="Isaac POS PostgreSQL"'
-    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS PostgreSQL" dir=in action=allow protocol=TCP localport=5432 remoteip=localsubnet profile=private,public'
+    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS PostgreSQL" dir=in action=allow protocol=TCP localport=5432 remoteip=localsubnet profile=private'
     Goto install_done
 
   install_terminal_firewall:
-    ; Reglas de Firewall para Terminal de Ventas (Puerto 3005)
-    DetailPrint "Configurando Firewall de Windows para Terminal (puerto 3005)..."
+    ; Reglas de Firewall para Terminal de Ventas restringidas a red privada local (Puerto 3005)
+    DetailPrint "Configurando Firewall de Windows para Terminal en red privada (puerto 3005)..."
     nsExec::Exec 'netsh advfirewall firewall delete rule name="Isaac POS Backend"'
-    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 profile=private,public'
+    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 remoteip=localsubnet profile=private'
 
   install_done:
 !macroend

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import lanSyncService from '../services/lanSyncService';
 import db from '../db/localDb';
 import { getStorageMetrics } from '../services/storagePersistence';
@@ -22,12 +22,16 @@ const NetworkStatusIndicator = () => {
           const count = await db.sales.where('status').equals('pending').count();
           setPendingOfflineSales(count);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn('[NetworkStatus] Error contando ventas offline pendientes:', e?.message);
+      }
 
       try {
         const metrics = await getStorageMetrics();
         setStorageMetrics(metrics);
-      } catch (e) {}
+      } catch (e) {
+        console.warn('[NetworkStatus] Error leyendo métricas de almacenamiento:', e?.message);
+      }
     };
 
     checkStatusAndStorage();

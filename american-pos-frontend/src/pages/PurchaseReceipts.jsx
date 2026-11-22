@@ -12,6 +12,8 @@ const safeParseItems = (raw) => {
         const parsed = JSON.parse(raw);
         return Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
     } catch (e) {
+        console.warn('[PurchaseReceipts] Error capturado en operación:', e?.message || e);
+        console.warn('[PurchaseReceipts] Error parseando datos locales:', e?.message);
         return [];
     }
 };

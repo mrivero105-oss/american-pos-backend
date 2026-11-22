@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { 
+import {
     format, 
     addMonths, 
     subMonths, 
@@ -10,8 +10,7 @@ import {
     isSameMonth, 
     isSameDay, 
     addDays, 
-    eachDayOfInterval, 
-    isWithinInterval,
+    isWithinInterval, 
     parseISO
 } from 'date-fns';
 import { es } from 'date-fns/locale';

@@ -7,11 +7,9 @@
  */
 
 import {
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY,
-  hasSupabaseConfig,
-  getSupabaseRealtimeWsUrl,
-  getSupabaseRestUrl,
+  hasSupabaseConfig, 
+  getSupabaseRealtimeWsUrl, 
+  getSupabaseRestUrl, 
   getSupabaseHeaders
 } from '../config/supabaseConfig';
 
@@ -134,7 +132,9 @@ class CloudRateSyncService {
               this.checkRate();
             }
           }
-        } catch (_e) {}
+        } catch (err) {
+          console.warn('[CloudRateSync] Mensaje WS no procesable:', err?.message);
+        }
       };
 
       this.ws.onerror = () => {
@@ -194,7 +194,7 @@ class CloudRateSyncService {
         this.ws.onclose = null;
         this.ws.onerror = null;
         this.ws.close();
-      } catch (_e) {}
+      } catch { /* WebSocket ya cerrado */ }
       this.ws = null;
     }
     this.isConnected = false;
@@ -247,7 +247,9 @@ class CloudRateSyncService {
       localStorage.setItem('pos_cached_exchange_rate', String(newRate));
       if (mode) localStorage.setItem('pos_currency_mode', mode);
       if (this.lastUpdatedAt) localStorage.setItem('pos_rate_updated_at', this.lastUpdatedAt);
-    } catch (_e) {}
+    } catch (err) {
+      console.warn('[CloudRateSync] Error guardando tasa en localStorage:', err?.message);
+    }
 
     // Notificar a observadores si hubo cambio
     if (rateChanged) {
@@ -269,7 +271,9 @@ class CloudRateSyncService {
     this.listeners.forEach((fn) => {
       try {
         fn({ rate: newRate, mode, updatedAt: this.lastUpdatedAt, rateChanged, isConnected: this.isConnected });
-      } catch (_e) {}
+      } catch (err) {
+        console.warn('[CloudRateSync] Error en listener de tasa:', err?.message);
+      }
     });
   }
 
@@ -283,7 +287,9 @@ class CloudRateSyncService {
         isConnected: this.isConnected,
         rateChanged: false
       });
-    } catch (_e) {}
+    } catch (err) {
+      console.warn('[CloudRateSync] Error notificando estado inicial:', err?.message);
+    }
     return () => this.listeners.delete(listener);
   }
 
@@ -291,7 +297,9 @@ class CloudRateSyncService {
     this.listeners.forEach((fn) => {
       try {
         fn({ isConnected: connected, rate: this.lastRate, updatedAt: this.lastUpdatedAt });
-      } catch (_e) {}
+      } catch (err) {
+        console.warn('[CloudRateSync] Error notificando cambio de estado:', err?.message);
+      }
     });
   }
 }

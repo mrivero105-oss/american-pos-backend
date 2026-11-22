@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import { db } from '../services/db';
-import { cacheAllProductImages } from '../services/imageCache';
+import {
+    fetchBusinessSettingsCached,
+    fetchTaxSettingsCached,
+    fetchPaymentMethodsCached
+} from '../utils/format';
 
 // Helper to extract numeric product stock safely
 export const getProductStock = (p) => {
@@ -59,7 +63,9 @@ try {
             cachedProductsL1 = sortProductsAlphabetically(parsed);
         }
     }
-} catch (_e) {}
+} catch (err) {
+    console.warn('[usePOSData] No se pudo hidratar caché L1:', err?.message);
+}
 
 export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSelectedCustomer, setActiveQuotationId) => {
     const [allProducts, setAllProducts] = useState(() => cachedProductsL1 || []);
@@ -101,6 +107,10 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
         }
     });
     const quoteLoadedRef = useRef(false);
+    const inFlightProductsRef = useRef(null);
+    const inFlightCategoriesRef = useRef(null);
+    const inFlightCustomersRef = useRef(null);
+    const inFlightStockIntelRef = useRef(null);
 
     const isDisconnectedOrCleared = () => {
         if (typeof window !== 'undefined' && localStorage.getItem('isaac_pos_is_offline_mode') === 'true') {
@@ -112,22 +122,33 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
         return isCleared || (currentRole === 'client' && !savedIp);
     };
 
-    const fetchProducts = useCallback(async () => {
+    const fetchProducts = useCallback(async (opts = {}) => {
+        const forceFull = Boolean(opts && opts.forceFull);
+        if (!forceFull && inFlightProductsRef.current) {
+            return inFlightProductsRef.current;
+        }
+        const task = (async () => {
         try {
-            // Priority 1: Load from IndexedDB immediately (Fast Access & Offline)
-            const localProducts = await db.getAll('products');
-            if (localProducts && localProducts.length > 0) {
-                const sortedLocal = sortProductsAlphabetically(localProducts);
-                cachedProductsL1 = sortedLocal;
-                setAllProducts(sortedLocal);
-                setLoading(false); // Unblock UI early
-                try {
-                    sessionStorage.setItem('pos_products_l1', JSON.stringify(sortedLocal));
-                } catch (_e) {}
-            } else if (isDisconnectedOrCleared()) {
-                setAllProducts([]);
-                setLoading(false);
-                return;
+            const preloadedLocal = Array.isArray(opts?.preloadedLocalProducts) ? opts.preloadedLocalProducts : null;
+            // Priority 1: Load from IndexedDB immediately (salvo que fetchInitialData ya lo hidrató)
+            const localProducts = preloadedLocal !== null ? preloadedLocal : await db.getAll('products');
+            const hasLocalProducts = Array.isArray(localProducts) && localProducts.length > 0;
+            if (preloadedLocal === null) {
+                if (hasLocalProducts) {
+                    const sortedLocal = sortProductsAlphabetically(localProducts);
+                    cachedProductsL1 = sortedLocal;
+                    setAllProducts(sortedLocal);
+                    setLoading(false); // Unblock UI early
+                    try {
+                        sessionStorage.setItem('pos_products_l1', JSON.stringify(sortedLocal));
+                    } catch (err) {
+                        console.warn('[usePOSData] No se pudo escribir caché L1 (pos_products_l1):', err?.message);
+                    }
+                } else if (isDisconnectedOrCleared()) {
+                    setAllProducts([]);
+                    setLoading(false);
+                    return;
+                }
             }
 
             if (isDisconnectedOrCleared() && localStorage.getItem('isaac_pos_is_offline_mode') !== 'true') {
@@ -135,28 +156,101 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
                 return;
             }
 
-            // Priority 2: Sync with API in background
-            const response = await api.get('/products?minimal=true', { timeout: 10000 });
-            const serverProducts = response.data.products || response.data;
+            // Priority 2: Sincronización Delta (?since=) cuando ya tenemos catálogo local + serverTime previo
+            let lastSyncMeta = null;
+            if (!forceFull && hasLocalProducts) {
+                try {
+                    lastSyncMeta = await db.getById('metadata', 'last_product_sync');
+                } catch (_) {
+                    lastSyncMeta = null;
+                }
+            }
+
+            let requestUrl = '/products?minimal=true&delta=true';
+            if (!forceFull && hasLocalProducts && lastSyncMeta?.value) {
+                const parsedLast = new Date(lastSyncMeta.value);
+                if (!Number.isNaN(parsedLast.getTime())) {
+                    // Margen de 2s para absorber concurrencia entre commits simultáneos en servidor
+                    const safeSince = new Date(Math.max(0, parsedLast.getTime() - 2000)).toISOString();
+                    requestUrl = `/products?minimal=true&since=${encodeURIComponent(safeSince)}`;
+                }
+            }
+
+            const response = await api.get(requestUrl, { timeout: 10000 });
+            const payload = response.data;
+            const nextServerTime = payload?.serverTime || new Date().toISOString();
+
+            // Rama Delta Real: Solo fusionar los productos modificados/eliminados sin reescribir todo el catálogo
+            if (payload && payload.delta === true && Array.isArray(payload.products) && hasLocalProducts) {
+                const changedProducts = payload.products;
+                const deletedIds = Array.isArray(payload.deletedIds) ? payload.deletedIds : [];
+
+                if (changedProducts.length === 0 && deletedIds.length === 0) {
+                    db.put('metadata', { key: 'last_product_sync', value: nextServerTime });
+                    return;
+                }
+
+                const mergedMap = new Map();
+                for (let i = 0; i < localProducts.length; i++) {
+                    const p = localProducts[i];
+                    if (p && p.id !== undefined && p.id !== null) {
+                        mergedMap.set(String(p.id), p);
+                    }
+                }
+                for (let i = 0; i < deletedIds.length; i++) {
+                    mergedMap.delete(String(deletedIds[i]));
+                }
+                for (let i = 0; i < changedProducts.length; i++) {
+                    const cp = changedProducts[i];
+                    if (cp && cp.id !== undefined && cp.id !== null) {
+                        mergedMap.set(String(cp.id), cp);
+                    }
+                }
+
+                const sortedMerged = sortProductsAlphabetically(Array.from(mergedMap.values()));
+                cachedProductsL1 = sortedMerged;
+                setAllProducts(sortedMerged);
+                try {
+                    sessionStorage.setItem('pos_products_l1', JSON.stringify(sortedMerged));
+                } catch (err) {
+                    console.warn('[usePOSData] No se pudo actualizar caché L1 delta:', err?.message);
+                }
+
+                if (changedProducts.length > 0) {
+                    await db.putAll('products', changedProducts);
+                }
+                if (deletedIds.length > 0) {
+                    await Promise.all(deletedIds.map(id => db.delete('products', id)));
+                }
+                db.put('metadata', { key: 'last_product_sync', value: nextServerTime });
+                return;
+            }
+
+            // Rama Full Sync (primer arranque, post-reinicio del servidor, o backend legacy)
+            const serverProducts = Array.isArray(payload) ? payload : payload?.products;
             if (Array.isArray(serverProducts)) {
                 if (serverProducts.length === 0) {
                     cachedProductsL1 = [];
                     setAllProducts([]);
                     try {
                         sessionStorage.removeItem('pos_products_l1');
-                    } catch (_e) {}
+                    } catch (err) {
+                        console.warn('[usePOSData] No se pudo limpiar caché L1:', err?.message);
+                    }
                     await db.clear('products');
-                    db.put('metadata', { key: 'last_product_sync', value: new Date().toISOString() });
+                    db.put('metadata', { key: 'last_product_sync', value: nextServerTime });
                 } else {
                     const sortedServer = sortProductsAlphabetically(serverProducts);
                     cachedProductsL1 = sortedServer;
                     setAllProducts(sortedServer);
                     try {
                         sessionStorage.setItem('pos_products_l1', JSON.stringify(sortedServer));
-                    } catch (_e) {}
+                    } catch (err) {
+                        console.warn('[usePOSData] No se pudo actualizar caché L1:', err?.message);
+                    }
                     // MASTER SYNC: Persist everything to IndexedDB in a single atomic transaction
                     await db.replaceAllAtomic('products', sortedServer);
-                    db.put('metadata', { key: 'last_product_sync', value: new Date().toISOString() });
+                    db.put('metadata', { key: 'last_product_sync', value: nextServerTime });
                 }
             }
         } catch (_error) {
@@ -169,10 +263,20 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
             }
         } finally {
             setLoading(false);
+            if (inFlightProductsRef.current === task) {
+                inFlightProductsRef.current = null;
+            }
         }
+        })();
+        if (!forceFull) {
+            inFlightProductsRef.current = task;
+        }
+        return task;
     }, []);
 
     const fetchCategories = useCallback(async () => {
+        if (inFlightCategoriesRef.current) return inFlightCategoriesRef.current;
+        const task = (async () => {
         try {
             if (isDisconnectedOrCleared()) {
                 setCategories(['Todas']);
@@ -190,10 +294,17 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
             localStorage.setItem('pos_categories', JSON.stringify(finalCats));
         } catch (_error) {
             setCategories(prev => prev.length > 1 ? prev : ['Todas']);
+        } finally {
+            if (inFlightCategoriesRef.current === task) inFlightCategoriesRef.current = null;
         }
+        })();
+        inFlightCategoriesRef.current = task;
+        return task;
     }, []);
 
     const fetchCustomers = useCallback(async (searchQuery = '') => {
+        if (!searchQuery && inFlightCustomersRef.current) return inFlightCustomersRef.current;
+        const task = (async () => {
         try {
             if (isDisconnectedOrCleared()) {
                 setCustomers([]);
@@ -215,10 +326,17 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
         } catch (_error) {
             const localCustomers = await db.getAll('customers');
             setCustomers(Array.isArray(localCustomers) ? localCustomers : []);
+        } finally {
+            if (!searchQuery && inFlightCustomersRef.current === task) inFlightCustomersRef.current = null;
         }
+        })();
+        if (!searchQuery) inFlightCustomersRef.current = task;
+        return task;
     }, []);
 
     const fetchStockIntelligence = useCallback(async () => {
+        if (inFlightStockIntelRef.current) return inFlightStockIntelRef.current;
+        const task = (async () => {
         try {
             if (isDisconnectedOrCleared()) return;
             const storedCompany = localStorage.getItem('companyId');
@@ -233,19 +351,32 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
             localStorage.setItem('pos_stock_intelligence', JSON.stringify(intelMap));
         } catch (error) {
             console.warn('[usePOSData] Stock intelligence deferred:', error.message);
+        } finally {
+            if (inFlightStockIntelRef.current === task) inFlightStockIntelRef.current = null;
         }
+        })();
+        inFlightStockIntelRef.current = task;
+        return task;
     }, []);
 
     const fetchInitialData = useCallback(async () => {
         try {
-            setLoading(true);
+            if (!cachedProductsL1 || cachedProductsL1.length === 0) {
+                setLoading(true);
+            }
 
-            // Phase 1: ESSENTIAL DATA (Always load local data immediately)
+            // Phase 1: ESSENTIAL DATA (Always load local data immediately, una sola lectura + orden)
             const localProducts = await db.getAll('products');
             if (localProducts && localProducts.length > 0) {
                 const sortedLocal = sortProductsAlphabetically(localProducts);
+                cachedProductsL1 = sortedLocal;
                 setAllProducts(sortedLocal);
                 setLoading(false); // Unblock UI early!
+                try {
+                    sessionStorage.setItem('pos_products_l1', JSON.stringify(sortedLocal));
+                } catch (err) {
+                    console.warn('[usePOSData] No se pudo escribir caché L1 (pos_products_l1):', err?.message);
+                }
             } else {
                 setAllProducts([]);
             }
@@ -270,31 +401,28 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
                 return;
             }
 
-            // Phase 2: SYNC EVERYTHING
-            // We fire background sync for everything else
+            // Phase 2: SYNC EVERYTHING (delta reutilizando los productos locales ya leídos)
             fetchCategories();
-            fetchProducts(); // This will update state when server responds
+            fetchProducts({ preloadedLocalProducts: localProducts || [] });
             
-            // Phase 3: SECONDARY DATA (Non-blocking)
-            // Fire these and let them finish in the background
+            // Phase 3: SECONDARY DATA (Non-blocking, coalescencia con caché compartido)
             Promise.all([
                 fetchCustomers().catch(e => console.warn('Background fetch failed: Customers', e.message)),
-                api.get('/settings/business').then(r => {
-                    if (r.data) {
-                        setBusinessSettings(r.data);
-                        localStorage.setItem('pos_business_settings', JSON.stringify(r.data));
+                fetchBusinessSettingsCached().then(bData => {
+                    if (bData) {
+                        setBusinessSettings(bData);
                     }
                 }).catch(e => console.warn('Background fetch failed: Business', e.message)),
-                api.get('/settings/taxes').then(r => {
-                    if (r.data) {
-                        setTaxSettings(r.data);
-                        localStorage.setItem('pos_tax_settings', JSON.stringify(r.data));
+                fetchTaxSettingsCached().then(tData => {
+                    if (tData) {
+                        setTaxSettings(tData);
+                        localStorage.setItem('pos_tax_settings', JSON.stringify(tData));
                     }
                 }).catch(e => console.warn('Background fetch failed: Taxes', e.message)),
-                api.get('/settings/payment-methods').then(r => {
-                    if (r.data) {
-                        setPaymentMethods(r.data);
-                        localStorage.setItem('pos_payment_methods', JSON.stringify(r.data));
+                fetchPaymentMethodsCached().then(pData => {
+                    if (pData) {
+                        setPaymentMethods(pData);
+                        localStorage.setItem('pos_payment_methods', JSON.stringify(pData));
                     }
                 }).catch(e => console.warn('Background fetch failed: Payments', e.message)),
                 fetchExchangeRate().catch(e => console.warn('Background fetch failed: Rate', e.message)),
@@ -344,9 +472,11 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
                 }
                 const cachedBiz = localStorage.getItem('pos_business_settings');
                 if (cachedBiz) {
-                    try { setBusinessSettings(JSON.parse(cachedBiz)); } catch (_e) {}
+                    try { setBusinessSettings(JSON.parse(cachedBiz)); } catch (err) { console.warn('[usePOSData] Error parseando pos_business_settings:', err?.message); }
                 }
-            } catch (_err) {}
+            } catch (err) {
+                console.warn('[usePOSData] Error hidratando tras pos-data-synced:', err?.message);
+            }
         };
         window.addEventListener('pos-data-synced', handlePosDataSynced);
         return () => {
@@ -356,9 +486,14 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
 
     useEffect(() => {
         if (!socket) return;
+        let remoteSyncTimer = null;
         const handleRemoteUpdate = () => {
-             console.log('⚡ Cambio detectado. Refrescando catálogo local...');
-             fetchProducts();
+             if (remoteSyncTimer) clearTimeout(remoteSyncTimer);
+             remoteSyncTimer = setTimeout(() => {
+                 remoteSyncTimer = null;
+                 console.log('⚡ Cambio detectado. Sincronizando delta de catálogo local...');
+                 fetchProducts();
+             }, 250);
         };
         const handleProductUpdated = (updatedProduct) => {
              console.log('⚡ Producto actualizado recibido por socket:', updatedProduct.name);
@@ -376,7 +511,7 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
         };
         const handleSettingsUpdate = (data) => {
              if (data.type === 'rate') {
-                 fetchExchangeRate();
+                 fetchExchangeRate(true);
              }
         };
 
@@ -384,6 +519,7 @@ export const usePOSData = (socket, fetchExchangeRate, location, setCart, setSele
         socket.on('product_updated', handleProductUpdated);
         socket.on('settings_changed', handleSettingsUpdate);
         return () => {
+            if (remoteSyncTimer) clearTimeout(remoteSyncTimer);
             socket.off('inventory_changed', handleRemoteUpdate);
             socket.off('product_updated', handleProductUpdated);
             socket.off('settings_changed', handleSettingsUpdate);

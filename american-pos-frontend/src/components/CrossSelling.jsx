@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ShoppingBag, Plus, X } from 'lucide-react';
 import api from '../services/api';
 import { formatMoney } from '../utils/format';
@@ -6,8 +6,22 @@ import { formatMoney } from '../utils/format';
 export default function CrossSelling({ cartItems, onAddToCart, exchangeRate, currencyMode }) {
     const [suggestions, setSuggestions] = useState([]);
     const [speech, setSpeech] = useState('');
-    const [loading, setLoading] = useState(false);
     const [dismissed, setDismissed] = useState(false);
+
+    const fetchSuggestions = useCallback(async () => {
+        try {
+            const response = await api.post('/ai/cross-selling', { cartItems });
+            if (response.data && response.data.items && response.data.items.length > 0) {
+                setSuggestions(response.data.items);
+                setSpeech(response.data.speech);
+                setDismissed(false); // Resetear dismiss al tener nuevas sugerencias
+            } else {
+                setSuggestions([]);
+            }
+        } catch (error) {
+            console.error('Cross selling error:', error);
+        }
+    }, [cartItems]);
 
     useEffect(() => {
         if (!cartItems || cartItems.length === 0) {
@@ -22,26 +36,7 @@ export default function CrossSelling({ cartItems, onAddToCart, exchangeRate, cur
         }, 1500);
 
         return () => clearTimeout(timer);
-    }, [cartItems]);
-
-    const fetchSuggestions = async () => {
-        try {
-            setLoading(true);
-            const response = await api.post('/ai/cross-selling', { cartItems });
-            if (response.data && response.data.items && response.data.items.length > 0) {
-                setSuggestions(response.data.items);
-                setSpeech(response.data.speech);
-                setDismissed(false); // Resetear dismiss al tener nuevas sugerencias
-            } else {
-                setSuggestions([]);
-                setSpeech('');
-            }
-        } catch (error) {
-            console.error('Error fetching cross-selling:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
+    }, [cartItems, fetchSuggestions]);
 
     if (dismissed || suggestions.length === 0) return null;
 

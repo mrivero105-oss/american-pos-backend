@@ -5,7 +5,7 @@
 #   3. dist_installers\Isaac-POS-Ultra-Setup.exe
 param(
     [ValidateSet('legacy', 'modern')]
-    [string]$Engine = 'legacy'
+    [string]$Engine = 'modern'
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,7 +35,13 @@ if (!(Test-Path $distDir)) {
     New-Item -ItemType Directory -Path $distDir -Force | Out-Null
 }
 
-Stop-Process -Name "*Isaac POS*","*American POS*","*electron*" -Force -ErrorAction SilentlyContinue | Out-Null
+# Cerrar únicamente procesos provenientes del árbol de compilación del proyecto (preservar instancias instaladas del usuario en AppData)
+Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -and (
+        $_.Path.StartsWith($src, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $_.Path.StartsWith($appFiles, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+} | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 500
 
 Write-Host "Paso 1: Empaquetando motor Electron ($Engine) con electron-builder..." -ForegroundColor Cyan
@@ -67,19 +73,15 @@ if (!(Test-Path $appFiles)) {
 # Limpiar archivos obsoletos previos de app_files
 Get-ChildItem -Path $appFiles | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-# Copiar todo el paquete Electron
+# Copiar todo el paquete Electron (ya incluye resources\scripts desde extraResources sin duplicar en app.asar)
 Copy-Item -Path "$unpackedDir\*" -Destination $appFiles -Recurse -Force
 
-# Asegurar carpeta de scripts fuera del asar para ejecución nativa en NSIS
-$scriptsTarget = Join-Path $appFiles "scripts"
-if (!(Test-Path $scriptsTarget)) {
-    New-Item -ItemType Directory -Path $scriptsTarget -Force | Out-Null
-}
-Copy-Item -Path (Join-Path $src "scripts\*") -Destination $scriptsTarget -Recurse -Force
-
 # Seguridad: limpiar archivos sensibles o locales antes de empaquetar NSIS.
-foreach ($pat in @('.env', '.env.*', 'settings.json', 'db-config.json', 'cloud_mirror_config.json', 'cert.pfx', '*.pfx', '*.p12', '*.key', '*private*.pem', '*.apk')) {
+foreach ($pat in @('.env', '.env.*', 'settings.json', 'db-config.json', '.dbcfg.key.dpapi', 'secrets.vault.json', '*.vault.json', '.secrets.key.dpapi', '.*.key.dpapi', 'cloud_mirror_config.json', 'cloud_license_config.json', 'cert.pfx', '*.pfx', '*.p12', '*.key', '*private*.pem', '*.apk', '*.sqlite*', 'audit_*.json')) {
     Get-ChildItem -Path $appFiles -Filter $pat -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+}
+foreach ($dirName in @('.wwebjs_auth', '.wwebjs_cache', '.test_wwebjs_auth', 'auto-backups', 'invoices', 'product_images', 'scratch', 'private', 'tests')) {
+    Get-ChildItem -Path $appFiles -Filter $dirName -Directory -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "Paso 3: Compilando 1_IsaacPOS_Servidor_Principal_Setup.exe..." -ForegroundColor Yellow
@@ -106,12 +108,17 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "Paso 6: Copiando instaladores a la raiz del proyecto..." -ForegroundColor Cyan
-Copy-Item "$distDir\1_IsaacPOS_Servidor_Principal_Setup.exe" "$projectRoot\1_IsaacPOS_Servidor_Principal_Setup.exe" -Force
-Copy-Item "$distDir\2_IsaacPOS_Caja_Terminal_Setup.exe" "$projectRoot\2_IsaacPOS_Caja_Terminal_Setup.exe" -Force
-if (Test-Path "$distDir\Isaac-POS-Ultra-Setup.exe") {
-    Copy-Item "$distDir\Isaac-POS-Ultra-Setup.exe" "$projectRoot\Isaac-POS-Ultra-Setup.exe" -Force
+Write-Host "Paso 6: Verificando instaladores finales en $distDir..." -ForegroundColor Cyan
+$generatedExes = Get-ChildItem -Path $distDir -Filter "*Setup.exe"
+if ($env:REQUIRE_AUTHENTICODE_SIGNATURE -eq 'true') {
+    foreach ($exe in $generatedExes) {
+        $sig = Get-AuthenticodeSignature -FilePath $exe.FullName -ErrorAction SilentlyContinue
+        if (-not $sig -or $sig.Status -ne 'Valid') {
+            Write-Error "REQUIRE_AUTHENTICODE_SIGNATURE=true: falta firma Authenticode en $($exe.Name) (configure CSC_LINK o Azure Trusted Signing)."
+            exit 1
+        }
+    }
 }
 
 Write-Host "COMPILACION EXITOSA DE TODOS LOS INSTALADORES" -ForegroundColor Green
-Get-ChildItem -Path $distDir -Filter "*Setup.exe" | Select-Object Name, Length, LastWriteTime
+$generatedExes | Select-Object Name, Length, LastWriteTime

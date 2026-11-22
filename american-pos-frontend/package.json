@@ -1,7 +1,7 @@
 {
   "name": "isaac-pos-frontend",
   "private": true,
-  "version": "24.04.0",
+  "version": "24.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:mobile": "vite --config vite.mobile.config.js --port 5174 --host",
+    "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "test:all": "node ../american-pos-backend/scripts/run_all_tests.cjs"
   },
@@ -23,7 +24,6 @@
     "@zxing/library": "^0.23.0",
     "axios": "^1.13.5",
     "date-fns": "^4.1.0",
-    "dexie": "^4.4.4",
     "framer-motion": "^12.36.0",
     "fuse.js": "^7.1.0",
     "html2canvas-pro": "^2.4.2",
@@ -47,6 +47,8 @@
     "@playwright/test": "^1.65.1",
     "@tailwindcss/postcss": "^4.2.1",
     "@tailwindcss/vite": "^4.2.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
@@ -56,10 +58,13 @@
     "eslint-plugin-react": "^7.37.2",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.14",
+    "fake-indexeddb": "^6.2.8",
     "globals": "^15.11.0",
+    "jsdom": "^25.0.1",
     "postcss": "^8.5.6",
     "postcss-preset-env": "^11.3.2",
     "tailwindcss": "^4.2.1",
-    "vite": "^5.4.10"
+    "vite": "^5.4.10",
+    "vitest": "^2.1.9"
   }
 }

@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # ISAAC POS - Compilador de Instalador Moderno para Windows 10 y 11
 # ==============================================================================
 # Genera:
@@ -46,21 +46,28 @@ try {
     Pop-Location
 }
 
-# 4. Copiar instalador a dist_installers y a la raíz
-Write-Host "`n[3/3] Distribuyendo archivo instalador final..." -ForegroundColor Yellow
+# 4. Distribuir unicamente hacia dist_installers y validar firma Authenticode si aplica
+Write-Host "`n[3/3] Distribuyendo archivo instalador final en dist_installers..." -ForegroundColor Yellow
 $builtInstaller = "$backendDir\dist_modern\$installerName"
 if (Test-Path $builtInstaller) {
-    Copy-Item $builtInstaller "$distDir\$installerName" -Force
-    Copy-Item $builtInstaller "$rootDir\$installerName" -Force
+    $targetExe = "$distDir\$installerName"
+    Copy-Item $builtInstaller $targetExe -Force
 
-    $sizeMb = [math]::Round((Get-Item "$distDir\$installerName").Length / 1MB, 2)
+    $sig = Get-AuthenticodeSignature -FilePath $targetExe -ErrorAction SilentlyContinue
+    if ($env:REQUIRE_AUTHENTICODE_SIGNATURE -eq "true" -and (-not $sig -or $sig.Status -ne "Valid")) {
+        Write-Error "REQUIRE_AUTHENTICODE_SIGNATURE=true: el instalador $targetExe no posee firma Authenticode valida ($($sig.Status)). Configure CSC_LINK o Azure Trusted Signing."
+        exit 1
+    }
+
+    $sizeMb = [math]::Round((Get-Item $targetExe).Length / 1MB, 2)
+    $sigLabel = if ($sig -and $sig.Status -eq "Valid") { "FIRMADA ($($sig.SignerCertificate.Subject))" } else { "Sin firma Authenticode local (configure CSC_LINK / Trusted Signing en release)" }
     Write-Host "`n==========================================================" -ForegroundColor Green
     Write-Host "   COMPILACION EXITOSA PARA WINDOWS 10 Y 11 (MODERNO)    " -ForegroundColor Green
     Write-Host "==========================================================" -ForegroundColor Green
     Write-Host "Archivo generado : $installerName" -ForegroundColor White
     Write-Host "Tamano           : $sizeMb MB" -ForegroundColor White
-    Write-Host "Ubicacion 1      : $distDir\$installerName" -ForegroundColor White
-    Write-Host "Ubicacion 2      : $rootDir\$installerName" -ForegroundColor White
+    Write-Host "Ubicacion        : $targetExe" -ForegroundColor White
+    Write-Host "Firma Digital    : $sigLabel" -ForegroundColor White
     Write-Host "Compatibilidad   : Windows 10 (x64), Windows 11 (x64)" -ForegroundColor White
     Write-Host "Motor Embebido   : Electron 31.4.0 (Chromium 128 / Node 20 LTS)" -ForegroundColor White
     Write-Host "==========================================================`n" -ForegroundColor Green

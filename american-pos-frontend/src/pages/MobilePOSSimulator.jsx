@@ -1,12 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { 
-  Settings, Plus, X, CheckCircle, Smartphone,
-  Printer, RefreshCw, Tag, CreditCard, DollarSign, Wallet,
-  FileText, ArrowLeft, Zap, Box, Users, Truck,
+  Settings, X, Smartphone,
+  RefreshCw, Tag, CreditCard, DollarSign, Wallet,
+  FileText, ArrowLeft, Box, Users, Truck,
   ShieldCheck, Coins, TrendingUp, Scale, Shield, Store,
-  FileSpreadsheet, Building2, PieChart, UserCog, Banknote,
-  AlertTriangle, Copy
+  FileSpreadsheet, Building2, PieChart, UserCog, Banknote
 } from 'lucide-react';
 import { playScanSound, playSuccessSound, playErrorSound, playDeleteSound, isSoundMuted, toggleSoundMute } from '../utils/sounds';
 import api, { updateApiBaseUrl, checkServerHealth, formatServerUrl, autoDiscoverServer } from '../services/api';
@@ -20,9 +18,8 @@ import { useSocket } from '../hooks/SocketContext';
 import { isDollarOnlyCountry } from '../utils/format';
 import { evaluateCartPromotions } from '../utils/promotionsEngine';
 import { getImageUrl } from '../utils/imageUtils';
-import { motion, AnimatePresence } from 'framer-motion';
+import { cacheAllProductImages } from '../services/imageCache';
 import { triggerHaptic } from '../utils/haptics';
-import BiometricEnrollModal from '../components/BiometricEnrollModal';
 import cloudRateSyncService from '../services/cloudRateSyncService';
 
 const stripAccents = (str = '') => String(str).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -38,31 +35,17 @@ import MobilePOSHeader from '../components/mobile/MobilePOSHeader';
 import MobilePOSLoginScreen from '../components/mobile/MobilePOSLoginScreen';
 import MobilePOSCatalogSection from '../components/mobile/MobilePOSCatalogSection';
 import MobilePOSBottomDock from '../components/mobile/MobilePOSBottomDock';
-import SupervisorAuthModal from '../components/mobile/SupervisorAuthModal';
 import MobileTabletCartPanel from '../components/mobile/MobileTabletCartPanel';
 import MobileCartSheet from '../components/mobile/MobileCartSheet';
-import MobileCheckoutModal from '../components/mobile/MobileCheckoutModal';
-import MobileReceiptModal from '../components/mobile/MobileReceiptModal';
-import MobileQuickProductModal from '../components/mobile/MobileQuickProductModal';
-import MobilePriceCardModal from '../components/mobile/MobilePriceCardModal';
-import MobileImagePreviewModal from '../components/mobile/MobileImagePreviewModal';
-import MobileQuickItemModal from '../components/mobile/MobileQuickItemModal';
-import MobileHeldSalesModal from '../components/mobile/MobileHeldSalesModal';
-import MobileSideNav from '../components/mobile/MobileSideNav';
-import MobilePreSaleSentModal from '../components/mobile/MobilePreSaleSentModal';
-import MobileWhatsAppReceiptModal from '../components/mobile/MobileWhatsAppReceiptModal';
-import MobilePriceCheckerModal from '../components/mobile/MobilePriceCheckerModal';
-import MobileCustomerSelectModal from '../components/mobile/MobileCustomerSelectModal';
-import MobileTableSelectModal from '../components/mobile/MobileTableSelectModal';
+import MobileSimulatorModals from '../components/mobile/MobileSimulatorModals';
 import { useVirtualCatalogGrid } from '../hooks/useVirtualCatalogGrid';
 import { getTerminalId } from '../utils/terminalIdentity';
-import { useMobileCart } from '../hooks/useMobileCart';
-import { useMobileCheckout } from '../hooks/useMobileCheckout';
 
 import biometricService from '../services/biometricService';
 import mobilePrinterService from '../services/mobilePrinterService';
 import { useMobilePosStore } from '../store/useMobilePosStore';
 import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 // Carga bajo demanda (Lazy) de todos los módulos del sistema principal para la versión móvil
 const AccountsReceivablePage = lazy(() => import('./AccountsReceivable'));
@@ -81,13 +64,6 @@ const CashierAuditCenterPage = lazy(() => import('./CashierAuditCenter'));
 const BranchesPage = lazy(() => import('./Branches'));
 const UsersPage = lazy(() => import('./Users'));
 const SettingsPage = lazy(() => import('./Settings'));
-const MobileBarcodeScannerModal = lazy(() => import('../components/MobileBarcodeScannerModal'));
-const MobileVariantPickerModal = lazy(() => import('../components/mobile/MobileVariantPickerModal'));
-const MobileControlledMedModal = lazy(() => import('../components/mobile/MobileControlledMedModal'));
-const MobileImageSearchModal = lazy(() => import('../components/mobile/MobileImageSearchModal'));
-const MobileThermalPrinterModal = lazy(() => import('../components/mobile/MobileThermalPrinterModal'));
-const MobileQuantityModal = lazy(() => import('../components/mobile/MobileQuantityModal'));
-const MobileBulkSelectModal = lazy(() => import('../components/mobile/MobileBulkSelectModal'));
 
 // Contenedor responsivo unificado para submódulos embebidos en móvil
 function MobileSubViewWrapper({ title, subtitle, icon: IconComponent, onBack, children, T }) {
@@ -137,7 +113,9 @@ function MobileSubViewWrapper({ title, subtitle, icon: IconComponent, onBack, ch
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Cargando {title}...</span>
           </div>
         }>
-          {children}
+          <ErrorBoundary inline resetKey={title} moduleName={title}>
+            {children}
+          </ErrorBoundary>
         </Suspense>
       </div>
     </div>
@@ -145,7 +123,6 @@ function MobileSubViewWrapper({ title, subtitle, icon: IconComponent, onBack, ch
 }
 
 export default function MobilePOSSimulator() {
-  const navigate = useNavigate();
   const isDollarCountry = isDollarOnlyCountry(localStorage.getItem('pos_country'));
   const { user, login, loginWithBiometrics, logout, hasPermission, refreshUser } = useAuth();
   const { theme, setTheme, isOled } = useTheme();
@@ -163,18 +140,21 @@ export default function MobilePOSSimulator() {
   }, [user, isBiometricsModalOpen]);
 
   const isLight = theme === 'studio' || theme === 'swiss';
-  const isOledMode = false;
+  const isOledMode = Boolean(isOled);
 
   // Módulo Activo en la Experiencia Móvil (Zustand Store): 'pos' | 'inventory' | 'sales' | 'customers' | 'cash' | 'expenses' | 'sync'
   const activeModule = useMobilePosStore((s) => s.activeModule);
   const setActiveModule = useMobilePosStore((s) => s.setActiveModule);
 
+  const hasRefreshedInitialUserRef = useRef(false);
   // Sincronizar permisos del usuario en tiempo real con el servidor
   useEffect(() => {
+    if (hasRefreshedInitialUserRef.current) return;
     if (user && refreshUser) {
+      hasRefreshedInitialUserRef.current = true;
       refreshUser().catch(() => {});
     }
-  }, []);
+  }, [user, refreshUser]);
 
   useEffect(() => {
     const handleUserUpdate = (data) => {
@@ -227,7 +207,7 @@ export default function MobilePOSSimulator() {
         setActiveModule('pos');
       }
     }
-  }, [activeModule, hasPermission]);
+  }, [activeModule, hasPermission, setActiveModule]);
 
   // Estado de Red, Socket Espejo y Cola Offline
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -428,7 +408,7 @@ export default function MobilePOSSimulator() {
         const parsed = JSON.parse(cached);
         if (parsed && typeof parsed === 'object') return parsed;
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error parseando JSON local:', caughtErr?.message || caughtErr); }
     return {
       name: 'Mi Negocio POS',
       rif: '',
@@ -444,7 +424,7 @@ export default function MobilePOSSimulator() {
       const cached = localStorage.getItem('pos_cached_exchange_rate') || localStorage.getItem('pos_exchange_rate');
       const parsed = parseFloat(cached);
       if (parsed && !isNaN(parsed) && parsed > 0) return parsed;
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
     return 1000.00;
   });
 
@@ -465,7 +445,7 @@ export default function MobilePOSSimulator() {
       const next = prev === 'list' ? 'grid' : 'list';
       try {
         localStorage.setItem('mobile_catalog_layout', next);
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       triggerHaptic(15);
       return next;
     });
@@ -473,8 +453,6 @@ export default function MobilePOSSimulator() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = React.useDeferredValue(searchQuery);
-  const [visibleCount, setVisibleCount] = useState(48);
-  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
 
   // O(1) Fast Product Lookup Map
   const productsMap = useMemo(() => {
@@ -518,6 +496,17 @@ export default function MobilePOSSimulator() {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [printedReceipt, setPrintedReceipt] = useState(null);
   const [toastMsg, setToastMsg] = useState(null);
+  const toastTimerRef = useRef(null);
+  const showToast = useCallback((msg) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    setToastMsg(msg);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMsg(null);
+      toastTimerRef.current = null;
+    }, 2200);
+  }, []);
   const [isProcessingSale, setIsProcessingSale] = useState(false);
   const cartDiscountPercent = useMobilePosStore((s) => s.cartDiscountPercent);
   const setCartDiscountPercent = useMobilePosStore((s) => s.setCartDiscountPercent);
@@ -570,7 +559,6 @@ export default function MobilePOSSimulator() {
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [previewProductImage, setPreviewProductImage] = useState(null);
-  const imageFileInputRef = useRef(null);
   const [isImageSearchModalOpen, setIsImageSearchModalOpen] = useState(false);
   const [isThermalPrinterModalOpen, setIsThermalPrinterModalOpen] = useState(false);
   const [scannerTarget, setScannerTarget] = useState('cart'); // 'cart' | 'product_barcode'
@@ -663,7 +651,7 @@ export default function MobilePOSSimulator() {
   const [paymentReference, setPaymentReference] = useState('');
   const [amountPaidUSD, setAmountPaidUSD] = useState('');
   const [amountPaidBS, setAmountPaidBS] = useState('');
-  const [autoPrint, setAutoPrint] = useState(true);
+  const autoPrint = true;
   const [isAudioMuted, setIsAudioMuted] = useState(isSoundMuted());
   const [quantityModalItem, setQuantityModalItem] = useState(null);
   const [isQuantityModalOpen, setIsQuantityModalOpen] = useState(false);
@@ -776,7 +764,7 @@ export default function MobilePOSSimulator() {
         capacitorListener = window.Capacitor.Plugins.App.addListener('backButton', () => {
           invokeBackNavigation();
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
     }
 
     // Listener de navegación en PWA / Web Mobile
@@ -812,7 +800,7 @@ export default function MobilePOSSimulator() {
       if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && document.visibilityState === 'visible') {
         try {
           wakeLockSentinel = await navigator.wakeLock.request('screen');
-        } catch (_) {}
+        } catch { /* Screen Wake Lock opcional no soportado o bloqueado */ }
       }
     };
 
@@ -853,34 +841,21 @@ export default function MobilePOSSimulator() {
   const pullIndicatorRef = useRef(null);
   const pullThresholdHapticRef = useRef(false);
   const pullStartYRef = useRef(0);
-  const longPressTimerRef = useRef(null);
-  const longPressTriggeredRef = useRef(false);
   const edgeSwipeStartXRef = useRef(null);
   const edgeSwipeStartYRef = useRef(null);
 
+  const canEditCatalogMobile = useMemo(() => {
+    const role = String(user?.role || '').toLowerCase();
+    return Boolean(
+      hasPermission('canManageInventory') ||
+      hasPermission('canEditProducts') ||
+      ['superadmin', 'owner', 'dueño', 'dueno', 'admin', 'supervisor', 'master'].includes(role)
+    );
+  }, [user?.role, hasPermission]);
+
   // Manejadores de Gesto de Presión Prolongada (Long-Press / Haptic Touch)
-  const handleProductTouchStart = (product) => {
-    longPressTriggeredRef.current = false;
-    longPressTimerRef.current = setTimeout(() => {
-      longPressTriggeredRef.current = true;
-      triggerHaptic(30);
-      openEditProduct(product);
-    }, 450);
-  };
 
-  const handleProductTouchEnd = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
 
-  const handleProductTouchMove = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
 
   const pullRafIdRef = useRef(null);
 
@@ -963,257 +938,23 @@ export default function MobilePOSSimulator() {
     }
   };
 
-  // Carga inicial escalonada y Enlace Espejo WebSockets / LAN Sync (Cero bloqueo de UI en el arranque)
+  const activeModuleRef = useRef(activeModule);
   useEffect(() => {
-    if (!user) return;
+    activeModuleRef.current = activeModule;
+  }, [activeModule]);
 
-    // Prioridad 0 (Inmediata): Catálogo y Tasa para que la terminal responda en 0 ms
-    loadSettings();
-    loadProducts();
-
-    // Prioridad 1 (Diferida 800ms): Datos secundarios sin bloquear el render inicial
-    const secondaryInitTimer = setTimeout(() => {
-      loadCustomers();
-      loadPromotions();
-      countPendingOfflineSales();
-    }, 800);
-
-    // 1. Iniciar servicio LAN y WebSockets para efecto Espejo
-    lanSyncService.init();
-
-    // Verificación inmediata de socket LAN si ya estaba conectado
-    if (lanSyncService.socket?.connected || lanSyncService.status?.state === 'CLOUD_ONLINE' || lanSyncService.status?.state === 'LAN_P2P_ACTIVE') {
-      setLanSocketConnected(true);
-      setIsOnline(true);
-    }
-
-    // Suscripción reactiva a cambios de topología LAN
-    const unsubscribeLAN = lanSyncService.subscribe((status) => {
-      const isLive = status?.state === 'CLOUD_ONLINE' || status?.state === 'LAN_P2P_ACTIVE' || Boolean(lanSyncService?.socket?.connected);
-      setLanSocketConnected(isLive);
-      if (isLive) setIsOnline(true);
-    });
-
-    const handleConnect = () => {
-      setLanSocketConnected(true);
-      setIsOnline(true);
-      loadProducts();
-      loadSettings();
-      syncOfflineSalesQueue();
-    };
-
-    const handleDisconnect = () => {
-      setLanSocketConnected(false);
-    };
-
-    const handleNetworkOnline = () => {
-      setIsOnline(true);
-      loadProducts();
-      loadSettings();
-      syncOfflineSalesQueue();
-    };
-
-    const handleNetworkOffline = () => {
-      setIsOnline(false);
-      setLanSocketConnected(false);
-    };
-
-    const handleRemoteInventoryChange = () => {
-      console.log('[ESPEJO] Cambio de inventario en PC detectado vía Socket.IO');
-      loadProducts();
-    };
-
-    const handleRemoteProductUpdate = (updatedProduct) => {
-      if (!updatedProduct) return;
-      console.log('[ESPEJO] Producto modificado en PC en tiempo real:', updatedProduct.name || updatedProduct.nombre);
-      setProducts(prev => prev.map(p => String(p.id) === String(updatedProduct.id) ? { ...p, ...updatedProduct } : p));
-      if (localDb && localDb.products) {
-        localDb.products.put(updatedProduct).catch((err) => console.warn('[MobilePOS] Error persistiendo producto remoto en IDB:', err?.message || err));
-      }
-    };
-
-    const handleStockUpdate = (evt) => {
-      const items = evt.detail || [];
-      if (Array.isArray(items) && items.length > 0) {
-        setProducts(prev => prev.map(p => {
-          const match = items.find(it => String(it.productId || it.id) === String(p.id));
-          if (match) {
-            const cur = Number(p.stockQuantity ?? p.stock ?? 0);
-            const next = Math.max(0, cur - Number(match.quantity || 1));
-            return { ...p, stockQuantity: next, stock: next };
-          }
-          return p;
-        }));
-      }
-    };
-
-    const handleServerDiscovered = () => {
-      loadProducts();
-      loadSettings();
-      syncOfflineSalesQueue();
-      syncManager.executeBatchSync();
-    };
-    const handleSyncQueueUpdated = () => {
-      countPendingOfflineSales();
-    };
-
-    window.addEventListener('online', handleNetworkOnline);
-    window.addEventListener('offline', handleNetworkOffline);
-    window.addEventListener('lan-sync-trigger', syncOfflineSalesQueue);
-    window.addEventListener('lan-stock-update-received', handleStockUpdate);
-    window.addEventListener('server-discovered', handleServerDiscovered);
-    window.addEventListener('offline-sales-synced', handleSyncQueueUpdated);
-    window.addEventListener('sync-queue-updated', handleSyncQueueUpdated);
-
-    const handleSettingsChanged = (payload) => {
-      if (payload?.rate) {
-        const newRate = parseFloat(payload.rate);
-        if (!isNaN(newRate) && newRate > 0) {
-          setExchangeRate(newRate);
-          try { localStorage.setItem('pos_cached_exchange_rate', String(newRate)); } catch (_) {}
-          showToast(`💱 Tasa oficial actualizada en tiempo real: Bs. ${newRate.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
-        }
-      }
-      loadSettings();
-    };
-
-    const handleRemoteCustomersChanged = () => {
-      loadCustomers();
-    };
-
-    const handleRemotePromotionsChanged = () => {
-      loadPromotions();
-    };
-
-    const handleRemoteSaleCompleted = () => {
-      loadProducts();
-      if (activeModule === 'sales' || activeModule === 'cash') {
-        loadSalesHistory();
-      }
-    };
-
-    if (lanSyncService.socket) {
-      lanSyncService.socket.on('connect', handleConnect);
-      lanSyncService.socket.on('disconnect', handleDisconnect);
-      lanSyncService.socket.on('inventory_changed', handleRemoteInventoryChange);
-      lanSyncService.socket.on('product_updated', handleRemoteProductUpdate);
-      lanSyncService.socket.on('settings_changed', handleSettingsChanged);
-      lanSyncService.socket.on('customers_changed', handleRemoteCustomersChanged);
-      lanSyncService.socket.on('promotions_updated', handleRemotePromotionsChanged);
-      lanSyncService.socket.on('promotions_changed', handleRemotePromotionsChanged);
-      lanSyncService.socket.on('sale_completed', handleRemoteSaleCompleted);
-    }
-
-    if (socketContext?.socket) {
-      socketContext.socket.on('connect', handleConnect);
-      socketContext.socket.on('disconnect', handleDisconnect);
-      socketContext.socket.on('inventory_changed', handleRemoteInventoryChange);
-      socketContext.socket.on('product_updated', handleRemoteProductUpdate);
-      socketContext.socket.on('settings_changed', handleSettingsChanged);
-      socketContext.socket.on('customers_changed', handleRemoteCustomersChanged);
-      socketContext.socket.on('promotions_updated', handleRemotePromotionsChanged);
-      socketContext.socket.on('promotions_changed', handleRemotePromotionsChanged);
-      socketContext.socket.on('sale_completed', handleRemoteSaleCompleted);
-    }
-
-    // Iniciar demonio unificado de sincronización con prioridad DAG y Backoff Exponencial
-    const stopAutoSyncDaemon = syncManager.startAutoSync(15000);
-
-    // Sincronización en tiempo real 24/7 de Tasa de Cambio desde Supabase
-    cloudRateSyncService.init();
-    const unsubCloudRate = cloudRateSyncService.subscribe((data) => {
-      if (data?.rate && !isNaN(data.rate) && data.rate > 0) {
-        setExchangeRate((prev) => {
-          if (prev !== data.rate) {
-            showToast('⚡ Tasa oficial actualizada: Bs. ' + data.rate.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-          }
-          return data.rate;
-        });
-      }
-    });
-
-    const handleRateUpdatedEvent = (e) => {
-      if (e?.detail?.rate) {
-        const val = Number(e.detail.rate);
-        if (!isNaN(val) && val > 0) {
-          setExchangeRate((prev) => {
-            if (prev !== val) {
-              showToast('⚡ Tasa oficial actualizada: Bs. ' + val.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-            }
-            return val;
-          });
-        }
-      }
-    };
-    window.addEventListener('pos-exchange-rate-updated', handleRateUpdatedEvent);
-
-    // Suscripción al spooler de impresión en segundo plano y audio
-    const unsubSpooler = mobilePrinterService.subscribeQueue((status) => {
-      setPrinterSpoolerStatus(status);
-    });
-
-    const handleMuteChange = (e) => {
-      if (e.detail?.muted !== undefined) {
-        setIsAudioMuted(e.detail.muted);
-      }
-    };
-    window.addEventListener('pos-sound-mute-changed', handleMuteChange);
-
-    // Auto-sync periódico de respaldo cada 30 segundos
-    const syncInterval = setInterval(() => {
-      syncOfflineSalesQueue();
-    }, 30000);
-
-    return () => {
-      if (lanSyncService.socket) {
-        lanSyncService.socket.off('connect', handleConnect);
-        lanSyncService.socket.off('disconnect', handleDisconnect);
-        lanSyncService.socket.off('inventory_changed', handleRemoteInventoryChange);
-        lanSyncService.socket.off('product_updated', handleRemoteProductUpdate);
-        lanSyncService.socket.off('settings_changed', handleSettingsChanged);
-        lanSyncService.socket.off('customers_changed', handleRemoteCustomersChanged);
-        lanSyncService.socket.off('promotions_updated', handleRemotePromotionsChanged);
-        lanSyncService.socket.off('promotions_changed', handleRemotePromotionsChanged);
-        lanSyncService.socket.off('sale_completed', handleRemoteSaleCompleted);
-      }
-      if (socketContext?.socket) {
-        socketContext.socket.off('connect', handleConnect);
-        socketContext.socket.off('disconnect', handleDisconnect);
-        socketContext.socket.off('inventory_changed', handleRemoteInventoryChange);
-        socketContext.socket.off('product_updated', handleRemoteProductUpdate);
-        socketContext.socket.off('settings_changed', handleSettingsChanged);
-        socketContext.socket.off('customers_changed', handleRemoteCustomersChanged);
-        socketContext.socket.off('promotions_updated', handleRemotePromotionsChanged);
-        socketContext.socket.off('promotions_changed', handleRemotePromotionsChanged);
-        socketContext.socket.off('sale_completed', handleRemoteSaleCompleted);
-      }
-      if (typeof stopAutoSyncDaemon === 'function') {
-        stopAutoSyncDaemon();
-      }
-      if (typeof unsubCloudRate === 'function') {
-        unsubCloudRate();
-      }
-      window.removeEventListener('pos-exchange-rate-updated', handleRateUpdatedEvent);
-      unsubSpooler();
-      unsubscribeLAN();
-      window.removeEventListener('pos-sound-mute-changed', handleMuteChange);
-      window.removeEventListener('online', handleNetworkOnline);
-      window.removeEventListener('offline', handleNetworkOffline);
-      window.removeEventListener('lan-sync-trigger', syncOfflineSalesQueue);
-      window.removeEventListener('lan-stock-update-received', handleStockUpdate);
-      window.removeEventListener('server-discovered', handleServerDiscovered);
-      window.removeEventListener('offline-sales-synced', handleSyncQueueUpdated);
-      window.removeEventListener('sync-queue-updated', handleSyncQueueUpdated);
-      clearInterval(syncInterval);
-      clearTimeout(secondaryInitTimer);
-    };
-  }, [user]);
+  const loadProductsRef = useRef(null);
+  const loadSettingsRef = useRef(null);
+  const loadCustomersRef = useRef(null);
+  const loadPromotionsRef = useRef(null);
+  const loadSalesHistoryRef = useRef(null);
+  const syncOfflineSalesQueueRef = useRef(null);
 
   const countPendingOfflineSales = async () => {
     try {
       const counts = await syncManager.getPendingCount();
       setPendingSalesCount(counts.total);
-    } catch (_e) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
   };
 
   const loadSalesHistory = async () => {
@@ -1271,13 +1012,6 @@ export default function MobilePOSSimulator() {
     await countPendingOfflineSales();
   };
 
-  // Recargar ventas automáticamente al ingresar a Ventas o Caja
-  useEffect(() => {
-    if (activeModule === 'sales' || activeModule === 'cash') {
-      loadSalesHistory();
-    }
-  }, [activeModule]);
-
   const syncOfflineSalesQueue = async () => {
     if (isSyncingSales || syncManager.isSyncing || window.__posOfflineSalesSyncLock) return;
 
@@ -1326,7 +1060,7 @@ export default function MobilePOSSimulator() {
           setExchangeRate(parsedRate);
         }
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error parseando JSON local:', caughtErr?.message || caughtErr); }
 
     // 2. Revalidar en segundo plano contra el servidor PC si está disponible
     try {
@@ -1338,7 +1072,7 @@ export default function MobilePOSSimulator() {
       if (bizRes.status === 'fulfilled' && bizRes.value.data) {
         setBusinessInfo(prev => {
           const updated = { ...prev, ...bizRes.value.data };
-          try { localStorage.setItem('pos_cached_business_info', JSON.stringify(updated)); } catch (_) {}
+          try { localStorage.setItem('pos_cached_business_info', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
           return updated;
         });
         if (bizRes.value.data.businessMode) {
@@ -1352,7 +1086,7 @@ export default function MobilePOSSimulator() {
         const rateVal = parseFloat(rateRes.value.data.rate);
         if (rateVal && !isNaN(rateVal)) {
           setExchangeRate(rateVal);
-          try { localStorage.setItem('pos_cached_exchange_rate', String(rateVal)); } catch (_) {}
+          try { localStorage.setItem('pos_cached_exchange_rate', String(rateVal)); } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
           rateLoaded = true;
         }
       }
@@ -1377,12 +1111,12 @@ export default function MobilePOSSimulator() {
                 try {
                   localStorage.setItem('pos_cached_exchange_rate', String(cloudRate));
                   localStorage.setItem('pos_exchange_rate', String(cloudRate));
-                } catch (_) {}
+                } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
                 console.log('[MobilePOSSimulator] ☁️ Tasa actualizada desde Supabase Cloud:', cloudRate);
               }
             }
           }
-        } catch (_cErr) {}
+        } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       }
     } catch (e) {
       console.warn('Notice loading business settings:', e);
@@ -1397,7 +1131,7 @@ export default function MobilePOSSimulator() {
           setPromotions(cachedPromos.filter(p => p.isActive));
         }
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
     try {
       const res = await api.get('/promotions', { timeout: 3500 });
@@ -1429,7 +1163,6 @@ export default function MobilePOSSimulator() {
   const loadProductsRetryTimerRef = useRef(null);
   const loadProducts = async (isRetry = false) => {
     // 1. Rendimiento Instantáneo: Cargar de inmediato desde la base de datos local (5 ms)
-    let hasLocalData = false;
     let localCount = 0;
     try {
       let localItems = [];
@@ -1446,14 +1179,9 @@ export default function MobilePOSSimulator() {
           catalogSignatureRef.current = localSig;
           setProducts(localItems);
         }
-        setIsLoadingProducts(false);
-        hasLocalData = true;
       }
-    } catch (_dexieErr) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
-    if (!hasLocalData) {
-      setIsLoadingProducts(true);
-    }
 
     // 2. Revalidación completa en segundo plano contra el servidor PC (incluyendo activos y agotados/inactivos)
     try {
@@ -1486,7 +1214,7 @@ export default function MobilePOSSimulator() {
           loadProductsRetryTimerRef.current = null;
         }
 
-        // Preservar descuentos de stock de ventas offline aún pendientes (pending_sync)
+        // Preservar descuentos de stock de ventas offline aún pendientes (pending_sync) multiplicados por presentación
         let pendingDeductions = new Map();
         try {
           if (localDb && localDb.sales) {
@@ -1494,15 +1222,16 @@ export default function MobilePOSSimulator() {
             for (const s of pendSales) {
               const items = Array.isArray(s.items) ? s.items : [];
               for (const it of items) {
-                const pid = String(it.productId || it.id || '').trim();
+                const pid = getCleanProductId(it.productId || it.id || '');
                 const qty = Number(it.quantity || 0);
+                const mult = Math.max(1, Number(it.factorConversion || it.unitsMultiplier || (it.isBulk ? it.unitsPerBulk : (it.isMidBulk ? it.unitsPerMidBulk : 1)) || 1));
                 if (pid && qty > 0) {
-                  pendingDeductions.set(pid, (pendingDeductions.get(pid) || 0) + qty);
+                  pendingDeductions.set(pid, (pendingDeductions.get(pid) || 0) + (qty * mult));
                 }
               }
             }
           }
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
         const adjustedRaw = pendingDeductions.size === 0
           ? raw
@@ -1534,7 +1263,9 @@ export default function MobilePOSSimulator() {
                   await localDb.products.bulkPut(adjustedRaw);
                 });
               }
-            } catch (_e) {}
+              // Precacheo incremental en segundo plano de imágenes nuevas para disponibilidad 100% offline
+              cacheAllProductImages(adjustedRaw, { concurrency: 2, yieldMs: 25 }).catch(() => {});
+            } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
           }, 400);
         }
       } else if (!isRetry) {
@@ -1543,14 +1274,13 @@ export default function MobilePOSSimulator() {
         }, 2200);
       }
     } catch (netErr) {
+      console.warn('[MobilePOSSimulator] Error capturado en operación:', netErr?.message || netErr);
       // Si el servidor aún estaba siendo descubierto en la LAN al arrancar, reintentar una vez
       if (!isRetry) {
         loadProductsRetryTimerRef.current = setTimeout(() => {
           loadProducts(true);
         }, 2200);
       }
-    } finally {
-      setIsLoadingProducts(false);
     }
   };
 
@@ -1562,7 +1292,7 @@ export default function MobilePOSSimulator() {
         if (localC && localC.length > 0) {
           setCustomers(localC);
         }
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
     }
 
     // 2. Revalidación en background si hay conexión con el servidor
@@ -1579,6 +1309,273 @@ export default function MobilePOSSimulator() {
       // Modo offline: los clientes locales ya están en pantalla
     }
   };
+
+  useEffect(() => {
+    loadProductsRef.current = loadProducts;
+    loadSettingsRef.current = loadSettings;
+    loadCustomersRef.current = loadCustomers;
+    loadPromotionsRef.current = loadPromotions;
+    loadSalesHistoryRef.current = loadSalesHistory;
+    syncOfflineSalesQueueRef.current = syncOfflineSalesQueue;
+  });
+
+  // Recargar ventas automáticamente al ingresar a Ventas o Caja
+  useEffect(() => {
+    if (activeModule === 'sales' || activeModule === 'cash') {
+      loadSalesHistoryRef.current?.();
+    }
+  }, [activeModule]);
+
+  // Carga inicial escalonada y Enlace Espejo WebSockets / LAN Sync (Cero bloqueo de UI en el arranque)
+  useEffect(() => {
+    if (!user) return;
+
+    // Prioridad 0 (Inmediata): Catálogo y Tasa para que la terminal responda en 0 ms
+    loadSettingsRef.current?.();
+    loadProductsRef.current?.();
+
+    // Prioridad 1 (Diferida 800ms): Datos secundarios sin bloquear el render inicial
+    const secondaryInitTimer = setTimeout(() => {
+      loadCustomersRef.current?.();
+      loadPromotionsRef.current?.();
+      countPendingOfflineSales();
+    }, 800);
+
+    // 1. Iniciar servicio LAN y WebSockets para efecto Espejo
+    lanSyncService.init();
+
+    // Verificación inmediata de socket LAN si ya estaba conectado
+    if (lanSyncService.socket?.connected || lanSyncService.status?.state === 'CLOUD_ONLINE' || lanSyncService.status?.state === 'LAN_P2P_ACTIVE') {
+      setLanSocketConnected(true);
+      setIsOnline(true);
+    }
+
+    // Suscripción reactiva a cambios de topología LAN
+    const unsubscribeLAN = lanSyncService.subscribe((status) => {
+      const isLive = status?.state === 'CLOUD_ONLINE' || status?.state === 'LAN_P2P_ACTIVE' || Boolean(lanSyncService?.socket?.connected);
+      setLanSocketConnected(isLive);
+      if (isLive) setIsOnline(true);
+    });
+
+    const handleConnect = () => {
+      setLanSocketConnected(true);
+      setIsOnline(true);
+      loadProductsRef.current?.();
+      loadSettingsRef.current?.();
+      syncOfflineSalesQueueRef.current?.();
+    };
+
+    const handleDisconnect = () => {
+      setLanSocketConnected(false);
+    };
+
+    const handleNetworkOnline = () => {
+      setIsOnline(true);
+      loadProductsRef.current?.();
+      loadSettingsRef.current?.();
+      syncOfflineSalesQueueRef.current?.();
+    };
+
+    const handleNetworkOffline = () => {
+      setIsOnline(false);
+      setLanSocketConnected(false);
+    };
+
+    const handleRemoteInventoryChange = () => {
+      console.log('[ESPEJO] Cambio de inventario en PC detectado vía Socket.IO');
+      loadProductsRef.current?.();
+    };
+
+    const handleRemoteProductUpdate = (updatedProduct) => {
+      if (!updatedProduct) return;
+      console.log('[ESPEJO] Producto modificado en PC en tiempo real:', updatedProduct.name || updatedProduct.nombre);
+      setProducts(prev => prev.map(p => String(p.id) === String(updatedProduct.id) ? { ...p, ...updatedProduct } : p));
+      if (localDb && localDb.products) {
+        localDb.products.put(updatedProduct).catch((err) => console.warn('[MobilePOS] Error persistiendo producto remoto en IDB:', err?.message || err));
+      }
+    };
+
+    const handleStockUpdate = (evt) => {
+      const items = evt.detail || [];
+      if (Array.isArray(items) && items.length > 0) {
+        setProducts(prev => prev.map(p => {
+          const match = items.find(it => String(it.productId || it.id) === String(p.id));
+          if (match) {
+            const cur = Number(p.stockQuantity ?? p.stock ?? 0);
+            const next = Math.max(0, cur - Number(match.quantity || 1));
+            return { ...p, stockQuantity: next, stock: next };
+          }
+          return p;
+        }));
+      }
+    };
+
+    const handleServerDiscovered = () => {
+      loadProductsRef.current?.();
+      loadSettingsRef.current?.();
+      syncOfflineSalesQueueRef.current?.();
+      syncManager.executeBatchSync();
+    };
+    const handleSyncQueueUpdated = () => {
+      countPendingOfflineSales();
+    };
+    const handleLanSyncTrigger = () => {
+      syncOfflineSalesQueueRef.current?.();
+    };
+
+    window.addEventListener('online', handleNetworkOnline);
+    window.addEventListener('offline', handleNetworkOffline);
+    window.addEventListener('lan-sync-trigger', handleLanSyncTrigger);
+    window.addEventListener('lan-stock-update-received', handleStockUpdate);
+    window.addEventListener('server-discovered', handleServerDiscovered);
+    window.addEventListener('offline-sales-synced', handleSyncQueueUpdated);
+    window.addEventListener('sync-queue-updated', handleSyncQueueUpdated);
+
+    const handleSettingsChanged = (payload) => {
+      if (payload?.rate) {
+        const newRate = parseFloat(payload.rate);
+        if (!isNaN(newRate) && newRate > 0) {
+          setExchangeRate(newRate);
+          try { localStorage.setItem('pos_cached_exchange_rate', String(newRate)); } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
+          showToast(`💱 Tasa oficial actualizada en tiempo real: Bs. ${newRate.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+        }
+      }
+      loadSettingsRef.current?.();
+    };
+
+    const handleRemoteCustomersChanged = () => {
+      loadCustomersRef.current?.();
+    };
+
+    const handleRemotePromotionsChanged = () => {
+      loadPromotionsRef.current?.();
+    };
+
+    const handleRemoteSaleCompleted = () => {
+      loadProductsRef.current?.();
+      if (activeModuleRef.current === 'sales' || activeModuleRef.current === 'cash') {
+        loadSalesHistoryRef.current?.();
+      }
+    };
+
+    const activeSocket = socketContext?.socket;
+
+    if (lanSyncService.socket) {
+      lanSyncService.socket.on('connect', handleConnect);
+      lanSyncService.socket.on('disconnect', handleDisconnect);
+      lanSyncService.socket.on('inventory_changed', handleRemoteInventoryChange);
+      lanSyncService.socket.on('product_updated', handleRemoteProductUpdate);
+      lanSyncService.socket.on('settings_changed', handleSettingsChanged);
+      lanSyncService.socket.on('customers_changed', handleRemoteCustomersChanged);
+      lanSyncService.socket.on('promotions_updated', handleRemotePromotionsChanged);
+      lanSyncService.socket.on('promotions_changed', handleRemotePromotionsChanged);
+      lanSyncService.socket.on('sale_completed', handleRemoteSaleCompleted);
+    }
+
+    if (activeSocket) {
+      activeSocket.on('connect', handleConnect);
+      activeSocket.on('disconnect', handleDisconnect);
+      activeSocket.on('inventory_changed', handleRemoteInventoryChange);
+      activeSocket.on('product_updated', handleRemoteProductUpdate);
+      activeSocket.on('settings_changed', handleSettingsChanged);
+      activeSocket.on('customers_changed', handleRemoteCustomersChanged);
+      activeSocket.on('promotions_updated', handleRemotePromotionsChanged);
+      activeSocket.on('promotions_changed', handleRemotePromotionsChanged);
+      activeSocket.on('sale_completed', handleRemoteSaleCompleted);
+    }
+
+    // Iniciar demonio unificado de sincronización con prioridad DAG y Backoff Exponencial
+    const stopAutoSyncDaemon = syncManager.startAutoSync(15000);
+
+    // Sincronización en tiempo real 24/7 de Tasa de Cambio desde Supabase
+    cloudRateSyncService.init();
+    const unsubCloudRate = cloudRateSyncService.subscribe((data) => {
+      if (data?.rate && !isNaN(data.rate) && data.rate > 0) {
+        setExchangeRate((prev) => {
+          if (prev !== data.rate) {
+            showToast('⚡ Tasa oficial actualizada: Bs. ' + data.rate.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+          }
+          return data.rate;
+        });
+      }
+    });
+
+    const handleRateUpdatedEvent = (e) => {
+      if (e?.detail?.rate) {
+        const val = Number(e.detail.rate);
+        if (!isNaN(val) && val > 0) {
+          setExchangeRate((prev) => {
+            if (prev !== val) {
+              showToast('⚡ Tasa oficial actualizada: Bs. ' + val.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+            }
+            return val;
+          });
+        }
+      }
+    };
+    window.addEventListener('pos-exchange-rate-updated', handleRateUpdatedEvent);
+
+    // Suscripción al spooler de impresión en segundo plano y audio
+    const unsubSpooler = mobilePrinterService.subscribeQueue((status) => {
+      setPrinterSpoolerStatus(status);
+    });
+
+    const handleMuteChange = (e) => {
+      if (e.detail?.muted !== undefined) {
+        setIsAudioMuted(e.detail.muted);
+      }
+    };
+    window.addEventListener('pos-sound-mute-changed', handleMuteChange);
+
+    // Auto-sync periódico de respaldo cada 30 segundos
+    const syncInterval = setInterval(() => {
+      syncOfflineSalesQueueRef.current?.();
+    }, 30000);
+
+    return () => {
+      if (lanSyncService.socket) {
+        lanSyncService.socket.off('connect', handleConnect);
+        lanSyncService.socket.off('disconnect', handleDisconnect);
+        lanSyncService.socket.off('inventory_changed', handleRemoteInventoryChange);
+        lanSyncService.socket.off('product_updated', handleRemoteProductUpdate);
+        lanSyncService.socket.off('settings_changed', handleSettingsChanged);
+        lanSyncService.socket.off('customers_changed', handleRemoteCustomersChanged);
+        lanSyncService.socket.off('promotions_updated', handleRemotePromotionsChanged);
+        lanSyncService.socket.off('promotions_changed', handleRemotePromotionsChanged);
+        lanSyncService.socket.off('sale_completed', handleRemoteSaleCompleted);
+      }
+      if (activeSocket) {
+        activeSocket.off('connect', handleConnect);
+        activeSocket.off('disconnect', handleDisconnect);
+        activeSocket.off('inventory_changed', handleRemoteInventoryChange);
+        activeSocket.off('product_updated', handleRemoteProductUpdate);
+        activeSocket.off('settings_changed', handleSettingsChanged);
+        activeSocket.off('customers_changed', handleRemoteCustomersChanged);
+        activeSocket.off('promotions_updated', handleRemotePromotionsChanged);
+        activeSocket.off('promotions_changed', handleRemotePromotionsChanged);
+        activeSocket.off('sale_completed', handleRemoteSaleCompleted);
+      }
+      if (typeof stopAutoSyncDaemon === 'function') {
+        stopAutoSyncDaemon();
+      }
+      if (typeof unsubCloudRate === 'function') {
+        unsubCloudRate();
+      }
+      window.removeEventListener('pos-exchange-rate-updated', handleRateUpdatedEvent);
+      unsubSpooler();
+      unsubscribeLAN();
+      window.removeEventListener('pos-sound-mute-changed', handleMuteChange);
+      window.removeEventListener('online', handleNetworkOnline);
+      window.removeEventListener('offline', handleNetworkOffline);
+      window.removeEventListener('lan-sync-trigger', handleLanSyncTrigger);
+      window.removeEventListener('lan-stock-update-received', handleStockUpdate);
+      window.removeEventListener('server-discovered', handleServerDiscovered);
+      window.removeEventListener('offline-sales-synced', handleSyncQueueUpdated);
+      window.removeEventListener('sync-queue-updated', handleSyncQueueUpdated);
+      clearInterval(syncInterval);
+      clearTimeout(secondaryInitTimer);
+    };
+  }, [user, socketContext?.socket, showToast]);
 
   // Buscador y filtrado dinámico de clientes (60 FPS, tolerante a acentos, puntos, guiones y espacios en Cédula/RIF)
   const filteredCustomers = useMemo(() => {
@@ -1692,7 +1689,7 @@ export default function MobilePOSSimulator() {
               timestamp: Date.now()
             });
             countPendingOfflineSales();
-          } catch (_) {}
+          } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         }
 
         // Actualizar lista en memoria
@@ -1742,7 +1739,7 @@ export default function MobilePOSSimulator() {
               timestamp: Date.now()
             });
             countPendingOfflineSales();
-          } catch (_) {}
+          } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         }
 
         // Añadir a la lista en memoria
@@ -1798,7 +1795,7 @@ export default function MobilePOSSimulator() {
     };
     const updated = [newHeldSale, ...heldSales];
     setHeldSales(updated);
-    try { localStorage.setItem('pos_held_sales', JSON.stringify(updated)); } catch (_) {}
+    try { localStorage.setItem('pos_held_sales', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
     setCart([]);
     setIsMobileCartOpen(false);
     showToast(`⏸️ Venta pausada (${totalItemsCount} productos guardados en espera)`);
@@ -1855,18 +1852,18 @@ export default function MobilePOSSimulator() {
       if (lanSyncService.socket && lanSyncService.socket.connected) {
         lanSyncService.socket.emit('remote_held_sale', preSalePayload);
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
     // Respaldo REST API garantizado (retransmite a todas las cajas y almacena)
     try {
       api.post('/sales/remote-held-sale', preSalePayload, { timeout: 3500 })
         .catch(err => console.warn('Aviso HTTP remote-held-sale:', err?.message || err));
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
 
     // 2. Guardar también en ventas pausadas locales como respaldo
     const updated = [preSalePayload, ...heldSales];
     setHeldSales(updated);
-    try { localStorage.setItem('pos_held_sales', JSON.stringify(updated)); } catch (_) {}
+    try { localStorage.setItem('pos_held_sales', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 
     // 3. Limpiar carrito, mesa, notas y cerrar drawer
     setCart([]);
@@ -1924,7 +1921,7 @@ export default function MobilePOSSimulator() {
     }
 
     setHeldSales(updatedHeld);
-    try { localStorage.setItem('pos_held_sales', JSON.stringify(updatedHeld)); } catch (_) {}
+    try { localStorage.setItem('pos_held_sales', JSON.stringify(updatedHeld)); } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
     setIsHeldSalesModalOpen(false);
     setIsMobileCartOpen(true);
     triggerHaptic(20);
@@ -1935,7 +1932,7 @@ export default function MobilePOSSimulator() {
   const handleDeleteHeldSale = (saleId) => {
     const updated = heldSales.filter(s => s.id !== saleId);
     setHeldSales(updated);
-    try { localStorage.setItem('pos_held_sales', JSON.stringify(updated)); } catch (_) {}
+    try { localStorage.setItem('pos_held_sales', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
     showToast('Venta en espera eliminada');
   };
 
@@ -1977,6 +1974,10 @@ export default function MobilePOSSimulator() {
 
   // Abrir Modal de Edición Rápida de Producto
   const openEditProduct = useCallback((product) => {
+    if (!canEditCatalogMobile) {
+      showToast('No tienes permisos para editar productos', 'error');
+      return;
+    }
     const priceU = Number(product.price || product.precio || 0);
     const priceB = Number(product.priceBs) > 0 ? Number(product.priceBs) : (priceU * exchangeRate);
     const costU = Number(product.cost || product.costo || 0);
@@ -2029,9 +2030,8 @@ export default function MobilePOSSimulator() {
     });
     setIsCustomCategoryMode(false);
     setIsQuickProductModalOpen(true);
-  }, [exchangeRate]);
+  }, [exchangeRate, canEditCatalogMobile, showToast]);
 
-  const handleOpenEditProduct = openEditProduct;
 
   const handleOpenBulkPicker = useCallback((prod) => {
     setSelectedProductForBulk(prod);
@@ -2092,7 +2092,7 @@ export default function MobilePOSSimulator() {
       try {
         await window.Capacitor.Plugins.PosNativeHardware.copyToClipboard({ text });
         ok = true;
-      } catch (_capErr) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
     }
     if (!ok) {
       try {
@@ -2107,7 +2107,7 @@ export default function MobilePOSSimulator() {
           document.execCommand('copy');
           document.body.removeChild(el);
           ok = true;
-        } catch (_err) {}
+        } catch { /* Copia fallback legacy bloqueada por políticas del navegador */ }
       }
     }
     showToast(`📋 Código copiado: ${text}`);
@@ -2264,7 +2264,7 @@ export default function MobilePOSSimulator() {
           lanSyncService.socket.emit('product_updated', savedProd);
           lanSyncService.socket.emit('inventory_changed', { timestamp: Date.now() });
         }
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
       setIsQuickProductModalOpen(false);
     } catch (err) {
@@ -2292,7 +2292,7 @@ export default function MobilePOSSimulator() {
           createdAt: new Date().toISOString()
         });
         countPendingOfflineSales();
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
 
       showToast(`⚡ Guardado localmente en modo offline. Se sincronizará con la PC.`);
       setIsQuickProductModalOpen(false);
@@ -2300,18 +2300,6 @@ export default function MobilePOSSimulator() {
       setIsSavingProduct(false);
     }
   };
-
-  const toastTimerRef = useRef(null);
-  const showToast = useCallback((msg) => {
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-    }
-    setToastMsg(msg);
-    toastTimerRef.current = setTimeout(() => {
-      setToastMsg(null);
-      toastTimerRef.current = null;
-    }, 2200);
-  }, []);
 
   // Normalización de Categorías y Conteo por Categoría (Idéntico a ProductGrid de Escritorio)
   const { normalizedCategories, categoryCounts } = useMemo(() => {
@@ -2452,7 +2440,6 @@ export default function MobilePOSSimulator() {
 
   // Reset de scroll al cambiar búsqueda o categoría
   useEffect(() => {
-    setVisibleCount(24);
     if (catalogScrollRef.current) {
       catalogScrollRef.current.scrollTop = 0;
     }
@@ -2494,26 +2481,29 @@ export default function MobilePOSSimulator() {
       let changed = false;
       const next = prev.map(item => {
         if (isUnlimitedStockProduct(item.product)) return item;
-        const latest = products.find(p => String(p.id) === String(item.product.id));
+        const cleanId = getCleanProductId(item.product.productId || item.product.id);
+        const latest = products.find(p => String(p.id) === cleanId);
         if (!latest) return item;
-        const maxStock = Math.max(0, Number(latest.stockQuantity ?? latest.stock ?? 0));
+        const baseStock = Math.max(0, Number(latest.stockQuantity ?? latest.stock ?? 0));
+        const mult = getProductUnitsMultiplier(item.product);
+        const maxStock = mult > 1 ? Math.floor(baseStock / mult) : baseStock;
         if (maxStock <= 0) {
           changed = true;
           return null;
         }
         if (item.quantity > maxStock) {
           changed = true;
-          return { ...item, product: latest, quantity: maxStock };
+          return { ...item, product: { ...latest, ...item.product, stockQuantity: latest.stockQuantity, stock: latest.stock }, quantity: maxStock };
         }
         if (latest.stockQuantity !== item.product.stockQuantity || latest.price !== item.product.price) {
           changed = true;
-          return { ...item, product: latest };
+          return { ...item, product: { ...latest, ...item.product, stockQuantity: latest.stockQuantity, stock: latest.stock } };
         }
         return item;
       }).filter(Boolean);
       return changed ? next : prev;
     });
-  }, [products, isUnlimitedStockProduct]);
+  }, [products, isUnlimitedStockProduct, setCart]);
 
   // Manejo de Carrito Inteligente Adaptado a Rubros de Negocio (Memoizado para no invalidar ProductCards)
   const addToCart = useCallback((product, forcedQty = 1) => {
@@ -2586,7 +2576,7 @@ export default function MobilePOSSimulator() {
       return [...prev, { product: latestProd, quantity: initialQty }];
     });
     showToast(`+${forcedQty} ${product.name || product.nombre}`);
-  }, [businessMode, isUnlimitedStockProduct]);
+  }, [businessMode, isUnlimitedStockProduct, setCart, showToast]);
 
   // Decremento directo desde la tarjeta de producto (1 toque sin abrir carrito)
   const decrementFromCard = useCallback((product) => {
@@ -2609,7 +2599,7 @@ export default function MobilePOSSimulator() {
       }
       return prev.map((it, idx) => idx === targetIdx ? { ...it, quantity: nextQty } : it);
     });
-  }, []);
+  }, [setCart]);
 
   // Manejo de Venta por Presentación de Empaque (Caja Completa, Media Caja, Bulto, Presentaciones Dinámicas)
   const handleSelectBulkPresentation = useCallback(({ product, type, quantity, priceUSD, priceBS, unitsMultiplier, packName, presentation }) => {
@@ -2687,7 +2677,7 @@ export default function MobilePOSSimulator() {
     });
 
     showToast(`📦 +${quantity} ${displayName}`);
-  }, [addToCart, isUnlimitedStockProduct]);
+  }, [addToCart, isUnlimitedStockProduct, setCart, showToast]);
 
   const handlePriceCheck = useCallback((product) => {
     setPriceCheckerProduct(product);
@@ -2742,12 +2732,12 @@ export default function MobilePOSSimulator() {
       return;
     }
 
-    // 1. Verificar si coincide con el código de barras de CAJA/BULTO (bulkBarcode):
+    // 1. Verificar si coincide exactamente con el código de barras de CAJA/BULTO (bulkBarcode):
     let bulkMatchedProduct = barcodeLookupIndex.bulkMap.get(cleanCode);
     if (!bulkMatchedProduct) {
       bulkMatchedProduct = products.find(p => {
         const bBarcode = String(p.bulkBarcode || '').trim().toLowerCase();
-        return bBarcode && bBarcode.endsWith(cleanCode);
+        return bBarcode && bBarcode === cleanCode;
       });
     }
 
@@ -2767,12 +2757,12 @@ export default function MobilePOSSimulator() {
       return;
     }
 
-    // 2. Verificar si coincide con el código de barras de MEDIA CAJA (midBulkBarcode):
+    // 2. Verificar si coincide exactamente con el código de barras de MEDIA CAJA (midBulkBarcode):
     let midBulkMatchedProduct = barcodeLookupIndex.midBulkMap.get(cleanCode);
     if (!midBulkMatchedProduct) {
       midBulkMatchedProduct = products.find(p => {
         const mBarcode = String(p.midBulkBarcode || '').trim().toLowerCase();
-        return mBarcode && mBarcode.endsWith(cleanCode);
+        return mBarcode && mBarcode === cleanCode;
       });
     }
 
@@ -2792,13 +2782,13 @@ export default function MobilePOSSimulator() {
       return;
     }
 
-    // 2.5. Verificar si coincide con el código de barras de alguna PRESENTACIÓN DINÁMICA (Tier 4 / N Presentaciones)
+    // 2.5. Verificar si coincide exactamente con el código de barras de alguna PRESENTACIÓN DINÁMICA (Tier 4 / N Presentaciones)
     let matchedPres = null;
     let presMatchedProduct = products.find(p => {
       if (Array.isArray(p.Presentations)) {
         const found = p.Presentations.find(pres => {
           const pb = String(pres.barcode || '').trim().toLowerCase();
-          return pb && pb.endsWith(cleanCode);
+          return pb && pb === cleanCode;
         });
         if (found) {
           matchedPres = found;
@@ -2826,13 +2816,13 @@ export default function MobilePOSSimulator() {
       return;
     }
 
-    // 3. Buscar en el inventario local completo por código de barras o SKU
+    // 3. Buscar en el inventario local completo por coincidencia exacta de código de barras o SKU
     let exactProduct = barcodeLookupIndex.directMap.get(cleanCode);
     if (!exactProduct) {
       exactProduct = products.find(p => {
         const pBarcode = String(p.barcode || p.codigo_barras || '').trim().toLowerCase();
         const pSku = String(p.sku || '').trim().toLowerCase();
-        return (pBarcode && pBarcode.endsWith(cleanCode)) || (pSku && pSku.endsWith(cleanCode));
+        return (pBarcode && pBarcode === cleanCode) || (pSku && pSku === cleanCode);
       });
     }
 
@@ -2854,7 +2844,7 @@ export default function MobilePOSSimulator() {
       playErrorSound();
       showToast(`Código "${code}" no registrado`);
     }
-  }, [scannerTarget, barcodeLookupIndex, products, exchangeRate, handleSelectBulkPresentation, posMode, isPriceCheckerModalOpen, addToCart]);
+  }, [scannerTarget, barcodeLookupIndex, products, exchangeRate, handleSelectBulkPresentation, posMode, isPriceCheckerModalOpen, addToCart, showToast]);
 
   const handleBarcodeScannedRef = useRef(handleBarcodeScanned);
   useEffect(() => {
@@ -2887,7 +2877,7 @@ export default function MobilePOSSimulator() {
           barcodeBuffer = '';
           
           if (isInputFocused) {
-            try { document.activeElement?.blur?.(); } catch (_) {}
+            try { document.activeElement?.blur?.(); } catch { /* El navegador impidió quitar el foco programáticamente */ }
           }
 
           if (handleBarcodeScannedRef.current) {
@@ -2945,16 +2935,27 @@ export default function MobilePOSSimulator() {
     return 1;
   };
 
+  const getAvailablePacksExcludingItem = (cleanProdId, targetCartItemId, targetProd) => {
+    const latestProd = products.find(p => String(p.id) === cleanProdId) || targetProd;
+    const baseStock = Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
+    const otherUnitsUsed = cart.reduce((acc, c) => {
+      if (String(c.product.id) === String(targetCartItemId)) return acc;
+      const cCleanId = getCleanProductId(c.product.productId || c.product.id);
+      if (cCleanId !== cleanProdId) return acc;
+      return acc + (Number(c.quantity || 0) * getProductUnitsMultiplier(c.product));
+    }, 0);
+    const remainingBaseStock = Math.max(0, baseStock - otherUnitsUsed);
+    const mult = getProductUnitsMultiplier(targetProd);
+    return mult > 1 ? Math.floor(remainingBaseStock / mult) : remainingBaseStock;
+  };
+
   const updateQuantity = (productId, delta) => {
     const targetItem = cart.find(item => String(item.product.id) === String(productId));
     if (!targetItem) return;
 
     if (delta > 0 && !isUnlimitedStockProduct(targetItem.product)) {
       const cleanProdId = getCleanProductId(targetItem.product.productId || productId);
-      const latestProd = products.find(p => String(p.id) === cleanProdId) || targetItem.product;
-      const baseStock = Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
-      const mult = getProductUnitsMultiplier(targetItem.product);
-      const maxPacksStock = mult > 1 ? Math.floor(baseStock / mult) : baseStock;
+      const maxPacksStock = getAvailablePacksExcludingItem(cleanProdId, productId, targetItem.product);
 
       if (targetItem.quantity + delta > maxPacksStock) {
         triggerHaptic(30);
@@ -3014,10 +3015,7 @@ export default function MobilePOSSimulator() {
 
     if (targetItem && !isUnlimitedStockProduct(targetItem.product)) {
       const cleanProdId = getCleanProductId(targetItem.product.productId || productId);
-      const latestProd = products.find(p => String(p.id) === cleanProdId) || targetItem.product;
-      const baseStock = Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
-      const mult = getProductUnitsMultiplier(targetItem.product);
-      const maxPacksStock = mult > 1 ? Math.floor(baseStock / mult) : baseStock;
+      const maxPacksStock = getAvailablePacksExcludingItem(cleanProdId, productId, targetItem.product);
 
       if (maxPacksStock <= 0) {
         triggerHaptic(30);
@@ -3073,17 +3071,11 @@ export default function MobilePOSSimulator() {
   }, [cart, promotions]);
 
   const {
-    rawSubtotalUSD,
-    totalPromoSavings,
-    subtotalBeforeDiscountUSD,
     cartDiscountAmountUSD,
     subtotalUSD,
     enrichedCart,
-    taxableSubtotalBeforeDiscountUSD,
-    effectiveTaxableUSD,
     taxUSD,
     baseImponibleUSD,
-    exemptUSD,
     totalUSD,
     totalBS,
     totalItemsCount
@@ -3112,7 +3104,9 @@ export default function MobilePOSSimulator() {
     const discRatio = subBeforeDisc > 0 ? (subUSD / subBeforeDisc) : 1;
     const effTaxable = Number((taxableSubBeforeDisc * discRatio).toFixed(2));
 
-    const tUSD = Number(Math.max(0, effTaxable - (effTaxable / 1.16)).toFixed(2));
+    const configuredIvaPct = Number(businessInfo?.ivaRate ?? businessInfo?.taxRate ?? 16) || 16;
+    const ivaDivisor = 1 + (configuredIvaPct / 100);
+    const tUSD = Number(Math.max(0, effTaxable - (effTaxable / ivaDivisor)).toFixed(2));
     const baseImp = Number((effTaxable - tUSD).toFixed(2));
     const exUSD = Number(Math.max(0, subUSD - effTaxable).toFixed(2));
     const totUSD = subUSD;
@@ -3135,53 +3129,62 @@ export default function MobilePOSSimulator() {
       totalBS: totBS,
       totalItemsCount: totItems
     };
-  }, [cart, promoResult, cartDiscountPercent, exchangeRate]);
+  }, [cart, promoResult, cartDiscountPercent, exchangeRate, businessInfo?.ivaRate, businessInfo?.taxRate]);
+
+  const isIgtfEnabled = Boolean(
+    businessInfo?.taxConfig?.igtfEnabled !== undefined
+      ? businessInfo.taxConfig.igtfEnabled
+      : businessInfo?.igtfEnabled
+  );
+  const igtfRatePct = Number(businessInfo?.taxConfig?.igtfRate ?? businessInfo?.igtfRate ?? 3) || 3;
+  const isBinanceIgtfEnabled = Boolean(
+    businessInfo?.binanceIgtfEnabled ?? businessInfo?.taxConfig?.binanceIgtfEnabled
+  );
+
+  const currentIgtfUSD = useMemo(() => {
+    if (!isIgtfEnabled || documentType === 'cotizacion' || totalUSD <= 0) return 0;
+    const round2 = (v) => Math.round((Number(v) + Number.EPSILON) * 100) / 100;
+    const factor = 1 + (igtfRatePct / 100);
+    if (checkoutMode === 'split') {
+      const sUsd = parseFloat(splitPayments.cash_usd) || 0;
+      if (sUsd <= 0) return 0;
+      const appliedPrincipal = Math.min(totalUSD, sUsd / factor);
+      return round2(appliedPrincipal * (igtfRatePct / 100));
+    }
+    const methodNorm = String(selectedMethod || '').toLowerCase().trim();
+    const isCrypto = methodNorm === 'binance' || methodNorm === 'binance_usdt';
+    const isExemptUsd = methodNorm === 'zelle' || methodNorm === 'crédito' || methodNorm === 'credito' || methodNorm === 'fiado' || (isCrypto && !isBinanceIgtfEnabled);
+    const isVesOnly = ['efectivo bs', 'pago móvil', 'pago movil', 'tarjeta', 'punto de venta', 'biopago', 'cash_bs', 'pago_movil', 'debit'].includes(methodNorm);
+    if (isExemptUsd || isVesOnly) return 0;
+    if (methodNorm === 'mixto') {
+      const enteredUsd = parseFloat(amountPaidUSD) || 0;
+      if (enteredUsd <= 0) return 0;
+      const appliedPrincipal = Math.min(totalUSD, enteredUsd / factor);
+      return round2(appliedPrincipal * (igtfRatePct / 100));
+    }
+    const enteredUsd = parseFloat(amountPaidUSD) || 0;
+    const enteredBs = parseFloat(amountPaidBS) || 0;
+    if (enteredBs > 0 && enteredUsd <= 0) return 0;
+    if (enteredUsd > 0) {
+      const appliedPrincipal = Math.min(totalUSD, enteredUsd / factor);
+      return round2(appliedPrincipal * (igtfRatePct / 100));
+    }
+    return round2(totalUSD * (igtfRatePct / 100));
+  }, [isIgtfEnabled, isBinanceIgtfEnabled, igtfRatePct, documentType, totalUSD, checkoutMode, splitPayments.cash_usd, selectedMethod, amountPaidUSD, amountPaidBS]);
+
+  const totalDueUSD = useMemo(() => Number((totalUSD + currentIgtfUSD).toFixed(2)), [totalUSD, currentIgtfUSD]);
+  const totalDueBS = useMemo(() => Number((totalDueUSD * exchangeRate).toFixed(2)), [totalDueUSD, exchangeRate]);
 
   const { paidUSD, paidBS, totalPaidInUSD, changeUSD, changeBS } = useMemo(() => {
     const pUSD = parseFloat(amountPaidUSD) || 0;
     const pBS = parseFloat(amountPaidBS) || 0;
     const totPaidUSD = pUSD + (pBS / (exchangeRate || 1));
-    const chUSD = Math.max(0, totPaidUSD - totalUSD);
+    const chUSD = Math.max(0, totPaidUSD - totalDueUSD);
     const chBS = chUSD * (exchangeRate || 1);
     return { paidUSD: pUSD, paidBS: pBS, totalPaidInUSD: totPaidUSD, changeUSD: chUSD, changeBS: chBS };
-  }, [amountPaidUSD, amountPaidBS, exchangeRate, totalUSD]);
+  }, [amountPaidUSD, amountPaidBS, exchangeRate, totalDueUSD]);
 
   // Botones de Billetes Sugeridos (Quick Cash Tender Chips)
-  const suggestedCashTenders = useMemo(() => {
-    if (totalUSD <= 0) return [];
-    const list = [];
-    const standardBills = [5, 10, 20, 50, 100];
-    const higherBills = standardBills.filter(b => b > totalUSD);
-
-    if (higherBills.length > 0) {
-      higherBills.slice(0, 3).forEach(bill => {
-        list.push({
-          id: `bill_${bill}`,
-          amountUSD: String(bill),
-          label: `$${bill}`,
-          subtitle: `Vuelto: $${(bill - totalUSD).toFixed(2)}`
-        });
-      });
-    } else {
-      const next10 = Math.ceil(totalUSD / 10) * 10;
-      const next20 = Math.ceil(totalUSD / 20) * 20;
-      const next50 = Math.ceil(totalUSD / 50) * 50;
-      const next100 = Math.ceil(totalUSD / 100) * 100;
-      [next10, next20, next50, next100]
-        .filter((v, idx, arr) => v > totalUSD && arr.indexOf(v) === idx)
-        .slice(0, 3)
-        .forEach(val => {
-          list.push({
-            id: `round_${val}`,
-            amountUSD: String(val),
-            label: `$${val}`,
-            subtitle: `Vuelto: $${(val - totalUSD).toFixed(2)}`
-          });
-        });
-    }
-
-    return list;
-  }, [totalUSD]);
 
   // Cálculo de Split Payments en USD y Bolívares
   const splitPaidUSD = useMemo(() => {
@@ -3195,8 +3198,8 @@ export default function MobilePOSSimulator() {
     return usdCash + zelle + credit + bsTotalInUSD;
   }, [splitPayments, exchangeRate]);
 
-  const splitRemainingUSD = Math.max(0, totalUSD - splitPaidUSD);
-  const splitChangeUSD = Math.max(0, splitPaidUSD - totalUSD);
+  const splitRemainingUSD = Math.max(0, totalDueUSD - splitPaidUSD);
+  const splitChangeUSD = Math.max(0, splitPaidUSD - totalDueUSD);
 
   // Manejo de Descuento con Validación Biométrica y PIN de Supervisor
   const handleApplyDiscount = (pct) => {
@@ -3220,15 +3223,22 @@ export default function MobilePOSSimulator() {
   // Reactividad al seleccionar método de pago
   const handleSelectPaymentMethod = (method) => {
     setSelectedMethod(method);
+    const round2 = (v) => Math.round((Number(v) + Number.EPSILON) * 100) / 100;
     if (method === 'Efectivo Bs' || method === 'Pago Móvil' || method === 'Tarjeta' || method === 'Punto de Venta') {
       setAmountPaidBS(totalBS.toFixed(2));
       setAmountPaidUSD('');
-    } else if (method === 'Efectivo USD' || method === 'Zelle') {
+    } else if (method === 'Efectivo USD') {
+      const usdDue = isIgtfEnabled ? round2(totalUSD * (1 + (igtfRatePct / 100))) : totalUSD;
+      setAmountPaidUSD(usdDue.toFixed(2));
+      setAmountPaidBS('');
+    } else if (method === 'Zelle') {
       setAmountPaidUSD(totalUSD.toFixed(2));
       setAmountPaidBS('');
     } else if (method === 'Mixto') {
-      setAmountPaidUSD((totalUSD / 2).toFixed(2));
-      setAmountPaidBS(((totalUSD / 2) * exchangeRate).toFixed(2));
+      const halfUSD = totalUSD / 2;
+      const halfIgtf = isIgtfEnabled ? round2(halfUSD * (igtfRatePct / 100)) : 0;
+      setAmountPaidUSD((halfUSD + halfIgtf).toFixed(2));
+      setAmountPaidBS((halfUSD * exchangeRate).toFixed(2));
     } else if (method === 'Crédito') {
       setAmountPaidUSD('0.00');
       setAmountPaidBS('0.00');
@@ -3302,6 +3312,8 @@ export default function MobilePOSSimulator() {
   };
 
   // Imprimir Recibo Térmico mediante Spooler Asíncrono / Bluetooth Nativo ESC/POS
+  const activeCurrencyMode = businessInfo?.currencyMode || localStorage.getItem('pos_currency_mode') || (isDollarCountry ? 'USD' : 'BOTH');
+
   const handlePrintBluetoothReceipt = async (sale) => {
     if (!sale) return;
     try {
@@ -3313,7 +3325,7 @@ export default function MobilePOSSimulator() {
           receiptWidth: paperWidth
         },
         exchangeRate,
-        currencyMode: 'BOTH'
+        currencyMode: activeCurrencyMode
       });
       triggerHaptic(15);
       playScanSound();
@@ -3331,6 +3343,23 @@ export default function MobilePOSSimulator() {
     if (documentType === 'cotizacion') {
       await handleSaveQuotation();
       return;
+    }
+
+    if (checkoutMode === 'split') {
+      if (splitPaidUSD < totalDueUSD - 0.02) {
+        triggerHaptic(30);
+        playErrorSound();
+        showToast(`⚠️ Pago incompleto: faltan $${Math.max(0, totalDueUSD - splitPaidUSD).toFixed(2)}`);
+        return;
+      }
+    } else if (selectedMethod !== 'Crédito' && selectedMethod !== 'fiado') {
+      const hasEnteredTender = String(amountPaidUSD || '').trim() !== '' || String(amountPaidBS || '').trim() !== '';
+      if (hasEnteredTender && totalPaidInUSD < totalDueUSD - 0.02) {
+        triggerHaptic(30);
+        playErrorSound();
+        showToast(`⚠️ Monto recibido insuficiente: faltan $${Math.max(0, totalDueUSD - totalPaidInUSD).toFixed(2)}`);
+        return;
+      }
     }
 
     const isRefRequired = checkoutMode === 'express'
@@ -3351,7 +3380,9 @@ export default function MobilePOSSimulator() {
       ? crypto.randomUUID()
       : `tx_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    const effectiveMethod = checkoutMode === 'split' ? 'Mixto / Dividido' : selectedMethod;
+    const effectiveMethod = checkoutMode === 'split'
+      ? 'Mixto / Dividido'
+      : ((selectedMethod === 'Efectivo USD' && paidBS > 0 && paidUSD <= 0) ? 'Efectivo Bs' : selectedMethod);
     const finalChangeUSD = checkoutMode === 'split' ? splitChangeUSD : changeUSD;
     const finalChangeBS = finalChangeUSD * exchangeRate;
 
@@ -3423,18 +3454,48 @@ export default function MobilePOSSimulator() {
       if (normalizedPaymentMethods.length === 0) {
         normalizedPaymentMethods.push({
           method: 'cash_usd',
-          amount: Number(totalUSD.toFixed(2)),
+          amount: Number(totalDueUSD.toFixed(2)),
           currency: 'USD',
-          convertedAmountUsd: Number(totalUSD.toFixed(2)),
+          convertedAmountUsd: Number(totalDueUSD.toFixed(2)),
+          reference: ''
+        });
+      }
+    } else if (effectiveMethod === 'Mixto') {
+      const mUsd = paidUSD > 0 ? paidUSD : 0;
+      const mBs = paidBS > 0 ? paidBS : 0;
+      if (mUsd > 0) {
+        normalizedPaymentMethods.push({
+          method: 'cash_usd',
+          amount: Number(mUsd.toFixed(2)),
+          currency: 'USD',
+          convertedAmountUsd: Number(mUsd.toFixed(2)),
+          reference: ''
+        });
+      }
+      if (mBs > 0) {
+        normalizedPaymentMethods.push({
+          method: 'cash_bs',
+          amount: Number(mBs.toFixed(2)),
+          currency: 'VES',
+          convertedAmountUsd: Number((mBs / (exchangeRate || 1)).toFixed(2)),
+          reference: ''
+        });
+      }
+      if (normalizedPaymentMethods.length === 0) {
+        normalizedPaymentMethods.push({
+          method: 'cash_usd',
+          amount: Number(totalDueUSD.toFixed(2)),
+          currency: 'USD',
+          convertedAmountUsd: Number(totalDueUSD.toFixed(2)),
           reference: ''
         });
       }
     } else {
       normalizedPaymentMethods = [{
         method: effectiveMethod === 'Crédito' ? 'fiado' : effectiveMethod,
-        amount: isVesMethod ? Number(totalBS.toFixed(2)) : Number(totalUSD.toFixed(2)),
+        amount: isVesMethod ? Number(totalDueBS.toFixed(2)) : Number(totalDueUSD.toFixed(2)),
         currency: isVesMethod ? 'VES' : 'USD',
-        convertedAmountUsd: Number(totalUSD.toFixed(2)),
+        convertedAmountUsd: Number(totalDueUSD.toFixed(2)),
         reference: paymentReference ? String(paymentReference).trim() : ''
       }];
     }
@@ -3468,12 +3529,14 @@ export default function MobilePOSSimulator() {
       discountPercent: Number(cartDiscountPercent) || 0,
       supervisorApprovalId: discountSupervisorApprovalId || null,
       tax: Number(taxUSD.toFixed(2)),
-      total: Number(totalUSD.toFixed(2)),
+      igtf: Number(currentIgtfUSD.toFixed(2)),
+      igtfAmount: Number(currentIgtfUSD.toFixed(2)),
+      total: Number(totalDueUSD.toFixed(2)),
       exchangeRate: Number(exchangeRate),
       paymentMethod: effectiveMethod === 'Crédito' ? 'fiado' : effectiveMethod,
       paymentReference: paymentReference ? String(paymentReference).trim() : null,
       paymentMethods: normalizedPaymentMethods,
-      receivedAmount: Number((totalPaidInUSD > 0 ? totalPaidInUSD : totalUSD).toFixed(2)),
+      receivedAmount: Number((totalPaidInUSD > 0 ? totalPaidInUSD : totalDueUSD).toFixed(2)),
       changeAmount: Number(finalChangeUSD.toFixed(2)),
       changeUSD: Number(finalChangeUSD.toFixed(2)),
       changeBS: Number(finalChangeBS.toFixed(2)),
@@ -3503,9 +3566,10 @@ export default function MobilePOSSimulator() {
         items: [...enrichedCart],
         subtotalUSD,
         taxUSD,
+        igtfUSD: currentIgtfUSD,
         baseImponibleUSD,
-        totalUSD,
-        totalBS,
+        totalUSD: totalDueUSD,
+        totalBS: totalDueBS,
         method: effectiveMethod,
         changeUSD: finalChangeUSD,
         changeBS: finalChangeBS,
@@ -3519,7 +3583,7 @@ export default function MobilePOSSimulator() {
           await localDb.sales.put(completedSaleRecord);
         }
         await primaryDb.put('sales', completedSaleRecord);
-      } catch (_e) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
       // Descontar inventario local inmediatamente considerando multiplicadores de empaque y presentaciones dinámicas
       setProducts(prev => prev.map(p => {
@@ -3540,27 +3604,33 @@ export default function MobilePOSSimulator() {
         return p;
       }));
 
-      // Persistir también el nuevo stock en IndexedDB local tras venta online para que el modo offline posterior sea exacto
+      // Persistir también el nuevo stock en IndexedDB local acumulando múltiples presentaciones del mismo producto
       try {
         if (localDb && localDb.products) {
           localDb.transaction('rw', localDb.products, async () => {
+            const deductedByCleanId = new Map();
             for (const item of enrichedCart) {
               const cleanId = getCleanProductId(item.product.productId || item.product.id);
               const mult = getProductUnitsMultiplier(item.product);
               const unitsToDeduct = Number(item.quantity) * mult;
-              const currentProd = productsMap.get(cleanId) || item.product;
-              const currentStock = Number(currentProd.stockQuantity ?? currentProd.stock ?? 0);
-              const newStock = Math.max(0, currentStock - unitsToDeduct);
-              await localDb.products.update(cleanId, { stockQuantity: newStock, stock: newStock });
+              deductedByCleanId.set(cleanId, (deductedByCleanId.get(cleanId) || 0) + unitsToDeduct);
+            }
+            for (const [cleanId, totalUnitsToDeduct] of deductedByCleanId.entries()) {
+              const currentProd = productsMap.get(cleanId) || await localDb.products.get(cleanId);
+              if (currentProd) {
+                const currentStock = Number(currentProd.stockQuantity ?? currentProd.stock ?? 0);
+                const newStock = Math.max(0, currentStock - totalUnitsToDeduct);
+                await localDb.products.update(cleanId, { stockQuantity: newStock, stock: newStock });
+              }
             }
           }).catch(() => {});
         }
-      } catch (_e) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
       // Propagar por WebSockets a toda la red LAN para reflejo espejo simultáneo
       try {
         lanSyncService.broadcastSale(completedSaleRecord);
-      } catch (_e) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
       setSalesHistory(prev => [completedSaleRecord, ...prev]);
 
@@ -3572,7 +3642,7 @@ export default function MobilePOSSimulator() {
             receiptWidth: localStorage.getItem('pos_mobile_paper_width') || '58mm'
           },
           exchangeRate,
-          currencyMode: 'BOTH'
+          currencyMode: activeCurrencyMode
         });
         setPrintedReceipt(completedSaleRecord);
       }
@@ -3586,6 +3656,7 @@ export default function MobilePOSSimulator() {
       playSuccessSound();
       showToast(`¡Venta #${invoiceNum} registrada en servidor PC!`);
     } catch (err) {
+      console.warn('[MobilePOSSimulator] Error capturado en operación:', err?.message || err);
       console.warn('[OFFLINE-ENGINE] Servidor PC no disponible o timeout de red. Persistiendo con ID inmutable:', persistentTransactionId);
 
       const offlineId = persistentTransactionId;
@@ -3594,11 +3665,11 @@ export default function MobilePOSSimulator() {
       // Firma Criptográfica SHA-256 Antifraude para Auditoría Offline
       let cryptoSig = 'SHA256_LOCAL_STAMP';
       try {
-        const rawPayload = `${offlineId}|${offlineInvoiceNum}|${totalUSD}|${user?.id || 'movil'}|${Date.now()}`;
+        const rawPayload = `${offlineId}|${offlineInvoiceNum}|${totalDueUSD}|${user?.id || 'movil'}|${Date.now()}`;
         const buffer = new TextEncoder().encode(rawPayload);
         const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
         cryptoSig = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error generando firma criptográfica local:', caughtErr?.message || caughtErr); }
 
       const nowOffline = new Date();
       const nowOfflineIso = nowOffline.toISOString();
@@ -3614,9 +3685,10 @@ export default function MobilePOSSimulator() {
         items: [...enrichedCart],
         subtotalUSD,
         taxUSD,
+        igtfUSD: currentIgtfUSD,
         baseImponibleUSD,
-        totalUSD,
-        totalBS,
+        totalUSD: totalDueUSD,
+        totalBS: totalDueBS,
         method: effectiveMethod,
         changeUSD: finalChangeUSD,
         changeBS: finalChangeBS,
@@ -3654,18 +3726,24 @@ export default function MobilePOSSimulator() {
         return p;
       }));
 
-      // Descontar en IndexedDB local de forma 100% ATÓMICA en 1 sola transacción
+      // Descontar en IndexedDB local de forma 100% ATÓMICA acumulando múltiples presentaciones del mismo producto
       try {
         if (localDb && localDb.products) {
           await localDb.transaction('rw', localDb.products, async () => {
+            const deductedByCleanId = new Map();
             for (const item of enrichedCart) {
               const cleanId = getCleanProductId(item.product.productId || item.product.id);
               const mult = getProductUnitsMultiplier(item.product);
               const unitsToDeduct = Number(item.quantity) * mult;
-              const currentProd = productsMap.get(cleanId) || item.product;
-              const currentStock = Number(currentProd.stockQuantity ?? currentProd.stock ?? 0);
-              const newStock = Math.max(0, currentStock - unitsToDeduct);
-              await localDb.products.update(cleanId, { stockQuantity: newStock, stock: newStock });
+              deductedByCleanId.set(cleanId, (deductedByCleanId.get(cleanId) || 0) + unitsToDeduct);
+            }
+            for (const [cleanId, totalUnitsToDeduct] of deductedByCleanId.entries()) {
+              const currentProd = productsMap.get(cleanId) || await localDb.products.get(cleanId);
+              if (currentProd) {
+                const currentStock = Number(currentProd.stockQuantity ?? currentProd.stock ?? 0);
+                const newStock = Math.max(0, currentStock - totalUnitsToDeduct);
+                await localDb.products.update(cleanId, { stockQuantity: newStock, stock: newStock });
+              }
             }
           });
         }
@@ -3684,7 +3762,7 @@ export default function MobilePOSSimulator() {
             receiptWidth: localStorage.getItem('pos_mobile_paper_width') || '58mm'
           },
           exchangeRate,
-          currencyMode: 'BOTH'
+          currencyMode: activeCurrencyMode
         });
         setPrintedReceipt(offlineSaleRecord);
       }
@@ -3703,7 +3781,7 @@ export default function MobilePOSSimulator() {
   };
 
   // 🌿 Formateador de Recibo Ecológico WhatsApp
-  const generateEcoReceiptText = (sale) => {
+  const generateEcoReceiptText = useCallback((sale) => {
     if (!sale) return '';
     const company = businessInfo?.name || localStorage.getItem('company_name') || 'Isaac POS';
     const rif = businessInfo?.rif || localStorage.getItem('company_rif') || '';
@@ -3736,7 +3814,7 @@ export default function MobilePOSSimulator() {
       }) : []),
       `--------------------------------`,
       `Subtotal: $${Number(sale.subtotal || sale.totalUSD || sale.total || 0).toFixed(2)}`,
-      ...(sale.discount > 0 ? [`Descuento: -${sale.discount}%`] : []),
+      ...(sale.discount > 0 ? [`Descuento: -$${Number(sale.discount).toFixed(2)}`] : []),
       `*TOTAL USD: $${Number(sale.totalUSD || sale.total || 0).toFixed(2)}*`,
       `*TOTAL BS: Bs. ${Number(sale.totalBS || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
       `Tasa Oficial: Bs. ${Number(sale.exchangeRate || exchangeRate).toFixed(2)}`,
@@ -3750,7 +3828,7 @@ export default function MobilePOSSimulator() {
       `✨ *¡Gracias por su preferencia!*`
     ];
     return lines.join('\n');
-  };
+  }, [businessInfo, exchangeRate, user?.name, user?.username]);
 
   // Normalizador de teléfono internacional / venezolano
   const cleanWhatsAppPhone = (rawPhone) => {
@@ -3771,10 +3849,9 @@ export default function MobilePOSSimulator() {
     setWhatsAppPhoneInput(sale.customerPhone || '');
   };
 
-  const [isGeneratingWhatsApp, setIsGeneratingWhatsApp] = useState(false);
   const whatsAppMessagePreview = useMemo(() => {
     return generateEcoReceiptText(whatsAppModalData);
-  }, [whatsAppModalData, businessInfo, exchangeRate]);
+  }, [whatsAppModalData, generateEcoReceiptText]);
 
   const handleConfirmSendWhatsApp = () => {
     if (!whatsAppModalData) return;
@@ -3802,7 +3879,7 @@ export default function MobilePOSSimulator() {
       sale: preSale,
       businessSettings: { ...businessInfo, receiptWidth: localStorage.getItem('pos_mobile_paper_width') || '58mm' },
       exchangeRate,
-      currencyMode: 'BOTH'
+      currencyMode: activeCurrencyMode
     });
     showToast('Imprimiendo ticket de preventa...');
   };
@@ -3827,7 +3904,7 @@ export default function MobilePOSSimulator() {
         try {
           localStorage.setItem('isaac_pos_initial_sync_done', 'true');
           localStorage.setItem('initial_mobile_sync_completed', 'true');
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         showToast(res.isOffline ? '⚡ Modo Autónomo Offline Activado' : '¡Bienvenido!');
         loadProducts();
         loadSettings();
@@ -3850,7 +3927,7 @@ export default function MobilePOSSimulator() {
         try {
           localStorage.setItem('isaac_pos_initial_sync_done', 'true');
           localStorage.setItem('initial_mobile_sync_completed', 'true');
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         showToast(res.isOffline ? '⚡ Modo Autónomo Offline Activado' : '¡Bienvenido!');
         loadProducts();
         loadSettings();
@@ -4047,7 +4124,7 @@ export default function MobilePOSSimulator() {
                           localDb.products.update(String(p.id), { stockQuantity: newStock, stock: newStock }).catch((err) => console.warn('[MobilePOS] Error revirtiendo stock en IDB:', err?.message || err));
                         }
                         primaryDb.put('products', { ...p, stockQuantity: newStock, stock: newStock }).catch((err) => console.warn('[MobilePOS] Error revirtiendo stock en primaryDb:', err?.message || err));
-                      } catch (_) {}
+                      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                       return { ...p, stockQuantity: newStock, stock: newStock };
                     }
                     return p;
@@ -4366,554 +4443,184 @@ export default function MobilePOSSimulator() {
         }}
       />
 
-      {/* 5. MODAL DE COBRO PROFESIONAL (PASARELA DE PAGO CON GESTO DRAG-TO-DISMISS) */}
-      {isCheckoutOpen && (
-        <MobileCheckoutModal
-          isOpen={isCheckoutOpen}
-          onClose={() => setIsCheckoutOpen(false)}
-          T={T}
-          isLight={isLight}
-          documentType={documentType}
-          setDocumentType={setDocumentType}
-          totalUSD={totalUSD}
-          totalBS={totalBS}
-          taxUSD={taxUSD}
-          exchangeRate={exchangeRate}
-          customerDoc={customerDoc}
-          setCustomerDoc={setCustomerDoc}
-          customerName={customerName}
-          setCustomerName={setCustomerName}
-          onOpenCustomerSelect={() => {
-            triggerHaptic(10);
-            setCustomerSearch('');
-            setIsCreatingCustomerInMobile(false);
-            setIsCustomerSelectModalOpen(true);
-          }}
-          isProcessingSale={isProcessingSale}
-          handleSaveQuotation={handleSaveQuotation}
-          checkoutMode={checkoutMode}
-          setCheckoutMode={setCheckoutMode}
-          selectedMethod={selectedMethod}
-          handleSelectPaymentMethod={handleSelectPaymentMethod}
-          cashAccumulateMode={cashAccumulateMode}
-          setCashAccumulateMode={setCashAccumulateMode}
-          amountPaidUSD={amountPaidUSD}
-          setAmountPaidUSD={setAmountPaidUSD}
-          amountPaidBS={amountPaidBS}
-          setAmountPaidBS={setAmountPaidBS}
-          totalPaidInUSD={totalPaidInUSD}
-          paidUSD={paidUSD}
-          paidBS={paidBS}
-          changeUSD={changeUSD}
-          changeBS={changeBS}
-          isDollarCountry={isDollarCountry}
-          splitPayments={splitPayments}
-          setSplitPayments={setSplitPayments}
-          splitPaidUSD={splitPaidUSD}
-          splitRemainingUSD={splitRemainingUSD}
-          splitChangeUSD={splitChangeUSD}
-          pagoMovilPhone={businessInfo?.pagoMovilPhone || '04248302226'}
-          pagoMovilId={businessInfo?.pagoMovilId || 'V22650692'}
-          pagoMovilBank={businessInfo?.pagoMovilBank || '0102'}
-          businessInfo={businessInfo}
-          paymentReference={paymentReference}
-          setPaymentReference={setPaymentReference}
-          handleConfirmSale={handleConfirmSale}
-          triggerHaptic={triggerHaptic}
-          playScanSound={playScanSound}
-        />
-      )}
-
-      {/* 6. MODAL DE COMPROBANTE TÉRMICO & WHATSAPP */}
-      {printedReceipt && (
-        <MobileReceiptModal
-          receipt={printedReceipt}
-          onClose={() => setPrintedReceipt(null)}
-          businessInfo={businessInfo}
-          user={user}
-          onPrintBluetooth={handlePrintBluetoothReceipt}
-          onOpenThermalPrinterSettings={() => setIsThermalPrinterModalOpen(true)}
-          onShareWhatsApp={shareReceiptWhatsApp}
-          triggerHaptic={triggerHaptic}
-        />
-      )}
-
-      {/* MODAL DE SELECCIÓN DE VARIANTES (MODA / BOUTIQUE / CALZADO) */}
-      {selectedProductForVariant && (
-        <Suspense fallback={null}>
-          <MobileVariantPickerModal
-            product={selectedProductForVariant}
-            isOpen={Boolean(selectedProductForVariant)}
-            onClose={() => setSelectedProductForVariant(null)}
-            onAddToCart={(variantItem, qty) => {
-              addToCart(variantItem, qty);
-            }}
-            exchangeRate={exchangeRate}
-            T={T}
-          />
-        </Suspense>
-      )}
-
-      {/* MODAL DE SELECCIÓN DE PRESENTACIÓN (VENTA POR CAJA / MEDIA CAJA / BULTO) */}
-      {selectedProductForBulk && (
-        <Suspense fallback={null}>
-          <MobileBulkSelectModal
-            isOpen={Boolean(selectedProductForBulk)}
-            product={selectedProductForBulk}
-            onClose={() => setSelectedProductForBulk(null)}
-            onConfirmSelection={handleSelectBulkPresentation}
-            exchangeRate={exchangeRate}
-            T={T}
-            isLight={isLight}
-          />
-        </Suspense>
-      )}
-
-      {/* MODAL DE MEDICAMENTO CONTROLADO (FARMACIA) */}
-      {selectedProductForControlledMed && (
-        <Suspense fallback={null}>
-          <MobileControlledMedModal
-            product={selectedProductForControlledMed}
-            isOpen={Boolean(selectedProductForControlledMed)}
-            onClose={() => setSelectedProductForControlledMed(null)}
-            onConfirm={(recipeData) => {
-              addToCart({
-                ...selectedProductForControlledMed,
-                recipe: recipeData
-              });
-              showToast(`💊 Récipe validado para ${selectedProductForControlledMed.name || selectedProductForControlledMed.nombre}`);
-            }}
-            T={T}
-          />
-        </Suspense>
-      )}
-
-      {/* MODAL DE CONFIGURACIÓN DE IMPRESORA TÉRMICA BLUETOOTH */}
-      {isThermalPrinterModalOpen && (
-        <Suspense fallback={null}>
-          <MobileThermalPrinterModal
-            isOpen={isThermalPrinterModalOpen}
-            onClose={() => setIsThermalPrinterModalOpen(false)}
-            T={T}
-            isLight={isLight}
-            showToast={showToast}
-            businessInfo={businessInfo}
-          />
-        </Suspense>
-      )}
-
-      {/* MODAL DE TECLADO NUMÉRICO TÁCTIL Y PESAJE A GRANEL */}
-      {isQuantityModalOpen && (
-        <Suspense fallback={null}>
-          <MobileQuantityModal
-            isOpen={isQuantityModalOpen}
-            onClose={() => {
-              setIsQuantityModalOpen(false);
-              setQuantityModalItem(null);
-            }}
-            item={quantityModalItem}
-            onApplyQuantity={handleApplyQuantity}
-            T={T}
-            isLight={isLight}
-          />
-        </Suspense>
-      )}
-
-      {/* INDICADOR FLOTANTE DE SPOOLER DE IMPRESIÓN EN SEGUNDO PLANO */}
-      {printerSpoolerStatus?.pendingCount > 0 && (
-        <div className="fixed bottom-20 left-4 z-40 bg-slate-900 text-white border border-blue-500/40 px-3.5 py-2 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs animate-fadeIn">
-          <div className="relative flex items-center justify-center">
-            <Printer size={15} className="text-blue-400 animate-pulse" />
-            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-blue-500 animate-ping" />
-          </div>
-          <div className="min-w-0">
-            <p className="font-extrabold text-[11px] leading-tight text-blue-300">
-              Imprimiendo en segundo plano
-            </p>
-            <p className="text-[10px] text-slate-400 leading-tight">
-              {printerSpoolerStatus.activeJob?.invoiceNumber ? `Ticket #${printerSpoolerStatus.activeJob.invoiceNumber}` : 'Procesando cola...'} ({printerSpoolerStatus.pendingCount} pend.)
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* 7. MODAL DE ESCÁNER DE CÓDIGO CON CÁMARA NATIVA */}
-      {isScannerOpen && (
-        <Suspense fallback={null}>
-          <MobileBarcodeScannerModal
-            isOpen={isScannerOpen}
-            onClose={() => {
-              setIsScannerOpen(false);
-              setScannerTarget('cart');
-            }}
-            targetMode={scannerTarget === 'product_barcode' ? 'ASSIGN' : 'CART'}
-            title={scannerTarget === 'product_barcode' ? 'Asignar Código' : (posMode === 'PRICE_CHECKER' ? 'Consultor de Precios' : 'Escáner Móvil')}
-            subtitle={scannerTarget === 'product_barcode' ? 'Apunta al código para asociarlo al producto' : (posMode === 'PRICE_CHECKER' ? 'Escanea para consultar precio y stock al instante' : 'Apunta al código de barras')}
-            products={products || []}
-            onVisionMatch={(prod) => {
-              if (prod) {
-                if (posMode === 'PRICE_CHECKER') {
-                  setPriceCheckerProduct(prod);
-                } else {
-                  addToCart(prod);
-                  showToast(`🛒 +1 ${prod.name || prod.nombre}`);
-                }
-              }
-            }}
-            onBarcodeScanned={(code) => {
-              handleBarcodeScanned(code);
-            }}
-            onSaveNewProduct={(code) => {
-              openCreateProduct(code);
-            }}
-          />
-        </Suspense>
-      )}
-
-      {/* 6. MODAL DE EDICIÓN / CREACIÓN RÁPIDA DE PRODUCTO */}
-      {isQuickProductModalOpen && (
-        <MobileQuickProductModal
-          isOpen={isQuickProductModalOpen}
-          onClose={() => setIsQuickProductModalOpen(false)}
-          T={T}
-          isLight={isLight}
-          productFormData={productFormData}
-          setProductFormData={setProductFormData}
-          handleSaveProduct={handleSaveProduct}
-          isSavingProduct={isSavingProduct}
-          isUploadingImage={isUploadingImage}
-          handleProductImageUpload={handleProductImageUpload}
-          onOpenImageSearch={() => setIsImageSearchModalOpen(true)}
-          generateInternalEanBarcode={generateInternalEanBarcode}
-          setScannerTarget={setScannerTarget}
-          setIsScannerOpen={setIsScannerOpen}
-          isCustomCategoryMode={isCustomCategoryMode}
-          setIsCustomCategoryMode={setIsCustomCategoryMode}
-          selectableCategories={selectableCategories}
-          exchangeRate={exchangeRate}
-          triggerHaptic={triggerHaptic}
-        />
-      )}
-
-      {/* 8. MODAL DE BÚSQUEDA DE IMÁGENES COMERCIALES / WEB */}
-      {isImageSearchModalOpen && (
-        <Suspense fallback={null}>
-          <MobileImageSearchModal
-            isOpen={isImageSearchModalOpen}
-            onClose={() => setIsImageSearchModalOpen(false)}
-            productName={productFormData.name}
-            productCategory={productFormData.category}
-            productId={productFormData.id || 'new'}
-            onImageSelected={(uri) => {
-              setProductFormData(prev => ({ ...prev, imageUri: uri }));
-              showToast('✅ Foto asignada con éxito');
-            }}
-            T={T}
-          />
-        </Suspense>
-      )}
-
-      {/* 9. BANNER INTERACTIVO DE CÓDIGO NO REGISTRADO (COPIAR O CREAR AL INSTANTE) */}
-      {unregisteredBarcodeNotice && (
-        <div className="fixed bottom-20 left-3 right-3 sm:left-auto sm:right-4 sm:max-w-md bg-slate-950 border border-amber-500/40 rounded-2xl p-3 shadow-2xl z-40 animate-slideUp flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">
-                <AlertTriangle size={15} />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Código No Registrado</p>
-                <p className="text-xs font-mono font-black text-amber-300 truncate">
-                  {unregisteredBarcodeNotice.barcode}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setUnregisteredBarcodeNotice(null)}
-              className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/10"
-            >
-              <X size={14} />
-            </button>
-          </div>
-          <div className="flex items-center gap-2 pt-1 border-t border-white/10">
-            <button
-              type="button"
-              onClick={() => copyBarcodeToClipboard(unregisteredBarcodeNotice.barcode)}
-              className="flex-1 py-1.5 px-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[11px] font-bold uppercase flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
-            >
-              <Copy size={12} />
-              <span>Copiar Código</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                openCreateProduct(unregisteredBarcodeNotice.barcode);
-              }}
-              className="flex-1 py-1.5 px-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all shadow-md"
-            >
-              <Plus size={12} />
-              <span>Crear Producto</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 10. MODAL TARJETA CONSULTOR DE PRECIOS */}
-      {priceCheckerProduct && !isPriceCheckerModalOpen && (
-        <MobilePriceCardModal
-          product={priceCheckerProduct}
-          onClose={() => setPriceCheckerProduct(null)}
-          T={T}
-          getImageUrl={getImageUrl}
-          exchangeRate={exchangeRate}
-          addToCart={addToCart}
-          showToast={showToast}
-          onOpenScanner={() => {
-            setPriceCheckerProduct(null);
-            setIsScannerOpen(true);
-          }}
-        />
-      )}
-
-      {/* MODAL DE VISUALIZACIÓN DE FOTO EN ALTA DEFINICIÓN (HD FULL PREVIEW CON GESTO DRAG-TO-DISMISS) */}
-      {previewProductImage && (
-        <MobileImagePreviewModal
-          previewProductImage={previewProductImage}
-          onClose={() => setPreviewProductImage(null)}
-          onEditProduct={openEditProduct}
-          triggerHaptic={triggerHaptic}
-          T={T}
-          isDollarCountry={isDollarCountry}
-        />
-      )}
-
-      {/* 7. MODAL DE ÍTEM RÁPIDO / MANUAL */}
-      {isManualItemModalOpen && (
-        <MobileQuickItemModal
-          isOpen={isManualItemModalOpen}
-          onClose={() => setIsManualItemModalOpen(false)}
-          T={T}
-          manualItemName={manualItemName}
-          setManualItemName={setManualItemName}
-          manualItemPrice={manualItemPrice}
-          setManualItemPrice={setManualItemPrice}
-          manualItemPriceBS={manualItemPriceBS}
-          setManualItemPriceBS={setManualItemPriceBS}
-          manualItemQty={manualItemQty}
-          setManualItemQty={setManualItemQty}
-          exchangeRate={exchangeRate}
-          handleAddManualItem={handleAddManualItem}
-        />
-      )}
-
-      {/* 8. MODAL DE VENTAS EN ESPERA (PAUSADAS) */}
-      {isHeldSalesModalOpen && (
-        <MobileHeldSalesModal
-          isOpen={isHeldSalesModalOpen}
-          onClose={() => setIsHeldSalesModalOpen(false)}
-          T={T}
-          heldSales={heldSales}
-          currentCartCount={cart.length}
-          handleDeleteHeldSale={handleDeleteHeldSale}
-          handleRestoreHeldSale={handleRestoreHeldSale}
-          triggerHaptic={triggerHaptic}
-        />
-      )}
-
-      {/* 9. MENÚ LATERAL COMPLETO CON GESTOS TÁCTILES (SWIPE-LEFT TO CLOSE) */}
-      <MobileSideNav
-        isOpen={isSideNavOpen}
-        onClose={() => setIsSideNavOpen(false)}
-        triggerHaptic={triggerHaptic}
+      {/* CAPA MODULAR DE MODALES SECUNDARIOS Y OVERLAYS */}
+      <MobileSimulatorModals
         T={T}
         isLight={isLight}
         isOledMode={isOledMode}
+        exchangeRate={exchangeRate}
+        businessInfo={businessInfo}
+        user={user}
+        isDollarCountry={isDollarCountry}
+        triggerHaptic={triggerHaptic}
+        playScanSound={playScanSound}
+        showToast={showToast}
+        getImageUrl={getImageUrl}
+        isUnlimitedStockProduct={isUnlimitedStockProduct}
+        products={products}
+        cart={cart}
+        addToCart={addToCart}
+        heldSales={heldSales}
+        handleDeleteHeldSale={handleDeleteHeldSale}
+        handleRestoreHeldSale={handleRestoreHeldSale}
+        isCheckoutOpen={isCheckoutOpen}
+        setIsCheckoutOpen={setIsCheckoutOpen}
+        documentType={documentType}
+        setDocumentType={setDocumentType}
+        totalUSD={totalDueUSD}
+        totalBS={totalDueBS}
+        taxUSD={taxUSD}
+        currentIgtfUSD={currentIgtfUSD}
+        igtfRate={igtfRatePct}
+        customerDoc={customerDoc}
+        setCustomerDoc={setCustomerDoc}
+        customerName={customerName}
+        setCustomerName={setCustomerName}
+        setCustomerSearch={setCustomerSearch}
+        setIsCreatingCustomerInMobile={setIsCreatingCustomerInMobile}
+        setIsCustomerSelectModalOpen={setIsCustomerSelectModalOpen}
+        isProcessingSale={isProcessingSale}
+        handleSaveQuotation={handleSaveQuotation}
+        checkoutMode={checkoutMode}
+        setCheckoutMode={setCheckoutMode}
+        selectedMethod={selectedMethod}
+        handleSelectPaymentMethod={handleSelectPaymentMethod}
+        cashAccumulateMode={cashAccumulateMode}
+        setCashAccumulateMode={setCashAccumulateMode}
+        amountPaidUSD={amountPaidUSD}
+        setAmountPaidUSD={setAmountPaidUSD}
+        amountPaidBS={amountPaidBS}
+        setAmountPaidBS={setAmountPaidBS}
+        totalPaidInUSD={totalPaidInUSD}
+        paidUSD={paidUSD}
+        paidBS={paidBS}
+        changeUSD={changeUSD}
+        changeBS={changeBS}
+        splitPayments={splitPayments}
+        setSplitPayments={setSplitPayments}
+        splitPaidUSD={splitPaidUSD}
+        splitRemainingUSD={splitRemainingUSD}
+        splitChangeUSD={splitChangeUSD}
+        paymentReference={paymentReference}
+        setPaymentReference={setPaymentReference}
+        handleConfirmSale={handleConfirmSale}
+        printedReceipt={printedReceipt}
+        setPrintedReceipt={setPrintedReceipt}
+        handlePrintBluetoothReceipt={handlePrintBluetoothReceipt}
+        setIsThermalPrinterModalOpen={setIsThermalPrinterModalOpen}
+        isThermalPrinterModalOpen={isThermalPrinterModalOpen}
+        shareReceiptWhatsApp={shareReceiptWhatsApp}
+        printerSpoolerStatus={printerSpoolerStatus}
+        preSaleSentModal={preSaleSentModal}
+        setPreSaleSentModal={setPreSaleSentModal}
+        printPreSaleBluetoothReceipt={printPreSaleBluetoothReceipt}
+        sharePreSaleWhatsApp={sharePreSaleWhatsApp}
+        whatsAppModalData={whatsAppModalData}
+        setWhatsAppModalData={setWhatsAppModalData}
+        whatsAppPhoneInput={whatsAppPhoneInput}
+        setWhatsAppPhoneInput={setWhatsAppPhoneInput}
+        handleConfirmSendWhatsApp={handleConfirmSendWhatsApp}
+        whatsAppMessagePreview={whatsAppMessagePreview}
+        generateEcoReceiptText={generateEcoReceiptText}
+        cleanWhatsAppPhone={cleanWhatsAppPhone}
+        selectedProductForVariant={selectedProductForVariant}
+        setSelectedProductForVariant={setSelectedProductForVariant}
+        selectedProductForBulk={selectedProductForBulk}
+        setSelectedProductForBulk={setSelectedProductForBulk}
+        handleSelectBulkPresentation={handleSelectBulkPresentation}
+        selectedProductForControlledMed={selectedProductForControlledMed}
+        setSelectedProductForControlledMed={setSelectedProductForControlledMed}
+        isQuantityModalOpen={isQuantityModalOpen}
+        setIsQuantityModalOpen={setIsQuantityModalOpen}
+        quantityModalItem={quantityModalItem}
+        setQuantityModalItem={setQuantityModalItem}
+        handleApplyQuantity={handleApplyQuantity}
+        isScannerOpen={isScannerOpen}
+        setIsScannerOpen={setIsScannerOpen}
+        scannerTarget={scannerTarget}
+        setScannerTarget={setScannerTarget}
+        posMode={posMode}
+        setPosMode={setPosMode}
+        handleBarcodeScanned={handleBarcodeScanned}
+        openCreateProduct={openCreateProduct}
+        openEditProduct={openEditProduct}
+        isQuickProductModalOpen={isQuickProductModalOpen}
+        setIsQuickProductModalOpen={setIsQuickProductModalOpen}
+        productFormData={productFormData}
+        setProductFormData={setProductFormData}
+        handleSaveProduct={handleSaveProduct}
+        isSavingProduct={isSavingProduct}
+        isUploadingImage={isUploadingImage}
+        handleProductImageUpload={handleProductImageUpload}
+        isImageSearchModalOpen={isImageSearchModalOpen}
+        setIsImageSearchModalOpen={setIsImageSearchModalOpen}
+        generateInternalEanBarcode={generateInternalEanBarcode}
+        isCustomCategoryMode={isCustomCategoryMode}
+        setIsCustomCategoryMode={setIsCustomCategoryMode}
+        selectableCategories={selectableCategories}
+        unregisteredBarcodeNotice={unregisteredBarcodeNotice}
+        setUnregisteredBarcodeNotice={setUnregisteredBarcodeNotice}
+        copyBarcodeToClipboard={copyBarcodeToClipboard}
+        priceCheckerProduct={priceCheckerProduct}
+        setPriceCheckerProduct={setPriceCheckerProduct}
+        isPriceCheckerModalOpen={isPriceCheckerModalOpen}
+        setIsPriceCheckerModalOpen={setIsPriceCheckerModalOpen}
+        priceCheckerSearch={priceCheckerSearch}
+        setPriceCheckerSearch={setPriceCheckerSearch}
+        previewProductImage={previewProductImage}
+        setPreviewProductImage={setPreviewProductImage}
+        isManualItemModalOpen={isManualItemModalOpen}
+        setIsManualItemModalOpen={setIsManualItemModalOpen}
+        manualItemName={manualItemName}
+        setManualItemName={setManualItemName}
+        manualItemPrice={manualItemPrice}
+        setManualItemPrice={setManualItemPrice}
+        manualItemPriceBS={manualItemPriceBS}
+        setManualItemPriceBS={setManualItemPriceBS}
+        manualItemQty={manualItemQty}
+        setManualItemQty={setManualItemQty}
+        handleAddManualItem={handleAddManualItem}
+        isHeldSalesModalOpen={isHeldSalesModalOpen}
+        setIsHeldSalesModalOpen={setIsHeldSalesModalOpen}
+        isSideNavOpen={isSideNavOpen}
+        setIsSideNavOpen={setIsSideNavOpen}
         socketConnected={socketConnected}
         pendingSalesCount={pendingSalesCount}
-        businessInfo={businessInfo}
-        exchangeRate={exchangeRate}
-        user={user}
         drawerSearch={drawerSearch}
         setDrawerSearch={setDrawerSearch}
         filteredNavSections={filteredNavSections}
         activeModule={activeModule}
         setActiveModule={setActiveModule}
-        posMode={posMode}
-        setPosMode={setPosMode}
-        onOpenThermalPrinterSettings={() => setIsThermalPrinterModalOpen(true)}
-        onOpenBiometricsModal={() => setIsBiometricsModalOpen(true)}
+        setIsBiometricsModalOpen={setIsBiometricsModalOpen}
+        isBiometricsModalOpen={isBiometricsModalOpen}
+        setEnrolledBioUser={setEnrolledBioUser}
         isAudioMuted={isAudioMuted}
         setIsAudioMuted={setIsAudioMuted}
         toggleSoundMute={toggleSoundMute}
-        playScanSound={playScanSound}
-        showToast={showToast}
         theme={theme}
         setTheme={setTheme}
         logout={logout}
+        toastMsg={toastMsg}
+        supervisorAuthRequest={supervisorAuthRequest}
+        setSupervisorAuthRequest={setSupervisorAuthRequest}
+        lastHardwareScan={lastHardwareScan}
+        isTableSelectModalOpen={isTableSelectModalOpen}
+        setIsTableSelectModalOpen={setIsTableSelectModalOpen}
+        selectedTable={selectedTable}
+        setSelectedTable={setSelectedTable}
+        orderNotes={orderNotes}
+        setOrderNotes={setOrderNotes}
+        isCustomerSelectModalOpen={isCustomerSelectModalOpen}
+        customers={customers}
+        isCreatingCustomerInMobile={isCreatingCustomerInMobile}
+        customerSearch={customerSearch}
+        filteredCustomers={filteredCustomers}
+        handleSelectCustomer={handleSelectCustomer}
+        newCustomerForm={newCustomerForm}
+        setNewCustomerForm={setNewCustomerForm}
+        handleSaveNewCustomer={handleSaveNewCustomer}
+        isSavingCustomer={isSavingCustomer}
       />
-
-      {/* MODAL DE ENROLAMIENTO Y GESTIÓN DE HUELLA DACTILAR */}
-      <BiometricEnrollModal
-        isOpen={isBiometricsModalOpen}
-        onClose={() => setIsBiometricsModalOpen(false)}
-        onEnrolledChange={(cred) => {
-          setEnrolledBioUser(cred);
-          if (cred) showToast('Huella vinculada con éxito');
-        }}
-      />
-
-      {/* 9. TOAST NOTIFICACIÓN SUTIL Y ELEGANTE (BOTTOM-RIGHT, CERO INVASIÓN) */}
-      {toastMsg && (
-        <div className="fixed bottom-5 right-5 bg-slate-900 border border-slate-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-2xl z-50 flex items-center gap-2 animate-slideUp">
-          <CheckCircle size={15} className="text-emerald-400" />
-          <span>{toastMsg}</span>
-        </div>
-      )}
-
-      {/* 10. MODAL DE AUTORIZACIÓN BIOMÉTRICA / PIN DE SUPERVISOR */}
-      {supervisorAuthRequest && (
-        <SupervisorAuthModal
-          isOpen={Boolean(supervisorAuthRequest)}
-          onClose={() => setSupervisorAuthRequest(null)}
-          onAuthorized={(approvalData) => {
-            const cb = supervisorAuthRequest.onAuthorized;
-            setSupervisorAuthRequest(null);
-            cb?.(approvalData);
-          }}
-          actionType={supervisorAuthRequest.actionType || 'pos_override'}
-          referenceId={supervisorAuthRequest.referenceId || null}
-          title={supervisorAuthRequest.title}
-          reason={supervisorAuthRequest.reason}
-          isLight={isLight}
-          T={T}
-        />
-      )}
-
-      {/* 🔫 HUD FLOTANTE DE ESCANEO POR PISTOLA BLUETOOTH / INALÁMBRICA */}
-      <AnimatePresence>
-        {lastHardwareScan && (
-          <motion.div
-            initial={{ opacity: 0, y: -25, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -25, scale: 0.95 }}
-            className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-950/95 text-emerald-400 border border-emerald-500/50 px-4 py-2 rounded-full shadow-2xl flex items-center gap-2.5 text-xs font-black backdrop-blur-md pointer-events-none"
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
-            <Zap size={14} className="text-emerald-400 shrink-0" />
-            <span className="truncate max-w-[240px]">
-              🔫 Pistola: {lastHardwareScan.code}
-            </span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* 🍽️ MODAL DE ASIGNACIÓN DE MESA Y NOTAS DE COMANDERA */}
-      <MobileTableSelectModal
-        isOpen={isTableSelectModalOpen}
-        onClose={() => setIsTableSelectModalOpen(false)}
-        currentTable={selectedTable}
-        currentNotes={orderNotes}
-        onSave={({ table, notes }) => {
-          setSelectedTable(table);
-          setOrderNotes(notes);
-          if (table) {
-            showToast(`🍽️ Asignada: ${table}${notes ? ` (${notes})` : ''}`);
-          } else {
-            showToast('ℹ️ Venta libre (Sin mesa)');
-          }
-        }}
-        T={T}
-        triggerHaptic={triggerHaptic}
-      />
-
-      {/* 📤 MODAL DE CONFIRMACIÓN DE PREVENTA ENVIADA A CAJA PRINCIPAL */}
-      {preSaleSentModal && (
-        <MobilePreSaleSentModal
-          preSaleSentModal={preSaleSentModal}
-          onClose={() => setPreSaleSentModal(null)}
-          T={T}
-          businessInfo={businessInfo}
-          printPreSaleBluetoothReceipt={printPreSaleBluetoothReceipt}
-          showToast={showToast}
-          onOpenThermalPrinterSettings={() => setIsThermalPrinterModalOpen(true)}
-          sharePreSaleWhatsApp={sharePreSaleWhatsApp}
-          triggerHaptic={triggerHaptic}
-        />
-      )}
-
-      {/* 📲 MODAL DE RECIBO ECOLÓGICO DIGITAL WHATSAPP */}
-      {whatsAppModalData && (
-        <MobileWhatsAppReceiptModal
-          whatsAppModalData={whatsAppModalData}
-          onClose={() => setWhatsAppModalData(null)}
-          T={T}
-          whatsAppPhoneInput={whatsAppPhoneInput}
-          setWhatsAppPhoneInput={setWhatsAppPhoneInput}
-          exchangeRate={exchangeRate}
-          handleConfirmSendWhatsApp={handleConfirmSendWhatsApp}
-          isGeneratingWhatsApp={isGeneratingWhatsApp}
-          whatsAppMessagePreview={whatsAppMessagePreview}
-          generateEcoReceiptText={generateEcoReceiptText}
-          cleanWhatsAppPhone={cleanWhatsAppPhone}
-          showToast={showToast}
-          triggerHaptic={triggerHaptic}
-        />
-      )}
-
-      {/* 🔍 MODAL COMPLETO: VERIFICADOR DE PRECIOS Y STOCK DE PASILLO */}
-      {isPriceCheckerModalOpen && (
-        <MobilePriceCheckerModal
-          isOpen={isPriceCheckerModalOpen}
-          onClose={() => {
-            setIsPriceCheckerModalOpen(false);
-            setPriceCheckerProduct(null);
-            setPriceCheckerSearch('');
-          }}
-          T={T}
-          priceCheckerSearch={priceCheckerSearch}
-          setPriceCheckerSearch={setPriceCheckerSearch}
-          onOpenScanner={() => setIsScannerOpen(true)}
-          setScannerTarget={setScannerTarget}
-          setPosMode={setPosMode}
-          isDollarCountry={isDollarCountry}
-          triggerHaptic={triggerHaptic}
-          priceCheckerProduct={priceCheckerProduct}
-          setPriceCheckerProduct={setPriceCheckerProduct}
-          getImageUrl={getImageUrl}
-          exchangeRate={exchangeRate}
-          addToCart={addToCart}
-          showToast={showToast}
-          products={products}
-          isUnlimitedStockProduct={isUnlimitedStockProduct}
-        />
-      )}
-
-      {/* 👤 MODAL: SELECCIONAR CLIENTE / BUSCADOR / NUEVO CLIENTE */}
-      {isCustomerSelectModalOpen && (
-        <MobileCustomerSelectModal
-          isOpen={isCustomerSelectModalOpen}
-          onClose={() => {
-            setIsCustomerSelectModalOpen(false);
-            setIsCreatingCustomerInMobile(false);
-          }}
-          T={T}
-          customers={customers}
-          customerName={customerName}
-          isDollarCountry={isDollarCountry}
-          isCreatingCustomerInMobile={isCreatingCustomerInMobile}
-          setIsCreatingCustomerInMobile={setIsCreatingCustomerInMobile}
-          customerSearch={customerSearch}
-          setCustomerSearch={setCustomerSearch}
-          filteredCustomers={filteredCustomers}
-          handleSelectExistingCustomer={handleSelectCustomer}
-          newCustomerData={newCustomerForm}
-          setNewCustomerData={setNewCustomerForm}
-          handleCreateCustomerSubmit={handleSaveNewCustomer}
-          isSavingCustomer={isSavingCustomer}
-          triggerHaptic={triggerHaptic}
-        />
-      )}
     </div>
   );
 }

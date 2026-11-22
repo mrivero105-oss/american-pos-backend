@@ -45,7 +45,7 @@ export default function ProductSearch({ onSelectProduct }) {
           });
           setProducts(normalized);
         }
-      } catch (_e) {}
+      } catch (caughtErr) { console.warn('[ProductSearch] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
     };
 
     loadLocalProducts();

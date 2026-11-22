@@ -91,7 +91,8 @@ class RefundService {
             if (sale.status === 'refunded') throw new Error('Esta venta ya fue devuelta en su totalidad.');
 
             // --- REGLA DE NEGOCIO: AUTORIZACIÓN DE DEVOLUCIONES ---
-            const canVoidDirectly = reqUser.role === 'superadmin' || reqUser.role === 'admin' || reqUser.permissions?.canVoidSales === true;
+            const { isCompanyAdminRole } = require('../constants/roles');
+            const canVoidDirectly = isCompanyAdminRole(reqUser.role) || reqUser.permissions?.canVoidSales === true;
             let approval = null;
 
             if (!canVoidDirectly && !supervisorApprovalId) {
@@ -775,6 +776,12 @@ class RefundService {
             }, { transaction: t });
 
             await t.commit();
+
+            try {
+                const DailyRollupService = require('./DailyRollupService');
+                DailyRollupService.scheduleDayRefresh(companyId, refund.date || new Date());
+                if (sale?.date) DailyRollupService.scheduleDayRefresh(companyId, sale.date);
+            } catch (_) {}
 
             // 📱 Alerta Ejecutiva WhatsApp al Dueño (Devolución / Reembolso)
             try {

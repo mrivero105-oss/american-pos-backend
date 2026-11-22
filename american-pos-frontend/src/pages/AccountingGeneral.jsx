@@ -1,12 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import {
-    BookOpen, Layers, FileSpreadsheet, Scale, PlusCircle,
-    Search, Calendar, RefreshCw, CheckCircle2, AlertTriangle,
-    Download, ShieldCheck, Landmark, ArrowUpRight, ArrowDownRight, Printer
+    BookOpen, 
+    Layers, 
+    FileSpreadsheet, 
+    Scale, 
+    PlusCircle, 
+    Search, 
+    Calendar, 
+    Download, 
+    Printer
 } from 'lucide-react';
 import api from '../services/api';
-import { usePos } from '../hooks/PosContext';
+import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
 
 const showToast = (msg, type = 'info') => {
     if (type === 'success') toast.success(msg);
@@ -24,7 +30,7 @@ const ACCOUNT_TYPE_META = {
 };
 
 export default function AccountingGeneral() {
-    const { exchangeRate } = usePos();
+    const exchangeRate = useBusinessSettingsStore((s) => s.rate);
     const bcvRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
 
     const [activeTab, setActiveTab] = useState('diario'); // 'diario' | 'catalogo' | 'mayor' | 'balances'
@@ -74,22 +80,22 @@ export default function AccountingGeneral() {
         ]
     });
 
-    const fetchCatalog = async () => {
+    const fetchCatalog = useCallback(async () => {
         try {
             const res = await api.get('/accounting/accounts');
             if ((res.data?.success || res.data?.ok)) {
                 setAccounts(res.data.accounts || []);
-                if (!selectedAccountId && res.data.accounts?.length > 0) {
+                if (res.data.accounts?.length > 0) {
                     const firstSelectable = res.data.accounts.find(a => a.isSelectable);
-                    if (firstSelectable) setSelectedAccountId(firstSelectable.id);
+                    if (firstSelectable) setSelectedAccountId(prev => prev || firstSelectable.id);
                 }
             }
         } catch (err) {
             console.error('Error cargando catálogo contable:', err);
         }
-    };
+    }, []);
 
-    const fetchJournalEntries = async () => {
+    const fetchJournalEntries = useCallback(async () => {
         setLoading(true);
         try {
             const params = { startDate, endDate };
@@ -103,9 +109,9 @@ export default function AccountingGeneral() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [startDate, endDate, referenceTypeFilter]);
 
-    const fetchLedger = async (accId) => {
+    const fetchLedger = useCallback(async (accId) => {
         const targetId = accId || selectedAccountId;
         if (!targetId) return;
         setLoading(true);
@@ -121,9 +127,9 @@ export default function AccountingGeneral() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [selectedAccountId, startDate, endDate]);
 
-    const fetchBalances = async () => {
+    const fetchBalances = useCallback(async () => {
         setLoading(true);
         try {
             const [tbRes, bsRes] = await Promise.all([
@@ -137,18 +143,17 @@ export default function AccountingGeneral() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [startDate, endDate]);
 
     useEffect(() => {
         fetchCatalog();
-        fetchBalances();
-    }, []);
+    }, [fetchCatalog]);
 
     useEffect(() => {
         if (activeTab === 'diario') fetchJournalEntries();
         if (activeTab === 'mayor' && selectedAccountId) fetchLedger(selectedAccountId);
         if (activeTab === 'balances') fetchBalances();
-    }, [activeTab, startDate, endDate, referenceTypeFilter, selectedAccountId]);
+    }, [activeTab, selectedAccountId, fetchJournalEntries, fetchLedger, fetchBalances]);
 
     // Equation summary from catalog
     const patrimonialSummary = useMemo(() => {

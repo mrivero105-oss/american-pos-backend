@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Search, Tag, Printer, VolumeX, Volume2, Columns2, Grid2x2, Cpu, LogOut, ChevronDown, ChevronRight, Zap, Monitor, Fingerprint } from 'lucide-react';
 
@@ -8,9 +8,6 @@ export default function MobileSideNav({
   isOpen,
   onClose,
   triggerHaptic = () => {},
-  T,
-  isLight,
-  isOledMode,
   socketConnected,
   pendingSalesCount,
   businessInfo,
@@ -275,7 +272,7 @@ export default function MobileSideNav({
                 filteredNavSections.length === 0 ? (
                   <div className="py-8 text-center text-xs text-slate-500 space-y-1">
                     <Search size={24} className="mx-auto text-slate-400 mb-2 opacity-60" />
-                    <p className="font-bold">No se encontró "{drawerSearch}"</p>
+                    <p className="font-bold">No se encontró &ldquo;{drawerSearch}&rdquo;</p>
                     <p className="text-[10px] text-slate-400">Intenta buscar por otro nombre o función</p>
                   </div>
                 ) : (

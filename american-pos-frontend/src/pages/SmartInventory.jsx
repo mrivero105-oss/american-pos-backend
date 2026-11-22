@@ -1,12 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-    Search,
-    TrendingUp,
-    AlertTriangle,
-    CheckCircle2,
-    ShoppingCart,
-    Clock,
-    ArrowRight,
+    Search, 
+    TrendingUp, 
+    AlertTriangle, 
+    CheckCircle2, 
+    ShoppingCart, 
+    Clock, 
     Package
 } from 'lucide-react';
 import api from '../services/api';
@@ -58,13 +57,6 @@ export default function SmartInventory() {
         })
         : [];
 
-    const getStatusStyles = (status) => {
-        switch (status) {
-            case 'CRITICAL': return 'bg-red-100 text-red-600 dark:bg-red-500/10 dark:text-red-400 border-red-200 dark:border-red-500/20';
-            case 'WARNING': return 'bg-amber-100 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400 border-amber-200 dark:border-amber-500/20';
-            default: return 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20';
-        }
-    };
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500 p-1 sm:p-0 pb-28 sm:pb-20 pb-safe">

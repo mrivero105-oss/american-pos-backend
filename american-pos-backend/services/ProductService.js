@@ -1,37 +1,3 @@
-
-function saveAndReplicateProductImage(filename, buffer) {
-    const path = require('path');
-    const fs = require('fs');
-    const candidates = [
-        path.join(__dirname, '..', 'product_images'),
-        process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'isaac-pos', 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'americanpos', 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'Isaac POS', 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'american-pos-backend', 'product_images') : null,
-    ].filter(Boolean);
-
-    const uniqueDirs = [...new Set(candidates)];
-    uniqueDirs.forEach(dir => {
-        try {
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(path.join(dir, filename), buffer);
-        } catch (e) {
-            console.warn(`[IMAGE SAVE] Error guardando copia en ${dir}:`, e.message);
-        }
-    });
-
-    // Replicar automáticamente a Supabase Storage en segundo plano
-    try {
-        const { uploadProductImageToSupabase } = require('./CloudStorageService');
-        uploadProductImageToSupabase(filename, buffer);
-    } catch (e) {
-        console.warn('[IMAGE SAVE] No se pudo invocar CloudStorageService:', e.message);
-    }
-
-    return `/product_images/${filename}`;
-}
-
 const { Product, BranchStock, Supplier, AuditLog, StockMovement, SupplierProductMapping, Branch, VarianteProducto, ProductPresentation, WarehouseStock } = require('../database/models');
 const { sequelize } = require('../database/connection');
 const { generateRobustId, readJson, readJsonAsync, getUserSettings } = require('../utils/helpers');
@@ -39,15 +5,49 @@ const { Op } = require('sequelize');
 const precision = require('../utils/precision');
 const cacheService = require('../utils/cacheService');
 const { SETTINGS_FILE } = require('../config/paths');
-const AIService = require('./AIService');
-const ImageSearchService = require('./ImageSearchService');
-const BarcodeSearchService = require('./BarcodeSearchService');
-// Native fetch is available in Node 18+ which is used in this project
+const productMediaService = require('./product/productMediaService');
+const productWasteAndAudit = require('./product/productWasteAndAudit');
 const fs = require('fs');
 const path = require('path');
 
 
 class ProductService {
+    constructor() {
+        this._serverBootMs = Date.now();
+        this._deletedProductsLog = new Map();
+    }
+
+    /**
+     * Registra un producto eliminado para sincronización delta (?since=)
+     */
+    recordDeletedProduct(companyId, productId) {
+        const compKey = String(companyId || 'default');
+        const now = Date.now();
+        let list = this._deletedProductsLog.get(compKey);
+        if (!list) {
+            list = [];
+            this._deletedProductsLog.set(compKey, list);
+        }
+        list.push({ id: String(productId), deletedAtMs: now });
+        // Podar entradas > 24h o exceso de tamaño para mantener memoria acotada
+        if (list.length > 500) {
+            const cutoff = now - (24 * 60 * 60 * 1000);
+            const pruned = list.filter(e => e.deletedAtMs >= cutoff).slice(-2000);
+            this._deletedProductsLog.set(compKey, pruned);
+        }
+    }
+
+    getDeletedProductsSince(companyId, sinceMs) {
+        const compKey = String(companyId || 'default');
+        const list = this._deletedProductsLog.get(compKey);
+        if (!Array.isArray(list) || list.length === 0) return [];
+        const ids = new Set();
+        for (const entry of list) {
+            if (entry.deletedAtMs >= sinceMs) ids.add(entry.id);
+        }
+        return Array.from(ids);
+    }
+
     /**
      * Evalúa si el usuario solicitante tiene autorización para visualizar costos de compra y márgenes.
      */
@@ -81,14 +81,22 @@ class ProductService {
         return p;
     }
 
+    invalidateCatalogCache() {
+        cacheService.delPrefix('catalog_full_');
+        cacheService.delPrefix('low_stock_');
+        cacheService.delPrefix('ai_catalog_');
+    }
+
     /**
      * Get all products with filtering and branch stock mapping.
      */
     async getAllProducts(reqUser, queryParams) {
         const { companyId, activeBranchId } = reqUser;
-        const { category, search, minimal, page = 1, limit = 0, supplierId, stockFilter, stockStatus, minPrice, maxPrice, status, es_controlado, expirationFilter, branchScoped, branchId: queryBranchId, missingCost } = queryParams;
+        const { category, search, minimal, page = 1, limit = 0, supplierId, stockFilter, stockStatus, minPrice, maxPrice, status, es_controlado, expirationFilter, branchScoped, branchId: queryBranchId, missingCost, since, delta } = queryParams;
         const currentStockFilter = stockFilter || stockStatus; 
         const isMinimal = minimal === 'true';
+        const isDeltaRequested = Boolean(since) || delta === 'true';
+        const serverTime = new Date().toISOString();
 
         const whereClause = { companyId };
 
@@ -237,14 +245,294 @@ class ProductService {
         };
 
         // Master Bypass: If fullCatalog is explicitly requested, we ignore limit/offset limits.
-        if (limit > 0 && !isMasterFullView) {
+        const hasPaginationLimit = Number(limit) > 0 && !isMasterFullView;
+        if (hasPaginationLimit) {
             options.limit = parseInt(limit);
             options.offset = (parseInt(page) - 1) * parseInt(limit);
         }
 
-        const { count, rows: productInstances } = await Product.findAndCountAll(options);
         const allowCosts = this.canUserViewCosts(reqUser);
-        const products = productInstances.map(p => p.get({ plain: true }));
+        const isSimpleCatalogRequest =
+            !hasPaginationLimit &&
+            !search &&
+            !minPrice &&
+            !maxPrice &&
+            !supplierId &&
+            !currentStockFilter &&
+            !expirationFilter &&
+            !missingCost &&
+            !es_controlado &&
+            (!category || category === 'Todas');
+
+        // FAST-PATH DELTA SYNC (?since=<ISO>): Transfiere únicamente los productos modificados/eliminados desde el último sync
+        if (since && isSimpleCatalogRequest) {
+            const parsedSince = new Date(String(since));
+            const sinceMs = parsedSince.getTime();
+            const canServeDelta = !Number.isNaN(sinceMs) && sinceMs >= (this._serverBootMs - 5000);
+
+            if (canServeDelta) {
+                const deltaAttrs = [...new Set([...options.attributes, 'status', 'updatedAt'])];
+                // Incluir tanto productos con updatedAt >= since como productos cuyo BranchStock cambió desde since
+                const [directChanged, changedBranchStocks] = await Promise.all([
+                    Product.findAll({
+                        where: { companyId, updatedAt: { [Op.gte]: parsedSince } },
+                        attributes: deltaAttrs,
+                        order: [['name', 'ASC']],
+                        raw: true
+                    }),
+                    BranchStock.findAll({
+                        where: { companyId, updatedAt: { [Op.gte]: parsedSince } },
+                        attributes: ['productId'],
+                        raw: true
+                    }).catch(() => [])
+                ]);
+
+                const directIds = new Set((directChanged || []).map(p => String(p.id)));
+                const extraStockProductIds = [...new Set(
+                    (changedBranchStocks || [])
+                        .map(bs => String(bs.productId))
+                        .filter(pid => pid && !directIds.has(pid))
+                )];
+
+                let extraProducts = [];
+                if (extraStockProductIds.length > 0) {
+                    extraProducts = await Product.findAll({
+                        where: { companyId, id: { [Op.in]: extraStockProductIds } },
+                        attributes: deltaAttrs,
+                        raw: true
+                    }).catch(() => []);
+                }
+
+                const combinedRows = [...(directChanged || []), ...(extraProducts || [])];
+                const targetStatus = status || 'active';
+                const deletedIdSet = new Set(this.getDeletedProductsSince(companyId, sinceMs));
+                const activeDeltaProducts = [];
+
+                for (const row of combinedRows) {
+                    if (row.status && row.status !== targetStatus) {
+                        deletedIdSet.add(String(row.id));
+                    } else {
+                        activeDeltaProducts.push(row);
+                    }
+                }
+
+                if (activeDeltaProducts.length > 0) {
+                    const deltaIds = activeDeltaProducts.map(p => p.id).filter(Boolean);
+                    const deltaSupIds = !isMinimal
+                        ? [...new Set(activeDeltaProducts.map(p => p.supplierId).filter(Boolean))]
+                        : [];
+
+                    const [bsRaw, varRaw, presRaw, supRaw] = await Promise.all([
+                        BranchStock.findAll({
+                            where: { productId: { [Op.in]: deltaIds } },
+                            attributes: ['productId', 'quantity', 'branchId'],
+                            raw: true
+                        }),
+                        VarianteProducto.findAll({
+                            where: { producto_id: { [Op.in]: deltaIds } },
+                            raw: true
+                        }).catch(() => []),
+                        ProductPresentation.findAll({
+                            where: { productId: { [Op.in]: deltaIds } },
+                            raw: true
+                        }).catch(() => []),
+                        deltaSupIds.length > 0
+                            ? Supplier.findAll({
+                                where: { id: { [Op.in]: deltaSupIds } },
+                                attributes: ['id', 'name'],
+                                raw: true
+                            }).catch(() => [])
+                            : Promise.resolve([])
+                    ]);
+
+                    const bsMap = new Map();
+                    for (const bs of (bsRaw || [])) {
+                        const k = String(bs.productId);
+                        let arr = bsMap.get(k);
+                        if (!arr) { arr = []; bsMap.set(k, arr); }
+                        arr.push({ quantity: bs.quantity, branchId: bs.branchId });
+                    }
+                    const varMap = new Map();
+                    for (const v of (varRaw || [])) {
+                        const k = String(v.producto_id);
+                        let arr = varMap.get(k);
+                        if (!arr) { arr = []; varMap.set(k, arr); }
+                        arr.push(v);
+                    }
+                    const presMap = new Map();
+                    for (const pr of (presRaw || [])) {
+                        const k = String(pr.productId);
+                        let arr = presMap.get(k);
+                        if (!arr) { arr = []; presMap.set(k, arr); }
+                        arr.push(pr);
+                    }
+                    const supMap = new Map();
+                    for (const s of (supRaw || [])) supMap.set(String(s.id), { name: s.name });
+
+                    for (const p of activeDeltaProducts) {
+                        const pid = String(p.id);
+                        p.BranchStocks = bsMap.get(pid) || [];
+                        p.Variantes = varMap.get(pid) || [];
+                        p.Presentations = presMap.get(pid) || [];
+                        if (!isMinimal) {
+                            p.Supplier = p.supplierId ? (supMap.get(String(p.supplierId)) || null) : null;
+                        }
+                        if (scopedBranch) {
+                            const branchRow = p.BranchStocks.find(s => String(s.branchId) === String(scopedBranch.id));
+                            p.stockQuantity = Number(branchRow ? branchRow.quantity : 0);
+                        } else {
+                            const hasBs = p.BranchStocks.length > 0;
+                            const totalBs = hasBs ? precision.add(p.BranchStocks.map(s => Number(s.quantity) || 0)) : 0;
+                            p.stockQuantity = Number(hasBs ? totalBs : (p.stockQuantity || p.stock || 0));
+                        }
+                        if (String(p.category || '').trim().toLowerCase() === 'servicios') {
+                            p.isService = true;
+                            p.isSoldByWeight = false;
+                            p.isFractional = false;
+                            p.stockUnit = 'un';
+                            p.allowNegative = true;
+                            p.stockQuantity = 0;
+                            p.minStock = 0;
+                        }
+                        this.sanitizeProductForUser(p, allowCosts);
+                    }
+                }
+
+                return {
+                    delta: true,
+                    fullSyncRequired: false,
+                    serverTime,
+                    products: activeDeltaProducts,
+                    deletedIds: Array.from(deletedIdSet),
+                    total: activeDeltaProducts.length,
+                    page: 1,
+                    totalPages: 1
+                };
+            }
+        }
+
+        const isCacheableFullCatalog =
+            process.env.ISAAC_TEST_ISOLATED !== '1' &&
+            isSimpleCatalogRequest;
+        const catalogCacheKey = isCacheableFullCatalog
+            ? `catalog_full_${companyId}_${status || 'active'}_${scopedBranch ? scopedBranch.id : 'global'}_${isMinimal ? 'min' : 'full'}`
+            : null;
+
+        if (catalogCacheKey) {
+            const cachedRaw = cacheService.get(catalogCacheKey);
+            if (Array.isArray(cachedRaw)) {
+                const cloned = cachedRaw.map(p => {
+                    const copy = { ...p };
+                    if (Array.isArray(p.Presentations)) {
+                        copy.Presentations = p.Presentations.map(pr => ({ ...pr }));
+                    }
+                    this.sanitizeProductForUser(copy, allowCosts);
+                    return copy;
+                });
+                return isDeltaRequested
+                    ? { delta: false, fullSyncRequired: true, serverTime, products: cloned, deletedIds: [], total: cloned.length, page: 1, totalPages: 1 }
+                    : { products: cloned, total: cloned.length, page: 1, totalPages: 1 };
+            }
+        }
+
+        let count = 0;
+        let products = [];
+
+        // Fast-Path Sin Producto Cartesiano ORM:
+        // En vez de 1 query gigante con 4 LEFT OUTER JOIN + instanciación pesada de Sequelize Models,
+        // ejecutamos consultas planas (raw: true) en paralelo y ensamblamos las relaciones en O(N).
+        const baseFindOptions = {
+            where: whereClause,
+            attributes: options.attributes,
+            order: options.order,
+            raw: true
+        };
+        if (hasPaginationLimit) {
+            baseFindOptions.limit = options.limit;
+            baseFindOptions.offset = options.offset;
+        }
+
+        if (hasPaginationLimit) {
+            const [rowsRaw, totalCount] = await Promise.all([
+                Product.findAll(baseFindOptions),
+                Product.count({ where: whereClause })
+            ]);
+            products = Array.isArray(rowsRaw) ? rowsRaw : [];
+            count = Number(totalCount) || 0;
+        } else {
+            const rowsRaw = await Product.findAll(baseFindOptions);
+            products = Array.isArray(rowsRaw) ? rowsRaw : [];
+            count = products.length;
+        }
+
+        if (products.length > 0) {
+            const productIds = products.map(p => p.id).filter(Boolean);
+            const supplierIds = !isMinimal
+                ? [...new Set(products.map(p => p.supplierId).filter(Boolean))]
+                : [];
+
+            const [branchStocksRaw, variantsRaw, presentationsRaw, suppliersRaw] = await Promise.all([
+                BranchStock.findAll({
+                    where: { productId: { [Op.in]: productIds } },
+                    attributes: ['productId', 'quantity', 'branchId'],
+                    raw: true
+                }),
+                VarianteProducto.findAll({
+                    where: { producto_id: { [Op.in]: productIds } },
+                    raw: true
+                }).catch(() => []),
+                ProductPresentation.findAll({
+                    where: { productId: { [Op.in]: productIds } },
+                    raw: true
+                }).catch(() => []),
+                supplierIds.length > 0
+                    ? Supplier.findAll({
+                        where: { id: { [Op.in]: supplierIds } },
+                        attributes: ['id', 'name'],
+                        raw: true
+                    }).catch(() => [])
+                    : Promise.resolve([])
+            ]);
+
+            const bsMap = new Map();
+            for (const bs of (branchStocksRaw || [])) {
+                const key = String(bs.productId);
+                let arr = bsMap.get(key);
+                if (!arr) { arr = []; bsMap.set(key, arr); }
+                arr.push({ quantity: bs.quantity, branchId: bs.branchId });
+            }
+
+            const varMap = new Map();
+            for (const v of (variantsRaw || [])) {
+                const key = String(v.producto_id);
+                let arr = varMap.get(key);
+                if (!arr) { arr = []; varMap.set(key, arr); }
+                arr.push(v);
+            }
+
+            const presMap = new Map();
+            for (const pr of (presentationsRaw || [])) {
+                const key = String(pr.productId);
+                let arr = presMap.get(key);
+                if (!arr) { arr = []; presMap.set(key, arr); }
+                arr.push(pr);
+            }
+
+            const supMap = new Map();
+            for (const s of (suppliersRaw || [])) {
+                supMap.set(String(s.id), { name: s.name });
+            }
+
+            for (const p of products) {
+                const pid = String(p.id);
+                p.BranchStocks = bsMap.get(pid) || [];
+                p.Variantes = varMap.get(pid) || [];
+                p.Presentations = presMap.get(pid) || [];
+                if (!isMinimal) {
+                    p.Supplier = p.supplierId ? (supMap.get(String(p.supplierId)) || null) : null;
+                }
+            }
+        }
 
         // Precise Stock Aggregation (por sucursal activa si branchScoped, o consolidado global)
         products.forEach(p => {
@@ -275,12 +563,36 @@ class ProductService {
                 p.stockQuantity = 0;
                 p.minStock = 0;
             }
+        });
+
+        if (catalogCacheKey) {
+            const snapshotToCache = products.map(p => ({
+                ...p,
+                Presentations: Array.isArray(p.Presentations) ? p.Presentations.map(pr => ({ ...pr })) : p.Presentations
+            }));
+            cacheService.set(catalogCacheKey, snapshotToCache, 30);
+        }
+
+        products.forEach(p => {
             this.sanitizeProductForUser(p, allowCosts);
         });
 
         // Debug Log (only enabled when DEBUG_VERBOSE=true)
         if (process.env.DEBUG_VERBOSE === 'true' && products.length > 0) {
             console.log(`[SYNC DEBUG] Sample Product: ${products[0].name} | Stock: ${products[0].stockQuantity}`);
+        }
+
+        if (isDeltaRequested) {
+            return {
+                delta: false,
+                fullSyncRequired: true,
+                serverTime,
+                products,
+                deletedIds: [],
+                total: count,
+                page: parseInt(page),
+                totalPages: limit > 0 ? Math.ceil(count / limit) : 1
+            };
         }
 
         return { products, total: count, page: parseInt(page), totalPages: limit > 0 ? Math.ceil(count / limit) : 1 };
@@ -394,6 +706,7 @@ class ProductService {
             }
 
             await t.commit();
+            this.invalidateCatalogCache();
             const plainProduct = newProduct.get({ plain: true });
             await this._logAudit(reqUser, 'CREATE_PRODUCT', `Creado producto: ${plainProduct.name}`, productId, null, plainProduct);
             return plainProduct;
@@ -602,6 +915,7 @@ class ProductService {
             }
             
             await t.commit();
+            this.invalidateCatalogCache();
             return updatedProduct.get({ plain: true });
 
         } catch (error) {
@@ -685,6 +999,7 @@ class ProductService {
         });
 
         await Promise.all(updates);
+        this.invalidateCatalogCache();
         await this._logAudit(reqUser, 'PRODUCT_BULK_PRICE_ADJUST', `Ajuste masivo (${adjustmentType}): ${direction || 'set'} de ${numericValue}${adjustmentType === 'fixed' ? '$' : '%'} para ${updatedCount} productos.`, 'BULK', null, null);
 
         return updatedCount;
@@ -704,10 +1019,11 @@ class ProductService {
                 stockQuantity: { [Op.lte]: sequelize.col('minStock') },
                 minStock: { [Op.gt]: 0 }
             },
-            attributes: ['id', 'name', 'stockQuantity', 'minStock']
+            attributes: ['id', 'name', 'stockQuantity', 'minStock'],
+            raw: true
         });
 
-        cacheService.set(cacheKey, products, 60);
+        cacheService.set(cacheKey, products, 180);
         return products;
     }
 
@@ -782,6 +1098,8 @@ class ProductService {
             await product.destroy({ transaction: t });
             
             await t.commit();
+            this.recordDeletedProduct(companyId, productId);
+            this.invalidateCatalogCache();
             return true;
         } catch (error) {
             await t.rollback();
@@ -1158,11 +1476,12 @@ class ProductService {
         if (!searchTerm) return [];
 
         const isPostgres = sequelize.getDialect() === 'postgres';
+        const safeLikePattern = sequelize.escape(`%${searchTerm}%`);
         const searchCondition = isPostgres
             ? {
                 [Op.or]: [
-                    { name: { [Op.iLike]: `%${searchTerm}%` } },
-                    { barcode: { [Op.iLike]: `%${searchTerm}%` } }
+                    sequelize.literal(`public.immutable_unaccent(lower("Product"."name")) ILIKE public.immutable_unaccent(lower(${safeLikePattern}))`),
+                    sequelize.literal(`COALESCE("Product"."barcode", '') ILIKE ${safeLikePattern}`)
                 ]
             }
             : {
@@ -1715,7 +2034,7 @@ class ProductService {
 
             // Invalidar cachés de catálogo y categorías tras confirmar transacción
             cacheService.delPrefix('categories_');
-            cacheService.delPrefix('ai_catalog_');
+            this.invalidateCatalogCache();
 
             if (invoiceOptions && Object.keys(invoiceOptions).length > 0) {
                 return {
@@ -1734,760 +2053,40 @@ class ProductService {
         }
     }
 
-    /**
-     * Genera una imagen para un producto usando el buscador de Bing.
-     */
     async generateImageIA(productId) {
-        try {
-            const product = await Product.findByPk(productId);
-            if (!product) throw new Error('Producto no encontrado');
-
-            console.log(`[IA IMAGE] Buscando imagen real para: ${product.name}`);
-            
-            // 1. Generar query optimizado con Gemini (pasamos también la categoría si existe)
-            const searchQuery = await AIService.generateProductSearchQuery(product.name, product.category);
-            
-            // 2. Buscar URL real usando el servicio de búsqueda robótica (ahora retorna un array de candidatas)
-            const imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
-            
-            if (!imageUrls || imageUrls.length === 0) {
-                throw new Error('No se encontró ninguna imagen válida en la búsqueda');
-            }
-
-            let buffer = null;
-            let successUrl = null;
-
-            for (const imageUrl of imageUrls) {
-                try {
-                    console.log(`[IA IMAGE] Intentando descargar imagen desde: ${imageUrl}`);
-                    const response = await fetch(imageUrl, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-                        }
-                    });
-                    
-                    if (response.ok) {
-                        const contentType = response.headers.get('content-type') || '';
-                        if (!contentType.toLowerCase().startsWith('image/')) {
-                            console.warn(`[IA IMAGE] URL devolvió un tipo no válido (${contentType}), omitiendo: ${imageUrl}`);
-                            continue;
-                        }
-                        
-                        const arrayBuffer = await response.arrayBuffer();
-                        buffer = Buffer.from(arrayBuffer);
-                        successUrl = imageUrl;
-                        break; // Stop trying if successful
-                    } else {
-                        console.warn(`[IA IMAGE] Error ${response.status} al descargar: ${imageUrl}`);
-                    }
-                } catch (err) {
-                    console.warn(`[IA IMAGE] Excepción al descargar ${imageUrl}:`, err.message);
-                }
-            }
-
-            if (!buffer) {
-                throw new Error(`Las restricciones del servidor (ej. Error 403) bloquearon la descarga de todas las imágenes candidatas.`);
-            }
-            
-            // Prepare storage & replicate to all active image directories
-            const filename = `ai_product_${productId}_${Date.now()}.jpg`;
-            const imageUri = saveAndReplicateProductImage(filename, buffer);
-            await product.update({ imageUri, imageUrl: null });
-
-            return { imageUri };
-        } catch (error) {
-            console.error('[IA IMAGE] Error fatal:', error.message);
-            throw new Error('No se pudo generar la imagen con la IA: ' + error.message);
-        }
+        return productMediaService.generateImageIA(productId);
     }
 
-    /**
-     * Busca imágenes candidatas con IA y las devuelve sin descargar.
-     */
     async searchImagesIA(productId, fallbackName = '', fallbackCategory = '') {
-        try {
-            let name = (fallbackName || '').trim();
-            let category = (fallbackCategory || '').trim();
-
-            if (productId && productId !== 'new' && !productId.toString().startsWith('local-')) {
-                const product = await Product.findByPk(productId);
-                if (product) {
-                    name = name || product.name;
-                    category = category || product.category;
-                }
-            }
-
-            if (!name) {
-                throw new Error('Ingresa el nombre del producto primero para buscar su imagen con IA');
-            }
-
-            console.log(`[IA IMAGE] Buscando imágenes candidatas para: "${name}" (${category || 'General'})`);
-            
-            let imageUrls = null;
-
-            // 1. Búsqueda Directa por Nombre del Producto (Infalible y Ultra-rápida)
-            try {
-                imageUrls = await ImageSearchService.findProductImageUrl(name);
-            } catch (e) {
-                console.warn('[IA IMAGE] Fallo búsqueda por nombre directo:', e.message);
-            }
-
-            // 2. Fallback: Query Generado por IA
-            if (!imageUrls || imageUrls.length === 0) {
-                let searchQuery = name;
-                try {
-                    searchQuery = await AIService.generateProductSearchQuery(name, category);
-                    if (searchQuery && searchQuery !== name) {
-                        console.log(`[IA IMAGE] Reintentando con query IA: "${searchQuery}"`);
-                        imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
-                    }
-                } catch (e) {}
-            }
-            
-            // 3. Fallback: Nombre Simplificado (Removiendo medidas o variantes)
-            if (!imageUrls || imageUrls.length === 0) {
-                const cleanName = name.replace(/lata|roja|azul|verde|paquete|caja|\b\d+(g|gr|kg|ml|l|oz)\b/gi, '').trim();
-                if (cleanName && cleanName.length >= 3 && cleanName !== name) {
-                    console.log(`[IA IMAGE] Reintentando búsqueda simplificada: "${cleanName}"`);
-                    try {
-                        imageUrls = await ImageSearchService.findProductImageUrl(cleanName);
-                    } catch (e) {}
-                }
-            }
-            
-            if (!imageUrls || imageUrls.length === 0) {
-                throw new Error('No se encontraron imágenes candidatas para este producto en la web. Puedes subir una manualmente o colocar su URL.');
-            }
-
-            return { images: imageUrls };
-        } catch (error) {
-            console.error('[IA IMAGE SEARCH] Error:', error.message);
-            throw new Error(error.message);
-        }
+        return productMediaService.searchImagesIA(productId, fallbackName, fallbackCategory);
     }
 
-    /**
-     * Descarga la imagen seleccionada y la asigna al producto.
-     */
     async downloadAndSetImage(productId, imageUrl, fallbackName = '', fallbackCategory = '') {
-        try {
-            let product = null;
-            if (productId && productId !== 'new' && !productId.toString().startsWith('local-')) {
-                product = await Product.findByPk(productId);
-            }
-
-            console.log(`[IA IMAGE] Intentando descargar imagen seleccionada desde: ${imageUrl}`);
-            
-            const axios = require('axios');
-            const response = await axios.get(imageUrl, {
-                responseType: 'arraybuffer',
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-                },
-                timeout: 15000
-            });
-            
-            const buffer = Buffer.from(response.data);
-
-            const filename = `ai_product_${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
-            const imageUri = saveAndReplicateProductImage(filename, buffer);
-            if (product) {
-                await product.update({ imageUri, imageUrl: imageUri });
-            }
-
-            return { imageUri, imageUrl: imageUri };
-        } catch (error) {
-            console.error('[IA IMAGE DOWNLOAD] Error:', error.message);
-            throw new Error('Fallo al descargar la imagen elegida: ' + error.message);
-        }
+        return productMediaService.downloadAndSetImage(productId, imageUrl, fallbackName, fallbackCategory);
     }
 
-    /**
-     * Busca y actualiza el código de barras de un producto usando IA.
-     */
     async updateBarcodeIA(productId) {
-        try {
-            const product = await Product.findByPk(productId);
-            if (!product) throw new Error('Producto no encontrado');
-
-            console.log(`[IA BARCODE] Buscando código para: ${product.name}`);
-
-            // 1. Generar query optimizado con Gemini
-            const searchQuery = await AIService.generateBarcodeSearchQuery(product.name, product.category);
-
-            // 2. Buscar código real usando el servicio de búsqueda robótica
-            let barcode = await BarcodeSearchService.findProductBarcode(searchQuery);
-
-            // 3. Contingencia: Si falla, usamos Visión Computacional + IA (Gemini 3.1 Pro)
-            if (!barcode) {
-                console.log(`[IA BARCODE] Búsqueda robótica falló. Intentando análisis visual e inferencia experta...`);
-                
-                let imageData = null;
-                if (product.imageUri) {
-                    try {
-                        const fs = require('fs');
-                        const path = require('path');
-                        
-                        let userDataPath = process.env.USER_DATA_PATH;
-                        if (!userDataPath && process.platform === 'win32') {
-                             let appData = path.join(process.env.APPDATA, 'americanpos');
-                             if (!fs.existsSync(appData)) appData = path.join(process.env.APPDATA, 'american-pos-backend');
-                             if (fs.existsSync(appData)) userDataPath = appData;
-                        }
-                        const uploadDir = userDataPath ? path.join(userDataPath, 'product_images') : path.join(__dirname, '..', 'product_images');
-                        const filename = product.imageUri.split('/').pop();
-                        const filePath = path.join(uploadDir, filename);
-                        
-                        if (fs.existsSync(filePath)) {
-                            const buffer = fs.readFileSync(filePath);
-                            const extension = filename.split('.').pop().toLowerCase();
-                            let mimeType = 'image/jpeg';
-                            if (extension === 'png') mimeType = 'image/png';
-                            if (extension === 'webp') mimeType = 'image/webp';
-                            
-                            imageData = {
-                                 data: buffer.toString('base64'),
-                                 mimeType
-                            };
-                            console.log(`[IA BARCODE] Imagen cargada para análisis visual (${mimeType}).`);
-                        }
-                    } catch (err) {
-                        console.error('[IA BARCODE] Ignorando error al cargar imagen:', err.message);
-                    }
-                }
-
-                barcode = await AIService.estimateBarcode(product.name, imageData);
-            }
-
-            if (!barcode) {
-                throw new Error('No se encontró ningún código de barras válido en la búsqueda ni en la estimación');
-            }
-
-            console.log(`[IA BARCODE] Código encontrado/estimado: ${barcode}`);
-
-            // 4. Actualizar producto en DB
-            await product.update({ barcode });
-
-            return { barcode };
-        } catch (error) {
-            console.error('[IA BARCODE] Error:', error.message);
-            throw new Error('No se pudo encontrar el código de barras: ' + error.message);
-        }
+        return productMediaService.updateBarcodeIA(productId);
     }
 
-
-    /**
-     * Registrar baja / merma / avería / ajuste de stock con trazabilidad,
-     * soporte de N-Presentaciones (factorConversion) y asiento contable automático.
-     */
     async recordWaste(reqUser, productId, body) {
-        const { companyId, activeBranchId } = reqUser;
-        const { 
-            quantity, 
-            reason = 'rotura', 
-            notes = '', 
-            responsibleName = '', 
-            presentationId = null,
-            warehouseId = null 
-        } = body;
-
-        const qtyNum = parseFloat(quantity);
-        if (isNaN(qtyNum) || qtyNum <= 0) {
-            throw new Error('La cantidad de merma debe ser un número mayor a 0');
-        }
-
-        return await sequelize.transaction(async (t) => {
-            const product = await Product.findOne({
-                where: { id: productId, companyId },
-                transaction: t,
-                lock: true
-            });
-
-            if (!product) {
-                throw new Error('Producto no encontrado');
-            }
-
-            // Factor de conversión si viene de una presentación
-            let factor = 1;
-            let presentation = null;
-            if (presentationId) {
-                presentation = await ProductPresentation.findOne({
-                    where: { id: presentationId, productId, companyId },
-                    transaction: t
-                });
-                if (presentation && presentation.factorConversion) {
-                    factor = parseFloat(presentation.factorConversion) || 1;
-                }
-            } else if (body.factorConversion) {
-                factor = parseFloat(body.factorConversion) || 1;
-            }
-
-            const baseUnits = precision.round(precision.multiply(qtyNum, factor), 4);
-            const currentStock = precision.parseNumericInput(product.stockQuantity ?? product.stock ?? 0);
-            const isPositive = reason === 'ajuste_positivo';
-            const newStock = isPositive
-                ? precision.round(precision.add([currentStock, baseUnits]), 4)
-                : Math.max(-999999, precision.round(precision.subtract(currentStock, baseUnits), 4));
-
-            // 1. Actualizar Producto maestro
-            await product.update({
-                stock: newStock,
-                stockQuantity: newStock
-            }, { transaction: t });
-
-            // 2. Actualizar BranchStock si aplica
-            const branchToUpdate = body.branchId || activeBranchId;
-            if (branchToUpdate) {
-                const branchExists = await Branch.findByPk(branchToUpdate, { transaction: t });
-                if (branchExists) {
-                    const [bStock] = await BranchStock.findOrCreate({
-                        where: { productId, branchId: branchToUpdate, companyId },
-                        defaults: {
-                            productId,
-                            branchId: branchToUpdate,
-                            companyId,
-                            quantity: currentStock
-                        },
-                        transaction: t
-                    });
-                    const currBranchQty = precision.parseNumericInput(bStock.quantity || 0);
-                    const nextBranchQty = isPositive
-                        ? precision.round(precision.add([currBranchQty, baseUnits]), 4)
-                        : precision.round(precision.subtract(currBranchQty, baseUnits), 4);
-                    await bStock.update({ quantity: nextBranchQty }, { transaction: t });
-                }
-            }
-
-            // 3. Actualizar WarehouseStock si aplica
-            if (warehouseId && WarehouseStock) {
-                const [wStock] = await WarehouseStock.findOrCreate({
-                    where: { productId, warehouseId, companyId },
-                    defaults: {
-                        id: generateRobustId(),
-                        productId,
-                        warehouseId,
-                        companyId,
-                        quantity: currentStock
-                    },
-                    transaction: t
-                });
-                const currWQty = precision.parseNumericInput(wStock.quantity || 0);
-                const nextWQty = isPositive
-                    ? precision.round(precision.add([currWQty, baseUnits]), 4)
-                    : precision.round(precision.subtract(currWQty, baseUnits), 4);
-                await wStock.update({ quantity: nextWQty }, { transaction: t });
-            }
-
-            // 4. Registrar StockMovement
-            const unitCost = precision.parseNumericInput(product.cost || 0);
-            const totalCost = precision.round(precision.multiply(unitCost, baseUnits), 4);
-            const presentationTag = factor > 1 ? ` [Empaque: ${presentation?.name || body.presentationName || 'Presentación'} x${factor}]` : '';
-            const fullNotes = `${notes || ''}${presentationTag}`.trim();
-
-            const movement = await StockMovement.create({
-                id: generateRobustId(),
-                productId,
-                userId: reqUser.id,
-                companyId,
-                branchId: branchToUpdate || null,
-                type: isPositive ? 'ADJUSTMENT_IN' : 'WASTE',
-                category: reason,
-                quantity: baseUnits,
-                stockBefore: currentStock,
-                stockAfter: newStock,
-                costPrice: unitCost,
-                totalCost,
-                responsibleName: responsibleName || reqUser.name || reqUser.username || 'Admin',
-                notes: fullNotes,
-                reason,
-                date: new Date().toISOString()
-            }, { transaction: t });
-
-            // 5. Asiento Contable Automático (PUC) síncrono y obligatorio dentro de la transacción para mermas reales
-            let accountingEntry = null;
-            if (!isPositive && totalCost > 0) {
-                const AccountingEngineService = require('./AccountingEngineService');
-                accountingEntry = await AccountingEngineService.recordWasteMovement({
-                    companyId,
-                    product,
-                    quantityBaseUnits: baseUnits,
-                    reason,
-                    notes: fullNotes,
-                    responsibleName,
-                    userId: reqUser.id,
-                    movementId: movement.id,
-                    transaction: t
-                });
-                if (!accountingEntry) {
-                    throw new Error(`No se pudo generar el asiento contable obligatorio para la merma del producto ${product.name}.`);
-                }
-            }
-
-            return {
-                success: true,
-                movement,
-                product: product.get({ plain: true }),
-                baseUnits,
-                factorConversion: factor,
-                accountingEntryId: accountingEntry?.id || null
-            };
-        });
+        return productWasteAndAudit.recordWaste(reqUser, productId, body);
     }
 
-    /**
-     * Obtener historial y auditoría de mermas y ajustes de inventario
-     */
     async getWasteHistory(reqUser, queryParams = {}) {
-        const { companyId } = reqUser;
-        const { startDate, endDate, reason, search, productId, limit = 100, page = 1 } = queryParams;
-
-        const where = {
-            companyId,
-            type: { [Op.in]: ['WASTE', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT'] }
-        };
-
-        if (startDate && endDate) {
-            where.date = { [Op.between]: [startDate, endDate + 'T23:59:59.999Z'] };
-        } else if (startDate) {
-            where.date = { [Op.gte]: startDate };
-        } else if (endDate) {
-            where.date = { [Op.lte]: endDate + 'T23:59:59.999Z' };
-        }
-
-        if (reason && reason !== 'all') {
-            where.category = reason;
-        }
-
-        if (productId) {
-            where.productId = productId;
-        }
-
-        const cleanSearch = search && typeof search === 'string' ? search.trim() : '';
-        if (cleanSearch) {
-            const likeOp = sequelize.getDialect() === 'postgres' ? Op.iLike : Op.like;
-            const pattern = `%${cleanSearch}%`;
-            where[Op.or] = [
-                { notes: { [likeOp]: pattern } },
-                { responsibleName: { [likeOp]: pattern } },
-                { reason: { [likeOp]: pattern } },
-                { '$Product.name$': { [likeOp]: pattern } },
-                { '$Product.barcode$': { [likeOp]: pattern } }
-            ];
-        }
-
-        const parsedLimit = Math.max(1, parseInt(limit, 10) || 100);
-        const offset = (Math.max(1, parseInt(page, 10) || 1) - 1) * parsedLimit;
-
-        const includeProduct = [
-            {
-                model: Product,
-                as: 'Product',
-                attributes: ['id', 'name', 'barcode', 'cost', 'price', 'imageUri', 'stockUnit'],
-                required: false
-            }
-        ];
-
-        const { count, rows } = await StockMovement.findAndCountAll({
-            where,
-            include: includeProduct,
-            order: [['date', 'DESC'], ['createdAt', 'DESC']],
-            limit: parsedLimit,
-            offset,
-            ...(cleanSearch ? { subQuery: false } : {})
-        });
-
-        let totalUnits = 0;
-        let totalCostUSD = 0;
-        const byCategory = {};
-
-        // Si existen más registros fuera de la página actual, sumar totales globales sobre el filtro completo
-        let summaryRows = rows;
-        if (count > rows.length || offset > 0) {
-            summaryRows = await StockMovement.findAll({
-                where,
-                include: cleanSearch ? [{ model: Product, as: 'Product', attributes: [], required: false }] : [],
-                attributes: ['quantity', 'totalCost', 'category'],
-                raw: true,
-                ...(cleanSearch ? { subQuery: false } : {})
-            });
-        }
-
-        summaryRows.forEach(mov => {
-            const q = precision.parseNumericInput(mov.quantity || 0);
-            const c = precision.parseNumericInput(mov.totalCost || 0);
-            totalUnits = precision.add([totalUnits, q]);
-            totalCostUSD = precision.add([totalCostUSD, c]);
-            const cat = mov.category || 'otros';
-            byCategory[cat] = precision.round(precision.add([byCategory[cat] || 0, c]), 4);
-        });
-
-        return {
-            movements: rows,
-            summary: {
-                totalUnits: precision.round(totalUnits, 4),
-                totalCostUSD: precision.round(totalCostUSD, 4),
-                totalRecords: count,
-                byCategory
-            }
-        };
+        return productWasteAndAudit.getWasteHistory(reqUser, queryParams);
     }
 
-    /**
-     * Exportar reporte de auditoría de mermas a Excel
-     */
     async exportWasteExcel(reqUser, queryParams = {}) {
-        const { movements } = await this.getWasteHistory(reqUser, { ...queryParams, limit: 10000 });
-        const ExcelJS = require('exceljs');
-
-        const rows = movements.map(m => ({
-            fecha: m.date ? new Date(m.date).toLocaleString('es-VE') : '',
-            producto: m.Product?.name || 'N/A',
-            barcode: m.Product?.barcode || '',
-            sku: m.Product?.sku || '',
-            motivo: m.category || m.reason || '',
-            tipo: m.type || '',
-            cantidad: parseFloat(m.quantity || 0),
-            stockAntes: parseFloat(m.stockBefore || 0),
-            stockResultante: parseFloat(m.stockAfter || 0),
-            costoUnitario: parseFloat(m.costPrice || 0),
-            perdidaTotal: parseFloat(m.totalCost || 0),
-            responsable: m.responsibleName || '',
-            notas: m.notes || ''
-        }));
-
-        const wb = new ExcelJS.Workbook();
-        const ws = wb.addWorksheet('Mermas y Ajustes');
-        ws.columns = [
-            { header: 'Fecha y Hora', key: 'fecha', width: 22 },
-            { header: 'Producto', key: 'producto', width: 32 },
-            { header: 'Código de Barras', key: 'barcode', width: 18 },
-            { header: 'SKU', key: 'sku', width: 16 },
-            { header: 'Motivo / Categoría', key: 'motivo', width: 24 },
-            { header: 'Tipo de Movimiento', key: 'tipo', width: 18 },
-            { header: 'Unidades Base Dadas de Baja', key: 'cantidad', width: 24 },
-            { header: 'Stock Antes', key: 'stockAntes', width: 14 },
-            { header: 'Stock Resultante', key: 'stockResultante', width: 16 },
-            { header: 'Costo Unitario ($)', key: 'costoUnitario', width: 18 },
-            { header: 'Pérdida Total ($)', key: 'perdidaTotal', width: 16 },
-            { header: 'Responsable', key: 'responsable', width: 22 },
-            { header: 'Justificación / Notas', key: 'notas', width: 32 }
-        ];
-        ws.addRows(rows);
-        return Buffer.from(await wb.xlsx.writeBuffer());
+        return productWasteAndAudit.exportWasteExcel(reqUser, queryParams);
     }
 
-    /**
-     * Ajuste rápido de inventario físico (conteo/kardex) - Soporta { newStock } o { type: 'add'|'subtract'|'set', quantity }
-     */
     async quickStockAdjust(reqUser, productId, body) {
-        const { companyId, activeBranchId } = reqUser;
-        const { newStock, type, quantity, reason = 'conteo_fisico', notes = '' } = body;
-
-        return await sequelize.transaction(async (t) => {
-            const product = await Product.findOne({
-                where: { id: productId, companyId },
-                transaction: t,
-                lock: t.LOCK.UPDATE
-            });
-            if (!product) throw new Error('Producto no encontrado');
-
-            const currentStock = parseFloat(product.stockQuantity ?? product.stock ?? 0);
-            let targetStock = parseFloat(newStock);
-
-            if (isNaN(targetStock)) {
-                const qtyVal = parseFloat(quantity);
-                if (isNaN(qtyVal)) {
-                    throw new Error('El nuevo stock o cantidad de ajuste debe ser un número válido');
-                }
-                if (type === 'add') {
-                    targetStock = precision.round(precision.add([currentStock, qtyVal]), 6);
-                } else if (type === 'subtract') {
-                    targetStock = Math.max(0, precision.round(precision.subtract(currentStock, qtyVal), 6));
-                } else {
-                    targetStock = precision.round(qtyVal, 6);
-                }
-            }
-
-            const delta = precision.round(precision.subtract(targetStock, currentStock), 6);
-            if (delta === 0) {
-                return {
-                    success: true,
-                    message: 'El stock no requirió cambios',
-                    currentStock,
-                    newStock: targetStock,
-                    stockBefore: currentStock,
-                    stockAfter: targetStock,
-                    delta: 0,
-                    product: product.get({ plain: true })
-                };
-            }
-
-            await product.update({ stock: targetStock, stockQuantity: String(targetStock) }, { transaction: t });
-
-            if (activeBranchId) {
-                const branchExists = await Branch.findByPk(activeBranchId, { transaction: t });
-                if (branchExists) {
-                    const [bStock] = await BranchStock.findOrCreate({
-                        where: { productId, branchId: activeBranchId, companyId },
-                        defaults: { productId, branchId: activeBranchId, companyId, quantity: targetStock },
-                        transaction: t
-                    });
-                    await bStock.update({ quantity: targetStock }, { transaction: t });
-                }
-            }
-
-            const unitCost = parseFloat(product.cost || 0);
-            const movementType = delta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT';
-
-            await StockMovement.create({
-                id: generateRobustId(),
-                productId,
-                userId: reqUser.id,
-                companyId,
-                branchId: activeBranchId || null,
-                type: movementType,
-                category: reason,
-                quantity: Math.abs(delta),
-                stockBefore: currentStock,
-                stockAfter: targetStock,
-                costPrice: unitCost,
-                totalCost: parseFloat((unitCost * Math.abs(delta)).toFixed(4)),
-                responsibleName: reqUser.name || reqUser.username || 'Admin',
-                notes: notes || `Ajuste rápido de inventario de ${currentStock} a ${targetStock}`,
-                reason,
-                date: new Date().toISOString()
-            }, { transaction: t });
-
-            return {
-                success: true,
-                currentStock,
-                newStock: targetStock,
-                stockBefore: currentStock,
-                stockAfter: targetStock,
-                delta,
-                product: product.get({ plain: true })
-            };
-        });
+        return productWasteAndAudit.quickStockAdjust(reqUser, productId, body);
     }
 
-    /**
-     * Ajuste masivo por Toma Física / Auditoría de Inventario
-     * Cuadra en una transacción atómica el stock físico de múltiples productos,
-     * generando sus respectivos asientos de Kardex (ADJUSTMENT_IN / ADJUSTMENT_OUT).
-     */
     async bulkAuditAdjust(reqUser, body = {}) {
-        const { companyId, activeBranchId, id: userId } = reqUser;
-        const { auditSessionId, reason = 'toma_fisica', notes = '', adjustments = [] } = body;
-
-        if (!Array.isArray(adjustments) || adjustments.length === 0) {
-            throw new Error('No se recibieron ajustes para procesar.');
-        }
-
-        const sessionRef = auditSessionId || `AUD-${Date.now().toString().slice(-6)}`;
-
-        return await sequelize.transaction(async (t) => {
-            let updatedCount = 0;
-            let totalFaltantesQty = 0;
-            let totalSobrantesQty = 0;
-            let totalFaltantesUsd = 0;
-            let totalSobrantesUsd = 0;
-            const movementsToInsert = [];
-
-            let branchExists = null;
-            if (activeBranchId) {
-                branchExists = await Branch.findByPk(activeBranchId, { transaction: t });
-            }
-
-            for (const adj of adjustments) {
-                const { productId, countedStock } = adj;
-                if (!productId || countedStock === undefined || countedStock === null || isNaN(Number(countedStock))) {
-                    continue;
-                }
-
-                const product = await Product.findOne({
-                    where: { id: productId, companyId },
-                    transaction: t,
-                    lock: t.LOCK.UPDATE
-                });
-
-                if (!product) continue;
-
-                const currentStock = parseFloat(product.stockQuantity ?? product.stock ?? 0);
-                const targetStock = precision.round(Math.max(0, parseFloat(countedStock)), 4);
-                const delta = precision.round(precision.subtract(targetStock, currentStock), 4);
-
-                if (delta === 0) continue;
-
-                await product.update({
-                    stock: targetStock,
-                    stockQuantity: String(targetStock)
-                }, { transaction: t });
-
-                if (branchExists) {
-                    const [bStock] = await BranchStock.findOrCreate({
-                        where: { productId, branchId: activeBranchId, companyId },
-                        defaults: { productId, branchId: activeBranchId, companyId, quantity: targetStock },
-                        transaction: t
-                    });
-                    await bStock.update({ quantity: targetStock }, { transaction: t });
-                }
-
-                const unitCost = parseFloat(product.cost || 0);
-                const movementType = delta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT';
-                const movementQty = Math.abs(delta);
-                const impactUsd = precision.round(movementQty * unitCost, 2);
-
-                if (delta < 0) {
-                    totalFaltantesQty = precision.round(totalFaltantesQty + movementQty, 4);
-                    totalFaltantesUsd = precision.round(totalFaltantesUsd + impactUsd, 2);
-                } else {
-                    totalSobrantesQty = precision.round(totalSobrantesQty + movementQty, 4);
-                    totalSobrantesUsd = precision.round(totalSobrantesUsd + impactUsd, 2);
-                }
-
-                movementsToInsert.push({
-                    id: generateRobustId(),
-                    productId,
-                    userId,
-                    companyId,
-                    branchId: activeBranchId || null,
-                    type: movementType,
-                    category: reason,
-                    quantity: movementQty,
-                    stockBefore: currentStock,
-                    stockAfter: targetStock,
-                    costPrice: unitCost,
-                    totalCost: impactUsd,
-                    responsibleName: reqUser.name || reqUser.username || 'Admin',
-                    reason: `Toma Física (${sessionRef}): ${delta > 0 ? '+' : ''}${delta} unidades. ${notes}`.trim(),
-                    notes: notes || `Auditoría física de inventario: de ${currentStock} a ${targetStock}`,
-                    referenceId: sessionRef,
-                    date: new Date().toISOString()
-                });
-
-                updatedCount++;
-            }
-
-            if (movementsToInsert.length > 0) {
-                await StockMovement.bulkCreate(movementsToInsert, { transaction: t });
-            }
-
-            const netDiffUsd = precision.round(totalSobrantesUsd - totalFaltantesUsd, 2);
-
-            return {
-                success: true,
-                auditSessionId: sessionRef,
-                updatedCount,
-                totalFaltantesQty,
-                totalSobrantesQty,
-                totalFaltantesUsd,
-                totalSobrantesUsd,
-                netDiffUsd,
-                timestamp: new Date().toISOString()
-            };
-        });
+        return productWasteAndAudit.bulkAuditAdjust(reqUser, body);
     }
 
 }

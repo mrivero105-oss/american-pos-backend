@@ -1,9 +1,26 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-    Banknote, Plus, ChevronUp, ChevronDown, Trash2, Save, RefreshCcw, 
-    CreditCard, Send, DollarSign, User, QrCode, Wallet, Building2, 
-    CheckCircle2, Hash, Layers, ShieldCheck, ChevronRight, SlidersHorizontal,
-    Smartphone, Upload, Image as ImageIcon, Eye
+import { useState, useEffect } from 'react';
+import {
+    Banknote, 
+    Plus, 
+    ChevronUp, 
+    ChevronDown, 
+    Trash2, 
+    Save, 
+    RefreshCcw, 
+    CreditCard, 
+    Send, 
+    DollarSign, 
+    User, 
+    QrCode, 
+    Wallet, 
+    Building2, 
+    CheckCircle2, 
+    Hash, 
+    ShieldCheck, 
+    SlidersHorizontal, 
+    Smartphone, 
+    Upload, 
+    Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../../services/api';
@@ -667,7 +684,7 @@ export default function PaymentMethodSettings({
                     <div className="text-center py-12 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
                         <Banknote size={40} className="mx-auto text-slate-400 mb-2" />
                         <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No hay métodos de pago registrados</p>
-                        <p className="text-xs text-slate-500 mt-0.5">Haz clic en "Agregar Método" para crear uno nuevo.</p>
+                        <p className="text-xs text-slate-500 mt-0.5">Haz clic en &ldquo;Agregar Método&rdquo; para crear uno nuevo.</p>
                     </div>
                 ) : (
                     paymentMethods.map((method, index) => {
@@ -1031,7 +1048,7 @@ export default function PaymentMethodSettings({
                                                                     )}
                                                                     <div>
                                                                         <p className="text-xs font-bold text-slate-900 dark:text-white">Imagen de Código QR Oficial del Banco</p>
-                                                                        <p className="text-[11px] text-slate-500 dark:text-slate-400">Sube la captura de 'Mi QR' o tu afiche de Pago Móvil provisto por tu banco.</p>
+                                                                        <p className="text-[11px] text-slate-500 dark:text-slate-400">Sube la captura de &apos;Mi QR&apos; o tu afiche de Pago Móvil provisto por tu banco.</p>
                                                                     </div>
                                                                 </div>
                                                                 <div className="flex items-center gap-2">

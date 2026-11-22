@@ -1,14 +1,29 @@
-import { useState, useEffect, useRef } from 'react';
-import { 
-    X, Check, CheckCircle2, AlertCircle, Package, DollarSign, 
-    ArrowRight, ShoppingBag, Plus, Minus, FileText, Upload, 
-    Eye, RefreshCw, Calculator, Truck, ShieldCheck, Hash, Camera, Trash2, Printer, FileCheck
+import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+    X, 
+    Check, 
+    CheckCircle2, 
+    AlertCircle, 
+    Package, 
+    DollarSign, 
+    ShoppingBag, 
+    Plus, 
+    Minus, 
+    FileText, 
+    Upload, 
+    Eye, 
+    RefreshCw, 
+    ShieldCheck, 
+    Hash, 
+    Camera, 
+    Trash2, 
+    Printer, 
+    FileCheck
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import BaseModal from './BaseModal';
-import { getImageUrl, getInvoiceUrl } from '../utils/imageUtils';
+import { getInvoiceUrl } from '../utils/imageUtils';
 import { isDollarOnlyCountry } from '../utils/format';
 import CameraScanModal from './CameraScanModal';
 import HardwareScannerModal from './HardwareScannerModal';
@@ -39,17 +54,8 @@ export default function OrderReceptionModal({
     const [reconciliationBanner, setReconciliationBanner] = useState(null);
     const fileInputRef = useRef(null);
 
-    useEffect(() => {
-        if (isOpen && order) {
-            setReferenceNumber(order.referenceNumber || '');
-            setPaymentStatus(order.paymentStatus || 'unpaid');
-            setInvoiceUrl(order.invoiceUrl || '');
-            setNotes(order.notes || '');
-            loadOrderItemsWithProductData();
-        }
-    }, [isOpen, order]);
-
-    const loadOrderItemsWithProductData = async () => {
+    const loadOrderItemsWithProductData = useCallback(async () => {
+        if (!order) return;
         try {
             setLoadingProducts(true);
             const rawItems = typeof order.items === 'string' ? JSON.parse(order.items || '[]') : (order.items || []);
@@ -111,7 +117,17 @@ export default function OrderReceptionModal({
         } finally {
             setLoadingProducts(false);
         }
-    };
+    }, [order]);
+
+    useEffect(() => {
+        if (isOpen && order) {
+            setReferenceNumber(order.referenceNumber || '');
+            setPaymentStatus(order.paymentStatus || 'unpaid');
+            setInvoiceUrl(order.invoiceUrl || '');
+            setNotes(order.notes || '');
+            loadOrderItemsWithProductData();
+        }
+    }, [isOpen, order, loadOrderItemsWithProductData]);
 
     if (!isOpen || !order) return null;
 
@@ -190,16 +206,6 @@ export default function OrderReceptionModal({
         }));
     };
 
-    const handleUnitsPerBulkChange = (productId, newUnits) => {
-        const units = Math.max(1, parseInt(newUnits, 10) || 1);
-        setItems(prev => prev.map(item => {
-            if (item.productId === productId) {
-                const bulkCost = Number((item.cost * units).toFixed(2));
-                return { ...item, unitsPerBulk: units, bulkCost };
-            }
-            return item;
-        }));
-    };
 
     const handlePriceChange = (productId, newPrice) => {
         const rawPrice = parseFloat(newPrice);
@@ -314,10 +320,6 @@ export default function OrderReceptionModal({
         }
     };
 
-    const handleScanCompleted = async (url) => {
-        setInvoiceUrl(url);
-        await reconcileWithAI(url);
-    };
 
     // Totales calculados
     const receivedItems = items.filter(i => i.isReceived && i.receivedQuantity > 0);

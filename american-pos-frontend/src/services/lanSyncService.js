@@ -3,6 +3,7 @@ import api from './api';
 import { db as primaryDb } from './db';
 import db from '../db/localDb';
 import { fetchGlobalSettings } from '../utils/format';
+import secureMobileStorage from '../utils/secureMobileStorage';
 
 class LANSyncService {
   constructor() {
@@ -26,15 +27,15 @@ class LANSyncService {
     this.printedSaleIds.add(key);
     try {
       sessionStorage.setItem('last_local_printed_sale_id', key);
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[lanSyncService] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
   }
 
   /**
    * Conecta al clúster LAN por WebSockets y activa el monitoreo continuo de red.
    */
   init() {
-    const currentAuthToken = typeof window !== 'undefined' ? (localStorage.getItem('auth_token') || null) : null;
-    const currentSyncKey = typeof window !== 'undefined' ? (import.meta.env?.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key') || null) : null;
+    const currentAuthToken = typeof window !== 'undefined' ? (secureMobileStorage.getToken() || null) : null;
+    const currentSyncKey = typeof window !== 'undefined' ? (localStorage.getItem('sync_secret_key') || null) : null;
     if (!currentAuthToken && !currentSyncKey) {
       return;
     }
@@ -43,7 +44,7 @@ class LANSyncService {
     if (this.socket && (this.socket.connected || this.socket.active || this.isConnecting) && !tokenChanged) return;
 
     if (tokenChanged) {
-      try { this.socket.disconnect(); } catch (_) {}
+      try { this.socket.disconnect(); } catch { /* Canal o socket ya cerrado previamente */ }
       this.socket = null;
       this.isConnecting = false;
     }
@@ -88,7 +89,7 @@ class LANSyncService {
     try {
       if (this.socket) {
         if (this.socket.connected || this.socket.active || this.isConnecting) return;
-        try { this.socket.disconnect(); } catch (_) {}
+        try { this.socket.disconnect(); } catch { /* Canal o socket ya cerrado previamente */ }
         this.socket = null;
       }
       this.isConnecting = true;
@@ -101,8 +102,8 @@ class LANSyncService {
       let baseUrl = isLocalLoopback
         ? `http://${localHost}:${targetLocalPort}`
         : (api.defaults.baseURL || (isAndroidCap ? 'http://192.168.1.30:3005' : `${window.location.protocol}//${window.location.hostname}:${targetLocalPort}`));
-      const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-      const syncKey = typeof window !== 'undefined' ? (import.meta.env?.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key')) : null;
+      const authToken = typeof window !== 'undefined' ? secureMobileStorage.getToken() : null;
+      const syncKey = typeof window !== 'undefined' ? localStorage.getItem('sync_secret_key') : null;
       if (!authToken && !syncKey) {
         this.isConnecting = false;
         return;
@@ -125,14 +126,15 @@ class LANSyncService {
         this.status.state = navigator.onLine ? 'CLOUD_ONLINE' : 'LAN_P2P_ACTIVE';
 
         try {
-          const userStr = localStorage.getItem('isaac_pos_saved_user_profile') || localStorage.getItem('pos_user') || sessionStorage.getItem('pos_user');
-          if (userStr) {
-            const parsedUser = JSON.parse(userStr);
-            if (parsedUser?.companyId) {
-              this.socket.emit('join_company', parsedUser.companyId);
-            }
+          const cachedProfile = secureMobileStorage.getUserProfile();
+          const legacyStr = !cachedProfile ? (localStorage.getItem('pos_user') || sessionStorage.getItem('pos_user')) : null;
+          const parsedUser = cachedProfile || (legacyStr ? JSON.parse(legacyStr) : null);
+          if (parsedUser?.companyId) {
+            this.socket.emit('join_company', parsedUser.companyId);
           }
-        } catch (e) {}
+        } catch (e) {
+          console.warn('[LAN_SYNC] No se pudo leer compañía de usuario al conectar:', e?.message);
+        }
 
         this.fetchLANPeers();
         this.notifyListeners();
@@ -217,7 +219,9 @@ class LANSyncService {
           const savedBiz = JSON.parse(localStorage.getItem('pos_business_settings') || '{}');
           const updatedBiz = { ...savedBiz, ...cfg };
           localStorage.setItem('pos_business_settings', JSON.stringify(updatedBiz));
-        } catch (_) {}
+        } catch (err) {
+          console.warn('[LAN_SYNC] Error guardando configuración local:', err?.message);
+        }
       });
 
       // 🖨️ Escuchar réplica de impresión en tiempo real (Modo Multicaja 3 Impresoras)
@@ -234,7 +238,9 @@ class LANSyncService {
               try {
                 const savedBiz = JSON.parse(localStorage.getItem('pos_business_settings') || '{}');
                 isBroadcastEnabled = savedBiz.broadcastPrintingEnabled === true;
-              } catch (_) {}
+              } catch (err) {
+                console.warn('[LAN_SYNC] Error leyendo configuración local de impresión:', err?.message);
+              }
             }
             if (!isBroadcastEnabled) return;
           }
@@ -270,7 +276,9 @@ class LANSyncService {
                 localStorage.setItem('pos_broadcast_print_enabled', 'false');
                 return;
               }
-            } catch (e) { }
+            } catch (e) {
+              console.warn('[LAN_SYNC] No se pudo consultar /settings/business para réplica:', e?.message);
+            }
 
             console.log(`[LAN_SYNC] 🖨️ Imprimiendo réplica simultánea de venta #${data.sale.invoiceNumber || data.sale.id} en ${stationPrinter}`);
 
@@ -281,7 +289,9 @@ class LANSyncService {
             try {
               const res = await api.get('/settings/payment-methods');
               payMethods = res.data || [];
-            } catch (e) { }
+            } catch (e) {
+              console.warn('[LAN_SYNC] No se pudo consultar /settings/business para réplica:', e?.message);
+            }
 
             const escPosContent = formatSaleToEscPos(
               data.sale,
@@ -303,8 +313,8 @@ class LANSyncService {
   }
 
   async fetchLANPeers() {
-    const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    const syncKey = typeof window !== 'undefined' ? (import.meta.env?.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key')) : null;
+    const authToken = typeof window !== 'undefined' ? secureMobileStorage.getToken() : null;
+    const syncKey = typeof window !== 'undefined' ? localStorage.getItem('sync_secret_key') : null;
     if (!authToken && !syncKey) return;
     try {
       const res = await api.get('/lan/peers');
@@ -320,6 +330,9 @@ class LANSyncService {
         this.notifyListeners();
       }
     } catch (e) {
+      if (navigator.onLine) {
+        console.warn('[LAN_SYNC] Error consultando pares LAN:', e?.message);
+      }
       if (!navigator.onLine && this.status.peers.length === 0) {
         this.status.state = 'OFFLINE_ISOLATED';
         this.notifyListeners();
@@ -351,21 +364,21 @@ class LANSyncService {
           if (strId) {
             try {
               prod = await db.products.get(strId);
-            } catch (_) {}
+            } catch { /* Fallback al siguiente índice en Dexie */ }
           }
 
           // Si no se encontró y es un número válido, buscar por clave numérica
           if (!prod && hasValidNumId) {
             try {
               prod = await db.products.get(numId);
-            } catch (_) {}
+            } catch { /* Fallback al siguiente índice en Dexie */ }
           }
 
           // Búsqueda alternativa por atributo 'id'
           if (!prod && strId) {
             try {
               prod = await db.products.where('id').equals(strId).first();
-            } catch (_) {}
+            } catch { /* Fallback al siguiente índice en Dexie */ }
           }
 
           // Búsqueda por código de barras si viene en el ítem
@@ -373,7 +386,7 @@ class LANSyncService {
             const bc = String(item.barcode || item.codigo_barras).trim();
             try {
               prod = await db.products.where('codigo_barras').equals(bc).first();
-            } catch (_) {}
+            } catch { /* Sin coincidencia en índice codigo_barras */ }
           }
 
           if (prod) {
@@ -425,7 +438,7 @@ class LANSyncService {
 
   notifyListeners() {
     this.listeners.forEach(cb => {
-      try { cb(this.status); } catch (e) {}
+      try { cb(this.status); } catch (e) { console.warn('[LAN_SYNC] Error en listener:', e?.message); }
     });
   }
 
@@ -438,7 +451,7 @@ class LANSyncService {
       const userStr = localStorage.getItem('pos_user') || sessionStorage.getItem('pos_user');
       let companyId = null;
       if (userStr) {
-        try { companyId = JSON.parse(userStr)?.companyId; } catch (_) {}
+        try { companyId = JSON.parse(userStr)?.companyId; } catch (err) { console.warn('[LAN_SYNC] Error leyendo companyId:', err?.message); }
       }
 
       this.socket.emit('lan_sale_sync', {

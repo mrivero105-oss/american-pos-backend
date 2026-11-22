@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, X, Image as ImageIcon, Download, Check, AlertCircle, RefreshCw, Link2, Globe, Sparkles } from 'lucide-react';
+import { Search, X, Check, AlertCircle, RefreshCw, Link2, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../../services/api';
 import { hapticTap, hapticSuccess } from '../../utils/haptics';
@@ -11,8 +11,7 @@ export default function MobileImageSearchModal({
   productName = '',
   productCategory = 'General',
   productId = 'new',
-  onImageSelected,
-  T
+  onImageSelected
 }) {
   const [searchTerm, setSearchTerm] = useState(productName || '');
   const [activeTab, setActiveTab] = useState('web'); // 'web' | 'url'
@@ -25,27 +24,13 @@ export default function MobileImageSearchModal({
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  // Iniciar búsqueda automática al abrir si hay término
+  const searchTermRef = useRef(searchTerm);
   useEffect(() => {
-    if (isOpen) {
-      const term = (productName || '').trim();
-      setSearchTerm(term);
-      setSelectedCandidate(null);
-      setSearchError('');
-      setCustomUrl('');
-      setPreviewCustomUrl('');
-      setActiveTab('web');
+    searchTermRef.current = searchTerm;
+  }, [searchTerm]);
 
-      if (term) {
-        performSearch(term);
-      } else {
-        setCandidates([]);
-      }
-    }
-  }, [isOpen, productName]);
-
-  const performSearch = async (termToSearch) => {
-    const query = (termToSearch || searchTerm || '').trim();
+  const performSearch = useCallback(async (termToSearch) => {
+    const query = (termToSearch || searchTermRef.current || '').trim();
     if (!query) {
       setSearchError('Ingresa el nombre del producto para buscar su imagen comercial.');
       return;
@@ -77,7 +62,26 @@ export default function MobileImageSearchModal({
     } finally {
       setIsSearching(false);
     }
-  };
+  }, [productId, productCategory]);
+
+  // Iniciar búsqueda automática al abrir si hay término
+  useEffect(() => {
+    if (isOpen) {
+      const term = (productName || '').trim();
+      setSearchTerm(term);
+      setSelectedCandidate(null);
+      setSearchError('');
+      setCustomUrl('');
+      setPreviewCustomUrl('');
+      setActiveTab('web');
+
+      if (term) {
+        performSearch(term);
+      } else {
+        setCandidates([]);
+      }
+    }
+  }, [isOpen, productName, performSearch]);
 
   const handleSelectImage = async (imgUrl) => {
     if (!imgUrl) return;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X, ArrowRightLeft, AlertCircle, Building2 } from 'lucide-react';
 import api from '../services/api';
 import BaseModal from './BaseModal';
@@ -12,14 +12,17 @@ export default function StockTransferModal({ isOpen, onClose, product, currentBr
     const [error, setError] = useState(null);
 
     // Filter out the current branch from destinations
-    const availableDestinations = branches.filter(b => b.id !== currentBranchId);
+    const availableDestinations = useMemo(
+        () => (branches || []).filter(b => b.id !== currentBranchId),
+        [branches, currentBranchId]
+    );
 
     useEffect(() => {
         if (isOpen) {
             setFormData({ toBranchId: availableDestinations[0]?.id || '', quantity: '' });
             setError(null);
         }
-    }, [isOpen]);
+    }, [isOpen, availableDestinations]);
 
     if (!isOpen || !product) return null;
 

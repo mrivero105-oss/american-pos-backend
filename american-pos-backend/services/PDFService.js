@@ -3,8 +3,14 @@ const fs = require('fs');
 const { ensureFetchPolyfill } = require('../utils/ensureFetchPolyfill');
 ensureFetchPolyfill();
 
-const AIService = require('./AIService');
 const precision = require('../utils/precision');
+let AIServiceRef = null;
+const getAIService = () => {
+    if (!AIServiceRef) {
+        AIServiceRef = require('./AIService');
+    }
+    return AIServiceRef;
+};
 
 /**
  * Servicio encargado de la extracción y procesamiento de datos desde PDFs e imágenes de proveedores.
@@ -90,7 +96,7 @@ class PDFService {
             const groupedText = result ? result.text : '';
             const looksLikeFiscalInvoice = /\b(FACTURA|SENIAT|BASE\s+IMPONIBLE|NRO\.?\s*CONTROL|NOTA\s+DE\s+ENTREGA)\b/i.test(groupedText);
 
-            if (looksLikeFiscalInvoice && AIService.initialized && dataBuffer.length <= 15 * 1024 * 1024) {
+            if (looksLikeFiscalInvoice && dataBuffer.length <= 15 * 1024 * 1024 && getAIService().initialized) {
                 try {
                     console.log('[PDFService] Documento fiscal detectado en PDF. Aplicando motor multimodal de alta precisión...');
                     const aiInvoice = await this._fallbackToAI(dataBuffer);
@@ -366,7 +372,7 @@ class PDFService {
      */
     static async _fallbackToAI(buffer) {
         try {
-            return await AIService.analyzeInvoicePDF(buffer);
+            return await getAIService().analyzeInvoicePDF(buffer);
         } catch (error) {
             console.error('[PDF] Fallo en fallback de IA:', error.message);
             throw error;

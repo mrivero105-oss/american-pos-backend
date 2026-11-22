@@ -1,12 +1,27 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../hooks/AuthContext';
-import { 
-    Users as UsersIcon, Plus, Edit2, Trash2, Shield, User as UserIcon, 
-    Search, Key, Phone, Building, CheckCircle2, XCircle, LayoutGrid, 
-    Table as TableIcon, Copy, Share2, BarChart3, Clock, DollarSign,
-    Lock, RefreshCcw, ShieldCheck, ShieldAlert, Award
+import {
+    Users as UsersIcon, 
+    Plus, 
+    Edit2, 
+    Trash2, 
+    Shield, 
+    User as UserIcon, 
+    Search, 
+    Key, 
+    Building, 
+    XCircle, 
+    LayoutGrid, 
+    Table as TableIcon, 
+    Copy, 
+    Share2, 
+    BarChart3, 
+    DollarSign, 
+    RefreshCcw, 
+    ShieldCheck, 
+    Award
 } from 'lucide-react';
 import UserModal from '../components/UserModal';
 import ConfirmModal from '../components/ConfirmModal';
@@ -65,15 +80,7 @@ export default function Users() {
         return role === 'superadmin' || role === 'owner' || role === 'dueño';
     }, [currentUser?.role]);
 
-    useEffect(() => {
-        fetchUsers(isMasterRevealActive);
-    }, [isMasterRevealActive]);
-
-    useEffect(() => {
-        fetchBranches();
-    }, []);
-
-    const fetchUsers = async (revealMaster = false) => {
+    const fetchUsers = useCallback(async (revealMaster = false) => {
         try {
             setLoading(true);
             const shouldReveal = revealMaster || String(currentUser?.role || '').toLowerCase() === 'superadmin';
@@ -85,16 +92,24 @@ export default function Users() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [currentUser?.role]);
 
-    const fetchBranches = async () => {
+    const fetchBranches = useCallback(async () => {
         try {
             const { data } = await api.get('/branches');
             setBranches(data || []);
         } catch (e) {
             console.error('Error fetching branches', e);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        fetchUsers(isMasterRevealActive);
+    }, [isMasterRevealActive, fetchUsers]);
+
+    useEffect(() => {
+        fetchBranches();
+    }, [fetchBranches]);
 
     const fetchUserStats = async (user) => {
         setStatsUser(user);

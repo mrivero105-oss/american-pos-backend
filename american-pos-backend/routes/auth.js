@@ -5,10 +5,18 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { User } = require('../database/models');
-const { generateRobustId } = require('../utils/helpers');
+const { generateRobustId, safeSecretEqual } = require('../utils/helpers');
 const auditController = require('../controllers/audit');
 const { verifyLicense } = require('../middleware/licenseMiddleware');
 const { invalidateUserAuthCache } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    loginSchema,
+    quickUnlockSchema,
+    supervisorAuthorizeSchema,
+    changePinSchema,
+    setQuickPinSchema
+} = require('../schemas/authSchema');
 
 const quickUnlockLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
@@ -35,7 +43,7 @@ const ipCleanupTimer = setInterval(() => {
 }, 5 * 60 * 1000);
 if (typeof ipCleanupTimer.unref === 'function') ipCleanupTimer.unref();
 
-router.post('/login', async (req, res) => {
+router.post('/login', validate(loginSchema), async (req, res) => {
     const { email, username, password } = req.body;
     const clientIp = (req.ip || req.connection?.remoteAddress || '127.0.0.1').replace('::ffff:', '');
     const isLoopback = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost';
@@ -144,8 +152,8 @@ router.post('/login', async (req, res) => {
             if (currentPassword.startsWith('$2') || currentPassword.length > 30) {
                 isMatch = await bcrypt.compare(password, currentPassword);
             } else {
-                // Legacy plaintext password check
-                if (password === currentPassword) {
+                // Legacy plaintext password check (constant-time)
+                if (safeSecretEqual(password, currentPassword)) {
                     isMatch = true;
                     // Auto-upgrade password to bcrypt
                     try {
@@ -174,7 +182,7 @@ router.post('/login', async (req, res) => {
                             isMatch = await bcrypt.compare(sha256Pin, currentPin);
                         }
                     } else {
-                        if (String(password) === currentPin) {
+                        if (safeSecretEqual(String(password), currentPin)) {
                             isMatch = true;
                         }
                     }
@@ -342,10 +350,8 @@ router.post('/login', async (req, res) => {
         }
     } catch (error) {
         console.error('[LOGIN] Internal error stack trace:', error.stack);
-        const hint = error.message && error.message.length < 200 ? error.message : 'Unknown';
-        res.status(500).json({ 
-            error: 'Error interno del servidor',
-            hint: hint
+        res.status(500).json({
+            error: 'Error interno del servidor'
         });
     }
 });
@@ -460,7 +466,7 @@ router.get('/cashiers', require('../middleware/auth').verifyToken, async (req, r
 /**
  * POST /change-pin - Update user PIN/Password (Protected)
  */
-router.post('/change-pin', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/change-pin', require('../middleware/auth').verifyToken, validate(changePinSchema), async (req, res) => {
     try {
         const { oldPin, newPin } = req.body;
         if (!oldPin || !newPin) {
@@ -506,7 +512,7 @@ router.get('/supervisors', require('../middleware/auth').verifyToken, async (req
 });
 
 // POST /supervisor-authorize - Validar PIN de supervisor y autorizar acción
-router.post('/supervisor-authorize', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/supervisor-authorize', require('../middleware/auth').verifyToken, validate(supervisorAuthorizeSchema), async (req, res) => {
     try {
         const AuthorizationService = require('../services/AuthorizationService');
         const approval = await AuthorizationService.authorizeAction(req.user, req.body);
@@ -517,7 +523,7 @@ router.post('/supervisor-authorize', require('../middleware/auth').verifyToken, 
     }
 });
 
-router.post('/supervisor_authorize', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/supervisor_authorize', require('../middleware/auth').verifyToken, validate(supervisorAuthorizeSchema), async (req, res) => {
     try {
         const AuthorizationService = require('../services/AuthorizationService');
         const approval = await AuthorizationService.authorizeAction(req.user, req.body);
@@ -554,7 +560,7 @@ router.get('/public-cashiers', verifyLicense, async (req, res) => {
 });
 
 // POST /quick-unlock - Desbloqueo rápido de sesión por PIN o contraseña tras inactividad
-router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').verifyToken, validate(quickUnlockSchema), async (req, res) => {
     try {
         const { pinOrPassword } = req.body;
         if (!pinOrPassword) {
@@ -576,7 +582,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
         if (user.quickPin) {
             if (user.quickPin.startsWith('$2')) {
                 isMatch = await bcrypt.compare(inputStr, user.quickPin);
-            } else if (inputStr === user.quickPin) {
+            } else if (safeSecretEqual(inputStr, user.quickPin)) {
                 isMatch = true;
                 user.quickPin = await bcrypt.hash(inputStr, 10);
                 await user.save().catch(() => {});
@@ -592,7 +598,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
                 if (!isMatch) {
                     isMatch = await bcrypt.compare(inputStr, currentPin);
                 }
-            } else if (inputStr === currentPin) {
+            } else if (safeSecretEqual(inputStr, currentPin)) {
                 isMatch = true;
                 user.supervisorPin = await bcrypt.hash(shaInput, 10);
                 await user.save().catch(() => {});
@@ -603,7 +609,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
         if (!isMatch && user.password) {
             if (user.password.startsWith('$2')) {
                 isMatch = await bcrypt.compare(inputStr, user.password);
-            } else if (inputStr === user.password) {
+            } else if (safeSecretEqual(inputStr, user.password)) {
                 isMatch = true;
                 user.password = await bcrypt.hash(inputStr, 10);
                 await user.save().catch(() => {});
@@ -635,7 +641,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
 });
 
 // POST /set-quick-pin - Configurar PIN rápido de cajero (Requiere re-autenticación obligatoria)
-router.post('/set-quick-pin', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/set-quick-pin', require('../middleware/auth').verifyToken, validate(setQuickPinSchema), async (req, res) => {
     try {
         const { pin, currentPassword } = req.body;
         if (!pin || String(pin).length < 4) {
@@ -655,7 +661,7 @@ router.post('/set-quick-pin', require('../middleware/auth').verifyToken, async (
             const curPass = user.password || '';
             if (curPass.startsWith('$2') || curPass.length > 30) {
                 isAuthValid = await bcrypt.compare(String(currentPassword), curPass);
-            } else if (String(currentPassword) === curPass) {
+            } else if (safeSecretEqual(String(currentPassword), curPass)) {
                 isAuthValid = true;
             }
 

@@ -1,13 +1,19 @@
-import { useState, useEffect } from 'react';
-import { 
-    Shield, AlertCircle, TrendingDown, Users, 
-    ArrowRight, Printer, Search, Filter, 
-    CheckCircle2, AlertTriangle, Fingerprint,
-    Calendar, User, Clock, DollarSign, Monitor, Activity
+import { useState, useEffect, useCallback } from 'react';
+import {
+    Shield, 
+    AlertCircle, 
+    Printer, 
+    Search, 
+    CheckCircle2, 
+    AlertTriangle, 
+    Fingerprint, 
+    User, 
+    Monitor, 
+    Activity
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { formatUSD, formatDate, getGlobalSettings, isSingleCurrencyMode } from '../utils/format';
+import { formatUSD, formatDate, isSingleCurrencyMode } from '../utils/format';
 import { useAuth } from '../hooks/AuthContext';
 import BaseModal from '../components/BaseModal';
 
@@ -23,18 +29,13 @@ export default function AuditDashboard() {
     const [loading, setLoading] = useState(true);
     const [downloading, setDownloading] = useState(false);
     const [selectedAudit, setSelectedAudit] = useState(null);
-    const [page, setPage] = useState(1);
 
-    useEffect(() => {
-        fetchAuditData();
-    }, [page]);
-
-    const fetchAuditData = async () => {
+    const fetchAuditData = useCallback(async () => {
         try {
             setLoading(true);
             const [summaryRes, historyRes, alertsRes, activeRes] = await Promise.all([
                 api.get('/cash/audit-summary'),
-                api.get('/cash/audit-history', { params: { page, limit: 10 } }),
+                api.get('/cash/audit-history', { params: { page: 1, limit: 10 } }),
                 api.get('/cash/alerts'),
                 api.get('/cash/active-shifts').catch(() => ({ data: [] }))
             ]);
@@ -64,7 +65,11 @@ export default function AuditDashboard() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        fetchAuditData();
+    }, [fetchAuditData]);
 
     const handleDownloadReport = async () => {
         try {
@@ -479,7 +484,7 @@ export default function AuditDashboard() {
                         {selectedAudit.notes && (
                             <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl">
                                 <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider mb-1">Notas del Cajero</p>
-                                <p className="text-xs font-medium text-amber-900 dark:text-amber-200 italic">"{selectedAudit.notes}"</p>
+                                <p className="text-xs font-medium text-amber-900 dark:text-amber-200 italic">&ldquo;{selectedAudit.notes}&rdquo;</p>
                             </div>
                         )}
 

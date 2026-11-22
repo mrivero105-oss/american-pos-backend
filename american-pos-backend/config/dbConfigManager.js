@@ -5,55 +5,34 @@ const crypto = require('crypto');
 const os = require('os');
 const { Client: PgClient } = require('pg');
 const { BASE_PATH } = require('./paths');
+const {
+    defaultMachineMaterial,
+    getOrCreateSharedDpapiAesKey,
+    protectString,
+    unprotectString
+} = require('../utils/dpapiCrypto');
 
 const CONFIG_FILE_PATH = path.join(BASE_PATH, 'db-config.json');
+const DPAPI_KEY_FILE_PATH = path.join(BASE_PATH, '.dbcfg.key.dpapi');
 const DB_IDENTIFIER_REGEX = /^[a-zA-Z0-9_]{1,63}$/;
-let cachedLocalAesKey = null;
 
-function getElectronSafeStorage() {
-    try {
-        if (process.versions && process.versions.electron) {
-            const electron = require('electron');
-            if (electron && electron.safeStorage && typeof electron.safeStorage.isEncryptionAvailable === 'function') {
-                if (electron.safeStorage.isEncryptionAvailable()) {
-                    return electron.safeStorage;
-                }
-            }
-        }
-    } catch (_) {}
-    return null;
-}
-
-function getLocalAesKey() {
-    if (cachedLocalAesKey) return cachedLocalAesKey;
+function getDbCryptoOptions() {
     const explicitKey = process.env.DB_CONFIG_KEY ? String(process.env.DB_CONFIG_KEY).trim() : '';
-    const material = explicitKey || `${os.hostname()}|${process.platform}|${process.arch}|${BASE_PATH}|isaac-db-cfg-v1`;
-    cachedLocalAesKey = crypto.scryptSync(material, 'isaac-pos-dbcfg-salt-2026', 32);
-    return cachedLocalAesKey;
+    return {
+        keyFilePath: DPAPI_KEY_FILE_PATH,
+        fallbackMaterial: explicitKey || defaultMachineMaterial(BASE_PATH, 'isaac-db-cfg-v1'),
+        fallbackSalt: 'isaac-pos-dbcfg-salt-2026',
+        skipIfEnvKey: true,
+        allowSafeStorageFallback: true
+    };
 }
 
 function encryptDbPassword(plainPassword) {
-    const raw = plainPassword === undefined || plainPassword === null ? '' : String(plainPassword);
-    if (!raw) {
-        return { passwordEncrypted: true, passwordEncScheme: 'empty', passwordCipher: '' };
-    }
-    const safeStorage = getElectronSafeStorage();
-    if (safeStorage) {
-        const encBuf = safeStorage.encryptString(raw);
-        return {
-            passwordEncrypted: true,
-            passwordEncScheme: 'dpapi',
-            passwordCipher: encBuf.toString('base64')
-        };
-    }
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', getLocalAesKey(), iv);
-    const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
+    const res = protectString(plainPassword, getDbCryptoOptions());
     return {
         passwordEncrypted: true,
-        passwordEncScheme: 'aes256gcm',
-        passwordCipher: `${iv.toString('hex')}:${tag.toString('hex')}:${encrypted.toString('hex')}`
+        passwordEncScheme: res.scheme,
+        passwordCipher: res.cipher
     };
 }
 
@@ -61,24 +40,18 @@ function decryptDbPassword(fileConfig) {
     if (!fileConfig || typeof fileConfig !== 'object') return undefined;
     if (fileConfig.passwordEncScheme === 'empty') return '';
 
-    if (fileConfig.passwordCipher && fileConfig.passwordEncScheme === 'dpapi') {
-        const safeStorage = getElectronSafeStorage();
-        if (!safeStorage) {
-            throw new Error('safeStorage DPAPI no disponible para descifrar db-config.json');
+    if (fileConfig.passwordCipher && fileConfig.passwordEncScheme) {
+        try {
+            return unprotectString(fileConfig.passwordCipher, fileConfig.passwordEncScheme, getDbCryptoOptions());
+        } catch (err) {
+            if (fileConfig.passwordEncScheme === 'aes256gcm_dpapi') {
+                throw new Error('Clave maestra DPAPI (.dbcfg.key.dpapi) no disponible para descifrar db-config.json');
+            }
+            if (fileConfig.passwordEncScheme === 'dpapi') {
+                throw new Error('safeStorage DPAPI (solo Electron) no disponible para descifrar db-config.json legado desde Node puro');
+            }
+            throw err;
         }
-        return safeStorage.decryptString(Buffer.from(String(fileConfig.passwordCipher), 'base64'));
-    }
-
-    if (fileConfig.passwordCipher && fileConfig.passwordEncScheme === 'aes256gcm') {
-        const parts = String(fileConfig.passwordCipher).split(':');
-        if (parts.length !== 3) {
-            throw new Error('Formato de cifra AES-256-GCM inválido en db-config.json');
-        }
-        const [ivHex, tagHex, dataHex] = parts;
-        const decipher = crypto.createDecipheriv('aes-256-gcm', getLocalAesKey(), Buffer.from(ivHex, 'hex'));
-        decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-        const dec = Buffer.concat([decipher.update(Buffer.from(dataHex, 'hex')), decipher.final()]);
-        return dec.toString('utf8');
     }
 
     if (fileConfig.password !== undefined) {
@@ -197,8 +170,15 @@ class DbConfigManager {
             updatedAt: fileConfig.updatedAt || null
         };
 
-        // Migración silenciosa automática: si existía contraseña en claro en CONFIG_FILE_PATH, reescribir cifrada
-        if (loadedFromPrimaryPath && fileConfig.password !== undefined && !fileConfig.passwordEncrypted) {
+        // Migración automática:
+        // 1) Contraseña en texto plano -> esquema cifrado actual
+        // 2) Esquema 'dpapi' exclusivo de Electron -> 'aes256gcm_dpapi' interoperable con Node puro (Edición Ultra)
+        const needsPlainMigration = fileConfig.password !== undefined && !fileConfig.passwordEncrypted;
+        const needsDpapiUpgrade = !isTestMode
+            && fileConfig.passwordEncScheme === 'dpapi'
+            && decryptedPassword !== undefined
+            && getOrCreateSharedDpapiAesKey(DPAPI_KEY_FILE_PATH, { allowCreate: true, skipIfEnvKey: true }) !== null;
+        if (loadedFromPrimaryPath && (needsPlainMigration || needsDpapiUpgrade)) {
             try {
                 const enc = encryptDbPassword(resolvedConfig.password);
                 const migratedDisk = {

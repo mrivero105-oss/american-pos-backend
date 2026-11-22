@@ -1,10 +1,11 @@
 ﻿$ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$exePath = "C:\Users\mrive\AppData\Local\Programs\Isaac POS Modern\Isaac POS Modern.exe"
-$icoPath = "C:\Users\mrive\AppData\Local\Programs\Isaac POS Modern\app_icon_fhd.ico"
-$rcedit = "C:\Users\mrive\AppData\Local\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0\rcedit-x64.exe"
-$installedResources = "C:\Users\mrive\AppData\Local\Programs\Isaac POS Modern\resources"
+$modernDir = if ($env:ISAAC_MODERN_DIR) { $env:ISAAC_MODERN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\Isaac POS Modern" }
+$exePath = Join-Path $modernDir "Isaac POS Modern.exe"
+$icoPath = Join-Path $modernDir "app_icon_fhd.ico"
+$rcedit = Get-ChildItem (Join-Path $env:LOCALAPPDATA "electron-builder\Cache\winCodeSign\*\rcedit-x64.exe") -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+$installedResources = Join-Path $modernDir "resources"
 
 Write-Host "Verificando ejecutable y recursos..."
 if (-not (Test-Path $exePath)) {

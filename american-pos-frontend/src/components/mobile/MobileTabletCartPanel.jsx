@@ -1,4 +1,3 @@
-import React from 'react';
 import { ShoppingCart, Trash2, User, UserCheck, Percent, PauseCircle, ArrowRight } from 'lucide-react';
 
 export default function MobileTabletCartPanel({
@@ -8,9 +7,7 @@ export default function MobileTabletCartPanel({
   enrichedCart,
   products,
   isUnlimitedStockProduct,
-  requestSupervisorAuth,
   clearCart,
-  showToast,
   customerName,
   customerDoc,
   onOpenCustomerSelect,

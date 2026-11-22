@@ -1,11 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { 
-    Wifi, RefreshCw, CheckCircle2, AlertCircle, Smartphone, Database, 
-    Image, Layers, ArrowRight, ShieldCheck, Server, Zap, Check, Lock, Users
+import { useState, useEffect } from 'react';
+import {
+    Wifi, 
+    RefreshCw, 
+    CheckCircle2, 
+    AlertCircle, 
+    Smartphone, 
+    Database, 
+    Image, 
+    ArrowRight, 
+    ShieldCheck, 
+    Server, 
+    Zap, 
+    Check, 
+    Lock, 
+    Users
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import api, { updateApiBaseUrl, checkServerHealth, autoDiscoverServer, formatServerUrl } from '../services/api';
+import { motion } from 'framer-motion';
+import { updateApiBaseUrl, checkServerHealth, autoDiscoverServer, formatServerUrl } from '../services/api';
 import { syncService } from '../services/syncService';
+import { getTerminalId } from '../utils/terminalIdentity';
 import IsaacWebLogo from './IsaacWebLogo';
 
 export default function MobileInitialSyncWizard({ onComplete }) {
@@ -21,7 +34,6 @@ export default function MobileInitialSyncWizard({ onComplete }) {
     const [pingLatency, setPingLatency] = useState(null);
 
     // Sync execution state
-    const [isSyncing, setIsSyncing] = useState(false);
     const [syncProgress, setSyncProgress] = useState({
         percent: 0,
         message: 'Preparando sincronización inicial...',
@@ -102,7 +114,6 @@ export default function MobileInitialSyncWizard({ onComplete }) {
     const startDeepSync = async () => {
         updateApiBaseUrl(serverIp);
         setStep(2);
-        setIsSyncing(true);
         setSyncError(null);
         setSyncProgress({
             percent: 5,
@@ -135,12 +146,10 @@ export default function MobileInitialSyncWizard({ onComplete }) {
                     cashiers: result.results.cashiers?.count || 0,
                     images: result.results.images || { total: 0, cached: 0, alreadyCached: 0 }
                 });
-                setIsSyncing(false);
                 setStep(3);
             }
         } catch (err) {
             console.error('Error in deep initial sync:', err);
-            setIsSyncing(false);
             setSyncError(err.message || 'Error de conexión durante la descarga. Verifica que la PC esté encendida y en la misma red WiFi.');
         }
     };
@@ -278,8 +287,12 @@ export default function MobileInitialSyncWizard({ onComplete }) {
                                 <button
                                     type="button"
                                     onClick={() => {
+                                        const termId = getTerminalId();
                                         localStorage.setItem('isaac_pos_initial_sync_done', 'true');
                                         localStorage.setItem('isaac_pos_license_activated', 'true');
+                                        if (termId) {
+                                            localStorage.setItem('isaac_pos_license_machine_id', termId);
+                                        }
                                         localStorage.setItem('isaac_pos_is_offline_mode', 'true');
                                         if (onComplete) onComplete();
                                     }}

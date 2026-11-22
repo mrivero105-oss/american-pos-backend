@@ -1,6 +1,6 @@
 const { User, SupervisorApproval } = require('../database/models');
 const bcrypt = require('bcryptjs');
-const { generateRobustId } = require('../utils/helpers');
+const { generateRobustId, safeSecretEqual } = require('../utils/helpers');
 
 const failedPinAttempts = new Map(); // key: `${companyId}:${supervisorId}:${reqUser.id}`, value: { count, lockedUntil }
 
@@ -83,8 +83,8 @@ class AuthorizationService {
                     isValid = await bcrypt.compare(sha256Pin, supervisor.supervisorPin);
                 }
             } else {
-                // Soporte de PIN legacy plano con auto-migración
-                if (String(pin) === supervisor.supervisorPin) {
+                // Soporte de PIN legacy plano con auto-migración (tiempo constante)
+                if (safeSecretEqual(String(pin), supervisor.supervisorPin)) {
                     isValid = true;
                     supervisor.supervisorPin = await bcrypt.hash(crypto.createHash('sha256').update(String(pin)).digest('hex'), 10);
                     await supervisor.save().catch(() => {});

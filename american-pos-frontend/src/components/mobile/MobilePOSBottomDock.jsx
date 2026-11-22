@@ -125,7 +125,7 @@ export default function MobilePOSBottomDock({
                                 if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.ensureCameraPermission) {
                                     try {
                                         await window.Capacitor.Plugins.PosNativeHardware.ensureCameraPermission();
-                                    } catch (_e) {}
+                                    } catch (caughtErr) { console.warn('[MobilePOSBottomDock] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
                                 }
                                 setIsScannerOpen(true);
                             }}

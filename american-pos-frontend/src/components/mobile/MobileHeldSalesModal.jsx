@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
-import { PauseCircle, X, Clock, Trash2, PlayCircle, AlertCircle, RefreshCw, ShoppingCart, ArrowRight } from 'lucide-react';
+import { PauseCircle, X, Clock, Trash2, PlayCircle, AlertCircle, RefreshCw, ArrowRight } from 'lucide-react';
 
 export default function MobileHeldSalesModal({
   isOpen,

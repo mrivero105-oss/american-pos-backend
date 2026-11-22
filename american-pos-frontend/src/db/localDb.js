@@ -1,9 +1,89 @@
 /**
  * Adaptador Unificado de Base de Datos Local (Compatible con API Dexie)
- * Reemplaza la antigua base de datos duplicada 'IsaacPOSPharmacyDB' delegando todas las
- * operaciones al motor unificado de persistencia (`src/services/db.js`: SQLite Nativo Android WAL + UnifiedDB).
+ * Delega todas las operaciones al motor unificado (`src/services/db.js`: SQLite Nativo Android WAL + UnifiedDB)
+ * con transacciones serializadas usando undo-log por deltas (O(k) sobre claves tocadas).
  */
 import { db as unifiedDb } from '../services/db';
+
+const STORE_KEY_FIELDS = {
+    products: 'id',
+    variants: 'id',
+    customers: 'id',
+    suppliers: 'id',
+    sales: 'id',
+    imageCache: 'uri',
+    promotions: 'id',
+    expenses: 'id',
+    cashShifts: 'id',
+    categories: 'name',
+    metadata: 'key',
+    syncQueue: 'id'
+};
+
+let txChain = Promise.resolve();
+let activeUndoLog = null;
+
+const cloneValue = (val) => {
+    if (val === undefined || val === null) return val;
+    if (typeof globalThis.structuredClone === 'function') {
+        return globalThis.structuredClone(val);
+    }
+    return JSON.parse(JSON.stringify(val));
+};
+
+const extractKey = (storeName, item) => {
+    const keyField = STORE_KEY_FIELDS[storeName] || 'id';
+    return item?.[keyField] ?? item?.id ?? item?.uri ?? item?.name ?? item?.key;
+};
+
+async function recordSingleDelta(storeName, key) {
+    if (!activeUndoLog || key === undefined || key === null) return;
+    const prev = await unifiedDb.getById(storeName, key).catch(() => undefined);
+    activeUndoLog.push({
+        type: 'key',
+        storeName,
+        key,
+        existed: prev !== undefined && prev !== null,
+        prevItem: prev ? cloneValue(prev) : null
+    });
+}
+
+async function txPut(storeName, item) {
+    if (activeUndoLog) {
+        const key = extractKey(storeName, item);
+        await recordSingleDelta(storeName, key);
+    }
+    return await unifiedDb.put(storeName, item);
+}
+
+async function txPutAll(storeName, items = []) {
+    if (activeUndoLog && Array.isArray(items) && items.length > 0) {
+        for (const item of items) {
+            const key = extractKey(storeName, item);
+            await recordSingleDelta(storeName, key);
+        }
+    }
+    return await unifiedDb.putAll(storeName, items);
+}
+
+async function txDelete(storeName, id) {
+    if (activeUndoLog) {
+        await recordSingleDelta(storeName, id);
+    }
+    return await unifiedDb.delete(storeName, id);
+}
+
+async function txClear(storeName) {
+    if (activeUndoLog) {
+        const prevAll = await unifiedDb.getAll(storeName).catch(() => []);
+        activeUndoLog.push({
+            type: 'clear',
+            storeName,
+            prevItems: cloneValue(Array.isArray(prevAll) ? prevAll : [])
+        });
+    }
+    return await unifiedDb.clear(storeName);
+}
 
 const createWhereClause = (storeName, fieldName) => {
     const matchItems = async (predicate) => {
@@ -13,6 +93,14 @@ const createWhereClause = (storeName, fieldName) => {
 
     const buildCollection = (fetcher) => ({
         toArray: () => fetcher(),
+        limit: (count) => buildCollection(async () => {
+            const list = await fetcher();
+            return Number.isFinite(count) && count >= 0 ? list.slice(0, count) : list;
+        }),
+        reverse: () => buildCollection(async () => {
+            const list = await fetcher();
+            return [...list].reverse();
+        }),
         first: async () => {
             const list = await fetcher();
             return list[0] || undefined;
@@ -25,9 +113,9 @@ const createWhereClause = (storeName, fieldName) => {
             const list = await fetcher();
             let deleted = 0;
             for (const item of list) {
-                const id = item?.id ?? item?.uri ?? item?.name ?? item?.key;
+                const id = extractKey(storeName, item);
                 if (id !== undefined && id !== null) {
-                    await unifiedDb.delete(storeName, id);
+                    await txDelete(storeName, id);
                     deleted++;
                 }
             }
@@ -46,7 +134,7 @@ const createWhereClause = (storeName, fieldName) => {
                 updated.push(clone);
             }
             if (updated.length > 0) {
-                await unifiedDb.putAll(storeName, updated);
+                await txPutAll(storeName, updated);
             }
             return updated.length;
         }
@@ -74,18 +162,18 @@ const createUnifiedTable = (storeName, keyPath = 'id') => ({
     name: storeName,
     toArray: () => unifiedDb.getAll(storeName),
     get: (id) => unifiedDb.getById(storeName, id),
-    put: (item) => unifiedDb.put(storeName, item),
-    add: (item) => unifiedDb.put(storeName, item),
-    bulkPut: (items) => unifiedDb.putAll(storeName, items),
-    bulkAdd: (items) => unifiedDb.putAll(storeName, items),
-    delete: (id) => unifiedDb.delete(storeName, id),
+    put: (item) => txPut(storeName, item),
+    add: (item) => txPut(storeName, item),
+    bulkPut: (items) => txPutAll(storeName, items),
+    bulkAdd: (items) => txPutAll(storeName, items),
+    delete: (id) => txDelete(storeName, id),
     bulkDelete: async (ids = []) => {
         if (!Array.isArray(ids)) return;
         for (let i = 0; i < ids.length; i++) {
-            await unifiedDb.delete(storeName, ids[i]);
+            await txDelete(storeName, ids[i]);
         }
     },
-    clear: () => unifiedDb.clear(storeName),
+    clear: () => txClear(storeName),
     count: async () => {
         const all = await unifiedDb.getAll(storeName);
         return all.length;
@@ -93,7 +181,7 @@ const createUnifiedTable = (storeName, keyPath = 'id') => ({
     update: async (id, changes = {}) => {
         const existing = await unifiedDb.getById(storeName, id);
         if (!existing) return 0;
-        await unifiedDb.put(storeName, { ...existing, ...changes });
+        await txPut(storeName, { ...existing, ...changes });
         return 1;
     },
     where: (fieldName) => createWhereClause(storeName, fieldName),
@@ -144,8 +232,6 @@ const createUnifiedTable = (storeName, keyPath = 'id') => ({
     })
 });
 
-let txChain = Promise.resolve();
-
 const localDb = {
     products: createUnifiedTable('products', 'id'),
     variants: createUnifiedTable('variants', 'id'),
@@ -164,38 +250,36 @@ const localDb = {
         const callback = args[args.length - 1];
         if (typeof callback !== 'function') return;
 
-        const tableArgs = args.slice(0, -1).flat();
         const isWriteTx = typeof mode === 'string' && (mode.includes('w') || mode === 'readwrite');
 
         const runAtomic = async () => {
-            const snapshots = [];
-            if (isWriteTx && tableArgs.length > 0) {
-                const cloneSnapshot = typeof globalThis.structuredClone === 'function'
-                    ? (val) => globalThis.structuredClone(val)
-                    : (val) => JSON.parse(JSON.stringify(val));
-                for (const tbl of tableArgs) {
-                    const storeName = typeof tbl === 'string' ? tbl : tbl?.name;
-                    if (storeName) {
-                        const currentItems = await unifiedDb.getAll(storeName).catch(() => []);
-                        snapshots.push({
-                            storeName,
-                            items: Array.isArray(currentItems) ? cloneSnapshot(currentItems) : []
-                        });
-                    }
-                }
+            const undoLog = isWriteTx ? [] : null;
+            const prevActive = activeUndoLog;
+            if (isWriteTx) {
+                activeUndoLog = undoLog;
             }
-
             try {
                 return await callback();
             } catch (txErr) {
-                if (snapshots.length > 0) {
-                    for (const snap of snapshots) {
-                        await unifiedDb.replaceAllAtomic(snap.storeName, snap.items).catch((rbErr) => {
-                            console.warn(`[localDb] Error revertiendo store "${snap.storeName}":`, rbErr?.message || rbErr);
-                        });
+                if (undoLog && undoLog.length > 0) {
+                    for (let i = undoLog.length - 1; i >= 0; i--) {
+                        const entry = undoLog[i];
+                        try {
+                            if (entry.type === 'clear') {
+                                await unifiedDb.replaceAllAtomic(entry.storeName, entry.prevItems);
+                            } else if (entry.existed && entry.prevItem) {
+                                await unifiedDb.put(entry.storeName, entry.prevItem);
+                            } else {
+                                await unifiedDb.delete(entry.storeName, entry.key);
+                            }
+                        } catch (rbErr) {
+                            console.warn(`[localDb] Error revertiendo delta en "${entry.storeName}":`, rbErr?.message || rbErr);
+                        }
                     }
                 }
                 throw txErr;
+            } finally {
+                activeUndoLog = prevActive;
             }
         };
 

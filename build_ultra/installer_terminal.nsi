@@ -55,7 +55,6 @@ BrandingText "Isaac POS • Terminal de Ventas (Caja Secundaria)"
 Section "Isaac POS Terminal de Ventas" SecMain
     DetailPrint "Cerrando instancias previas de Isaac POS..."
     nsExec::Exec 'cmd.exe /c taskkill /F /IM "Isaac POS.exe" /T'
-    nsExec::Exec 'cmd.exe /c taskkill /F /IM "node.exe" /T'
     nsExec::Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -LocalPort 3005,5005,8080 -ErrorAction SilentlyContinue | ForEach-Object { try { Stop-Process -Id $$_.OwningProcess -Force } catch {} }"'
     Sleep 1500
 
@@ -74,17 +73,19 @@ Section "Isaac POS Terminal de Ventas" SecMain
 
     SetOverwrite on
     SetOutPath "$INSTDIR"
-    File /r /x ".env" /x ".env.*" /x "settings.json" /x "db-config.json" /x "*.pfx" /x "*private*.pem" "${PROJECT_ROOT}\build_ultra\app_files\*.*"
+    File /r /x ".env" /x ".env.*" /x "settings.json" /x "db-config.json" /x "cloud_mirror_config.json" /x ".dbcfg.key.dpapi" /x ".secrets.key.dpapi" /x "secrets.vault.json" /x "*.vault.json" /x "*.pfx" /x "*.key" /x "*private*.pem" "${PROJECT_ROOT}\build_ultra\app_files\*.*"
 
     ; Crear desinstalador
     WriteUninstaller "$INSTDIR\Uninstall_Terminal.exe"
 
-    ; Configurar modo Terminal / Cliente en db-config.json de forma nativa
-    DetailPrint "Estableciendo configuracion de modo Terminal de Ventas..."
+    ; Configurar modo Terminal / Cliente solo si no existe db-config.json previo (sin credenciales débiles predeterminadas)
     CreateDirectory "$APPDATA\isaac-pos"
+    IfFileExists "$APPDATA\isaac-pos\db-config.json" skip_db_cfg_terminal 0
+    DetailPrint "Estableciendo configuracion inicial de modo Terminal de Ventas..."
     FileOpen $0 "$APPDATA\isaac-pos\db-config.json" w
-    FileWrite $0 '{"mode":"client","dialect":"postgres","host":"","port":5432,"database":"americanpos","user":"postgres","password":"postgres"}'
+    FileWrite $0 '{"mode":"client","dialect":"postgres","host":"","port":5432,"database":"americanpos","user":"","password":""}'
     FileClose $0
+    skip_db_cfg_terminal:
 
     ; Accesos directos en Menú Inicio y Escritorio
     CreateDirectory "$SMPROGRAMS\Isaac POS"
@@ -95,10 +96,10 @@ Section "Isaac POS Terminal de Ventas" SecMain
     ; Configurar Inicio Automático con Windows vía Registro Run
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Isaac POS Terminal" '"$INSTDIR\Isaac POS.exe"'
 
-    ; Configurar Firewall de Windows para admitir el socket P2P y backend local
-    DetailPrint "Configurando Firewall de Windows..."
+    ; Configurar Firewall de Windows restringido a red privada local
+    DetailPrint "Configurando Firewall de Windows para red privada..."
     nsExec::Exec 'netsh advfirewall firewall delete rule name="Isaac POS Backend"'
-    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 profile=private,public'
+    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 remoteip=localsubnet profile=private'
 
     ; Registro de Windows
     WriteRegStr HKCU "Software\IsaacPOSTerminal" "InstallDir" "$INSTDIR"

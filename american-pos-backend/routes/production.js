@@ -1,10 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const ProductionService = require('../services/ProductionService');
+const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createRecipeSchema,
+    createProductionOrderSchema,
+    completeProductionOrderSchema
+} = require('../schemas/productionSchema');
 const { BillOfMaterials, BillOfMaterialsItem, ProductionOrder, Product, Warehouse } = require('../database/models');
 
 // Listar recetas (BOM)
-router.get('/recipes', async (req, res) => {
+router.get('/recipes', requirePermission(['canManageInventory', 'canViewReports']), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const recipes = await BillOfMaterials.findAll({
@@ -26,7 +33,7 @@ router.get('/recipes', async (req, res) => {
 });
 
 // Crear nueva receta
-router.post('/recipes', async (req, res) => {
+router.post('/recipes', requirePermission('canManageInventory'), validate(createRecipeSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const recipe = await ProductionService.createRecipe({
@@ -40,7 +47,7 @@ router.post('/recipes', async (req, res) => {
 });
 
 // Simular costo de receta
-router.get('/recipes/:id/cost', async (req, res) => {
+router.get('/recipes/:id/cost', requirePermission(['canManageInventory', 'canViewReports']), async (req, res) => {
     try {
         const { id } = req.params;
         const companyId = req.user?.companyId || 'default';
@@ -52,7 +59,7 @@ router.get('/recipes/:id/cost', async (req, res) => {
 });
 
 // Listar órdenes de producción
-router.get('/orders', async (req, res) => {
+router.get('/orders', requirePermission(['canManageInventory', 'canViewReports']), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const orders = await ProductionOrder.findAll({
@@ -75,7 +82,7 @@ router.get('/orders', async (req, res) => {
 });
 
 // Iniciar orden de producción
-router.post('/orders', async (req, res) => {
+router.post('/orders', requirePermission('canManageInventory'), validate(createProductionOrderSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const userId = req.user?.id || 'admin';
@@ -91,7 +98,7 @@ router.post('/orders', async (req, res) => {
 });
 
 // Completar orden de producción
-router.post('/orders/:id/complete', async (req, res) => {
+router.post('/orders/:id/complete', requirePermission('canManageInventory'), validate(completeProductionOrderSchema), async (req, res) => {
     try {
         const { id } = req.params;
         const companyId = req.user?.companyId || 'default';

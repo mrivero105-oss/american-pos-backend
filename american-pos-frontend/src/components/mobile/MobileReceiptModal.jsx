@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Printer, Settings, Share2, CheckCircle2, X } from 'lucide-react';
 

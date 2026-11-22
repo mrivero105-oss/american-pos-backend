@@ -1,9 +1,15 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { 
-    X, Printer, CheckCircle2, TrendingUp, 
-    ArrowDownRight, ArrowUpRight, DollarSign, 
-    Calendar, User, Receipt, Package, Layers
+import { useState, useEffect, useMemo } from 'react';
+import {
+    Printer, 
+    CheckCircle2, 
+    TrendingUp, 
+    ArrowDownRight, 
+    ArrowUpRight, 
+    DollarSign, 
+    Calendar, 
+    User, 
+    Receipt, 
+    Package
 } from 'lucide-react';
 import { formatMoney, formatDate as formatDateSafe, formatBs, isSingleCurrencyMode } from '../utils/format';
 import { printZReportReceipt, printShiftInventoryReceipt } from '../utils/printCashReceipts';
@@ -33,7 +39,7 @@ export default function ZReportModal({ isOpen, onClose, shift, businessSettings 
         return typeof val === 'object' ? val : {};
     };
 
-    const salesSummary = safeParse(shift?.salesSummary);
+    const salesSummary = useMemo(() => safeParse(shift?.salesSummary), [shift?.salesSummary]);
     const physicalBreakdown = safeParse(salesSummary?.physicalBreakdown || shift?.physicalBreakdown);
     const expectedBreakdown = safeParse(salesSummary?.expectedBreakdown || shift?.expectedBreakdown);
     const rawMovements = shift?.CashMovements || shift?.movements || [];
@@ -70,7 +76,7 @@ export default function ZReportModal({ isOpen, onClose, shift, businessSettings 
                 .catch(err => console.warn('Could not fetch items summary for shift:', err))
                 .finally(() => setLoadingItems(false));
         }
-    }, [isOpen, shift?.id]);
+    }, [isOpen, shift, salesSummary?.itemsSummary]);
 
     if (!isOpen || !shift) return null;
 

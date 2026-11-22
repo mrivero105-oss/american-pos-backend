@@ -81,6 +81,24 @@ const computeSalesPriceExact = (bulkPrice, unitsPerBulk, margin, manualPvp = nul
 
 const isItemReadyToSave = (item) => Boolean(item.isNew || (item.approved && item.matchedProduct));
 
+const getLocalDateISO = (d = new Date()) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const getConfiguredIvaPct = () => {
+    try {
+        const raw = localStorage.getItem('pos_business_settings');
+        const parsed = raw ? JSON.parse(raw) : {};
+        const val = Number(parsed?.ivaRate ?? parsed?.taxRate ?? 16);
+        return val > 0 ? val : 16;
+    } catch (_) {
+        return 16;
+    }
+};
+
 // --- COMPONENTES AUXILIARES ---
 
 const ProductSearcher = ({ onSelect, currentProduct }) => {
@@ -466,6 +484,9 @@ export default function CatalogImporter() {
     const [isSaving, setIsSaving] = useState(false);
     const [filterQuery, setFilterQuery] = useState('');
 
+    const ivaPct = useMemo(() => getConfiguredIvaPct(), []);
+    const ivaMultiplier = useMemo(() => 1 + (ivaPct / 100), [ivaPct]);
+
     // Metadatos fiscales y tasas
     const [docCurrency, setDocCurrency] = useState('USD');
     const [systemRate, setSystemRate] = useState(1);
@@ -495,7 +516,7 @@ export default function CatalogImporter() {
     const [previewProductImage, setPreviewProductImage] = useState(null);
     const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
 
-    const handleViewInvoiceFromHistory = (url, label) => {
+    const handleViewInvoiceFromHistory = (url) => {
         setInvoiceUrl(url);
         setShowInvoiceViewer(true);
     };
@@ -544,13 +565,12 @@ export default function CatalogImporter() {
     const detectUnitsFromName = (name) => {
         if (!name) return 1;
         const patterns = [
-            /\b1\s*[xX]\s*(\d{1,4})\b/,
-            /\b(\d{1,3})\s*[xX]\b/,
-            /\b[xX]\s*(\d{1,4})\b/,
+            /\b\d{1,2}\s*[xX]\s*(\d{1,4})\b/,
+            /\b(\d{1,4})\s*uni(?:d|dades)?\b/i,
             /\b(\d{1,4})\s*und\b/i,
-            /\b(\d{1,4})\s*unid\b/i,
             /\bcaja\s*(?:de\s*|x\s*)?(\d{1,4})\b/i,
-            /\bbulto\s*(?:de\s*|x\s*)?(\d{1,4})\b/i
+            /\bbulto\s*(?:de\s*|x\s*)?(\d{1,4})\b/i,
+            /\bdisplay\s*(?:de\s*|x\s*)?(\d{1,4})\b/i
         ];
         for (const pattern of patterns) {
             const match = name.match(pattern);
@@ -570,7 +590,7 @@ export default function CatalogImporter() {
         const safeRate = targetRate && targetRate > 0 ? Number(targetRate) : 1;
         setItems(prevItems => prevItems.map(item => {
             const isExempt = item.isExempt === true || item.taxStatus === 'exento' || Number(item.taxRate) === 0;
-            const multiplier = isExempt ? 1 : 1.16;
+            const multiplier = isExempt ? 1 : (1 + ((Number(item.taxRate) > 0 ? Number(item.taxRate) : ivaPct) / 100));
 
             // docRawBase conserva el número base original impreso en el documento
             const nominalBase = item.docRawBase !== undefined && item.docRawBase > 0
@@ -712,7 +732,7 @@ export default function CatalogImporter() {
         const currency = (data?.currency || data?.items?.currency || 'USD').toUpperCase() === 'BS' ? 'BS' : 'USD';
         const rate = Number(data?.rate || data?.posExchangeRate || 1) || 1;
         const activePosRate = Number(data?.posExchangeRate || rate || 1) || 1;
-        const invDate = data?.invoiceDate || new Date().toISOString().split('T')[0];
+        const invDate = data?.invoiceDate || getLocalDateISO();
         const src = data?.rateSource || 'BCV';
         const detectedMode = String(data?.documentType || '').toUpperCase() === 'CATALOG' ? 'CATALOG' : importMode;
 
@@ -743,12 +763,8 @@ export default function CatalogImporter() {
             const nameDetectedBulk = detectUnitsFromName(item.externalName);
             const inventoryMargin = Number(item.matchedProduct?.margin || 0);
 
-            const finalQuantity = suggestedBulk > 1
-                ? suggestedBulk
-                : (inventoryBulk > 1 ? inventoryBulk : (nameDetectedBulk > 1 ? nameDetectedBulk : 1));
-
             const isExempt = item.isExempt === true || item.taxStatus === 'exento' || Number(item.taxRate) === 0;
-            const multiplier = isExempt ? 1 : 1.16;
+            const multiplier = isExempt ? 1 : (1 + ((Number(item.taxRate) > 0 ? Number(item.taxRate) : ivaPct) / 100));
 
             const baseBs = Number(
                 item.basePriceBs !== undefined && item.basePriceBs !== null
@@ -766,6 +782,30 @@ export default function CatalogImporter() {
             const initialPriceUsd = currency === 'BS'
                 ? (rate > 0 ? roundExact(initialPriceBs / rate, 6) : roundExact(baseUsd * multiplier, 6))
                 : roundExact(baseUsd * multiplier, 6);
+
+            let finalQuantity = suggestedBulk > 1
+                ? suggestedBulk
+                : (nameDetectedBulk > 1 ? nameDetectedBulk : (detectedMode === 'CATALOG' && inventoryBulk > 1 ? inventoryBulk : 1));
+
+            // Conciliación inteligente con el costo actual del producto vinculado en inventario:
+            // Si el precio en la factura ya es el costo de 1 unidad individual (cercano a refCost),
+            // evitamos dividir erróneamente entre el tamaño del bulto; y si vino el precio del bulto completo, aplicamos inventoryBulk.
+            const refCost = Number(item.matchedProduct?.currentCost ?? item.matchedProduct?.cost ?? 0);
+            if (refCost > 0 && initialPriceUsd > 0) {
+                if (finalQuantity > 1 && nameDetectedBulk <= 1) {
+                    const diffAsUnit = Math.abs(initialPriceUsd - refCost);
+                    const diffAsBulk = Math.abs((initialPriceUsd / finalQuantity) - refCost);
+                    if (diffAsUnit < diffAsBulk && initialPriceUsd <= refCost * 2.2) {
+                        finalQuantity = 1;
+                    }
+                } else if (finalQuantity === 1 && inventoryBulk > 1) {
+                    const diffAsUnit = Math.abs(initialPriceUsd - refCost);
+                    const diffAsBulk = Math.abs((initialPriceUsd / inventoryBulk) - refCost);
+                    if (diffAsBulk < diffAsUnit * 0.35) {
+                        finalQuantity = inventoryBulk;
+                    }
+                }
+            }
 
             const rawPurchasedQty = item.purchasedQuantity !== undefined && item.purchasedQuantity !== null
                 ? Number(item.purchasedQuantity)
@@ -1011,10 +1051,16 @@ export default function CatalogImporter() {
         let exemptBs = 0;
         let taxableBaseBs = 0;
         let taxBs = 0;
+        let totalUnits = 0;
 
         for (const it of items) {
             const qty = importMode === 'INVOICE' ? Math.max(0, Number(it.purchasedQuantity ?? 1)) : 1;
+            const packUnits = Math.max(1, Number(it.quantity ?? 1));
+            if (isItemReadyToSave(it)) {
+                totalUnits += qty * packUnits;
+            }
             const isEx = it.isExempt === true || it.taxStatus === 'exento' || Number(it.taxRate) === 0;
+            const itemTaxFactor = (Number(it.taxRate) > 0 ? Number(it.taxRate) : ivaPct) / 100;
             const lineBaseUsd = Number(it.basePrice || 0) * qty;
             const lineBaseBs = Number(it.basePriceBs || 0) * qty;
 
@@ -1023,9 +1069,9 @@ export default function CatalogImporter() {
                 exemptBs += lineBaseBs;
             } else {
                 taxableBaseUsd += lineBaseUsd;
-                taxUsd += lineBaseUsd * 0.16;
+                taxUsd += lineBaseUsd * itemTaxFactor;
                 taxableBaseBs += lineBaseBs;
-                taxBs += lineBaseBs * 0.16;
+                taxBs += lineBaseBs * itemTaxFactor;
             }
         }
 
@@ -1055,13 +1101,14 @@ export default function CatalogImporter() {
             taxableBaseBs: roundExact(taxableBaseBs, 2),
             taxBs: roundExact(taxBs, 2),
             totalBs,
+            totalUnits: roundExact(totalUnits, 2),
             readyCount,
             unapprovedLinkedCount,
             unlinkedCount,
             diffDoc,
             isReconciled
         };
-    }, [items, importMode, docTotals, docCurrency, systemRate]);
+    }, [items, importMode, docTotals, docCurrency, systemRate, ivaPct]);
 
     const onDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
     const onDragLeave = () => setIsDragging(false);
@@ -1127,12 +1174,14 @@ export default function CatalogImporter() {
 
             const currentExempt = item.isExempt === true || item.taxStatus === 'exento' || Number(item.taxRate) === 0;
             const nextExempt = !currentExempt;
-            const multiplier = nextExempt ? 1 : 1.16;
+            const itemTaxPct = Number(item.taxRate) > 0 ? Number(item.taxRate) : ivaPct;
+            const itemMult = 1 + (itemTaxPct / 100);
+            const multiplier = nextExempt ? 1 : itemMult;
             const safeRate = systemRate > 0 ? systemRate : 1;
 
             const baseBs = item.basePriceBs > 0
                 ? Number(item.basePriceBs)
-                : roundExact((currentExempt ? Number(item.price || 0) : Number(item.price || 0) / 1.16) * safeRate, 2);
+                : roundExact((currentExempt ? Number(item.price || 0) : Number(item.price || 0) / itemMult) * safeRate, 2);
             const baseUsd = item.basePrice > 0
                 ? Number(item.basePrice)
                 : roundExact(baseBs / safeRate, 6);
@@ -1150,7 +1199,7 @@ export default function CatalogImporter() {
                 price: updatedPriceUsd,
                 rawPriceBs: updatedPriceBs,
                 isExempt: nextExempt,
-                taxRate: nextExempt ? 0 : 16,
+                taxRate: nextExempt ? 0 : itemTaxPct,
                 taxStatus: nextExempt ? 'exento' : 'gravable',
                 manualPvp: null
             };
@@ -1160,13 +1209,13 @@ export default function CatalogImporter() {
 
     const handleApplyGlobalTax = (makeExempt) => {
         const safeRate = systemRate > 0 ? systemRate : 1;
-        const multiplier = makeExempt ? 1 : 1.16;
+        const multiplier = makeExempt ? 1 : ivaMultiplier;
 
         setItems(prev => prev.map(item => {
             const currentExempt = item.isExempt === true || item.taxStatus === 'exento' || Number(item.taxRate) === 0;
             const baseBs = item.basePriceBs > 0
                 ? Number(item.basePriceBs)
-                : roundExact((currentExempt ? Number(item.price || 0) : Number(item.price || 0) / 1.16) * safeRate, 2);
+                : roundExact((currentExempt ? Number(item.price || 0) : Number(item.price || 0) / ivaMultiplier) * safeRate, 2);
             const baseUsd = item.basePrice > 0
                 ? Number(item.basePrice)
                 : roundExact(baseBs / safeRate, 6);
@@ -1184,7 +1233,7 @@ export default function CatalogImporter() {
                 price: updatedPriceUsd,
                 rawPriceBs: updatedPriceBs,
                 isExempt: makeExempt,
-                taxRate: makeExempt ? 0 : 16,
+                taxRate: makeExempt ? 0 : ivaPct,
                 taxStatus: makeExempt ? 'exento' : 'gravable',
                 manualPvp: null
             };
@@ -1193,7 +1242,7 @@ export default function CatalogImporter() {
         toast.success(
             makeExempt
                 ? 'Todos los productos marcados como EXENTOS (0% IVA)'
-                : 'Todos los productos marcados como GRAVADOS (+16% IVA sumado al costo)'
+                : `Todos los productos marcados como GRAVADOS (+${ivaPct}% IVA sumado al costo)`
         );
     };
 
@@ -1206,7 +1255,7 @@ export default function CatalogImporter() {
             if (!item) return prev;
 
             const isExempt = item.isExempt === true || item.taxStatus === 'exento' || Number(item.taxRate) === 0;
-            const divisor = isExempt ? 1 : 1.16;
+            const divisor = isExempt ? 1 : (1 + ((Number(item.taxRate) > 0 ? Number(item.taxRate) : ivaPct) / 100));
             const baseUsd = roundExact(newCostUsd / divisor, 6);
             const priceBs = roundExact(newCostUsd * safeRate, 2);
             const baseBs = roundExact(baseUsd * safeRate, 2);
@@ -1446,7 +1495,7 @@ export default function CatalogImporter() {
             try {
                 const { data: freshSups } = await api.get('/suppliers');
                 if (Array.isArray(freshSups)) setSuppliers(freshSups);
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[CatalogImporter] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
 
             setIsSettlementModalOpen(false);
             setItems([]);
@@ -1763,7 +1812,7 @@ export default function CatalogImporter() {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={applyUpdates}
+                                    onClick={() => applyUpdates(null)}
                                     disabled={isSaving || liveSummary.readyCount === 0}
                                     className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer shrink-0"
                                 >
@@ -2052,7 +2101,7 @@ export default function CatalogImporter() {
                                     <div className="pt-3 pb-6 flex flex-col gap-2.5">
                                         <button
                                             type="button"
-                                            onClick={applyUpdates}
+                                            onClick={() => applyUpdates(null)}
                                             disabled={isSaving || liveSummary.readyCount === 0}
                                             className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider shadow-xl shadow-emerald-600/30 flex items-center justify-center gap-2.5 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                                         >
@@ -2549,8 +2598,8 @@ export default function CatalogImporter() {
                 title="Documento Original Digitalizado"
                 details={{
                     referenceNumber: referenceNumber || 'Importador',
-                    supplierName: suppliers.find(s => s.id === selectedSupplierId)?.name || detectedSupplierLabel || '',
-                    date: invoiceDate || new Date().toISOString().split('T')[0]
+                    supplierName: suppliers.find(s => String(s.id) === String(selectedSupplierId))?.name || detectedSupplierLabel || '',
+                    date: invoiceDate || getLocalDateISO()
                 }}
             />
 

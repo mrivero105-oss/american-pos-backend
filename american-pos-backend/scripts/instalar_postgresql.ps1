@@ -1,5 +1,8 @@
-param(
+﻿param(
     [string]$SourceDir = "",
+    [string]$DbPassword = "",
+    [string]$ExpectedSha256 = "",
+    [switch]$LocalhostOnly,
     [switch]$NoGui
 )
 
@@ -16,12 +19,21 @@ try {
 
 # 2. Requerir elevación de Administrador
 if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    if (-not [string]::IsNullOrWhiteSpace($DbPassword)) {
+        $env:ISAAC_PG_BOOTSTRAP_PWD = $DbPassword
+    }
+    $argList = "-STA -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($SourceDir) { $argList += " -SourceDir `"$SourceDir`"" }
+    if ($LocalhostOnly) { $argList += " -LocalhostOnly" }
     if ($NoGui) { $argList += " -NoGui" }
     Start-Process powershell.exe -ArgumentList $argList -Verb RunAs
     exit
 }
+
+if ([string]::IsNullOrWhiteSpace($DbPassword) -and -not [string]::IsNullOrWhiteSpace($env:ISAAC_PG_BOOTSTRAP_PWD)) {
+    $DbPassword = $env:ISAAC_PG_BOOTSTRAP_PWD
+}
+Remove-Item Env:\ISAAC_PG_BOOTSTRAP_PWD -ErrorAction SilentlyContinue
 
 # 3. Detectar si podemos mostrar interfaz gráfica moderna (WPF)
 $useWpf = (-not $NoGui) -and ([System.Environment]::UserInteractive)
@@ -315,20 +327,25 @@ if ($hasVCRuntime) {
     }
 
     if ($vcRedist) {
-        Update-UiStatus -Progress 15 -Message "Instalando Microsoft Visual C++ de forma silenciosa..." -Step 1 -StepStatus "Instalando..."
-        
-        # Ejecutar 100% silencioso y esperar finalización absoluta
-        $pVc = Start-Process -FilePath $vcRedist -ArgumentList "/install /quiet /norestart" -PassThru
-        $null = $pVc.WaitForExit()
+        $vcSig = Get-AuthenticodeSignature -FilePath $vcRedist -ErrorAction SilentlyContinue
+        if (-not $vcSig -or $vcSig.Status -ne 'Valid' -or ([string]$vcSig.SignerCertificate.Subject) -notmatch 'Microsoft') {
+            Update-UiStatus -Progress 25 -Message "Firma digital inválida en vc_redist.x64.exe ($($vcSig.Status)). Omitido por seguridad." -Step 1 -StepStatus "Bloqueado" -StepColor "#EF4444"
+        } else {
+            Update-UiStatus -Progress 15 -Message "Instalando Microsoft Visual C++ verificado de forma silenciosa..." -Step 1 -StepStatus "Instalando..."
+            
+            # Ejecutar 100% silencioso y esperar finalización absoluta
+            $pVc = Start-Process -FilePath $vcRedist -ArgumentList "/install /quiet /norestart" -PassThru
+            $null = $pVc.WaitForExit()
 
-        # Esperar liberación completa del mutex de Windows Installer (MSI)
-        $msiWait = 0
-        while ((Get-Process -Name "msiexec", "vc_redist*", "vcredist*" -ErrorAction SilentlyContinue) -and ($msiWait -lt 30)) {
-            Start-Sleep -Milliseconds 500
-            $msiWait++
+            # Esperar liberación completa del mutex de Windows Installer (MSI)
+            $msiWait = 0
+            while ((Get-Process -Name "msiexec", "vc_redist*", "vcredist*" -ErrorAction SilentlyContinue) -and ($msiWait -lt 30)) {
+                Start-Sleep -Milliseconds 500
+                $msiWait++
+            }
+            
+            Update-UiStatus -Progress 25 -Message "Librerías C++ configuradas con éxito." -Step 1 -StepStatus "Instalado" -StepColor "#34D399"
         }
-        
-        Update-UiStatus -Progress 25 -Message "Librerías C++ configuradas con éxito." -Step 1 -StepStatus "Instalado" -StepColor "#34D399"
     } else {
         Update-UiStatus -Progress 25 -Message "Librerías C++ listas." -Step 1 -StepStatus "Omitido" -StepColor "#34D399"
     }
@@ -337,6 +354,9 @@ if ($hasVCRuntime) {
 # ------------------------------------------------------------------------------
 # PASO 2: INSTALAR POSTGRESQL 16 & PGADMIN 4 (SI NO ESTÁ INSTALADO)
 # ------------------------------------------------------------------------------
+$generatedRandomPassword = $null
+$effectiveDbPassword = if (-not [string]::IsNullOrWhiteSpace($DbPassword)) { $DbPassword } else { "" }
+
 if ($null -eq $installedPg) {
     Update-UiStatus -Progress 30 -Message "Buscando paquete de instalación de PostgreSQL 16..." -Step 2 -StepStatus "Localizando..."
     
@@ -386,6 +406,47 @@ if ($null -eq $installedPg) {
         }
     }
 
+    # Verificar firma Authenticode digital, emisor EnterpriseDB y SHA-256 esperado del binario antes de ejecutarlo
+    try {
+        $sig = Get-AuthenticodeSignature -FilePath $installerExe
+        $hashInfo = Get-FileHash -Path $installerExe -Algorithm SHA256
+        if ($sig.Status -ne 'Valid') {
+            Update-UiStatus -Progress 32 -Message "Firma digital inválida en instalador PostgreSQL ($($sig.Status)). Abortado por seguridad." -Step 2 -StepStatus "Bloqueado" -StepColor "#EF4444"
+            Start-Sleep -Seconds 3
+            if ($useWpf -and $window) { $window.Close() }
+            exit 1
+        }
+        $signerSubject = [string]($sig.SignerCertificate.Subject)
+        if ($signerSubject -notmatch 'EnterpriseDB|PostgreSQL') {
+            Update-UiStatus -Progress 32 -Message "Firmante inesperado en instalador PostgreSQL ($signerSubject). Abortado por seguridad." -Step 2 -StepStatus "Bloqueado" -StepColor "#EF4444"
+            Start-Sleep -Seconds 3
+            if ($useWpf -and $window) { $window.Close() }
+            exit 1
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256) -and $hashInfo.Hash.ToUpperInvariant() -ne $ExpectedSha256.Trim().ToUpperInvariant()) {
+            Update-UiStatus -Progress 32 -Message "Hash SHA-256 de PostgreSQL no coincide con el esperado. Abortado." -Step 2 -StepStatus "Bloqueado" -StepColor "#EF4444"
+            Start-Sleep -Seconds 3
+            if ($useWpf -and $window) { $window.Close() }
+            exit 1
+        }
+        Update-UiStatus -Progress 40 -Message "Firma digital verificada ($($signerSubject.Split(',')[0])) | SHA256: $($hashInfo.Hash.Substring(0,12))..."
+    } catch {
+        Update-UiStatus -Progress 32 -Message "No se pudo validar integridad digital de PostgreSQL. Abortado." -Step 2 -StepStatus "Bloqueado" -StepColor "#EF4444"
+        Start-Sleep -Seconds 3
+        if ($useWpf -and $window) { $window.Close() }
+        exit 1
+    }
+
+    # Resolver contraseña de instalación: parámetro explícito o contraseña aleatoria fuerte generada localmente
+    if ([string]::IsNullOrWhiteSpace($DbPassword)) {
+        $rngBytes = New-Object byte[] 18
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($rngBytes)
+        $effectiveDbPassword = [Convert]::ToBase64String($rngBytes).Replace('+', 'A').Replace('/', 'B').Replace('=', '')
+        $generatedRandomPassword = $effectiveDbPassword
+    } else {
+        $effectiveDbPassword = $DbPassword
+    }
+
     # Detectar entorno de Windows Sandbox
     $isSandbox = ($env:USERNAME -eq "WDAGUtilityAccount") -or (Test-Path "C:\Users\WDAGUtilityAccount")
     
@@ -396,7 +457,7 @@ if ($null -eq $installedPg) {
     $pgArgs = @(
         "--mode", "unattended",
         "--unattendedmodeui", "none",
-        "--superpassword", "postgres",
+        "--superpassword", $effectiveDbPassword,
         "--serverport", "5432",
         "--install_runtimes", "0",
         "--enable_acls", "1"
@@ -413,9 +474,9 @@ if ($null -eq $installedPg) {
     if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
         Update-UiStatus -Progress 55 -Message "Reintentando configuración de servicio alternativo..." -Step 2 -StepStatus "Reintentando..."
         $altArgs = if ($isSandbox) {
-            "--mode unattended --unattendedmodeui none --superpassword postgres --serverport 5432 --install_runtimes 0"
+            "--mode unattended --unattendedmodeui none --superpassword $effectiveDbPassword --serverport 5432 --install_runtimes 0"
         } else {
-            "--mode unattended --unattendedmodeui none --superpassword postgres --serverport 5432 --install_runtimes 0 --serviceaccount LocalSystem"
+            "--mode unattended --unattendedmodeui none --superpassword $effectiveDbPassword --serverport 5432 --install_runtimes 0 --serviceaccount LocalSystem"
         }
         $proc2 = Start-Process -FilePath $installerExe -ArgumentList $altArgs -Wait -PassThru
 
@@ -481,8 +542,9 @@ if (!(Test-Path $createdb)) {
 }
 
 if ($createdb -and (Test-Path $createdb)) {
-    $env:PGPASSWORD = "postgres"
+    $env:PGPASSWORD = $effectiveDbPassword
     & $createdb -U postgres -h 127.0.0.1 -p 5432 -E UTF8 americanpos 2>$null
+    $env:PGPASSWORD = ""
     Update-UiStatus -Progress 95 -Message "Base de datos 'americanpos' preparada con éxito." -Step 4 -StepStatus "Lista" -StepColor "#34D399"
 } else {
     Update-UiStatus -Progress 95 -Message "Cluster de datos listo para inicialización de esquemas." -Step 4 -StepStatus "Listo" -StepColor "#34D399"
@@ -491,19 +553,23 @@ if ($createdb -and (Test-Path $createdb)) {
 # ------------------------------------------------------------------------------
 # PASO 5: CONFIGURAR ACCESO DE RED LOCAL (LAN) Y FIREWALL DE WINDOWS
 # ------------------------------------------------------------------------------
-Update-UiStatus -Progress 96 -Message "Habilitando puertos en Firewall de Windows para terminales remotas..."
+Update-UiStatus -Progress 96 -Message "Habilitando puertos en Firewall de Windows (perfil Privado)..."
 
 try {
-    # 1. Reglas de entrada de Firewall para PostgreSQL (5432) y API de Isaac POS (3005, 5005, 8080)
-    New-NetFirewallRule -DisplayName "Isaac POS - PostgreSQL Database" -Direction Inbound -Protocol TCP -LocalPort 5432 -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    New-NetFirewallRule -DisplayName "Isaac POS - Express API" -Direction Inbound -Protocol TCP -LocalPort 3005, 5005, 8080 -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    New-NetFirewallRule -DisplayName "Isaac POS - LAN P2P Discovery" -Direction Inbound -Protocol UDP -LocalPort 41234 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    # 1. Reglas de entrada de Firewall restringidas a redes privadas y subred local
+    if (-not $LocalhostOnly) {
+        New-NetFirewallRule -DisplayName "Isaac POS - PostgreSQL Database" -Direction Inbound -Protocol TCP -LocalPort 5432 -RemoteAddress LocalSubnet -Profile Private -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    }
+    New-NetFirewallRule -DisplayName "Isaac POS - Express API" -Direction Inbound -Protocol TCP -LocalPort 3005, 5005, 8080 -RemoteAddress LocalSubnet -Profile Private -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName "Isaac POS - LAN P2P Discovery" -Direction Inbound -Protocol UDP -LocalPort 41234 -RemoteAddress LocalSubnet -Profile Private -Action Allow -ErrorAction SilentlyContinue | Out-Null
 } catch {
-    netsh advfirewall firewall add rule name="Isaac POS - PostgreSQL" dir=in action=allow protocol=TCP localport=5432 2>$null | Out-Null
-    netsh advfirewall firewall add rule name="Isaac POS - Express API" dir=in action=allow protocol=TCP localport=3005,5005,8080 2>$null | Out-Null
+    if (-not $LocalhostOnly) {
+        netsh advfirewall firewall add rule name="Isaac POS - PostgreSQL" dir=in action=allow protocol=TCP localport=5432 remoteip=localsubnet profile=private 2>$null | Out-Null
+    }
+    netsh advfirewall firewall add rule name="Isaac POS - Express API" dir=in action=allow protocol=TCP localport=3005,5005,8080 remoteip=localsubnet profile=private 2>$null | Out-Null
 }
 
-# 2. Configurar postgresql.conf y pg_hba.conf para permitir conexiones desde Cajas Secundarias
+# 2. Configurar postgresql.conf y pg_hba.conf (por defecto restringido si -LocalhostOnly, o LAN con scram-sha-256)
 $dataDirs = @(
     "C:\Program Files\PostgreSQL\16\data",
     "C:\Program Files\PostgreSQL\17\data",
@@ -516,22 +582,36 @@ foreach ($dDir in $dataDirs) {
         $hbaFile = Join-Path $dDir "pg_hba.conf"
         $needsRestart = $false
 
-        # postgresql.conf -> listen_addresses = '*'
-        if (Test-Path $confFile) {
-            $confContent = Get-Content -Path $confFile -Raw -Encoding UTF8
-            if ($confContent -notmatch "listen_addresses\s*=\s*'\*'") {
-                Add-Content -Path $confFile -Value "`nlisten_addresses = '*'`n" -Encoding UTF8
-                $needsRestart = $true
+        if ($LocalhostOnly) {
+            if (Test-Path $confFile) {
+                $confContent = Get-Content -Path $confFile -Raw -Encoding UTF8
+                if ($confContent -match "listen_addresses\s*=\s*'\*'") {
+                    $confContent = [regex]::Replace($confContent, "listen_addresses\s*=\s*'\*'", "listen_addresses = '127.0.0.1'")
+                    Set-Content -Path $confFile -Value $confContent -Encoding UTF8
+                    $needsRestart = $true
+                } elseif ($confContent -notmatch "(?m)^listen_addresses\s*=") {
+                    Add-Content -Path $confFile -Value "`nlisten_addresses = '127.0.0.1'`n" -Encoding UTF8
+                    $needsRestart = $true
+                }
             }
-        }
+        } else {
+            # postgresql.conf -> listen_addresses = '*' únicamente cuando el nodo actúa como Hub multi-caja
+            if (Test-Path $confFile) {
+                $confContent = Get-Content -Path $confFile -Raw -Encoding UTF8
+                if ($confContent -notmatch "listen_addresses\s*=\s*'\*'") {
+                    Add-Content -Path $confFile -Value "`nlisten_addresses = '*'`n" -Encoding UTF8
+                    $needsRestart = $true
+                }
+            }
 
-        # pg_hba.conf -> permitir subredes privadas LAN con scram-sha-256
-        if (Test-Path $hbaFile) {
-            $hbaContent = Get-Content -Path $hbaFile -Raw -Encoding UTF8
-            if ($hbaContent -notmatch "192\.168\.0\.0/16") {
-                $lanRules = "`n# Isaac POS LAN Subnets`nhost    all             all             192.168.0.0/16          scram-sha-256`nhost    all             all             10.0.0.0/8              scram-sha-256`nhost    all             all             172.16.0.0/12           scram-sha-256`n"
-                Add-Content -Path $hbaFile -Value $lanRules -Encoding UTF8
-                $needsRestart = $true
+            # pg_hba.conf -> permitir subredes privadas LAN con scram-sha-256
+            if (Test-Path $hbaFile) {
+                $hbaContent = Get-Content -Path $hbaFile -Raw -Encoding UTF8
+                if ($hbaContent -notmatch "192\.168\.0\.0/16") {
+                    $lanRules = "`n# Isaac POS LAN Subnets`nhost    all             all             192.168.0.0/16          scram-sha-256`nhost    all             all             10.0.0.0/8              scram-sha-256`nhost    all             all             172.16.0.0/12           scram-sha-256`n"
+                    Add-Content -Path $hbaFile -Value $lanRules -Encoding UTF8
+                    $needsRestart = $true
+                }
             }
         }
 
@@ -542,12 +622,12 @@ foreach ($dDir in $dataDirs) {
     }
 }
 
-# 3. Escribir configuración inicial de servidor en %AppData%\isaac-pos\db-config.json
+# 3. Escribir configuración inicial de servidor en %AppData%\isaac-pos\db-config.json solo si no existe (cifrado con DPAPI en 1er arranque por DbConfigManager)
 try {
     $appDataTarget = Join-Path $env:APPDATA "isaac-pos"
     if (!(Test-Path $appDataTarget)) { New-Item -Path $appDataTarget -ItemType Directory -Force 2>$null | Out-Null }
     $cfgJsonPath = Join-Path $appDataTarget "db-config.json"
-    if (!(Test-Path $cfgJsonPath)) {
+    if (!(Test-Path $cfgJsonPath) -and -not [string]::IsNullOrWhiteSpace($effectiveDbPassword)) {
         $serverConfigObj = [PSCustomObject]@{
             mode = "server"
             dialect = "postgres"
@@ -555,9 +635,10 @@ try {
             port = 5432
             database = "americanpos"
             user = "postgres"
-            password = "postgres"
+            password = $effectiveDbPassword
         }
         $serverConfigObj | ConvertTo-Json | Set-Content -Path $cfgJsonPath -Encoding UTF8 2>$null
+        & icacls.exe $cfgJsonPath /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" "${env:USERNAME}:F" 2>$null | Out-Null
     }
 } catch { }
 
@@ -568,7 +649,23 @@ try {
 # ------------------------------------------------------------------------------
 Update-UiStatus -Progress 100 -Message "¡Todos los componentes se configuraron con éxito! Iniciando Isaac POS..."
 
-Start-Sleep -Milliseconds 2200
+Start-Sleep -Milliseconds 1200
+
+if (-not [string]::IsNullOrWhiteSpace($generatedRandomPassword)) {
+    if ($useWpf) {
+        try {
+            Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue
+            $msg = "PostgreSQL 16 fue configurado y protegido con una contraseña aleatoria segura:`n`n$generatedRandomPassword`n`nEsta contraseña ya quedó guardada en este Servidor Principal (se cifrará con DPAPI al iniciar Isaac POS).`n`n¿Deseas copiarla al portapapeles ahora para enlazar tus Cajas Terminales (Configuración de Servidor -> Avanzado)?"
+            $ans = [System.Windows.MessageBox]::Show($msg, "Isaac POS - Credencial Segura de Base de Datos", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Information)
+            if ($ans -eq [System.Windows.MessageBoxResult]::Yes) {
+                [System.Windows.Clipboard]::SetText($generatedRandomPassword)
+            }
+        } catch {}
+    } else {
+        Write-Host "[SEGURIDAD] Contraseña aleatoria generada para PostgreSQL: $generatedRandomPassword" -ForegroundColor Yellow
+        Write-Host "Guárdala para enlazar Cajas Terminales desde Configuración de Servidor -> Avanzado." -ForegroundColor Yellow
+    }
+}
 
 if ($useWpf -and $window) {
     $window.Close()

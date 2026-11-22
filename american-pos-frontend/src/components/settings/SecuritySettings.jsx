@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shield, Fingerprint, ShieldCheck, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Shield, Fingerprint, ShieldCheck, ChevronRight } from 'lucide-react';
 import IdleLockPanel from './IdleLockPanel';
 import BiometricEnrollModal from '../BiometricEnrollModal';
 import biometricService from '../../services/biometricService';

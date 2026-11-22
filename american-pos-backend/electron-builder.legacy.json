@@ -7,8 +7,7 @@
   "asar": true,
   "asarUnpack": [
     "**/node_modules/**/*.node",
-    "**/bin/**/*",
-    "**/scripts/**/*"
+    "**/bin/**/*"
   ],
   "extraResources": [
     {
@@ -16,17 +15,40 @@
       "to": "scripts"
     }
   ],
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "mrivero105-oss",
+      "repo": "american-pos-backend",
+      "channel": "legacy"
+    }
+  ],
   "directories": {
     "output": "dist_final_installer"
   },
   "files": [
     "**/*",
+    "!scripts/**",
+    "!private/**",
+    "!audit_*.json",
+    "!coverage/**",
+    "!cloud_license_config.json",
+    "!**/cloud_license_config.json",
+    "!**/*.zip",
+    "!**/*.tar.gz",
     "!**/*.sqlite",
     "!**/*.sqlite*",
     "!**/*.bak",
     "!**/*.dev_backup",
     "!**/serviceAccountKey.json",
     "!**/.env*",
+    "!**/.dbcfg.key.dpapi",
+    "!**/.dbcfg.key.dpapi.ess",
+    "!**/.secrets.key.dpapi",
+    "!**/.secrets.key.dpapi.ess",
+    "!**/*.dpapi.ess",
+    "!**/secrets.vault.json",
+    "!**/*.vault.json",
     "!env_backup.txt",
     "!app_fixed.asar",
     "!test_backup.zip",
@@ -61,6 +83,10 @@
     "!node_modules/@electron/rebuild/**",
     "!node_modules/builder-util/**",
     "!node_modules/typescript/**",
+    "!node_modules/**/*.map",
+    "!node_modules/**/*.d.ts",
+    "!node_modules/**/*.d.mts",
+    "!node_modules/**/*.d.cts",
     "!tests/**",
     "!test-results/**",
     "!playwright-report/**",

@@ -31,9 +31,6 @@ export const usePosShortcuts = (props) => {
                 setActionDialog,
                 setCategory,
                 categories = [],
-                setShowNewCustomerModal,
-                setIsCustomerDropdownOpen,
-                customerSearchRef,
                 handleSaveQuotation
             } = propsRef.current;
 

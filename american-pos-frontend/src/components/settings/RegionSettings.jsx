@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Globe, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
+import { Globe, CheckCircle2, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 

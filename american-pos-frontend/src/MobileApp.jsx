@@ -1,6 +1,6 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { RefreshCw, X } from 'lucide-react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import toast, { Toaster, ToastBar } from 'react-hot-toast';
 import LockScreen from './components/LockScreen';
 import ActivationPortal from './components/ActivationPortal';
@@ -72,6 +72,7 @@ export default function MobileApp() {
     logout,
     isActivated,
     machineId,
+    licenseInfo,
     licenseLoading,
     setIsActivated,
     checkLicense
@@ -176,6 +177,7 @@ export default function MobileApp() {
       ) : !isActivated ? (
         <ActivationPortal
           machineId={machineId}
+          licenseInfo={licenseInfo}
           onActivated={async () => {
             setIsActivated(true);
             if (checkLicense) await checkLicense();

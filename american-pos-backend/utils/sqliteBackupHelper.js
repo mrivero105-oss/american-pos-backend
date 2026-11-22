@@ -98,17 +98,21 @@ async function performPostgresBackup(userDataPath) {
             });
         }).catch(async () => {
             const models = require('../database/models');
-            const exportData = {};
-            for (const [name, model] of Object.entries(models)) {
-                if (model && typeof model.findAll === 'function') {
-                    try {
-                        exportData[name] = await model.findAll({ raw: true });
-                    } catch (modelErr) {
-                        logMsg(`Warning exporting table ${name}: ${modelErr.message}`);
-                        exportData[name] = [];
+            const { runWithTenantContext } = require('../database/tenantContext');
+            const exportData = await runWithTenantContext({ companyId: '', userId: 'system-backup', isSuperAdmin: true }, async () => {
+                const data = {};
+                for (const [name, model] of Object.entries(models)) {
+                    if (model && typeof model.findAll === 'function') {
+                        try {
+                            data[name] = await model.findAll({ raw: true });
+                        } catch (modelErr) {
+                            logMsg(`Warning exporting table ${name}: ${modelErr.message}`);
+                            data[name] = [];
+                        }
                     }
                 }
-            }
+                return data;
+            });
             const jsonPath = backupPath.replace('.sql', '.json');
             fs.writeFileSync(jsonPath, JSON.stringify(exportData, null, 2));
             logMsg(`JSON export completed: ${jsonPath}`);

@@ -1,13 +1,25 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-    Building2, Clock, MessageSquare, Plus, RefreshCw, TrendingDown,
-    Calendar, Search, FileText, ExternalLink, X, ShieldAlert,
-    Download, Printer, Lock, Unlock, Banknote, History
+    Building2, 
+    MessageSquare, 
+    Plus, 
+    RefreshCw, 
+    TrendingDown, 
+    Calendar, 
+    Search, 
+    ExternalLink, 
+    X, 
+    Download, 
+    Printer, 
+    Lock, 
+    Unlock, 
+    Banknote, 
+    History
 } from 'lucide-react';
 import api from '../services/api';
-import { usePos } from '../hooks/PosContext';
+import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
 import { useAuth } from '../hooks/AuthContext';
 import AbonoModal from '../components/AbonoModal';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
@@ -37,7 +49,7 @@ const ACTION_TYPE_LABELS = {
 };
 
 export default function AssetsAndCollections() {
-    const { exchangeRate } = usePos();
+    const exchangeRate = useBusinessSettingsStore((s) => s.rate);
     const { hasPermission } = useAuth();
     const { confirm, confirmDialog } = useConfirmDialog();
     const location = useLocation();
@@ -109,7 +121,6 @@ export default function AssetsAndCollections() {
     // STATE: PROPIEDAD, PLANTA Y EQUIPO (ACTIVOS FIJOS NIC 16)
     // =========================================================================
     const [assetsList, setAssetsList] = useState([]);
-    const [loadingAssets, setLoadingAssets] = useState(false);
     const [assetSearch, setAssetSearch] = useState('');
     const [assetCategoryFilter, setAssetCategoryFilter] = useState('ALL');
     const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
@@ -135,16 +146,7 @@ export default function AssetsAndCollections() {
     });
     const [depreciating, setDepreciating] = useState(false);
 
-    useEffect(() => {
-        if (isCollectionsModule && canCollections) {
-            fetchAgingReport(includeZeroBalance);
-            api.get('/settings/payment-methods').then(r => setPaymentMethods(r.data || [])).catch(() => {});
-        } else if (!isCollectionsModule && canAssets) {
-            fetchAssets();
-        }
-    }, [isCollectionsModule, canCollections, canAssets, includeZeroBalance]);
-
-    const fetchAgingReport = async (withZero = includeZeroBalance) => {
+    const fetchAgingReport = useCallback(async (withZero = includeZeroBalance) => {
         try {
             setLoadingCollections(true);
             const res = await api.get('/collections/aging', {
@@ -161,21 +163,27 @@ export default function AssetsAndCollections() {
         } finally {
             setLoadingCollections(false);
         }
-    };
+    }, [includeZeroBalance]);
 
-    const fetchAssets = async () => {
+    const fetchAssets = useCallback(async () => {
         try {
-            setLoadingAssets(true);
             const res = await api.get('/assets');
             if (res.data?.success || res.data?.ok) {
                 setAssetsList(res.data.assets || []);
             }
         } catch (err) {
             console.error('Error cargando activos fijos:', err);
-        } finally {
-            setLoadingAssets(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (isCollectionsModule && canCollections) {
+            fetchAgingReport(includeZeroBalance);
+            api.get('/settings/payment-methods').then(r => setPaymentMethods(r.data || [])).catch(() => {});
+        } else if (!isCollectionsModule && canAssets) {
+            fetchAssets();
+        }
+    }, [isCollectionsModule, canCollections, canAssets, includeZeroBalance, fetchAgingReport, fetchAssets]);
 
     const handleToggleBlock = async (customer) => {
         const cId = customer.customerId || customer.id;
@@ -209,6 +217,7 @@ export default function AssetsAndCollections() {
                 setWhatsappModalData({ ...res.data, customerId });
             }
         } catch (err) {
+            console.warn('[AssetsAndCollections] Error capturado en operación:', err?.message || err);
             showToast('Error al generar estado de cuenta para WhatsApp', 'error');
         }
     };
@@ -229,6 +238,7 @@ export default function AssetsAndCollections() {
                 fetchAgingReport(includeZeroBalance);
             }
         } catch (err) {
+            console.warn('[AssetsAndCollections] Error capturado en operación:', err?.message || err);
             showToast('Error al guardar gestión de cobranza', 'error');
         }
     };
@@ -304,6 +314,7 @@ export default function AssetsAndCollections() {
                 setIsAssetHistoryOpen(true);
             }
         } catch (err) {
+            console.warn('[AssetsAndCollections] Error capturado en operación:', err?.message || err);
             showToast('Error consultando historial de depreciación', 'error');
         }
     };

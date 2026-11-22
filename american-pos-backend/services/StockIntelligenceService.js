@@ -38,15 +38,20 @@ class StockIntelligenceService {
 
             // 2. Fetch current stock levels for products that had sales
             const productIds = salesStats.map(s => s.productId).filter(Boolean);
+            if (productIds.length === 0) {
+                cache.set(cacheKey, [], 300);
+                return [];
+            }
             const products = await Product.findAll({
                 where: { id: { [Op.in]: productIds }, companyId },
                 attributes: ['id', 'name', 'stockQuantity', 'stock', 'minStock'],
                 raw: true
             });
+            const productMap = new Map(products.map(p => [p.id, p]));
 
             // 3. Calculate Intelligence
             const predictions = salesStats.map(stat => {
-                const product = products.find(p => p.id === stat.productId);
+                const product = productMap.get(stat.productId);
                 if (!product) return null;
 
                 const totalSold = parseFloat(stat.totalSold) || 0;

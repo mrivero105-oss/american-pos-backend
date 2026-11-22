@@ -1,6 +1,5 @@
-import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Share2, X, Phone, FileText, Send, RefreshCw, Copy, Smartphone } from 'lucide-react';
+import { Share2, X, Phone, Copy, Smartphone } from 'lucide-react';
 
 export default function MobileWhatsAppReceiptModal({
   whatsAppModalData,
@@ -8,10 +7,6 @@ export default function MobileWhatsAppReceiptModal({
   T,
   whatsAppPhoneInput,
   setWhatsAppPhoneInput,
-  exchangeRate,
-  handleConfirmSendWhatsApp,
-  isGeneratingWhatsApp,
-  whatsAppMessagePreview,
   generateEcoReceiptText = () => '',
   cleanWhatsAppPhone = (p) => String(p || '').replace(/\D/g, ''),
   showToast = () => {},
@@ -129,7 +124,7 @@ export default function MobileWhatsAppReceiptModal({
                             text: fullText
                           });
                           onClose();
-                        } catch (_) {}
+                        } catch (caughtErr) { if (caughtErr?.name !== 'AbortError') console.warn('[MobileWhatsAppReceiptModal] Error al compartir comprobante:', caughtErr?.message || caughtErr); }
                       }}
                       className={`flex-1 py-2.5 rounded-xl border ${T.btnGhost} text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-blue-400 border-blue-500/30`}
                     >

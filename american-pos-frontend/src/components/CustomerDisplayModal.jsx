@@ -1,29 +1,28 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
-    Tv,
-    Monitor,
-    Smartphone,
-    QrCode,
-    ExternalLink,
-    Copy,
-    Check,
-    X,
-    Wifi,
-    Maximize2,
-    RefreshCw,
-    Upload,
-    Plus,
-    Trash2,
-    ChevronUp,
-    ChevronDown,
-    Search,
-    Layers,
-    Save,
-    Eye,
-    EyeOff,
-    Image as ImageIcon,
-    Columns2,
+    Tv, 
+    Monitor, 
+    Smartphone, 
+    QrCode, 
+    ExternalLink, 
+    Copy, 
+    Check, 
+    X, 
+    Wifi, 
+    Maximize2, 
+    RefreshCw, 
+    Upload, 
+    Trash2, 
+    ChevronUp, 
+    ChevronDown, 
+    Search, 
+    Layers, 
+    Save, 
+    Eye, 
+    EyeOff, 
+    Image as ImageIcon, 
+    Columns2, 
     Package
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -147,7 +146,7 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
                             const parsed = JSON.parse(local);
                             setConfig({ ...DEFAULT_CONFIG, ...parsed });
                         }
-                    } catch (_) {}
+                    } catch (caughtErr) { console.warn('[CustomerDisplayModal] Error parseando JSON local:', caughtErr?.message || caughtErr); }
                 })
                 .finally(() => {
                     if (isMounted) setLoadingConfig(false);
@@ -155,7 +154,7 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
         }
 
         return () => { isMounted = false; };
-    }, [isOpen, canManageAds]);
+    }, [isOpen, canManageAds, user?.companyId]);
 
     // Búsqueda rápida de productos para destacar en el carrusel
     useEffect(() => {
@@ -265,14 +264,14 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
     const broadcastConfigLive = (savedConfig) => {
         try {
             localStorage.setItem('pos_customer_display_config', JSON.stringify(savedConfig));
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplayModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         try {
             if (typeof BroadcastChannel !== 'undefined') {
                 const bc = new BroadcastChannel('isaac_pos_display_sync');
                 bc.postMessage({ type: 'DISPLAY_CONFIG_UPDATED', payload: savedConfig });
                 bc.close();
             }
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplayModal] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
     };
 
     const persistConfig = async (nextConfig = config, silent = false) => {

@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
-import { X, Check, ShoppingBag, Shirt, AlertCircle, Plus, Minus } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useMemo } from 'react';
+import { X, Check, ShoppingBag, Shirt, Plus, Minus } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 const COLOR_MAP = {
   negro: 'bg-black text-white border-slate-700',

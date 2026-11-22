@@ -2,6 +2,17 @@ const express = require('express');
 const router = express.Router();
 const cashService = require('../services/CashService');
 const { isAdmin, requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    openShiftSchema,
+    closeShiftSchema,
+    cashMovementSchema,
+    forceCloseShiftSchema,
+    registerNameSchema,
+    stationCategoriesSchema,
+    drawerOpenEventSchema,
+    alertStatusUpdateSchema
+} = require('../schemas/cashSchema');
 const { CashShift, User } = require('../database/models');
 const { Op } = require('sequelize');
 
@@ -74,7 +85,7 @@ router.get('/admin/cashier-audit/:userId', isAdmin, async (req, res) => {
 });
 
 // POST /admin/force-close/:shiftId - Remote force close of shift (Admin only)
-router.post('/admin/force-close/:shiftId', isAdmin, async (req, res) => {
+router.post('/admin/force-close/:shiftId', isAdmin, validate(forceCloseShiftSchema), async (req, res) => {
     try {
         const closedShift = await cashService.forceCloseShift(req.user, req.params.shiftId, req.body.reason);
         
@@ -101,7 +112,7 @@ router.post('/admin/force-close/:shiftId', isAdmin, async (req, res) => {
 });
 
 // PUT /admin/register-name/:shiftId - Rename register on the fly (Admin only)
-router.put('/admin/register-name/:shiftId', isAdmin, async (req, res) => {
+router.put('/admin/register-name/:shiftId', isAdmin, validate(registerNameSchema), async (req, res) => {
     try {
         const { shiftId } = req.params;
         const { registerName } = req.body;
@@ -136,7 +147,7 @@ router.put('/admin/register-name/:shiftId', isAdmin, async (req, res) => {
 
 // GET /active-shifts - Get all active open shifts for the company (Admin monitoring)
 // PUT /station-categories - Update station categories and products for active shift in real-time
-router.put('/station-categories', async (req, res) => {
+router.put('/station-categories', requirePermission('canManageSettings'), validate(stationCategoriesSchema), async (req, res) => {
     try {
         const { shiftId, registerId, allowedCategories, allowedProducts } = req.body;
         const { CashShift } = require('../database/models');
@@ -182,7 +193,7 @@ router.get('/active-shifts', isAdmin, async (req, res) => {
 });
 
 // POST /open - Open a new shift
-router.post('/open', async (req, res) => {
+router.post('/open', validate(openShiftSchema), async (req, res) => {
     try {
         const newShift = await cashService.openShift(req.user, req.body);
         
@@ -208,7 +219,7 @@ router.post('/open', async (req, res) => {
 });
 
 // POST /close - Close the current shift
-router.post('/close', async (req, res) => {
+router.post('/close', validate(closeShiftSchema), async (req, res) => {
     try {
         const closedShift = await cashService.closeShift(req.user, req.body);
         
@@ -241,7 +252,7 @@ router.post('/close', async (req, res) => {
 });
 
 // POST /close-blind - Cierre Ciego de Turno (Auditoría Antifraude)
-router.post('/close-blind', async (req, res) => {
+router.post('/close-blind', validate(closeShiftSchema), async (req, res) => {
     try {
         const result = await cashService.closeShiftBlind(req.user, req.body);
         
@@ -328,7 +339,7 @@ router.get('/alerts', async (req, res) => {
 });
 
 // PUT /alerts/:id - Update alert status/resolution
-router.put('/alerts/:id', async (req, res) => {
+router.put('/alerts/:id', validate(alertStatusUpdateSchema), async (req, res) => {
     try {
         if (!isAuditAuthorized(req.user)) {
             return res.status(403).json({ message: 'No autorizado' });
@@ -376,7 +387,7 @@ router.get('/audit-daily-report', async (req, res) => {
 });
 
 // POST /movement - Add a cash movement (in/out/expense)
-router.post('/movement', async (req, res) => {
+router.post('/movement', validate(cashMovementSchema), async (req, res) => {
     try {
         const movement = await cashService.addMovement(req.user, req.body);
         
@@ -450,7 +461,7 @@ router.get('/x-report', async (req, res) => {
 });
 
 // POST /drawer-open-event - Log and notify manual cash drawer opening without sale
-router.post('/drawer-open-event', async (req, res) => {
+router.post('/drawer-open-event', validate(drawerOpenEventSchema), async (req, res) => {
     try {
         const { reason = 'Apertura manual de gaveta', registerId = '1' } = req.body || {};
         const { AuditLog } = require('../database/models');

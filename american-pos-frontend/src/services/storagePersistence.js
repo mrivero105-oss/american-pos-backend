@@ -6,7 +6,6 @@
  */
 
 let isPersistenceGranted = false;
-let hasAttempted = false;
 let persistencePromise = null;
 
 /**
@@ -41,14 +40,12 @@ export async function ensureStoragePersistence() {
       const alreadyPersisted = await navigator.storage.persisted();
       if (alreadyPersisted) {
         isPersistenceGranted = true;
-        hasAttempted = true;
         console.debug('🛡️ [StoragePersistence] Blindaje de almacenamiento activo: Persistencia confirmada.');
         return true;
       }
 
       const granted = await navigator.storage.persist();
       isPersistenceGranted = granted;
-      hasAttempted = true;
 
       if (granted) {
         console.debug('🛡️ [StoragePersistence] Permiso de persistencia concedido.');
@@ -87,7 +84,9 @@ function attachGestureRetry() {
           console.debug('🛡️ [StoragePersistence] Persistencia concedida tras interacción del usuario.');
         }
       }
-    } catch (_e) {}
+    } catch (err) {
+      console.debug('[StoragePersistence] Reintento tras interacción falló:', err?.message);
+    }
   };
 
   window.addEventListener('click', retryOnInteraction, { once: true, passive: true });

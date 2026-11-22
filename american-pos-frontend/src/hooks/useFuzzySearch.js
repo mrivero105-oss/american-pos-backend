@@ -111,13 +111,14 @@ export const useFuzzySearch = (data, searchTerm) => {
     }, [searchTerm]);
 
     // 3.1 Integración de Búsqueda Semántica Vectorial con IA (pgvector en PostgreSQL 16)
+    // Solo se invoca como fallback cuando el Web Worker local devuelve menos de 3 coincidencias directas.
     useEffect(() => {
         if (semanticDebounceRef.current) {
             clearTimeout(semanticDebounceRef.current);
         }
 
         const trimmed = (searchTerm || '').trim();
-        if (!trimmed || trimmed.length < 3) {
+        if (!trimmed || trimmed.length < 3 || (Array.isArray(workerResults) && workerResults.length >= 3)) {
             setSemanticResults(null);
             return;
         }
@@ -145,11 +146,12 @@ export const useFuzzySearch = (data, searchTerm) => {
                 clearTimeout(semanticDebounceRef.current);
             }
         };
-    }, [searchTerm, dataMap]);
+    }, [searchTerm, dataMap, workerResults]);
 
-    // 4. Fallback Synchronous Search (used when Worker is unavailable or on initial frame)
+    // 4. Fallback Synchronous Search (only when Worker is unavailable AND there is an active search term)
     const indexedData = useMemo(() => {
-        if (hasWorkerRef.current && workerResults !== null) return [];
+        if (!searchTerm || typeof searchTerm !== 'string' || !searchTerm.trim()) return [];
+        if (hasWorkerRef.current) return [];
         if (!Array.isArray(data) || data.length === 0) return [];
         return data.map(item => {
             const name = normalizeText(item.name || item.nombre);
@@ -180,7 +182,7 @@ export const useFuzzySearch = (data, searchTerm) => {
                 words
             };
         });
-    }, [data, workerResults]);
+    }, [data, searchTerm]);
 
     const fallbackResults = useMemo(() => {
         if (!searchTerm || typeof searchTerm !== 'string') return data || [];

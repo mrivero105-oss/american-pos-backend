@@ -1,12 +1,130 @@
 import api from '../services/api';
+import secureMobileStorage from '../utils/secureMobileStorage';
 import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
+import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
+
+const IS_TEST_ENV = Boolean(
+    (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.MODE === 'test')
+    || (typeof globalThis !== 'undefined' && globalThis.__vitest_worker__)
+);
+const SETTINGS_CACHE_TTL_MS = IS_TEST_ENV ? 0 : 15000;
+const SHIFT_CACHE_TTL_MS = IS_TEST_ENV ? 0 : 4000;
+
+let inFlightGlobalSettingsPromise = null;
+let lastGlobalSettingsFetchedAt = 0;
+let lastGlobalSettingsToken = '';
+
+const resourceCacheStore = new Map();
+const resourceInFlightMap = new Map();
+
+const getActiveAuthScope = () => {
+    try {
+        return secureMobileStorage.getToken() || 'anon';
+    } catch {
+        return 'anon';
+    }
+};
+
+export const invalidateSettingsResourceCache = (keys) => {
+    if (!keys || keys === 'all') {
+        resourceCacheStore.clear();
+        lastGlobalSettingsFetchedAt = 0;
+        return;
+    }
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const k of list) {
+        if (k === 'globalSettings') {
+            lastGlobalSettingsFetchedAt = 0;
+            continue;
+        }
+        for (const existingKey of Array.from(resourceCacheStore.keys())) {
+            if (existingKey === k || existingKey.startsWith(`${k}:`)) {
+                resourceCacheStore.delete(existingKey);
+            }
+        }
+    }
+};
+
+export const clearSettingsHttpCache = () => {
+    resourceCacheStore.clear();
+    resourceInFlightMap.clear();
+    inFlightGlobalSettingsPromise = null;
+    lastGlobalSettingsFetchedAt = 0;
+    lastGlobalSettingsToken = '';
+};
+
+const runCoalescedFetch = async ({ cacheKey, ttlMs, forceRefresh = false, fetcher }) => {
+    const scopeToken = getActiveAuthScope();
+    const now = Date.now();
+    if (!forceRefresh && ttlMs > 0) {
+        const entry = resourceCacheStore.get(cacheKey);
+        if (entry && entry.scopeToken === scopeToken && (now - entry.fetchedAt) < ttlMs) {
+            return entry.data;
+        }
+    }
+    const inFlightKey = `${cacheKey}::${scopeToken}`;
+    if (resourceInFlightMap.has(inFlightKey)) {
+        return resourceInFlightMap.get(inFlightKey);
+    }
+    const promise = (async () => {
+        try {
+            const data = await fetcher();
+            if (ttlMs > 0) {
+                if (cacheKey.startsWith('shift:')) {
+                    for (const k of Array.from(resourceCacheStore.keys())) {
+                        if (k.startsWith('shift:') && k !== cacheKey) {
+                            resourceCacheStore.delete(k);
+                        }
+                    }
+                }
+                resourceCacheStore.set(cacheKey, {
+                    data,
+                    scopeToken,
+                    fetchedAt: Date.now()
+                });
+            }
+            return data;
+        } finally {
+            resourceInFlightMap.delete(inFlightKey);
+        }
+    })();
+    resourceInFlightMap.set(inFlightKey, promise);
+    return promise;
+};
+
+if (typeof window !== 'undefined') {
+    const invalidateRateAndGlobal = () => {
+        invalidateSettingsResourceCache(['rate', 'globalSettings']);
+    };
+    const invalidateBusinessAndGlobal = () => {
+        invalidateSettingsResourceCache(['business', 'globalSettings']);
+    };
+    const invalidateAllSettings = () => {
+        invalidateSettingsResourceCache(['rate', 'business', 'paymentMethods', 'taxes', 'globalSettings']);
+    };
+    const invalidateShiftCache = (event) => {
+        const regId = event?.detail?.registerId;
+        if (regId) {
+            invalidateSettingsResourceCache(`shift:${regId}`);
+        } else {
+            invalidateSettingsResourceCache('shift');
+        }
+    };
+    window.addEventListener('pos-exchange-rate-updated', invalidateRateAndGlobal);
+    window.addEventListener('business_mode_changed', invalidateBusinessAndGlobal);
+    window.addEventListener('settings_changed', invalidateAllSettings);
+    window.addEventListener('pos-settings-updated', invalidateAllSettings);
+    window.addEventListener('shift_status_changed', invalidateShiftCache);
+    window.addEventListener('auth-unauthorized', clearSettingsHttpCache);
+    window.addEventListener('auth-logout', clearSettingsHttpCache);
+}
 
 const getStoredSetting = (key, fallback) => {
     if (typeof window !== 'undefined') {
         try {
             const v = localStorage.getItem(key);
             if (v !== null && v !== undefined && v !== '') return v;
-        } catch (_) {}
+        } catch { /* Acceso restringido a localStorage */ }
     }
     return fallback;
 };
@@ -16,7 +134,7 @@ const getStoredBusinessSettings = () => {
         try {
             const raw = localStorage.getItem('pos_business_settings');
             if (raw) return JSON.parse(raw) || {};
-        } catch (_) {}
+        } catch { /* JSON o localStorage inaccesible */ }
     }
     return {};
 };
@@ -36,59 +154,143 @@ export const setGlobalSettings = (newSettings) => {
     if (newSettings.country !== undefined) globalSettings.country = (newSettings.country || '').toLowerCase().trim();
     if (newSettings.businessInfo?.country !== undefined) globalSettings.country = (newSettings.businessInfo.country || '').toLowerCase().trim();
     if (newSettings.paymentMethods !== undefined) globalSettings.paymentMethods = newSettings.paymentMethods;
+    try {
+        useBusinessSettingsStore.getState().setSettings({
+            ...newSettings,
+            rate: globalSettings.rate,
+            currencyMode: globalSettings.currencyMode,
+            country: globalSettings.country
+        });
+    } catch (err) {
+        console.warn('[Format] Error sincronizando store de settings:', err?.message);
+    }
 };
 
-export const fetchGlobalSettings = async () => {
-    try {
-        const [rateRes, pmRes, bizRes] = await Promise.all([
-            api.get('/settings/rate'),
-            api.get('/settings/payment-methods').catch(() => ({ data: [] })),
-            api.get('/settings/business').catch(() => ({ data: getStoredBusinessSettings() }))
-        ]);
-        const bizData = bizRes?.data || getStoredBusinessSettings();
-        if (typeof window !== 'undefined' && bizRes?.data && Object.keys(bizRes.data).length > 0) {
+export const fetchExchangeRateCached = (forceRefresh = false) => runCoalescedFetch({
+    cacheKey: 'rate',
+    ttlMs: SETTINGS_CACHE_TTL_MS,
+    forceRefresh,
+    fetcher: async () => {
+        const res = await api.get('/settings/rate');
+        return res?.data;
+    }
+});
+
+export const fetchBusinessSettingsCached = (forceRefresh = false) => runCoalescedFetch({
+    cacheKey: 'business',
+    ttlMs: SETTINGS_CACHE_TTL_MS,
+    forceRefresh,
+    fetcher: async () => {
+        const res = await api.get('/settings/business');
+        const bizData = res?.data;
+        if (typeof window !== 'undefined' && bizData && typeof bizData === 'object' && Object.keys(bizData).length > 0) {
             try {
-                localStorage.setItem('pos_business_settings', JSON.stringify(bizRes.data));
-            } catch (_) {}
+                localStorage.setItem('pos_business_settings', JSON.stringify(bizData));
+                if (bizData.businessMode) localStorage.setItem('pos_business_mode', bizData.businessMode);
+                if (bizData.country) localStorage.setItem('pos_country', bizData.country);
+            } catch (err) {
+                console.warn('[Format] No se pudo persistir pos_business_settings:', err?.message);
+            }
         }
-        const merged = { ...bizData, ...rateRes.data, paymentMethods: pmRes.data || [] };
-        setGlobalSettings(merged);
+        return bizData;
+    }
+});
+
+export const fetchPaymentMethodsCached = (forceRefresh = false) => runCoalescedFetch({
+    cacheKey: 'paymentMethods',
+    ttlMs: SETTINGS_CACHE_TTL_MS,
+    forceRefresh,
+    fetcher: async () => {
+        const res = await api.get('/settings/payment-methods');
+        return res?.data ?? [];
+    }
+});
+
+export const fetchTaxSettingsCached = (forceRefresh = false) => runCoalescedFetch({
+    cacheKey: 'taxes',
+    ttlMs: SETTINGS_CACHE_TTL_MS,
+    forceRefresh,
+    fetcher: async () => {
+        const res = await api.get('/settings/taxes');
+        return res?.data;
+    }
+});
+
+export const fetchCurrentShiftCached = (registerId, forceRefresh = false) => runCoalescedFetch({
+    cacheKey: `shift:${registerId || 'default'}`,
+    ttlMs: SHIFT_CACHE_TTL_MS,
+    forceRefresh,
+    fetcher: async () => {
+        const res = await api.get('/cash/current', { params: { registerId } });
+        return res?.data || null;
+    }
+});
+
+export const fetchGlobalSettings = async (forceRefresh = false) => {
+    const now = Date.now();
+    const scopeToken = getActiveAuthScope();
+    if (!forceRefresh && lastGlobalSettingsFetchedAt > 0 && lastGlobalSettingsToken === scopeToken && (now - lastGlobalSettingsFetchedAt) < SETTINGS_CACHE_TTL_MS) {
         return globalSettings;
-    } catch (error) {
-        console.error('Error fetching global settings locally, intentando Supabase Cloud:', error?.message || error);
-        if (hasSupabaseConfig()) {
-            try {
-                const cloudRes = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general'), {
-                    headers: getSupabaseHeaders()
-                });
-            if (cloudRes.ok) {
-                const cloudData = await cloudRes.json();
-                if (Array.isArray(cloudData) && cloudData.length > 0) {
-                    const cfg = cloudData[0];
-                    const cloudSettings = {
-                        rate: Number(cfg.tasa_cambio || 1),
-                        currencyMode: cfg.modo_moneda || 'BOTH',
-                        businessName: cfg.nombre_negocio,
-                        businessInfo: {
-                            name: cfg.nombre_negocio,
-                            address: cfg.direccion,
-                            taxId: cfg.rif_cedula
+    }
+    if (inFlightGlobalSettingsPromise) {
+        return inFlightGlobalSettingsPromise;
+    }
+
+    inFlightGlobalSettingsPromise = (async () => {
+        try {
+            const [rateData, pmData, bizDataRaw] = await Promise.all([
+                fetchExchangeRateCached(forceRefresh),
+                fetchPaymentMethodsCached(forceRefresh).catch(() => []),
+                fetchBusinessSettingsCached(forceRefresh).catch(() => getStoredBusinessSettings())
+            ]);
+            const bizData = bizDataRaw || getStoredBusinessSettings();
+            const merged = { ...bizData, ...(rateData || {}), paymentMethods: pmData || [] };
+            setGlobalSettings(merged);
+            lastGlobalSettingsFetchedAt = Date.now();
+            lastGlobalSettingsToken = scopeToken;
+            return globalSettings;
+        } catch (error) {
+            console.warn('No se pudo obtener settings locales (usando fallback/nube):', error?.message || error);
+            if (hasSupabaseConfig()) {
+                try {
+                    const cloudRes = await fetch(getSupabaseRestUrl('cloud_configuracion?id=eq.general'), {
+                        headers: getSupabaseHeaders()
+                    });
+                    if (cloudRes.ok) {
+                        const cloudData = await cloudRes.json();
+                        if (Array.isArray(cloudData) && cloudData.length > 0) {
+                            const cfg = cloudData[0];
+                            const cloudSettings = {
+                                rate: Number(cfg.tasa_cambio || 1),
+                                currencyMode: cfg.modo_moneda || 'BOTH',
+                                businessName: cfg.nombre_negocio,
+                                businessInfo: {
+                                    name: cfg.nombre_negocio,
+                                    address: cfg.direccion,
+                                    taxId: cfg.rif_cedula
+                                }
+                            };
+                            setGlobalSettings(cloudSettings);
+                            if (typeof window !== 'undefined') {
+                                localStorage.setItem('pos_exchange_rate', String(cfg.tasa_cambio));
+                                localStorage.setItem('pos_currency_mode', cfg.modo_moneda || 'BOTH');
+                            }
+                            lastGlobalSettingsFetchedAt = Date.now();
+                            lastGlobalSettingsToken = scopeToken;
+                            return globalSettings;
                         }
-                    };
-                    setGlobalSettings(cloudSettings);
-                    if (typeof window !== 'undefined') {
-                        localStorage.setItem('pos_exchange_rate', String(cfg.tasa_cambio));
-                        localStorage.setItem('pos_currency_mode', cfg.modo_moneda || 'BOTH');
                     }
-                    return globalSettings;
+                } catch (cloudErr) {
+                    console.warn('Fallback de configuracion en nube fallo:', cloudErr?.message || cloudErr);
                 }
             }
-            } catch (cloudErr) {
-                console.warn('Fallback de configuracion en nube fallo:', cloudErr?.message || cloudErr);
-            }
+            return { ...getStoredBusinessSettings(), ...globalSettings };
+        } finally {
+            inFlightGlobalSettingsPromise = null;
         }
-        return { ...getStoredBusinessSettings(), ...globalSettings };
-    }
+    })();
+
+    return inFlightGlobalSettingsPromise;
 };
 
 export const getGlobalSettings = () => globalSettings;

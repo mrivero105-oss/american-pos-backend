@@ -41,11 +41,26 @@ zip.addLocalFolder(srcDir, '', (filename) => !filename.toLowerCase().endsWith('.
 const zipBuffer = zip.toBuffer();
 const checksum = crypto.createHash('sha256').update(zipBuffer).digest('hex');
 
+// Firma digital RSA-SHA256 opcional para paquetes OTA móviles
+let otaSignature = null;
+const otaPrivKeyInline = process.env.OTA_SIGNING_PRIVATE_KEY_PEM;
+const otaPrivKeyPath = process.env.OTA_SIGNING_PRIVATE_KEY_PATH;
+let otaPrivKeyPem = otaPrivKeyInline ? otaPrivKeyInline.replace(/\\n/g, '\n') : null;
+if (!otaPrivKeyPem && otaPrivKeyPath && fs.existsSync(path.resolve(otaPrivKeyPath))) {
+  otaPrivKeyPem = fs.readFileSync(path.resolve(otaPrivKeyPath), 'utf8');
+}
+if (otaPrivKeyPem) {
+  otaSignature = crypto.sign('sha256', zipBuffer, otaPrivKeyPem).toString('base64');
+} else if (process.env.REQUIRE_OTA_SIGNATURE === 'true') {
+  throw new Error('OTA_SIGNING_PRIVATE_KEY_PEM o OTA_SIGNING_PRIVATE_KEY_PATH es obligatorio cuando REQUIRE_OTA_SIGNATURE=true.');
+}
+
 const versionPayload = {
   version: fullVersion,
   buildTime: buildTimeIso,
   bundleUrl: '/dist.zip',
   checksum: checksum,
+  ...(otaSignature ? { otaSignature, otaSignatureAlg: 'RSA-SHA256' } : {}),
   apkUrl: '/Isaac-POS-Mobile.apk'
 };
 
@@ -59,7 +74,7 @@ console.log(
 // 3. Publicar únicamente dist.zip y version.json en el servidor (CERO impacto en los archivos web de Desktop)
 const targetDirs = [
   path.resolve(__dirname, '../american-pos-backend/public'),
-  'C:\\Users\\mrive\\AppData\\Local\\Temp\\isaac_asar_extracted\\public'
+  ...(process.env.ISAAC_EXTRA_PUBLIC_DIR ? [path.resolve(process.env.ISAAC_EXTRA_PUBLIC_DIR)] : [])
 ];
 
 const apkReleasePath = path.resolve(__dirname, 'android/app/build/outputs/apk/release/app-release.apk');
@@ -96,7 +111,11 @@ for (const targetDir of targetDirs) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
   if (!supabaseUrl || !supabaseKey) {
-    throw new Error('SUPABASE_URL y SUPABASE_SERVICE_KEY deben definirse en variables de entorno.');
+    if (process.env.REQUIRE_OTA_CLOUD_PUBLISH === 'true') {
+      throw new Error('SUPABASE_URL y SUPABASE_SERVICE_KEY deben definirse cuando REQUIRE_OTA_CLOUD_PUBLISH=true.');
+    }
+    console.log('[MOBILE OTA SYNC] ℹ️ Paquete OTA local generado. Subida a Supabase Storage omitida (define SUPABASE_URL y SUPABASE_SERVICE_KEY para publicar en nube).');
+    return;
   }
 
   try {

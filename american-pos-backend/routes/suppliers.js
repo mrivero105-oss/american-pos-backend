@@ -10,6 +10,14 @@ const http = require('http');
 const { Supplier } = require('../database/models');
 const { Op } = require('sequelize');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createSupplierSchema,
+    updateSupplierSchema,
+    supplierInvoiceSchema,
+    supplierPaymentSchema,
+    supplierProductsSyncSchema
+} = require('../schemas/supplierSchema');
 
 const READ_ONLY_SUPPLIER_AUX_PATHS = new Set(['/public-list', '/bcv-rate']);
 const PAYABLE_SUPPLIER_PATHS = ['/invoices', '/analyze-invoice-data'];
@@ -469,7 +477,7 @@ router.get('/export', async (req, res) => {
 });
 
 // POST / - Create supplier with logo
-router.post('/', upload.single('logo'), async (req, res) => {
+router.post('/', upload.single('logo'), validate(createSupplierSchema), async (req, res) => {
     try {
         const user = req.user || { id: 'admin', companyId: 'default' };
         const newSupplier = await supplierService.createSupplier(user, req.body, req.file);
@@ -481,7 +489,7 @@ router.post('/', upload.single('logo'), async (req, res) => {
 });
 
 // PUT /:id - Update supplier
-router.put('/:id', upload.single('logo'), async (req, res) => {
+router.put('/:id', upload.single('logo'), validate(updateSupplierSchema), async (req, res) => {
     try {
         const user = req.user || { id: 'admin', companyId: 'default' };
         const updatedSupplier = await supplierService.updateSupplier(user, req.params.id, req.body, req.file);
@@ -683,7 +691,7 @@ router.post('/analyze-invoice-data', invoiceUpload.single('file'), async (req, r
 });
 
 // POST /invoices - Registrar Factura Real de Proveedor y Cuenta por Pagar
-router.post('/invoices', invoiceUpload.single('file'), async (req, res) => {
+router.post('/invoices', invoiceUpload.single('file'), validate(supplierInvoiceSchema), async (req, res) => {
     try {
         const user = req.user || { id: 'admin', companyId: 'default' };
         const companyId = user.companyId || 'default';
@@ -878,7 +886,7 @@ router.get('/:id/credit-history', async (req, res) => {
 });
 
 // POST /:id/payment - Register payment to supplier
-router.post('/:id/payment', async (req, res) => {
+router.post('/:id/payment', validate(supplierPaymentSchema), async (req, res) => {
     try {
         const user = req.user || { id: 'admin', companyId: 'default' };
         const payment = await supplierService.registerPayment(user, req.params.id, req.body);
@@ -890,7 +898,7 @@ router.post('/:id/payment', async (req, res) => {
 });
 
 // POST /:id/products - Synchronize products list
-router.post('/:id/products', async (req, res) => {
+router.post('/:id/products', validate(supplierProductsSyncSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         await supplierService.syncProducts(companyId, req.params.id, req.body.productIds);

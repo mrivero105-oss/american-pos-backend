@@ -1,3 +1,4 @@
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { createPostgresBackup, cleanupOldBackups } = require('../utils/backupHelper');
@@ -15,8 +16,9 @@ async function runAutoBackup() {
 
         console.log(`✅ [COPIA 1 - LOCAL PRIMARIA] Snapshot generado con éxito: ${zipName} (${zipSizeMb} MB)`);
 
+        const homeDir = process.env.USERPROFILE || os.homedir();
         // Destino Secundario / Espejo Seguro (Desktop)
-        const secondaryDir = path.join('C:', 'Users', 'mrive', 'Desktop', 'RESPALDO_POSTGRESQL_CLIENTE');
+        const secondaryDir = path.join(homeDir, 'Desktop', 'RESPALDO_POSTGRESQL_CLIENTE');
         if (fs.existsSync(secondaryDir)) {
             const secondaryZipPath = path.join(secondaryDir, zipName);
             fs.copyFileSync(primaryZipPath, secondaryZipPath);
@@ -25,7 +27,7 @@ async function runAutoBackup() {
         }
 
         // Destino Terciario / NUBE OFFSITE (OneDrive - Regla 3-2-1)
-        const oneDriveBase = path.join('C:', 'Users', 'mrive', 'OneDrive');
+        const oneDriveBase = process.env.OneDrive || process.env.OneDriveConsumer || path.join(homeDir, 'OneDrive');
         if (fs.existsSync(oneDriveBase)) {
             const cloudDir = path.join(oneDriveBase, 'Respaldos_Isaac_POS');
             if (!fs.existsSync(cloudDir)) {

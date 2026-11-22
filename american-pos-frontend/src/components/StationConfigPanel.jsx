@@ -1,12 +1,19 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-    Layers, Package, Store, Search, Plus, X, RotateCcw, 
-    Check, Filter, AlertCircle, CheckCircle2 
+import {
+    Layers, 
+    Package, 
+    Store, 
+    Search, 
+    Plus, 
+    X, 
+    RotateCcw, 
+    Check, 
+    Filter, 
+    CheckCircle2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db } from '../services/db';
 import api from '../services/api';
-import { formatUSD } from '../utils/format';
 
 /**
  * StationConfigPanel
@@ -48,7 +55,6 @@ export default function StationConfigPanel({
 
     // Búsqueda de productos en tiempo real
     const [productSearchTerm, setProductSearchTerm] = useState('');
-    const [isSearchingProduct, setIsSearchingProduct] = useState(false);
     const searchInputRef = useRef(null);
 
     // Cargar categorías y productos de IndexedDB con fallback de API

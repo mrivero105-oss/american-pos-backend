@@ -23,9 +23,9 @@ try {
     Pop-Location
 }
 
-# 2. Compilar Instaladores Principales (Servidor, Terminal, Ultra)
+# 2. Compilar Instaladores Principales (Servidor, Terminal, Ultra) con motor Moderno (Electron 31)
 Write-Host "`n>>> [2/5] Generando Instaladores Principales (Servidor, Terminal, Ultra)..." -ForegroundColor Yellow
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$rootDir\build_ultra\compilar_ambos_instaladores.ps1"
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$rootDir\build_ultra\compilar_ambos_instaladores.ps1" -Engine modern
 if ($LASTEXITCODE -ne 0) { throw "compilar_ambos_instaladores fallo con codigo $LASTEXITCODE" }
 
 # 3. Compilar Instalador Legacy (Windows 7 / 8 / 8.1)

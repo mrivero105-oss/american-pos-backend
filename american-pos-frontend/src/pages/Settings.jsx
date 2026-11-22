@@ -3,10 +3,18 @@ import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import {
-    Store, Shield as ShieldIcon, Loader2, CreditCard,
-    Printer, Database, Activity, Banknote,
-    Globe, Server, Cpu, CheckCircle2, Lock, Smartphone,
-    SlidersHorizontal, ArrowRight, Laptop, HardDrive, MessageSquare, Search, Volume2
+    Store, 
+    Shield as ShieldIcon, 
+    Loader2, 
+    CreditCard, 
+    Printer, 
+    Database, 
+    Banknote, 
+    SlidersHorizontal, 
+    HardDrive, 
+    MessageSquare, 
+    Search, 
+    Volume2
 } from 'lucide-react';
 import { db } from '../services/db';
 import { syncManager } from '../services/syncManager';
@@ -174,7 +182,7 @@ export default function Settings() {
                         setBusiness(savedBiz);
                         localStorage.setItem('pos_broadcast_print_enabled', String(savedBiz.broadcastPrintingEnabled === true));
                     }
-                } catch (_e) {}
+                } catch (caughtErr) { console.warn('[Settings] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             }
 
             if (taxRes && taxRes.data) {
@@ -184,7 +192,7 @@ export default function Settings() {
                 try {
                     const savedTaxes = JSON.parse(localStorage.getItem('pos_tax_settings') || '{}');
                     if (savedTaxes && Object.keys(savedTaxes).length > 0) setTaxes(savedTaxes);
-                } catch (_e) {}
+                } catch (caughtErr) { console.warn('[Settings] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             }
 
             if (payRes && payRes.data) {
@@ -194,7 +202,7 @@ export default function Settings() {
                 try {
                     const savedPay = JSON.parse(localStorage.getItem('pos_payment_methods') || '[]');
                     if (savedPay && savedPay.length > 0) setPaymentMethods(savedPay);
-                } catch (_e) {}
+                } catch (caughtErr) { console.warn('[Settings] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             }
         } catch (error) { 
             console.error(error); 
@@ -244,7 +252,7 @@ export default function Settings() {
                     const bc = new BroadcastChannel('isaac_pos_display_sync');
                     bc.postMessage({ type: 'BUSINESS_SETTINGS_UPDATED', payload: business });
                     bc.close();
-                } catch (_) {}
+                } catch (caughtErr) { console.warn('[Settings] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
             }
             toast.success('Datos y logotipo del negocio actualizados correctamente');
         } catch (_error) { 
@@ -279,7 +287,7 @@ export default function Settings() {
                     const bc = new BroadcastChannel('isaac_pos_display_sync');
                     bc.postMessage({ type: 'PAYMENT_METHODS_UPDATED', payload: paymentMethods });
                     bc.close();
-                } catch (_) {}
+                } catch (caughtErr) { console.warn('[Settings] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
             }
             toast.success('Métodos de pago actualizados exitosamente');
         } catch (_error) { 

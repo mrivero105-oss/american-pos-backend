@@ -19,6 +19,7 @@ class BCVAutoSyncService {
     constructor() {
         this.io = null;
         this.timer = null;
+        this.startupTimer = null;
         this.isSyncing = false;
         this.lastSyncTime = null;
         this.lastKnownRate = null;
@@ -35,11 +36,14 @@ class BCVAutoSyncService {
         console.log('[BCVAutoSync] 🚀 Inicializando servicio de actualización automática de tasa BCV...');
 
         // Ejecutar primera verificación 5 segundos después del arranque
-        setTimeout(() => {
+        if (this.startupTimer) clearTimeout(this.startupTimer);
+        this.startupTimer = setTimeout(() => {
+            this.startupTimer = null;
             this.syncRate({ reason: 'STARTUP' }).catch(err => {
                 console.warn('[BCVAutoSync] Aviso en sincronización inicial:', err.message);
             });
         }, 5000);
+        if (typeof this.startupTimer.unref === 'function') this.startupTimer.unref();
 
         // Intervalo periódico: cada 30 minutos
         if (this.timer) clearInterval(this.timer);
@@ -48,6 +52,18 @@ class BCVAutoSyncService {
                 console.warn('[BCVAutoSync] Aviso en sincronización periódica:', err.message);
             });
         }, 1000 * 60 * 30);
+        if (typeof this.timer.unref === 'function') this.timer.unref();
+    }
+
+    stop() {
+        if (this.startupTimer) {
+            clearTimeout(this.startupTimer);
+            this.startupTimer = null;
+        }
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
     }
 
     /**
@@ -123,8 +139,8 @@ class BCVAutoSyncService {
                     allSettings['default'].autoUpdateRate = true;
                 }
 
-                writeJson(SETTINGS_FILE, allSettings);
-                cache.set('all_settings', allSettings);
+                const SettingsStoreService = require('./SettingsStoreService');
+                await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
                 cache.del(`user_currency_1`);
                 cache.del(`user_currency_2`);
 

@@ -39,13 +39,34 @@ const excludeDirs = new Set([
     'backend',
     'dist_installer',
     'dist_final_installer',
+    'dist_modern',
+    'dist_release',
     '.wwebjs_auth',
+    '.test_wwebjs_auth',
     '.wwebjs_cache',
+    'auto-backups',
     'backups',
+    'invoices',
+    'product_images',
+    'supplier_logos',
+    'scratch',
     'logs',
     '.git',
     'bin',
     'obj'
+]);
+
+const sensitiveExactFiles = new Set([
+    '.env',
+    'settings.json',
+    'db-config.json',
+    '.dbcfg.key.dpapi',
+    'secrets.vault.json',
+    '.secrets.key.dpapi',
+    'cloud_mirror_config.json',
+    'private.pem',
+    'serviceAccountKey.json',
+    'real_token.json'
 ]);
 
 function scan(dir) {
@@ -69,8 +90,18 @@ function scan(dir) {
             }
             scan(full);
         } else {
-            // Reglas de exclusión en cualquier directorio
-            if (item.endsWith('.apk') || 
+            const lowerItem = item.toLowerCase();
+            // Reglas de exclusión de secretos y residuos en cualquier directorio
+            if (sensitiveExactFiles.has(lowerItem) ||
+                lowerItem.startsWith('.env.') ||
+                (lowerItem.includes('private') && lowerItem.endsWith('.pem')) ||
+                lowerItem.endsWith('.pfx') ||
+                lowerItem.endsWith('.p12') ||
+                lowerItem.endsWith('.key') ||
+                lowerItem.endsWith('.sqlite') ||
+                lowerItem.endsWith('.sqlite-wal') ||
+                lowerItem.endsWith('.sqlite-shm') ||
+                item.endsWith('.apk') || 
                 item.endsWith('.dev_backup') || 
                 item.includes('premigration') ||
                 item.endsWith('.tar.gz') ||
@@ -84,7 +115,7 @@ function scan(dir) {
                     item.startsWith('debug_') || item.startsWith('fix_') || 
                     item.startsWith('inspect_') || item.startsWith('find_') || 
                     item.startsWith('temp_')) continue;
-                if (item.endsWith('.cs') || item.endsWith('.tmp') || item.endsWith('.log') || item === 'real_token.json') continue;
+                if (item.endsWith('.cs') || item.endsWith('.tmp') || item.endsWith('.log')) continue;
             }
             filesToPack.push({ full, rel });
         }

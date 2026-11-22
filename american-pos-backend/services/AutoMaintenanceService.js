@@ -19,6 +19,7 @@ class AutoMaintenanceService {
         this.lastReport = null;
         this.isRunning = false;
         this.timer = null;
+        this.bootTimer = null;
     }
 
     /**
@@ -134,25 +135,39 @@ class AutoMaintenanceService {
             // Índices de Ventas y JSONB
             'CREATE INDEX IF NOT EXISTS idx_sales_company_created ON "Sales" ("companyId", "createdAt" DESC);',
             'CREATE INDEX IF NOT EXISTS idx_sales_company_status ON "Sales" ("companyId", "status");',
+            'CREATE INDEX IF NOT EXISTS idx_sales_company_status_date ON "Sales" ("companyId", "status", "date");',
             'CREATE INDEX IF NOT EXISTS idx_sales_company_payment_status ON "Sales" ("companyId", "paymentStatus");',
+            'CREATE INDEX IF NOT EXISTS idx_sales_company_cust_created ON "Sales" ("companyId", "customerId", "createdAt" DESC);',
             'CREATE INDEX IF NOT EXISTS idx_sales_date ON "Sales" ("date" DESC);',
             'CREATE INDEX IF NOT EXISTS idx_sales_payment_methods_gin ON "Sales" USING gin ("paymentMethods" jsonb_path_ops);',
             'CREATE INDEX IF NOT EXISTS idx_sales_applied_promos_gin ON "Sales" USING gin ("appliedPromotions" jsonb_path_ops);',
 
-            // Índices de Ítems de Venta (nombres canónicos unificados con schemaMigrator)
-            'CREATE INDEX IF NOT EXISTS idx_saleitems_saleid ON "SaleItems" ("saleId");',
+            // Índices de Ítems de Venta (idx_saleitems_sale_prod cubre también consultas por "saleId")
+            'CREATE INDEX IF NOT EXISTS idx_saleitems_sale_prod ON "SaleItems" ("saleId", "productId");',
             'CREATE INDEX IF NOT EXISTS idx_saleitems_product ON "SaleItems" ("productId");',
 
             // Índices de Productos, Códigos de Barras e Inventario
             'CREATE INDEX IF NOT EXISTS idx_products_barcode ON "Products" ("barcode");',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_barcode ON "Products" ("companyId", "barcode");',
             'CREATE INDEX IF NOT EXISTS idx_products_barcode_trgm ON "Products" USING gin (COALESCE("barcode", \'\') gin_trgm_ops);',
             'CREATE INDEX IF NOT EXISTS idx_products_bulk_barcode_trgm ON "Products" USING gin (COALESCE("bulkBarcode", \'\') gin_trgm_ops);',
             'CREATE INDEX IF NOT EXISTS idx_presentations_barcode_trgm ON "product_presentaciones" USING gin (COALESCE("barcode", \'\') gin_trgm_ops);',
             'CREATE INDEX IF NOT EXISTS idx_products_company_name ON "Products" ("companyId", "name");',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_updated ON "Products" ("companyId", "updatedAt" DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_branchstocks_company_updated ON "BranchStocks" ("companyId", "updatedAt" DESC);',
             'CREATE INDEX IF NOT EXISTS idx_products_company_stock_qty ON "Products" ("companyId", "stockQuantity");',
             'CREATE INDEX IF NOT EXISTS idx_products_company_price ON "Products" ("companyId", "price");',
             'CREATE INDEX IF NOT EXISTS idx_stock_movements_date ON "StockMovements" ("companyId", "createdAt" DESC);',
-            'CREATE INDEX IF NOT EXISTS idx_stockmovements_product ON "StockMovements" ("productId");',
+            'CREATE INDEX IF NOT EXISTS idx_stock_movements_prod_date ON "StockMovements" ("productId", "createdAt" DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_stock_movements_company_prod_date ON "StockMovements" ("companyId", "productId", "date" DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_cashmovements_shift ON "CashMovements" ("shiftId", "companyId");',
+            'CREATE INDEX IF NOT EXISTS idx_expenses_company_date ON "Expenses" ("companyId", "date");',
+
+            // Índices de Cuentas por Cobrar / Pagar (FIFO batch)
+            'CREATE INDEX IF NOT EXISTS idx_credit_history_comp_cust_type ON "CreditHistories" ("companyId", "customerId", "type", "timestamp" ASC);',
+            'CREATE INDEX IF NOT EXISTS idx_supplier_credit_history_sup ON "SupplierCreditHistories" ("companyId", "supplierId", "type", "timestamp" ASC);',
+            'CREATE INDEX IF NOT EXISTS idx_customers_company_credit ON "Customers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0;',
+            'CREATE INDEX IF NOT EXISTS idx_suppliers_company_credit ON "Suppliers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0;',
 
             // Índices de Auditoría y Conflictos
             'CREATE INDEX IF NOT EXISTS idx_audit_logs_company_created ON "AuditLogs" ("companyId", "createdAt" DESC);',
@@ -160,11 +175,16 @@ class AutoMaintenanceService {
             'CREATE INDEX IF NOT EXISTS idx_brin_audit_logs_created ON "AuditLogs" USING brin ("createdAt");',
             'CREATE INDEX IF NOT EXISTS idx_brin_stock_movements_created ON "StockMovements" USING brin ("createdAt");',
             'CREATE INDEX IF NOT EXISTS idx_brin_cash_movements_created ON "CashMovements" USING brin ("createdAt");',
-            'CREATE INDEX IF NOT EXISTS idx_stock_alerts_resolved ON "StockAlerts" ("resolved", "createdAt" DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_stock_alerts_company_resolved ON "StockAlerts" ("companyId", "resolved", "createdAt" DESC);',
 
             // Índices de Promociones JSONB
             'CREATE INDEX IF NOT EXISTS idx_promotions_active ON "Promotions" ("companyId", "isActive");',
             'CREATE INDEX IF NOT EXISTS idx_promotions_target_products_gin ON "Promotions" USING gin ("targetProductIds" jsonb_path_ops);',
+
+            // Índices para sync_outbox y Users (evitan Sequential Scans recurrentes)
+            'CREATE INDEX IF NOT EXISTS idx_sync_outbox_status ON sync_outbox (status);',
+            'CREATE INDEX IF NOT EXISTS idx_users_username_lower ON "Users" (LOWER("username"));',
+            'CREATE INDEX IF NOT EXISTS idx_users_company_status ON "Users" ("companyId", "status");',
 
             // Estadísticas Extendidas Multicolumna (PostgreSQL 16 Planner Optimization)
             'CREATE STATISTICS IF NOT EXISTS stat_products_company_status_cat (dependencies, ndistinct) ON "companyId", "status", "category" FROM "Products";',
@@ -181,6 +201,24 @@ class AutoMaintenanceService {
             }
         }
 
+        // Eliminar índices estrictamente redundantes cubiertos por índices compuestos/funcionales superiores
+        const redundantIndexesToDrop = [
+            'DROP INDEX IF EXISTS idx_saleitems_saleid;',
+            'DROP INDEX IF EXISTS idx_stockmovements_product;',
+            'DROP INDEX IF EXISTS idx_products_name;',
+            'DROP INDEX IF EXISTS idx_products_name_trgm;',
+            'DROP INDEX IF EXISTS idx_products_principio_trgm;',
+            'DROP INDEX IF EXISTS idx_cashmovements_shiftid;',
+            'DROP INDEX IF EXISTS idx_sales_company_createdat;',
+            'DROP INDEX IF EXISTS idx_auditlogs_company_createdat;',
+            'DROP INDEX IF EXISTS idx_stock_alerts_resolved;'
+        ];
+        for (const dropSql of redundantIndexesToDrop) {
+            try {
+                await sequelize.query(dropSql);
+            } catch (_) {}
+        }
+
         try {
             const { initializeDatabaseSecurity } = require('../database/tenantContext');
             await initializeDatabaseSecurity(sequelize);
@@ -194,6 +232,20 @@ class AutoMaintenanceService {
             console.warn('[AutoMaintenance] Aviso verificando tablas particionadas:', _partErr.message);
         }
 
+        try {
+            const AccountingEngineService = require('./AccountingEngineService');
+            await AccountingEngineService.ensureJournalSequence();
+        } catch (_seqErr) {
+            console.warn('[AutoMaintenance] Aviso verificando secuencia contable:', _seqErr.message);
+        }
+
+        try {
+            const DailyRollupService = require('./DailyRollupService');
+            await DailyRollupService.ensureTable();
+        } catch (_rolErr) {
+            console.warn('[AutoMaintenance] Aviso verificando daily_sales_rollups:', _rolErr.message);
+        }
+
         return { indexesChecked: indexStatements.length, createdCount };
     }
 
@@ -201,10 +253,31 @@ class AutoMaintenanceService {
      * Ejecuta VACUUM ANALYZE en PostgreSQL para actualizar estadísticas del planificador y liberar tuplas muertas
      */
     async executeVacuumAnalyze() {
-        const tables = ['Sales', 'SaleItems', 'Products', 'BranchStocks', 'StockMovements', 'AuditLogs', 'Promotions'];
+        try {
+            // 1. Purgar eventos de sync_outbox ya sincronizados hace más de 7 días para mantener la tabla ultraligera
+            await sequelize.query(`DELETE FROM sync_outbox WHERE status = 'SYNCED' AND created_at < NOW() - INTERVAL '7 days';`);
+        } catch (_) {}
+        try {
+            // 2. Rotación y compactación segura de AuditLogs:
+            // - Compactar blobs oldValue/newValue mayores a 60 días (preservando acción, usuario, entidad y fecha)
+            // - Purgar registros históricos de más de AUDIT_RETENTION_DAYS (default 180 días, mínimo 30)
+            const retentionDays = Math.max(30, parseInt(process.env.AUDIT_RETENTION_DAYS || '180', 10) || 180);
+            await sequelize.query(`
+                UPDATE "AuditLogs"
+                SET "oldValue" = NULL, "newValue" = NULL
+                WHERE "createdAt" < NOW() - INTERVAL '60 days'
+                  AND ("oldValue" IS NOT NULL OR "newValue" IS NOT NULL);
+            `);
+            await sequelize.query(`
+                DELETE FROM "AuditLogs"
+                WHERE "createdAt" < NOW() - MAKE_INTERVAL(days => :retentionDays);
+            `, { replacements: { retentionDays } });
+        } catch (_) {}
+        const tables = ['Sales', 'SaleItems', 'Products', 'BranchStocks', 'StockMovements', 'AuditLogs', 'Promotions', 'sync_outbox', 'Users'];
         for (const table of tables) {
             try {
-                await sequelize.query(`VACUUM ANALYZE "${table}";`);
+                const target = table === 'sync_outbox' ? 'sync_outbox' : `"${table}"`;
+                await sequelize.query(`VACUUM ANALYZE ${target};`);
             } catch (e) {
                 console.warn(`[AutoMaintenance] Vacuum warning on ${table}:`, e.message);
             }
@@ -232,6 +305,7 @@ class AutoMaintenanceService {
                     "customerId" VARCHAR(255),
                     "customerName" VARCHAR(255),
                     "userId" VARCHAR(255),
+                    "invoiceNumber" VARCHAR(255),
                     "companyId" VARCHAR(255),
                     "branchId" VARCHAR(255),
                     "status" VARCHAR(255) DEFAULT 'completed',
@@ -246,6 +320,7 @@ class AutoMaintenanceService {
                     PRIMARY KEY ("id", "createdAt")
                 ) PARTITION BY RANGE ("createdAt");
             `);
+            await sequelize.query(`ALTER TABLE "SalesHistory" ADD COLUMN IF NOT EXISTS "invoiceNumber" VARCHAR(255);`).catch(() => {});
 
             // 2. Tabla padre particionada SaleItemsHistory
             await sequelize.query(`
@@ -312,101 +387,113 @@ class AutoMaintenanceService {
         const safeDays = Math.max(1, parseInt(daysOld, 10) || 365);
         const cutoffDate = new Date(Date.now() - (safeDays * 24 * 60 * 60 * 1000)).toISOString();
 
-        try {
-            await this.ensurePartitionTables();
-
-            let archivedSales = 0;
-            let archivedItems = 0;
-
-            const t = await sequelize.transaction();
+        const { runWithTenantContext } = require('../database/tenantContext');
+        return runWithTenantContext({ companyId: '', userId: 'system-maintenance', isSuperAdmin: true }, async () => {
             try {
-                // 1. Enrutar ventas antiguas hacia SalesHistory particionada
-                const [salesCopy, salesMeta] = await sequelize.query(`
-                    INSERT INTO "SalesHistory" (
-                        "id", "createdAt", "updatedAt", "date", "total", "companyId", 
-                        "status", "subtotal", "tax", "discount", "paymentMethod", "paymentMethods"
-                    )
-                    SELECT 
-                        s.id, s."createdAt", s."updatedAt", s.date, s.total, s."companyId", 
-                        s.status, s.subtotal, s.tax, s.discount, s."paymentMethod", s."paymentMethods"
-                    FROM "Sales" s
-                    WHERE s."createdAt" < :cutoffDate
-                      AND s.status IN ('completed', 'cancelled')
-                    ON CONFLICT ("id", "createdAt") DO NOTHING;
-                `, { replacements: { cutoffDate }, transaction: t });
+                await this.ensurePartitionTables();
 
-                archivedSales = Number(salesMeta?.rowCount ?? salesCopy?.rowCount ?? 0);
+                let archivedSales = 0;
+                let archivedItems = 0;
 
-                // 2. Enrutar ítems antiguos hacia SaleItemsHistory particionada
-                const [itemsCopy, itemsMeta] = await sequelize.query(`
-                    INSERT INTO "SaleItemsHistory" (
-                        "id", "saleId", "productId", "name", "quantity", "price", 
-                        "subtotal", "cost", "companyId", "createdAt", "updatedAt"
-                    )
-                    SELECT 
-                        si.id, si."saleId", si."productId", COALESCE(si.name, 'Producto'), 
-                        si.quantity, si.price, COALESCE(si.subtotal, 0), si.cost, 
-                        si."companyId", si."createdAt", si."updatedAt"
-                    FROM "SaleItems" si
-                    JOIN "Sales" s ON s.id = si."saleId"
-                    WHERE s."createdAt" < :cutoffDate
-                      AND s.status IN ('completed', 'cancelled')
-                    ON CONFLICT ("id", "createdAt") DO NOTHING;
-                `, { replacements: { cutoffDate }, transaction: t });
-
-                archivedItems = Number(itemsMeta?.rowCount ?? itemsCopy?.rowCount ?? 0);
-
-                // 3. Purgar ventas archivadas de las tablas activas operativas
-                if (archivedSales > 0) {
-                    await sequelize.query(`
-                        DELETE FROM "Sales"
-                        WHERE "createdAt" < :cutoffDate
-                          AND status IN ('completed', 'cancelled');
+                const t = await sequelize.transaction();
+                try {
+                    // 1. Enrutar ventas antiguas hacia SalesHistory particionada preservando todas las columnas fiscales y de trazabilidad
+                    const [salesCopy, salesMeta] = await sequelize.query(`
+                        INSERT INTO "SalesHistory" (
+                            "id", "createdAt", "updatedAt", "date", "total", "companyId",
+                            "status", "subtotal", "tax", "discount", "paymentMethod", "paymentMethods",
+                            "invoiceNumber", "customerId", "customerName", "userId", "branchId",
+                            "exchangeRate", "igtfAmount", "documentType", "paymentStatus",
+                            "registerId", "promoDiscount", "appliedPromotions"
+                        )
+                        SELECT
+                            s.id, s."createdAt", s."updatedAt", s.date, s.total, s."companyId",
+                            s.status, s.subtotal, s.tax, s.discount, s."paymentMethod", s."paymentMethods",
+                            s."invoiceNumber", s."customerId", s."customerName", s."userId", s."branchId",
+                            s."exchangeRate", s."igtfAmount", s."documentType", s."paymentStatus",
+                            s."registerId", s."promoDiscount", s."appliedPromotions"
+                        FROM "Sales" s
+                        WHERE s."createdAt" < :cutoffDate
+                          AND s.status IN ('completed', 'cancelled')
+                        ON CONFLICT ("id", "createdAt") DO NOTHING;
                     `, { replacements: { cutoffDate }, transaction: t });
+
+                    archivedSales = Number(salesMeta?.rowCount ?? salesCopy?.rowCount ?? 0);
+
+                    // 2. Enrutar ítems antiguos hacia SaleItemsHistory particionada
+                    const [itemsCopy, itemsMeta] = await sequelize.query(`
+                        INSERT INTO "SaleItemsHistory" (
+                            "id", "saleId", "productId", "name", "quantity", "price", 
+                            "subtotal", "cost", "companyId", "createdAt", "updatedAt"
+                        )
+                        SELECT 
+                            si.id, si."saleId", si."productId", COALESCE(si.name, 'Producto'), 
+                            si.quantity, si.price, COALESCE(si.subtotal, 0), si.cost, 
+                            si."companyId", si."createdAt", si."updatedAt"
+                        FROM "SaleItems" si
+                        JOIN "Sales" s ON s.id = si."saleId"
+                        WHERE s."createdAt" < :cutoffDate
+                          AND s.status IN ('completed', 'cancelled')
+                        ON CONFLICT ("id", "createdAt") DO NOTHING;
+                    `, { replacements: { cutoffDate }, transaction: t });
+
+                    archivedItems = Number(itemsMeta?.rowCount ?? itemsCopy?.rowCount ?? 0);
+
+                    // 3. Purgar ventas archivadas de las tablas activas operativas
+                    if (archivedSales > 0) {
+                        await sequelize.query(`
+                            DELETE FROM "Sales"
+                            WHERE "createdAt" < :cutoffDate
+                              AND status IN ('completed', 'cancelled');
+                        `, { replacements: { cutoffDate }, transaction: t });
+                    }
+
+                    await t.commit();
+                } catch (txErr) {
+                    await t.rollback();
+                    throw txErr;
                 }
 
-                await t.commit();
-            } catch (txErr) {
-                await t.rollback();
-                throw txErr;
-            }
+                if (archivedSales > 0) {
+                    console.log(`📦 [AutoMaintenance] Archivo particionado exitoso: ${archivedSales} ventas y ${archivedItems} ítems transferidos a particiones declarativas.`);
+                }
 
-            if (archivedSales > 0) {
-                console.log(`📦 [AutoMaintenance] Archivo particionado exitoso: ${archivedSales} ventas y ${archivedItems} ítems transferidos a particiones declarativas.`);
+                return { archivedSales, archivedItems, cutoffDate, status: 'SUCCESS' };
+            } catch (e) {
+                console.warn('[AutoMaintenance] Warning archiving postgres data:', e.message);
+                return { archivedSales: 0, error: e.message };
             }
-
-            return { archivedSales, archivedItems, cutoffDate, status: 'SUCCESS' };
-        } catch (e) {
-            console.warn('[AutoMaintenance] Warning archiving postgres data:', e.message);
-            return { archivedSales: 0, error: e.message };
-        }
+        });
     }
 
     /**
      * Purga controlada de logs de auditoría antiguos para evitar crecimiento desmedido de disco
      */
     async purgeAuditLogs(daysToKeep = 90) {
-        try {
-            const cutoffDate = new Date();
-            cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+        const { runWithTenantContext } = require('../database/tenantContext');
+        return runWithTenantContext({ companyId: '', userId: 'system-maintenance', isSuperAdmin: true }, async () => {
+            try {
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
 
-            const [result, meta] = await sequelize.query(`
-                DELETE FROM "AuditLogs"
-                WHERE "createdAt" < :cutoffDate
-                  AND "action" NOT IN ('SYSTEM_CRITICAL_EVENT', 'LICENSE_ACTIVATION', 'DATA_MIGRATION_COMPLETED');
-            `, {
-                replacements: { cutoffDate }
-            });
+                const [result, meta] = await sequelize.query(`
+                    DELETE FROM "AuditLogs"
+                    WHERE "createdAt" < :cutoffDate
+                      AND "action" NOT IN ('SYSTEM_CRITICAL_EVENT', 'LICENSE_ACTIVATION', 'DATA_MIGRATION_COMPLETED');
+                `, {
+                    replacements: { cutoffDate }
+                });
 
-            const purgedCount = Number(meta?.rowCount ?? result?.rowCount ?? 0);
-            if (purgedCount > 0) {
-                console.log(`[AutoMaintenance] 🧹 Purga de AuditLogs (> ${daysToKeep} días): ${purgedCount} registros eliminados.`);
+                const purgedCount = Number(meta?.rowCount ?? result?.rowCount ?? 0);
+                if (purgedCount > 0) {
+                    console.log(`[AutoMaintenance] 🧹 Purga de AuditLogs (> ${daysToKeep} días): ${purgedCount} registros eliminados.`);
+                }
+                return { purgedLogs: purgedCount, daysToKeep, status: 'SUCCESS' };
+            } catch (e) {
+                console.warn('[AutoMaintenance] Warning purging audit logs:', e.message);
+                return { purgedLogs: 0, error: e.message };
             }
-            return { purgedLogs: purgedCount, daysToKeep, status: 'SUCCESS' };
-        } catch (e) {
-            console.warn('[AutoMaintenance] Warning purging audit logs:', e.message);
-            return { purgedLogs: 0, error: e.message };
-        }
+        });
     }
 
     /**
@@ -536,13 +623,21 @@ class AutoMaintenanceService {
             const indexResult = await this.ensureIndexes();
             const vacuumResult = await this.executeVacuumAnalyze();
 
-            // Refresco concurrente de vistas materializadas (PostgreSQL 16)
+            // Refresco concurrente de vistas materializadas y rollups diarios (PostgreSQL 16)
             let viewsResult = { success: true };
             try {
                 const PostgresAnalyticsService = require('./PostgresAnalyticsService');
                 viewsResult = await PostgresAnalyticsService.refreshViews(sequelize);
             } catch (vErr) {
                 viewsResult = { success: false, error: vErr.message };
+            }
+
+            let rollupResult = { rebuilt: 0 };
+            try {
+                const DailyRollupService = require('./DailyRollupService');
+                rollupResult = await DailyRollupService.backfillAllActiveCompanies(365);
+            } catch (rErr) {
+                rollupResult = { rebuilt: 0, error: rErr.message };
             }
 
             const archiveResult = await this.archiveHistoricalData(options.daysOld || 365);
@@ -558,6 +653,7 @@ class AutoMaintenanceService {
                 indexResult,
                 vacuumResult,
                 viewsResult,
+                rollupResult,
                 archiveResult,
                 purgeResult,
                 dbMetrics
@@ -617,19 +713,27 @@ class AutoMaintenanceService {
      */
     startSchedule() {
         if (this.timer) clearInterval(this.timer);
+        if (this.bootTimer) clearTimeout(this.bootTimer);
 
         console.log('[AutoMaintenance] ⏰ Programador nocturno de mantenimiento PostgreSQL 16 activado (cada 24h).');
 
-        const bootTimer = setTimeout(async () => {
+        // Diferir el ajuste ligero 25s post-arranque para no competir con la carga inicial y el primer login
+        this.bootTimer = setTimeout(async () => {
+            this.bootTimer = null;
             try {
                 await this.tunePostgresEngine();
-                await this.ensureIndexes();
-                console.log('[AutoMaintenance] Motor PostgreSQL 16, estadísticas extendidas e índices GIN/B-Tree garantizados en arranque.');
+                await this.ensurePartitionTables();
+                const AccountingEngineService = require('./AccountingEngineService');
+                await AccountingEngineService.ensureJournalSequence();
+                const DailyRollupService = require('./DailyRollupService');
+                await DailyRollupService.ensureTable();
+                await DailyRollupService.backfillAllActiveCompanies(90);
+                console.log('[AutoMaintenance] Parámetros PostgreSQL 16, particiones, secuencia contable y rollups verificados en segundo plano.');
             } catch (e) {
                 console.warn('[AutoMaintenance] Error en chequeo de inicio:', e.message);
             }
-        }, 15000);
-        if (typeof bootTimer.unref === 'function') bootTimer.unref();
+        }, 25000);
+        if (typeof this.bootTimer.unref === 'function') this.bootTimer.unref();
 
         this.timer = setInterval(() => {
             const now = new Date();
@@ -639,6 +743,17 @@ class AutoMaintenanceService {
             }
         }, 1000 * 60 * 10);
         if (typeof this.timer.unref === 'function') this.timer.unref();
+    }
+
+    stop() {
+        if (this.bootTimer) {
+            clearTimeout(this.bootTimer);
+            this.bootTimer = null;
+        }
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
     }
 }
 

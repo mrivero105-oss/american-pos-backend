@@ -64,7 +64,7 @@ export default function PharmacyPOSView() {
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + 0.25);
-    } catch (_e) {}
+    } catch { /* AudioContext opcional no disponible en este navegador */ }
   }, []);
 
   const showNotification = useCallback((message, type = 'success') => {

@@ -91,6 +91,8 @@ export default function BackupSettings({
                 toast.success('Carpeta seleccionada. Pulsa "Guardar Destino" para aplicar.');
             }
         } catch (err) {
+            console.warn('[BackupSettings] Error capturado en operación:', err?.message || err);
+            console.warn('[BackupSettings] Error abriendo selector de carpetas:', err?.message || err);
             toast.error('No se pudo abrir el selector de carpetas', { id: 'browse_cloud' });
         }
     };

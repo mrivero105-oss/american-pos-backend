@@ -1,21 +1,19 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import {
-    X,
-    CheckCircle2,
-    CreditCard,
-    Building2,
-    Calendar,
-    DollarSign,
-    AlertCircle,
-    Boxes,
-    FileText,
-    Plus,
-    Loader2,
-    ArrowRight,
-    Wallet,
-    Clock,
-    Layers,
-    BadgePercent
+    X, 
+    CheckCircle2, 
+    CreditCard, 
+    Building2, 
+    Calendar, 
+    DollarSign, 
+    AlertCircle, 
+    Boxes, 
+    FileText, 
+    Loader2, 
+    ArrowRight, 
+    Wallet, 
+    Clock, 
+    Layers
 } from 'lucide-react';
 
 const formatSmartUsd = (val) => {

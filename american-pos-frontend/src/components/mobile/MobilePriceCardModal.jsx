@@ -1,11 +1,10 @@
-import React from 'react';
 import { Tag, X, Box, ShoppingCart, Scan } from 'lucide-react';
+import { CachedImage } from '../CachedImage';
 
 export default function MobilePriceCardModal({
   product,
   onClose,
   T,
-  getImageUrl,
   exchangeRate,
   addToCart,
   showToast,
@@ -36,10 +35,11 @@ export default function MobilePriceCardModal({
             <div className="flex items-center gap-3">
               <div className="w-20 h-20 rounded-2xl bg-slate-900 border border-white/10 overflow-hidden flex items-center justify-center shrink-0">
                 {priceCheckerProduct.imageUrl || priceCheckerProduct.imageUri || priceCheckerProduct.image ? (
-                  <img
-                    src={getImageUrl(priceCheckerProduct.imageUrl || priceCheckerProduct.imageUri || priceCheckerProduct.image)}
+                  <CachedImage
+                    src={priceCheckerProduct.imageUrl || priceCheckerProduct.imageUri || priceCheckerProduct.image}
                     alt={priceCheckerProduct.name}
                     className="w-full h-full object-contain p-1"
+                    fallback={<Box size={24} className="text-slate-600" />}
                   />
                 ) : (
                   <Box size={24} className="text-slate-600" />

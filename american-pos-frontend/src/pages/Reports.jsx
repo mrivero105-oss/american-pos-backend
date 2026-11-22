@@ -3,16 +3,16 @@ import { useSocket } from '../hooks/SocketContext';
 import { useAuth } from '../hooks/AuthContext';
 import api from '../services/api';
 import {
-    TrendingUp, PieChart, Clock, Award,
-    ArrowUpCircle, Download, Calendar, Filter,
-    Activity, ChevronRight, AlertCircle, Package,
-    ShoppingCart, DollarSign, Banknote, History,
-    Search, X
+    TrendingUp, 
+    Award, 
+    ArrowUpCircle, 
+    Download, 
+    Calendar, 
+    Activity, 
+    AlertCircle, 
+    Search, 
+    X
 } from 'lucide-react';
-import {
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-    ResponsiveContainer, Cell, LineChart, Line, AreaChart, Area
-} from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatMoney, fetchGlobalSettings, formatStock, isSingleCurrencyMode } from '../utils/format';
 import MiniCalendar from '../components/MiniCalendar';
@@ -25,7 +25,6 @@ export default function Reports() {
     const { socket } = useSocket();
     const { user } = useAuth();
     const [settings, setSettings] = useState({ currencyMode: 'BOTH', rate: 1 });
-    const [isClient, setIsClient] = useState(false);
      const [range, setRange] = useState('today');
     const [isCustomRange, setIsCustomRange] = useState(false);
     const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -33,9 +32,7 @@ export default function Reports() {
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [valuation, setValuation] = useState(null);
     const [lowStock, setLowStock] = useState([]);
-    const [lastUpdated, setLastUpdated] = useState(new Date());
     const [rankingMode, setRankingMode] = useState('quantity'); // 'quantity' or 'profit'
     const [rankingSearch, setRankingSearch] = useState('');
     const [selectedProductDetails, setSelectedProductDetails] = useState(null);
@@ -62,16 +59,13 @@ export default function Reports() {
             }
             
             // Fetch everything in parallel
-            const [reportRes, valuationRes, lowStockRes] = await Promise.all([
+            const [reportRes, lowStockRes] = await Promise.all([
                 api.get(reportUrl),
-                api.get('/reports/inventory/valuation').catch(() => ({ data: null })),
                 api.get('/reports/inventory/low-stock?limit=5').catch(() => ({ data: { items: [] } }))
             ]);
 
             setData(reportRes.data);
-            setValuation(valuationRes.data);
             setLowStock(lowStockRes.data?.items || []);
-            setLastUpdated(new Date());
         } catch (error) {
             console.error('Error fetching BI reports:', error);
         } finally {
@@ -84,7 +78,6 @@ export default function Reports() {
             fetchSettings();
             fetchReport();
         }
-        setIsClient(true);
     }, [user?.role, fetchSettings, fetchReport]);
 
     useEffect(() => {
@@ -665,40 +658,3 @@ export default function Reports() {
 
 }
 
-function BIStatCard({ title, value, sub, icon, accent, warning }) {
-    const variants = {
-        blue: { bg: 'bg-primary-50 dark:bg-primary-950/40', text: 'text-primary-600 dark:text-primary-400', border: 'border-primary-200 dark:border-primary-800/40' },
-        emerald: { bg: 'bg-emerald-50 dark:bg-emerald-950/40', text: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-200 dark:border-emerald-800/40' },
-        amber: { bg: 'bg-amber-50 dark:bg-amber-950/40', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-200 dark:border-amber-800/40' },
-        violet: { bg: 'bg-violet-50 dark:bg-violet-950/40', text: 'text-violet-600 dark:text-violet-400', border: 'border-violet-200 dark:border-violet-800/40' }
-    };
-    const v = variants[accent] || variants.blue;
-
-    return (
-        <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs relative overflow-hidden">
-            <div className="flex justify-between items-start mb-4 relative z-10">
-                <div className={`p-2.5 rounded-lg border ${v.border} ${v.bg} ${v.text}`}>
-                    {icon}
-                </div>
-                {warning && (
-                    <div className="group/warn relative">
-                        <div className="p-1.5 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 rounded-lg border border-amber-200 dark:border-amber-800/40 cursor-help">
-                            <AlertCircle size={15} />
-                        </div>
-                        <div className="absolute top-full right-0 mt-2 w-48 p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-lg opacity-0 group-hover/warn:opacity-100 transition-opacity z-50 pointer-events-none">
-                            <p className="text-[10px] font-semibold text-slate-800 dark:text-slate-200 leading-relaxed">
-                                <span className="text-amber-600 dark:text-amber-400 font-bold">Cálculo Estimado:</span> Algunos productos no tienen costo definido. Se aplicó un margen genérico del 30%.
-                            </p>
-                        </div>
-                    </div>
-                )}
-            </div>
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 relative z-10">{title}</p>
-            <h4 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight tabular-nums mb-2 relative z-10">{value}</h4>
-            <div className="flex items-center gap-2 relative z-10">
-                <div className={`w-1.5 h-1.5 rounded-full ${v.text.split(' ')[0]} bg-current`}></div>
-                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{sub}</p>
-            </div>
-        </div>
-    );
-}

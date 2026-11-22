@@ -5,9 +5,14 @@ const { requirePermission } = require('../middleware/auth');
 
 const emitExpensesChanged = (req, payload = {}) => {
     try {
+        const companyId = String(req.user?.companyId || '2');
+        try {
+            const DailyRollupService = require('../services/DailyRollupService');
+            const targetDate = payload?.expense?.date || req.body?.date || new Date();
+            DailyRollupService.scheduleDayRefresh(companyId, targetDate);
+        } catch (_) {}
         const io = req.app?.get('io');
         if (io) {
-            const companyId = String(req.user?.companyId || '2');
             const eventData = { companyId, timestamp: Date.now(), ...payload };
             io.to(companyId).emit('expenses_changed', eventData);
         }

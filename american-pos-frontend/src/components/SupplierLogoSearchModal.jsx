@@ -1,8 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { 
-    Search, X, Download, Check, Globe, RefreshCw, 
-    Image as ImageIcon, Link2, ExternalLink, AlertCircle
+import {
+    Search, 
+    X, 
+    Download, 
+    Check, 
+    Globe, 
+    RefreshCw, 
+    Image as ImageIcon, 
+    Link2
 } from 'lucide-react';
 import api from '../services/api';
 import BaseModal from './BaseModal';
@@ -32,22 +38,13 @@ export default function SupplierLogoSearchModal({
             .trim();
     };
 
+    const queryRef = useRef(query);
     useEffect(() => {
-        if (isOpen) {
-            const initialQuery = cleanBrandName(supplierName) || supplierName || '';
-            setQuery(initialQuery);
-            if (initialQuery) {
-                performSearch(initialQuery);
-            } else {
-                setResults([]);
-            }
-            setCustomUrl('');
-            setShowCustomUrl(false);
-        }
-    }, [isOpen, supplierName]);
+        queryRef.current = query;
+    }, [query]);
 
-    const performSearch = async (searchTerm) => {
-        const q = (searchTerm || query).trim();
+    const performSearch = useCallback(async (searchTerm) => {
+        const q = (searchTerm || queryRef.current).trim();
         if (!q) return;
 
         try {
@@ -73,7 +70,21 @@ export default function SupplierLogoSearchModal({
         } finally {
             setLoading(false);
         }
-    };
+    }, [supplierName]);
+
+    useEffect(() => {
+        if (isOpen) {
+            const initialQuery = cleanBrandName(supplierName) || supplierName || '';
+            setQuery(initialQuery);
+            if (initialQuery) {
+                performSearch(initialQuery);
+            } else {
+                setResults([]);
+            }
+            setCustomUrl('');
+            setShowCustomUrl(false);
+        }
+    }, [isOpen, supplierName, performSearch]);
 
     const handleSearchSubmit = (e) => {
         e.preventDefault();

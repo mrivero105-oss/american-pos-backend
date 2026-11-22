@@ -1,5 +1,4 @@
-import React from 'react';
-import { Package, ZoomIn, ZoomOut, Upload, Search, Loader2, X, Link as LinkIcon, Image as ImageIcon } from 'lucide-react';
+import { ZoomIn, ZoomOut, Upload, Search, Loader2, X, Link as LinkIcon, Image as ImageIcon } from 'lucide-react';
 
 export default function ProductImageUpload({
     imageSrc,

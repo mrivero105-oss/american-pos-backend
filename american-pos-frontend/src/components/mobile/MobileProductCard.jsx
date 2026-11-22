@@ -1,6 +1,5 @@
-import React, { memo, useRef } from 'react';
+import { memo, useRef } from 'react';
 import { Minus, Package, Plus } from 'lucide-react';
-import { getImageUrl } from '../../utils/imageUtils';
 import { CachedImage } from '../CachedImage';
 import { triggerHaptic } from '../../utils/haptics';
 
@@ -18,7 +17,6 @@ function MobileProductCardComponent({
   businessMode,
   posMode,
   isLight,
-  T = {},
   onAddToCart,
   onDecrementFromCart,
   onOpenBulkPicker,
@@ -40,7 +38,6 @@ function MobileProductCardComponent({
   const isExhausted = availableStock <= 0;
   const rawImage = product.imageUrl || product.imageUri || product.image || '';
   const hasImage = Boolean(rawImage && String(rawImage).trim());
-  const imgSrc = hasImage ? getImageUrl(rawImage) : null;
 
   const unitsPerBulk = Number(product.unitsPerBulk) || 1;
   const bulkPriceUSD = Number(product.bulkPrice) || 0;
@@ -136,7 +133,7 @@ function MobileProductCardComponent({
       onPreviewImage({
         product,
         name: product.name || product.nombre,
-        url: imgSrc,
+        url: rawImage,
         priceUSD,
         priceBS,
         barcode: product.barcode || '',
@@ -554,6 +551,9 @@ export const MobileProductCard = memo(MobileProductCardComponent, (prev, next) =
     prev.product.midBulkPrice === next.product.midBulkPrice &&
     prev.product.name === next.product.name &&
     prev.product.nombre === next.product.nombre &&
+    prev.product.imageUrl === next.product.imageUrl &&
+    prev.product.imageUri === next.product.imageUri &&
+    prev.product.image === next.product.image &&
     prev.exchangeRate === next.exchangeRate &&
     prev.isLight === next.isLight &&
     prev.posMode === next.posMode &&

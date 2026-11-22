@@ -60,7 +60,9 @@ class BiometricService {
                     navigator.vibrate([60, 50, 60]);
                 }
             }
-        } catch (_) {}
+        } catch {
+            /* Vibración háptica opcional no soportada */
+        }
     }
 
     /**

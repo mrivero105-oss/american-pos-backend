@@ -1,4 +1,3 @@
-import React from 'react';
 import logoLight from '../assets/isaac-logo-horizontal.png';
 import logoDark from '../assets/isaac-logo-horizontal-dark.png';
 

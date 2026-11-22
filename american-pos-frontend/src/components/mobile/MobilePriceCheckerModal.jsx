@@ -1,6 +1,6 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Tag, X, Search, Camera, Box, ShoppingCart, Check, ScanBarcode, Plus, Minus, RefreshCw } from 'lucide-react';
+import { Tag, X, Search, Camera, Box, ShoppingCart, ScanBarcode, Plus, Minus } from 'lucide-react';
 import { playSuccessSound } from '../../utils/sounds';
 import CachedImage from '../CachedImage';
 import { VoiceMicButton } from '../../utils/voiceSearch';
@@ -20,12 +20,10 @@ export default function MobilePriceCheckerModal({
   triggerHaptic = () => {},
   priceCheckerProduct,
   setPriceCheckerProduct,
-  getImageUrl,
   exchangeRate,
   addToCart,
   showToast,
-  products,
-  isUnlimitedStockProduct
+  products
 }) {
   const [checkQty, setCheckQty] = useState(1);
 

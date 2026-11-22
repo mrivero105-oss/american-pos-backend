@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Printer, RefreshCw, X, Play, Loader2, CheckCircle2, ShieldCheck, FileScan, Sliders, Wifi } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';

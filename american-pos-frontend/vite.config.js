@@ -1,3 +1,4 @@
+import process from 'node:process';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
@@ -73,7 +74,17 @@ function electronChromiumColorFixPlugin() {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // Por seguridad de distribución, nunca incrustar VITE_SUPABASE_URL ni VITE_SUPABASE_ANON_KEY en builds comerciales
+  // salvo que el compilador autorice explícitamente VITE_ALLOW_EMBED_SUPABASE=true.
+  ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
+    ? {
+        define: {
+          'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),
+          'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('')
+        }
+      }
+    : {}),
   plugins: [
     react(),
     tailwindcss(),
@@ -153,24 +164,33 @@ export default defineConfig({
     chunkSizeWarningLimit: 500,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-icons': ['lucide-react'],
-          'vendor-docs': ['jspdf', 'html2canvas-pro'],
-          'vendor-charts': ['recharts'],
-          'vendor-motion': ['framer-motion'],
-          'vendor-zxing': ['@zxing/library'],
-          'vendor-realtime': ['socket.io-client'],
-          'vendor-capacitor': ['@capacitor/core', '@capacitor/clipboard', '@capgo/capacitor-updater'],
-          'vendor-qr': ['qrcode', 'jsbarcode'],
-          'vendor-state': ['zustand', 'dexie'],
-          'vendor-utils': ['axios', 'date-fns', 'uuid', 'fuse.js']
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/');
+          if (normalized.includes('commonjsHelpers')) return 'vendor-react';
+          if (!normalized.includes('/node_modules/')) return undefined;
+          const rules = [
+            ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/']],
+            ['vendor-icons', ['/node_modules/lucide-react/']],
+            ['vendor-docs', ['/node_modules/jspdf/', '/node_modules/html2canvas-pro/']],
+            ['vendor-charts', ['/node_modules/recharts/']],
+            ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
+            ['vendor-zxing', ['/node_modules/@zxing/library/']],
+            ['vendor-realtime', ['/node_modules/socket.io-client/', '/node_modules/engine.io-client/', '/node_modules/socket.io-parser/']],
+            ['vendor-capacitor', ['/node_modules/@capacitor/core/', '/node_modules/@capacitor/clipboard/', '/node_modules/@capgo/capacitor-updater/']],
+            ['vendor-qr', ['/node_modules/qrcode/', '/node_modules/jsbarcode/']],
+            ['vendor-state', ['/node_modules/zustand/']],
+            ['vendor-utils', ['/node_modules/axios/', '/node_modules/date-fns/', '/node_modules/uuid/']]
+          ];
+          for (const [chunkName, patterns] of rules) {
+            if (patterns.some((p) => normalized.includes(p))) return chunkName;
+          }
+          return undefined;
         }
       }
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom', 'react-window', 'fuse.js']
+    include: ['react', 'react-dom', 'react-router-dom', 'react-window']
   },
   base: './'
-});
+}));

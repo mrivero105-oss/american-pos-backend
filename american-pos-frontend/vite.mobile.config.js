@@ -27,13 +27,23 @@ function mobileEntrypointHtmlPlugin() {
       if (fs.existsSync(nestedApk)) {
         try {
           fs.unlinkSync(nestedApk);
-        } catch (_) {}
+        } catch (err) {
+          console.warn('[vite.mobile] No se pudo limpiar APK anidado:', err?.message);
+        }
       }
     }
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
+    ? {
+        define: {
+          'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),
+          'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('')
+        }
+      }
+    : {}),
   plugins: [
     mobileEntrypointHtmlPlugin(),
     react(),
@@ -97,18 +107,27 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom', 'zustand'],
-          'vendor-icons': ['lucide-react'],
-          'vendor-motion': ['framer-motion'],
-          'vendor-zxing': ['@zxing/library'],
-          'vendor-utils': ['axios', 'date-fns', 'uuid', 'fuse.js']
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/');
+          if (normalized.includes('commonjsHelpers')) return 'vendor-react';
+          if (!normalized.includes('/node_modules/')) return undefined;
+          const rules = [
+            ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/', '/node_modules/zustand/']],
+            ['vendor-icons', ['/node_modules/lucide-react/']],
+            ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
+            ['vendor-zxing', ['/node_modules/@zxing/library/']],
+            ['vendor-utils', ['/node_modules/axios/', '/node_modules/date-fns/', '/node_modules/uuid/']]
+          ];
+          for (const [chunkName, patterns] of rules) {
+            if (patterns.some((p) => normalized.includes(p))) return chunkName;
+          }
+          return undefined;
         }
       }
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom', 'zustand', 'fuse.js']
+    include: ['react', 'react-dom', 'react-router-dom', 'zustand']
   },
   base: './'
-});
+}));

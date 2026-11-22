@@ -126,7 +126,7 @@ class CloudMirrorService {
             providerId: preferredCloud ? preferredCloud.id : 'local_c',
             mirrorPath: preferredCloud ? preferredCloud.suggestedMirrorPath : DEFAULT_LOCAL_MIRROR,
             autoSyncOnBackup: true,
-            encryptMirrorCopies: false,
+            encryptMirrorCopies: true,
             maxMirrorCopies: 15,
             lastSyncAt: null,
             lastSyncedFile: null,

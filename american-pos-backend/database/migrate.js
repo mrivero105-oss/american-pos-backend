@@ -1,6 +1,6 @@
 const { sequelize } = require('./connection');
 
-const CURRENT_SCHEMA_VERSION = '2026.04.7-PHASE3-HARDWARE-INDEXES';
+const CURRENT_SCHEMA_VERSION = '2026.04.8-PHASE3-OPT-INDEXES';
 
 async function runMigrations() {
     try {
@@ -309,25 +309,31 @@ async function runMigrations() {
                 // 1. Enable pg_trgm extension for high-speed fuzzy search and ILIKE index scans
                 'CREATE EXTENSION IF NOT EXISTS pg_trgm;',
 
-                // 2. GIN Trigram Indexes on Products for < 2ms search
-                'CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON "Products" USING gin (name gin_trgm_ops);',
-                'CREATE INDEX IF NOT EXISTS idx_products_barcode_trgm ON "Products" USING gin (barcode gin_trgm_ops);',
-                'CREATE INDEX IF NOT EXISTS idx_products_principio_trgm ON "Products" USING gin (principio_activo gin_trgm_ops);',
+                // 2. GIN Trigram Indexes on Products (expresiones canónicas alineadas con schemaMigrator y AutoMaintenance)
+                'CREATE INDEX IF NOT EXISTS idx_products_barcode_trgm ON "Products" USING gin (COALESCE("barcode", \'\') gin_trgm_ops);',
+                'CREATE INDEX IF NOT EXISTS idx_products_bulk_barcode_trgm ON "Products" USING gin (COALESCE("bulkBarcode", \'\') gin_trgm_ops);',
 
                 // 3. Multi-Caja and Concurrency Compound Indexes (prevent table locks)
                 'CREATE INDEX IF NOT EXISTS idx_sales_company_created ON "Sales" ("companyId", "createdAt" DESC);',
                 'CREATE INDEX IF NOT EXISTS idx_sales_company_user_date ON "Sales" ("companyId", "userId", "date");',
+                'CREATE INDEX IF NOT EXISTS idx_sales_company_status_date ON "Sales" ("companyId", "status", "date");',
+                'CREATE INDEX IF NOT EXISTS idx_sales_company_payment_status ON "Sales" ("companyId", "paymentStatus");',
+                'CREATE INDEX IF NOT EXISTS idx_sales_company_cust_created ON "Sales" ("companyId", "customerId", "createdAt" DESC);',
                 'CREATE INDEX IF NOT EXISTS idx_sales_shift_stats ON "Sales" ("companyId", "userId", "registerId", "date");',
                 'CREATE INDEX IF NOT EXISTS idx_saleitems_sale_prod ON "SaleItems" ("saleId", "productId");',
                 'CREATE INDEX IF NOT EXISTS idx_branchstocks_prod_branch ON "BranchStocks" ("productId", "branchId", "companyId");',
                 'CREATE INDEX IF NOT EXISTS idx_cashmovements_shift ON "CashMovements" ("shiftId", "companyId");',
                 'CREATE INDEX IF NOT EXISTS idx_cashshifts_user_status ON "CashShifts" ("userId", "status", "companyId");',
-                // 4. Strategic POS Enterprise Compound Indexes (Fase 3)
+                // 4. Strategic POS Enterprise Compound & Partial Indexes (Fase 3)
                 'CREATE INDEX IF NOT EXISTS idx_products_company_barcode ON "Products" ("companyId", "barcode");',
-                'CREATE INDEX IF NOT EXISTS idx_sales_company_createdat ON "Sales" ("companyId", "createdAt");',
-                'CREATE INDEX IF NOT EXISTS idx_saleitems_saleid ON "SaleItems" ("saleId");',
-                'CREATE INDEX IF NOT EXISTS idx_cashmovements_shiftid ON "CashMovements" ("shiftId");',
-                'CREATE INDEX IF NOT EXISTS idx_auditlogs_company_createdat ON "AuditLogs" ("companyId", "createdAt" DESC);'
+                'CREATE INDEX IF NOT EXISTS idx_audit_logs_company_created ON "AuditLogs" ("companyId", "createdAt" DESC);',
+                'CREATE INDEX IF NOT EXISTS idx_supplier_credit_history_sup ON "SupplierCreditHistories" ("companyId", "supplierId", "type", "timestamp" ASC);',
+                'CREATE INDEX IF NOT EXISTS idx_credit_history_comp_cust_type ON "CreditHistories" ("companyId", "customerId", "type", "timestamp" ASC);',
+                'CREATE INDEX IF NOT EXISTS idx_expenses_company_date ON "Expenses" ("companyId", "date");',
+                'CREATE INDEX IF NOT EXISTS idx_stock_movements_company_prod_date ON "StockMovements" ("companyId", "productId", "date" DESC);',
+                'CREATE INDEX IF NOT EXISTS idx_stock_alerts_company_resolved ON "StockAlerts" ("companyId", "resolved", "createdAt" DESC);',
+                'CREATE INDEX IF NOT EXISTS idx_customers_company_credit ON "Customers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0;',
+                'CREATE INDEX IF NOT EXISTS idx_suppliers_company_credit ON "Suppliers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0;'
             ];
 
             for (const q of queries) {

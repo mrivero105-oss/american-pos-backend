@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import BaseModal from './BaseModal';
 import { Landmark, RefreshCw, Check, X } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -19,7 +19,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
     const [lastBcvRate, setLastBcvRate] = useState(null);
     const inputRef = useRef(null);
 
-    const handleFetchBCV = async (isSilent = false) => {
+    const handleFetchBCV = useCallback(async (isSilent = false) => {
         setIsFetchingBCV(true);
         setBcvError('');
         try {
@@ -30,7 +30,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                 if (data && data.success && data.rate) {
                     bcvRate = data.rate;
                 }
-            } catch (_backendErr) {}
+            } catch (caughtErr) { console.warn('[ExchangeRateModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
 
             // 2. Fallback DolarAPI
             if (!bcvRate) {
@@ -42,7 +42,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                             bcvRate = data.promedio;
                         }
                     }
-                } catch (_dolarApiErr) {}
+                } catch (caughtErr) { console.warn('[ExchangeRateModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
             }
 
             // 3. Fallback PyDolarVenezuela API
@@ -75,7 +75,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
         } finally {
             setIsFetchingBCV(false);
         }
-    };
+    }, [autoUpdate]);
 
     useEffect(() => {
         if (isOpen) {
@@ -104,7 +104,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                 }
             }, 80);
         }
-    }, [isOpen, currentRate, isSingleDollar]);
+    }, [isOpen, currentRate, isSingleDollar, handleFetchBCV]);
 
     const handleSave = async () => {
         const val = parseFloat(rate.toString().replace(',', '.'));
@@ -125,7 +125,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
             if (autoUpdate) {
                 try {
                     await api.post('/settings/bcv/sync');
-                } catch (_syncErr) {}
+                } catch (caughtErr) { console.warn('[ExchangeRateModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
             }
 
             if (onRateUpdated) {

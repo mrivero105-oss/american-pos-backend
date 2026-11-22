@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Utensils, Check, MessageSquare, Coffee } from 'lucide-react';
+import { X, Utensils, Check, MessageSquare } from 'lucide-react';
 
 const QUICK_NOTES = [
   'Sin cebolla',

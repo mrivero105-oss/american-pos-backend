@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
-import { 
-    X, Building2, MapPin, Phone, Mail, DollarSign, Package, 
-    Users, ShoppingCart, TrendingUp, RefreshCcw, Star, CheckCircle2,
-    Calendar, ArrowRight, ShieldCheck, Tag, ExternalLink
+import { useState, useEffect, useCallback } from 'react';
+import {
+    X, 
+    Building2, 
+    RefreshCcw, 
+    Star, 
+    ExternalLink
 } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
@@ -12,13 +14,8 @@ export default function BranchAnalyticsModal({ isOpen, onClose, branch, onSwitch
     const [analytics, setAnalytics] = useState(null);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        if (isOpen && branch?.id) {
-            fetchAnalytics();
-        }
-    }, [isOpen, branch]);
-
-    const fetchAnalytics = async () => {
+    const fetchAnalytics = useCallback(async () => {
+        if (!branch?.id) return;
         try {
             setLoading(true);
             const { data } = await api.get(`/branches/${branch.id}/analytics`);
@@ -29,7 +26,13 @@ export default function BranchAnalyticsModal({ isOpen, onClose, branch, onSwitch
         } finally {
             setLoading(false);
         }
-    };
+    }, [branch?.id]);
+
+    useEffect(() => {
+        if (isOpen && branch?.id) {
+            fetchAnalytics();
+        }
+    }, [isOpen, branch?.id, fetchAnalytics]);
 
     if (!isOpen || !branch) return null;
 

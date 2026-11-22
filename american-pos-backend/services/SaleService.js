@@ -261,34 +261,43 @@ class SaleService {
             branchId = String(rawBranchId);
         }
 
-        // Verify branch actually exists to prevent FOREIGN KEY constraint errors
-        let dbBranch = null;
-        if (branchId) {
-            dbBranch = await sequelize.models.Branch.findOne({ where: { id: branchId, companyId } });
+        // Verify branch actually exists to prevent FOREIGN KEY constraint errors (con caché TTL 5 min)
+        const branchCacheKey = `resolved_branch_${companyId}_${branchId || 'main'}`;
+        let cachedBranchId = process.env.ISAAC_TEST_ISOLATED !== '1' ? cache.get(branchCacheKey) : null;
+        if (cachedBranchId) {
+            branchId = cachedBranchId;
+        } else {
+            let dbBranch = null;
+            if (branchId) {
+                dbBranch = await sequelize.models.Branch.findOne({ where: { id: branchId, companyId } });
+            }
+            if (!dbBranch) {
+                dbBranch = await sequelize.models.Branch.findOne({ 
+                    where: { companyId, isMain: true },
+                    order: [['createdAt', 'ASC']]
+                });
+            }
+            if (!dbBranch) {
+                dbBranch = await sequelize.models.Branch.findOne({ where: { companyId }, order: [['createdAt', 'ASC']] });
+            }
+            if (!dbBranch) {
+                dbBranch = await sequelize.models.Branch.findOne({ where: { isMain: true }, order: [['createdAt', 'ASC']] }) || await sequelize.models.Branch.findOne({ order: [['createdAt', 'ASC']] });
+            }
+            if (!dbBranch) {
+                dbBranch = await sequelize.models.Branch.create({
+                    id: generateRobustId(),
+                    userId,
+                    companyId,
+                    name: 'Principal',
+                    isMain: true,
+                    isActive: true
+                });
+            }
+            branchId = dbBranch.id;
+            if (process.env.ISAAC_TEST_ISOLATED !== '1') {
+                cache.set(branchCacheKey, branchId, 300);
+            }
         }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.findOne({ 
-                where: { companyId, isMain: true },
-                order: [['createdAt', 'ASC']]
-            });
-        }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.findOne({ where: { companyId }, order: [['createdAt', 'ASC']] });
-        }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.findOne({ where: { isMain: true }, order: [['createdAt', 'ASC']] }) || await sequelize.models.Branch.findOne({ order: [['createdAt', 'ASC']] });
-        }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.create({
-                id: generateRobustId(),
-                userId,
-                companyId,
-                name: 'Principal',
-                isMain: true,
-                isActive: true
-            });
-        }
-        branchId = dbBranch.id;
 
         if (!items || !items.length) {
             throw new Error('INTEGRITY_ERROR: No se pueden procesar ventas sin productos.');
@@ -543,7 +552,10 @@ class SaleService {
             }
             return pmCurrency ? pmCurrency === 'USD' : (!pmMethod.includes('_bs') && !pmMethod.includes('_ves'));
         });
-        const totalUsdTendered = foreignCurrencyPayments.reduce((sum, p) => precision.add([sum, Number(p.amount) || 0]), 0);
+        const totalUsdTendered = foreignCurrencyPayments.reduce((sum, p) => {
+            const eqUsd = Number(p.convertedAmountUsd) > 0 ? Number(p.convertedAmountUsd) : (Number(p.amount) || 0);
+            return precision.add([sum, eqUsd]);
+        }, 0);
 
         if (totalUsdTendered > 0 && isIgtfEnabled) {
             const igtfRate = effectiveIgtfRate;
@@ -641,7 +653,9 @@ class SaleService {
             const amt = Number(p.amount) || 0;
             if (amt > 0) {
                 const cur = String(p.currency || 'USD').toUpperCase();
-                if (cur === 'VES' || cur === 'BS') {
+                if (Number(p.convertedAmountUsd) > 0 && (cur === 'USDT' || cur === 'VES' || cur === 'BS' || p.method === 'binance_usdt')) {
+                    totalCoveredUsd = precision.add([totalCoveredUsd, Number(p.convertedAmountUsd)]);
+                } else if (cur === 'VES' || cur === 'BS') {
                     totalCoveredUsd = precision.add([totalCoveredUsd, exchangeRate > 0 ? precision.divide(amt, exchangeRate) : amt]);
                 } else {
                     totalCoveredUsd = precision.add([totalCoveredUsd, amt]);
@@ -769,6 +783,76 @@ class SaleService {
                 const idB = String(b.productId || b.id || '').trim().replace(CLEAN_PRODUCT_ID_REGEX, '');
                 return idA.localeCompare(idB);
             });
+
+            // Pre-cargar en lote con LOCK.UPDATE determinístico (anti-deadlock) productos, lotes FEFO y kits BOM del carrito
+            const uniqueCartProductIds = [...new Set(
+                sortedItems
+                    .filter(it => !it.isCustom)
+                    .map(it => String(it.productId || it.id || '').trim().replace(CLEAN_PRODUCT_ID_REGEX, ''))
+                    .filter(id => id && id !== 'undefined' && id !== 'null')
+            )].sort();
+
+            let lockedProductsMap = new Map();
+            let activeLotsByProductMap = null;
+            let kitProductIdsSet = null;
+            if (uniqueCartProductIds.length > 0) {
+                try {
+                    const { BillOfMaterials } = require('../database/models');
+                    // Consultas por lote secuenciales sobre la misma conexión de transacción t (evita pipelining en pg.Client)
+                    const lockedProds = await Product.findAll({
+                        where: { id: { [Op.in]: uniqueCartProductIds }, ...companyCondition },
+                        order: [['id', 'ASC']],
+                        lock: sequelize.constructor.Transaction.LOCK.UPDATE,
+                        transaction: t
+                    });
+                    const allActiveLots = await ProductLot.findAll({
+                        where: {
+                            productId: { [Op.in]: uniqueCartProductIds },
+                            companyId,
+                            quantity: { [Op.gt]: 0 },
+                            status: 'active'
+                        },
+                        order: [
+                            ['productId', 'ASC'],
+                            [sequelize.fn('COALESCE', sequelize.col('expirationDate'), '9999-12-31'), 'ASC'],
+                            ['createdAt', 'ASC']
+                        ],
+                        transaction: t,
+                        lock: sequelize.constructor.Transaction.LOCK.UPDATE
+                    }).catch(() => null);
+                    const kitBoms = (BillOfMaterials && typeof BillOfMaterials.findAll === 'function')
+                        ? await BillOfMaterials.findAll({
+                            where: { targetProductId: { [Op.in]: uniqueCartProductIds }, isKit: true, isActive: true, companyId },
+                            attributes: ['targetProductId'],
+                            transaction: t,
+                            raw: true
+                        }).catch(() => null)
+                        : null;
+
+                    if (Array.isArray(lockedProds)) {
+                        lockedProductsMap = new Map(lockedProds.map(p => [String(p.id), p]));
+                    }
+                    if (Array.isArray(allActiveLots)) {
+                        activeLotsByProductMap = new Map();
+                        for (const lot of allActiveLots) {
+                            const pidKey = String(lot.productId);
+                            let arr = activeLotsByProductMap.get(pidKey);
+                            if (!arr) { arr = []; activeLotsByProductMap.set(pidKey, arr); }
+                            arr.push(lot);
+                        }
+                    }
+                    if (Array.isArray(kitBoms)) {
+                        kitProductIdsSet = new Set(kitBoms.map(b => String(b.targetProductId)));
+                    }
+                } catch (_) {
+                    lockedProductsMap = new Map();
+                    activeLotsByProductMap = null;
+                    kitProductIdsSet = null;
+                }
+            }
+
+            const stockMovementsBatch = [];
+
             for (const item of sortedItems) {
                 const rawId = String(item.productId || item.id || '').trim();
                 const pId = rawId.replace(CLEAN_PRODUCT_ID_REGEX, '');
@@ -779,7 +863,7 @@ class SaleService {
                 let product = null;
 
                 if (!item.isCustom && pId) {
-                    product = await Product.findOne({
+                    product = lockedProductsMap.get(String(pId)) || await Product.findOne({
                         where: { id: pId, ...companyCondition },
                         lock: sequelize.constructor.Transaction.LOCK.UPDATE,
                         transaction: t
@@ -897,20 +981,22 @@ class SaleService {
 
                     // --- INICIO LÓGICA DE LOTES FIFO ---
                     let remainingQtyToDeduct = unitsToDeduct;
-                    const activeLots = await ProductLot.findAll({
-                        where: { 
-                            productId: pId, 
-                            companyId, 
-                            quantity: { [Op.gt]: 0 }, 
-                            status: 'active' 
-                        },
-                        order: [
-                            [sequelize.fn('COALESCE', sequelize.col('expirationDate'), '9999-12-31'), 'ASC'],
-                            ['createdAt', 'ASC']
-                        ],
-                        transaction: t,
-                        lock: sequelize.constructor.Transaction.LOCK.UPDATE
-                    });
+                    const activeLots = activeLotsByProductMap !== null
+                        ? (activeLotsByProductMap.get(String(pId)) || [])
+                        : await ProductLot.findAll({
+                            where: { 
+                                productId: pId, 
+                                companyId, 
+                                quantity: { [Op.gt]: 0 }, 
+                                status: 'active' 
+                            },
+                            order: [
+                                [sequelize.fn('COALESCE', sequelize.col('expirationDate'), '9999-12-31'), 'ASC'],
+                                ['createdAt', 'ASC']
+                            ],
+                            transaction: t,
+                            lock: sequelize.constructor.Transaction.LOCK.UPDATE
+                        });
 
                     for (const lot of activeLots) {
                         if (remainingQtyToDeduct <= 0) break;
@@ -953,8 +1039,10 @@ class SaleService {
                         }
                     }
 
-                    // 3. Recargar la instancia dentro de la transacción para obtener el valor actualizado real
-                    await product.reload({ transaction: t });
+                    // 3. Actualizar valor en memoria sin ejecutar un SELECT reload() extra por cada ítem
+                    const resolvedMasterStockAfter = precision.subtract(masterStock, unitsToDeduct);
+                    product.stockQuantity = resolvedMasterStockAfter;
+                    product.stock = resolvedMasterStockAfter;
 
                     // 4. Registro incondicional en el Kardex (resuelve también el Hallazgo 6)
                     const movementReason = item.presentationName 
@@ -965,7 +1053,7 @@ class SaleService {
                                 ? `Venta #${saleRecord.id.split('-').pop()} (${itemQty} ${product.midBulkUnitName || 'Media Presentación'} x ${unitsMultiplier} un)`
                                 : `Venta #${saleRecord.id.split('-').pop()}`));
 
-                    await StockMovement.create({
+                    stockMovementsBatch.push({
                         id: generateRobustId(),
                         productId: product.id,
                         branchId: branchId || null,
@@ -974,12 +1062,12 @@ class SaleService {
                         type: 'OUT',
                         quantity: unitsToDeduct,
                         stockBefore,
-                        stockAfter: branchStock ? precision.subtract(stockBefore, unitsToDeduct) : product.stockQuantity,
+                        stockAfter: branchStock ? precision.subtract(stockBefore, unitsToDeduct) : resolvedMasterStockAfter,
                         reason: movementReason,
                         referenceId: saleRecord.id,
                         date: now,
                         timestamp: now
-                    }, { transaction: t });
+                    });
 
                     if (item.variante_id || item.variantId) {
                         const varId = String(item.variante_id || item.variantId);
@@ -1046,32 +1134,34 @@ class SaleService {
                 }, { transaction: t });
                 createdSaleItems.push(createdSaleItem);
 
-                // DEDUCCIÓN AUTOMÁTICA DE COMPONENTES DE RECETA / COMBO (BOM)
-                try {
-                    const ProductionService = require('./ProductionService');
-                    await ProductionService.processKitSaleDeduction(createdSaleItem, t, companyId, {
-                        bypassStockCheck: Boolean(options.bypassStockCheck)
-                    });
-                } catch (kitErr) {
-                    if (!options.bypassStockCheck) {
-                        throw kitErr;
-                    }
-                    console.warn('[SaleService] Déficit BOM en sincronización offline:', kitErr.message);
+                // DEDUCCIÓN AUTOMÁTICA DE COMPONENTES DE RECETA / COMBO (BOM) — Solo si el producto está registrado como Kit
+                if (!kitProductIdsSet || kitProductIdsSet.has(String(pId))) {
                     try {
-                        await StockAlert.create({
-                            id: `ALERT-BOM-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-                            productId: pId || createdSaleItem.productId,
-                            productName: `${item.name || 'Combo'} [BOM]`,
-                            saleId: clientTransactionId,
-                            companyId,
-                            cashierName: reqUser.name || reqUser.username || saleData.cashierName || 'Cajero',
-                            registerName: saleData.registerName || 'Caja Principal',
-                            expectedStock: 0,
-                            soldQuantity: itemQty,
-                            overdraftAmount: itemQty,
-                            resolved: false
-                        }, { transaction: t });
-                    } catch (_) {}
+                        const ProductionService = require('./ProductionService');
+                        await ProductionService.processKitSaleDeduction(createdSaleItem, t, companyId, {
+                            bypassStockCheck: Boolean(options.bypassStockCheck)
+                        });
+                    } catch (kitErr) {
+                        if (!options.bypassStockCheck) {
+                            throw kitErr;
+                        }
+                        console.warn('[SaleService] Déficit BOM en sincronización offline:', kitErr.message);
+                        try {
+                            await StockAlert.create({
+                                id: `ALERT-BOM-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                                productId: pId || createdSaleItem.productId,
+                                productName: `${item.name || 'Combo'} [BOM]`,
+                                saleId: clientTransactionId,
+                                companyId,
+                                cashierName: reqUser.name || reqUser.username || saleData.cashierName || 'Cajero',
+                                registerName: saleData.registerName || 'Caja Principal',
+                                expectedStock: 0,
+                                soldQuantity: itemQty,
+                                overdraftAmount: itemQty,
+                                resolved: false
+                            }, { transaction: t });
+                        } catch (_) {}
+                    }
                 }
 
                 // DESCUENTO AUTOMÁTICO DE EFECTIVO EN GAVETA POR AVANCE DE EFECTIVO (Avance BS)
@@ -1083,6 +1173,25 @@ class SaleService {
                     if (explicitCashBs > 0) {
                         totalCashAdvanceBs = precision.add([totalCashAdvanceBs, explicitCashBs]);
                     }
+                }
+            }
+
+            // 5A. INSERTAR MOVIMIENTOS KARDEX DEL CARRITO EN 1 SOLO BULK INSERT Y MARCAR updatedAt PARA DELTA SYNC
+            if (stockMovementsBatch.length > 0) {
+                if (typeof StockMovement.bulkCreate === 'function') {
+                    await StockMovement.bulkCreate(stockMovementsBatch, { transaction: t });
+                } else {
+                    for (const mov of stockMovementsBatch) {
+                        await StockMovement.create(mov, { transaction: t });
+                    }
+                }
+                // Actualizar updatedAt en lote para que GET /products?since= detecte el cambio de stock al instante
+                const touchedProductIds = [...new Set(stockMovementsBatch.map(m => m.productId).filter(Boolean))];
+                if (touchedProductIds.length > 0 && typeof Product.update === 'function') {
+                    await Product.update(
+                        { updatedAt: new Date() },
+                        { where: { id: { [Op.in]: touchedProductIds } }, silent: true, transaction: t }
+                    ).catch(() => {});
                 }
             }
 
@@ -1303,6 +1412,15 @@ class SaleService {
 
             // 9. COMMIT FINANCIERO FINAL
             await t.commit();
+            cache.delPrefix('catalog_full_');
+            cache.delPrefix('low_stock_');
+            cache.delPrefix('ai_catalog_');
+            cache.delPrefix('dashboard_summary_');
+            cache.delPrefix('daily_count_');
+            try {
+                const DailyRollupService = require('./DailyRollupService');
+                DailyRollupService.scheduleDayRefresh(companyId, saleDate);
+            } catch (_) {}
 
             // Auditoría post-commit
             this._logAudit(reqUser, 'CREATE_SALE', `Venta completada: ${clientTransactionId}`, clientTransactionId, null, { total: saleTotal }).catch(() => {});
@@ -1370,10 +1488,12 @@ class SaleService {
                     const amountUsdt = precision.round(Number(p.amount) || 0, 2);
                     const cryptoRate = Number(p.cryptoRate || exchangeRate || 0);
                     let convertedAmountBs = Number(p.convertedAmountBs || 0);
-                    if (!convertedAmountBs && exchangeRate > 0) {
-                        convertedAmountBs = precision.round(precision.multiply(amountUsdt, exchangeRate), 2);
+                    if (!convertedAmountBs && cryptoRate > 0) {
+                        convertedAmountBs = precision.round(precision.multiply(amountUsdt, cryptoRate), 2);
                     }
-                    const convertedAmountUsd = amountUsdt;
+                    const convertedAmountUsd = (convertedAmountBs > 0 && exchangeRate > 0 && cryptoRate > 0 && Math.abs(cryptoRate - exchangeRate) > 0.0001)
+                        ? precision.round(precision.divide(convertedAmountBs, exchangeRate), 2)
+                        : amountUsdt;
                     return {
                         ...p,
                         method: 'binance_usdt',

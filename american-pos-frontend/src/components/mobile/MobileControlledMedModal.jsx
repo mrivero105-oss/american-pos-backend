@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, ShieldAlert, FileText, CheckCircle, User, Calendar, Hash } from 'lucide-react';
+import { useState } from 'react';
+import { X, ShieldAlert, CheckCircle, User } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function MobileControlledMedModal({

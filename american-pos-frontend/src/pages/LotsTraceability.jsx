@@ -1,18 +1,29 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { 
-    Clock, AlertTriangle, ShieldAlert, CheckCircle2, Search, 
-    RefreshCcw, Download, Plus, Tag, History, Trash2, Edit3, 
-    Layers, Calendar, DollarSign, Package, AlertCircle, ArrowUpRight,
-    X, ChevronRight, FileText, Check, ShieldCheck, Barcode, RotateCcw,
-    ScanLine, Loader2
+import {
+    Clock, 
+    AlertTriangle, 
+    ShieldAlert, 
+    Search, 
+    RefreshCcw, 
+    Download, 
+    Plus, 
+    Tag, 
+    History, 
+    Trash2, 
+    Edit3, 
+    Layers, 
+    Package, 
+    X, 
+    Barcode, 
+    Loader2
 } from 'lucide-react';
 import api from '../services/api';
-import { usePos } from '../hooks/PosContext';
-import { formatUSD, formatBs, formatStock, formatDate } from '../utils/format';
+import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
+import { formatUSD, formatBs, formatStock } from '../utils/format';
 
 export default function LotsTraceability() {
-    const { exchangeRate } = usePos();
+    const exchangeRate = useBusinessSettingsStore((s) => s.rate);
 
     const [loading, setLoading] = useState(true);
     const [lotsData, setLotsData] = useState({ summary: {}, lots: [] });
@@ -35,8 +46,17 @@ export default function LotsTraceability() {
     const [suppliersList, setSuppliersList] = useState([]);
     const [searchingProducts, setSearchingProducts] = useState(false);
 
+    const activeTabRef = useRef(activeTab);
+    const searchQueryRef = useRef(searchQuery);
+    useEffect(() => {
+        activeTabRef.current = activeTab;
+    }, [activeTab]);
+    useEffect(() => {
+        searchQueryRef.current = searchQuery;
+    }, [searchQuery]);
+
     // Cargar datos del dashboard
-    const fetchDashboard = async (tab = activeTab, search = searchQuery) => {
+    const fetchDashboard = useCallback(async (tab = activeTabRef.current, search = searchQueryRef.current) => {
         try {
             setLoading(true);
             const res = await api.get('/lots/dashboard', {
@@ -57,11 +77,11 @@ export default function LotsTraceability() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        fetchDashboard(activeTab, searchQuery);
-    }, [activeTab]);
+        fetchDashboard(activeTab, searchQueryRef.current);
+    }, [activeTab, fetchDashboard]);
 
     // Buscador interactivo de productos para modal de lote
     const [productSearchInput, setProductSearchInput] = useState('');
@@ -100,13 +120,18 @@ export default function LotsTraceability() {
         return () => clearTimeout(timer);
     }, [productSearchInput, isLotModalOpen, selectedProductObj]);
 
+    const isInitialSearchMount = useRef(true);
     // Debounce para búsqueda en tabla principal
     useEffect(() => {
+        if (isInitialSearchMount.current) {
+            isInitialSearchMount.current = false;
+            return;
+        }
         const timer = setTimeout(() => {
-            fetchDashboard(activeTab, searchQuery);
+            fetchDashboard(activeTabRef.current, searchQuery);
         }, 300);
         return () => clearTimeout(timer);
-    }, [searchQuery]);
+    }, [searchQuery, fetchDashboard]);
 
     // Cargar proveedores
     const loadSuppliers = async () => {
@@ -298,6 +323,8 @@ export default function LotsTraceability() {
                 setTraceabilityData(res.data);
             }
         } catch (err) {
+            console.warn('[LotsTraceability] Error capturado en operación:', err?.message || err);
+            console.error('[LotsTraceability] Error al consultar trazabilidad:', err);
             toast.error('Error al consultar trazabilidad');
             setIsTraceabilityModalOpen(false);
         } finally {
@@ -837,7 +864,7 @@ export default function LotsTraceability() {
                                                         {searchingProducts ? (
                                                             'Buscando en catálogo...'
                                                         ) : (
-                                                            <>No se encontraron productos para <strong className="text-slate-600 dark:text-slate-200 font-mono">"{productSearchInput}"</strong></>
+                                                            <>No se encontraron productos para <strong className="text-slate-600 dark:text-slate-200 font-mono">&ldquo;{productSearchInput}&rdquo;</strong></>
                                                         )}
                                                     </div>
                                                 )}

@@ -1,9 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  ArrowLeft, DollarSign, Plus, Trash2, Calendar, 
-  CheckCircle, RefreshCw, X, Save, AlertCircle,
-  Edit2, Search, Eye, Tag, FileText, Check, AlertTriangle,
-  Receipt, Clock, User
+import { useState, useEffect, useMemo } from 'react';
+import {
+  ArrowLeft, 
+  DollarSign, 
+  Plus, 
+  Trash2, 
+  RefreshCw, 
+  X, 
+  Save, 
+  Edit2, 
+  Search, 
+  Eye, 
+  Receipt, 
+  Clock
 } from 'lucide-react';
 import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
@@ -15,13 +23,13 @@ const LOCAL_EXPENSES_KEY = 'isaac_pos_mobile_expenses';
 const persistExpensesLocally = async (list) => {
   try {
     localStorage.setItem(LOCAL_EXPENSES_KEY, JSON.stringify(list.slice(0, 200)));
-  } catch (_) {}
+  } catch (caughtErr) { console.warn('[MobileExpensesView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
   try {
     if (localDb && localDb.expenses) {
       await localDb.expenses.clear();
       await localDb.expenses.bulkPut(list.slice(0, 200));
     }
-  } catch (_) {}
+  } catch (caughtErr) { console.warn('[MobileExpensesView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 };
 
 const triggerHaptic = (ms = 15) => {
@@ -29,7 +37,7 @@ const triggerHaptic = (ms = 15) => {
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       navigator.vibrate(ms);
     }
-  } catch (_) {}
+  } catch { /* Vibración háptica opcional no soportada */ }
 };
 
 const EXPENSE_CATEGORIES = [
@@ -48,7 +56,6 @@ export default function MobileExpensesView({
   exchangeRate = 950,
   user,
   T,
-  isLight,
   onBackToPOS,
   showToast
 }) {
@@ -102,7 +109,7 @@ export default function MobileExpensesView({
           return;
         }
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobileExpensesView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
     try {
       const saved = localStorage.getItem(LOCAL_EXPENSES_KEY);
@@ -110,7 +117,7 @@ export default function MobileExpensesView({
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) setExpenses(parsed);
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobileExpensesView] Error parseando JSON local:', caughtErr?.message || caughtErr); }
     setIsLoading(false);
   };
 
@@ -241,7 +248,7 @@ export default function MobileExpensesView({
             payload,
             createdAt: new Date().toISOString()
           });
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[MobileExpensesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         showToast?.('⚡ Gasto actualizado offline');
         setIsFormModalOpen(false);
         if (detailExpense?.id === expId) setDetailExpense(updated);
@@ -280,7 +287,7 @@ export default function MobileExpensesView({
             payload: newExpense,
             createdAt: new Date().toISOString()
           });
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileExpensesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         showToast?.('⚡ Gasto guardado offline en teléfono');
       } finally {
         setIsSubmitting(false);
@@ -334,7 +341,7 @@ export default function MobileExpensesView({
           method: 'DELETE',
           createdAt: new Date().toISOString()
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileExpensesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       showToast?.('⚡ Gasto eliminado offline');
       setDeleteConfirm(null);
       if (detailExpense?.id === exp.id) setDetailExpense(null);
@@ -465,7 +472,7 @@ export default function MobileExpensesView({
               {searchQuery ? 'No se encontraron gastos con esa búsqueda' : 'No hay egresos registrados en esta categoría'}
             </p>
             <p className={`text-[11px] ${T.textMuted}`}>
-              Usa el botón "+ Gasto" arriba para registrar compras de caja chica
+              Usa el botón &ldquo;+ Gasto&rdquo; arriba para registrar compras de caja chica
             </p>
           </div>
         ) : (

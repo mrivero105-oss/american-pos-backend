@@ -175,7 +175,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   if (srvHandle && typeof srvHandle.stopServer === 'function') {
-    await srvHandle.stopServer();
+    await srvHandle.stopServer({ closeDb: false });
   }
   try {
     if (isolatedUserDataDir) {

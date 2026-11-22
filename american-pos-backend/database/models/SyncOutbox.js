@@ -38,7 +38,7 @@ const SyncOutbox = sequelize.define('SyncOutbox', {
     },
     created_at: {
         type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
+        allowNull: false
     },
     synced_at: {
         type: DataTypes.DATE,
@@ -46,7 +46,28 @@ const SyncOutbox = sequelize.define('SyncOutbox', {
     }
 }, {
     tableName: 'sync_outbox',
-    timestamps: false
+    timestamps: false,
+    hooks: {
+        beforeValidate(instance) {
+            if (!instance.created_at) {
+                instance.created_at = nextMonotonicTimestamp();
+            }
+        },
+        beforeBulkCreate(instances) {
+            for (const inst of instances) {
+                if (!inst.created_at) {
+                    inst.created_at = nextMonotonicTimestamp();
+                }
+            }
+        }
+    }
 });
+
+let _lastOutboxMs = 0;
+function nextMonotonicTimestamp() {
+    const now = Date.now();
+    _lastOutboxMs = now > _lastOutboxMs ? now : _lastOutboxMs + 1;
+    return new Date(_lastOutboxMs);
+}
 
 module.exports = SyncOutbox;

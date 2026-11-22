@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Save, Upload, Image as ImageIcon, User, Phone, Mail, MapPin, FileText, Globe } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { getImageUrl } from '../utils/imageUtils';
 import BaseModal from './BaseModal';
 import SupplierLogoSearchModal from './SupplierLogoSearchModal';
-import { getSupplierInitials, getSupplierTheme } from './SupplierLogoBox';
+import { getSupplierInitials, getSupplierTheme } from '../utils/supplierTheme';
 
 export default function SupplierModal({ isOpen, onClose, onSave, supplier = null, processing = false }) {
     const fileInputRef = useRef(null);

@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const INSTALLED_DIR = 'C:\\Users\\mrive\\AppData\\Local\\Programs\\Isaac POS Modern\\resources';
+const localAppData = process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local');
+const INSTALLED_DIR = process.env.ISAAC_MODERN_RESOURCES_DIR || path.join(localAppData, 'Programs', 'Isaac POS Modern', 'resources');
 const targetAsar = path.join(INSTALLED_DIR, 'app.asar');
 const targetNewAsar = path.join(INSTALLED_DIR, 'app.asar.new');
 

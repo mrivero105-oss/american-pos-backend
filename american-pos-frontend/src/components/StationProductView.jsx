@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Package, Box, Layers, Plus, Edit, Scale, ShoppingBag, Check, ArrowRight, Tag } from 'lucide-react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Package, Box, Plus, Edit } from 'lucide-react';
 import { formatMoney, formatStock, formatStockUnit, isUsdOnlyMode, isDollarOnlyCountry, formatPhysicalStock } from '../utils/format';
 import { CachedImage } from './CachedImage';
 import { getImageUrl } from '../utils/imageUtils';
@@ -120,13 +120,13 @@ export default function StationProductView({
         }
 
         return { text: `${formatStock(total)} ${weightUnit}`, totalUnits: total, isOutOfStock: false };
-    }, [currentProduct?.stockQuantity, presentations, currentProduct?.unitsPerBulk, currentProduct?.bulkUnitName, isWeighed, weightUnit]);
+    }, [currentProduct?.stockQuantity, currentProduct?.stockUnits, presentations, currentProduct?.unitsPerBulk, currentProduct?.bulkUnitName, isWeighed, weightUnit]);
 
     // Manejador de agregar con vibración táctil (abre el selector de cantidad/peso)
     const handleAdd = useCallback((qty = 1, isBulk = false, isMidBulk = false, pres = null) => {
         if (!currentProduct || (currentProduct.stockQuantity <= 0 && !currentProduct.allowNegative)) return;
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
-            try { navigator.vibrate(25); } catch (_) {}
+            try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no soportada */ }
         }
         onAdd(currentProduct, qty, false, isBulk, isMidBulk, pres);
     }, [onAdd, currentProduct]);

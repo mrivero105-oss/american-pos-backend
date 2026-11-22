@@ -3,7 +3,7 @@
  * Strategy: Cache-First for App Shell & Static Assets, Network-First for APIs
  */
 
-const CACHE_NAME = 'isaac-pos-24.4.0.1794746045';
+const CACHE_NAME = 'isaac-pos-24.4.0.1795274638';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -65,7 +65,9 @@ self.addEventListener('fetch', (event) => {
             try {
               const cache = await caches.open(CACHE_NAME);
               cache.put(event.request, networkResponse.clone());
-            } catch (_) {}
+            } catch (err) {
+              console.warn('[SW] Error guardando recurso en caché:', err?.message);
+            }
           }
           return networkResponse;
         }).catch(() => null);
@@ -98,7 +100,9 @@ self.addEventListener('fetch', (event) => {
             const cache = await caches.open(CACHE_NAME);
             cache.put('/index.html', networkResponse.clone());
             cache.put('/', networkResponse.clone());
-          } catch (_) {}
+          } catch (err) {
+            console.warn('[SW] Error cacheando shell HTML:', err?.message);
+          }
         }
         return networkResponse;
       })

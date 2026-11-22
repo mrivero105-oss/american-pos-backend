@@ -1,6 +1,6 @@
 {
   "name": "isaac-pos",
-  "version": "24.04.0",
+  "version": "24.4.0",
   "author": {
     "name": "Isaac POS Team",
     "email": "support@isaacpos.com"
@@ -35,6 +35,7 @@
     "dotenv": "^17.2.3",
     "duck-duck-scrape": "^2.2.7",
     "electron-squirrel-startup": "^1.0.1",
+    "electron-updater": "^6.8.11",
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "express-async-errors": "^3.1.1",
@@ -42,7 +43,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
-    "nodemailer": "^7.0.10",
+    "nodemailer": "^10.6.0",
     "pdf-parse": "^1.1.1",
     "pg": "^8.20.0",
     "pg-hstore": "^2.3.4",
@@ -72,8 +73,13 @@
     "asar": true,
     "asarUnpack": [
       "**/node_modules/**/*.node",
-      "**/bin/**/*",
-      "**/scripts/**/*"
+      "**/bin/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "scripts",
+        "to": "scripts"
+      }
     ],
     "directories": {
       "output": "dist_final_installer"
@@ -87,17 +93,33 @@
     ],
     "files": [
       "**/*",
+      "!scripts/**",
+      "!private/**",
+      "!audit_*.json",
+      "!coverage/**",
+      "!test-results/**",
+      "!playwright-report/**",
+      "!**/*.zip",
+      "!**/*.tar.gz",
       "!**/*.sqlite",
       "!**/*.sqlite*",
       "!**/*.bak",
       "!**/*.dev_backup",
       "!**/serviceAccountKey.json",
       "!**/.env*",
+      "!**/.dbcfg.key.dpapi",
+      "!**/.dbcfg.key.dpapi.ess",
+      "!**/.secrets.key.dpapi",
+      "!**/.secrets.key.dpapi.ess",
+      "!**/*.dpapi.ess",
+      "!**/secrets.vault.json",
+      "!**/*.vault.json",
       "!env_backup.txt",
       "!app_fixed.asar",
       "!test_backup.zip",
       "!.wwebjs_auth/**",
       "!.wwebjs_cache/**",
+      "!.test_wwebjs_auth/**",
       "!dist*/**",
       "!backups/**",
       "!build_temp/**",
@@ -123,6 +145,10 @@
       "!node_modules/@electron/rebuild/**",
       "!node_modules/builder-util/**",
       "!node_modules/typescript/**",
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.d.ts",
+      "!node_modules/**/*.d.mts",
+      "!node_modules/**/*.d.cts",
       "!tests/**",
       "!*.apk",
       "!**/*.apk",
@@ -143,7 +169,9 @@
       "!**/*private*.pem",
       "!settings.json",
       "!db-config.json",
-      "!cloud_mirror_config.json"
+      "!cloud_mirror_config.json",
+      "!cloud_license_config.json",
+      "!**/cloud_license_config.json"
     ],
     "win": {
       "target": [

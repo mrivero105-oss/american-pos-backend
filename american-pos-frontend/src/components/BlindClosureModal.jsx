@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, X, AlertTriangle, ArrowRight, Save, Printer } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { formatUSD, formatBs, getGlobalSettings, isSingleCurrencyMode } from '../utils/format';
+import { formatUSD, formatBs, isSingleCurrencyMode } from '../utils/format';
 import { printZReportReceipt, printShiftInventoryReceipt } from '../utils/printCashReceipts';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import { useAuth } from '../hooks/AuthContext';
@@ -82,20 +82,7 @@ export default function BlindClosureModal(props) {
     const [showAuth, setShowAuth] = useState(false);
     const [approval, setApproval] = useState(null);
 
-    // Load Draft
-    useEffect(() => {
-        if (isOpen && step === 1) {
-            const draft = localStorage.getItem('closureDraft');
-            if (draft) {
-                try {
-                    setClosureData(JSON.parse(draft));
-                } catch (_e) {}
-            }
-            fetchRiskLevel();
-        }
-    }, [isOpen]);
-
-    const fetchRiskLevel = async () => {
+    const fetchRiskLevel = useCallback(async () => {
         if (!currentShift?.userId) return;
         try {
             const { data } = await api.get(`/cash/risk-level/${currentShift.userId}`);
@@ -103,7 +90,20 @@ export default function BlindClosureModal(props) {
         } catch (e) {
             console.error('Error fetching risk level', e);
         }
-    };
+    }, [currentShift?.userId]);
+
+    // Load Draft
+    useEffect(() => {
+        if (isOpen && step === 1) {
+            const draft = localStorage.getItem('closureDraft');
+            if (draft) {
+                try {
+                    setClosureData(JSON.parse(draft));
+                } catch (caughtErr) { console.warn('[BlindClosureModal] Error parseando JSON local:', caughtErr?.message || caughtErr); }
+            }
+            fetchRiskLevel();
+        }
+    }, [isOpen, step, fetchRiskLevel]);
 
     // Save Draft
     useEffect(() => {
@@ -429,7 +429,7 @@ export default function BlindClosureModal(props) {
                         </div>
                     </div>
                 );
-            case 5: // Resultado
+            case 5: { // Resultado
                 if (!result) return null;
                 const isPerfect = result.status === 'match';
                 return (
@@ -486,6 +486,7 @@ export default function BlindClosureModal(props) {
                                             await window.electronAPI.openDrawer(targetPrinter, businessSettings?.drawerSequence);
                                             toast.success('Gaveta abierta');
                                         } catch (e) {
+                                            console.warn('[BlindClosureModal] Error capturado en operación:', e?.message || e);
                                             toast.error('Error al abrir gaveta');
                                         }
                                     } else {
@@ -496,6 +497,7 @@ export default function BlindClosureModal(props) {
                                             });
                                             toast.success('Gaveta abierta');
                                         } catch (e) {
+                                            console.warn('[BlindClosureModal] Error capturado en operación:', e?.message || e);
                                             toast.error('Error al abrir gaveta');
                                         }
                                     }
@@ -532,6 +534,7 @@ export default function BlindClosureModal(props) {
                         </button>
                     </div>
                 );
+            }
             default: return null;
         }
     };

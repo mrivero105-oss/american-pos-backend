@@ -1,13 +1,18 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import {
-    TrendingUp, Lock, Unlock, Award,
-    RefreshCw, Download, Printer,
-    CheckCircle2, AlertTriangle, X,
-    Briefcase, FileSpreadsheet, ArrowUpRight, ArrowDownRight
+    TrendingUp, 
+    Lock, 
+    Unlock, 
+    Award, 
+    RefreshCw, 
+    Download, 
+    Printer, 
+    X, 
+    Briefcase
 } from 'lucide-react';
 import api from '../services/api';
-import { usePos } from '../hooks/PosContext';
+import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
 import { formatBs, formatUSD } from '../utils/format';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
@@ -27,7 +32,7 @@ const MONTHS = [
 ];
 
 export default function ExecutiveBI() {
-    const { exchangeRate } = usePos();
+    const exchangeRate = useBusinessSettingsStore((s) => s.rate);
     const { confirm, confirmDialog } = useConfirmDialog();
     const effRate = Number(exchangeRate) || 1;
 
@@ -41,12 +46,6 @@ export default function ExecutiveBI() {
     const [pnlData, setPnlData] = useState(null);
     const [periods, setPeriods] = useState([]);
     const [commissions, setCommissions] = useState([]);
-    const [rechargeStats, setRechargeStats] = useState({
-        totalNominalBs: 0,
-        totalServiceFeeBs: 0,
-        totalChargedBs: 0,
-        completedCount: 0
-    });
 
     // Modals
     const [isClosePeriodModalOpen, setIsClosePeriodModalOpen] = useState(false);
@@ -61,39 +60,29 @@ export default function ExecutiveBI() {
     const [selectedCommission, setSelectedCommission] = useState(null);
     const [customRate, setCustomRate] = useState('3.0');
 
-    useEffect(() => {
-        fetchDashboardData();
-    }, [selectedYear, selectedMonth]);
-
-    const fetchDashboardData = async () => {
+    const fetchDashboardData = useCallback(async () => {
         setLoading(true);
         try {
-            const startOfMonth = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-            const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
-            const endOfMonth = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-
-            const [pnlRes, periodsRes, commRes, rechRes] = await Promise.all([
+            const [pnlRes, periodsRes, commRes] = await Promise.all([
                 api.get('/bi/profit-loss', { params: { year: selectedYear, month: selectedMonth } }).catch(() => ({ data: null })),
                 api.get('/bi/periods', { params: { year: selectedYear } }).catch(() => ({ data: [] })),
-                api.get('/bi/commissions', { params: { year: selectedYear, month: selectedMonth } }).catch(() => ({ data: [] })),
-                api.get('/recharges', { params: { startDate: startOfMonth, endDate: endOfMonth, limit: 500 } }).catch(() => ({ data: null }))
+                api.get('/bi/commissions', { params: { year: selectedYear, month: selectedMonth } }).catch(() => ({ data: [] }))
             ]);
 
             setPnlData(pnlRes.data);
             setPeriods(periodsRes.data || []);
             setCommissions(commRes.data || []);
-            if (rechRes.data?.stats) {
-                setRechargeStats(rechRes.data.stats);
-            } else {
-                setRechargeStats({ totalNominalBs: 0, totalServiceFeeBs: 0, totalChargedBs: 0, completedCount: 0 });
-            }
         } catch (error) {
             console.error('Error fetching BI data:', error);
             toast.error('Error al sincronizar estados financieros');
         } finally {
             setLoading(false);
         }
-    };
+    }, [selectedYear, selectedMonth]);
+
+    useEffect(() => {
+        fetchDashboardData();
+    }, [fetchDashboardData]);
 
     const handleOpenClosePeriodModal = (period) => {
         setPeriodToClose(period);
@@ -196,11 +185,7 @@ export default function ExecutiveBI() {
         const fxDiffUsd = effRate > 0 ? fxDiffVes / effRate : 0;
         const salesCount = Number(raw.salesCount) || 0;
 
-        // Ganancia neta por servicio de Recargas Telefónicas (el 20% de servicio es utilidad directa sin costo de inventario)
-        const rechargeFeeBs = Number(rechargeStats.totalServiceFeeBs) || 0;
-        const rechargeFeeUsd = effRate > 0 ? rechargeFeeBs / effRate : 0;
-
-        const totalRevenueUsd = salesUsd + rechargeFeeUsd;
+        const totalRevenueUsd = salesUsd;
         const grossProfitUsd = totalRevenueUsd - cogsUsd;
         const grossMarginPct = totalRevenueUsd > 0 ? (grossProfitUsd / totalRevenueUsd) * 100 : 0;
 
@@ -218,8 +203,6 @@ export default function ExecutiveBI() {
         return {
             salesUsd,
             salesBs: salesUsd * effRate,
-            rechargeFeeUsd,
-            rechargeFeeBs,
             totalRevenueUsd,
             totalRevenueBs: totalRevenueUsd * effRate,
             cogsUsd,
@@ -244,14 +227,13 @@ export default function ExecutiveBI() {
             avgTicketUsd,
             avgTicketBs: avgTicketUsd * effRate
         };
-    }, [pnlData, rechargeStats, commissions, effRate]);
+    }, [pnlData, commissions, effRate]);
 
     const handleExportCSV = () => {
         const monthName = MONTHS.find(m => m.value === selectedMonth)?.label || selectedMonth;
         const rows = [
             ['CODIGO', 'CONCEPTO CONTABLE', 'MONTO VES (BS)', 'MONTO USD ($)', '% SOBRE INGRESOS'],
             ['4.1.01', 'Ventas Brutas de Mercancia (POS)', fin.salesBs.toFixed(2), fin.salesUsd.toFixed(2), fin.totalRevenueUsd > 0 ? ((fin.salesUsd / fin.totalRevenueUsd) * 100).toFixed(2) + '%' : '0%'],
-            ['4.1.02', 'Ingresos por Comision de Recargas Telefonicas', fin.rechargeFeeBs.toFixed(2), fin.rechargeFeeUsd.toFixed(2), fin.totalRevenueUsd > 0 ? ((fin.rechargeFeeUsd / fin.totalRevenueUsd) * 100).toFixed(2) + '%' : '0%'],
             ['4.0.00', 'TOTAL INGRESOS OPERACIONALES', fin.totalRevenueBs.toFixed(2), fin.totalRevenueUsd.toFixed(2), '100.00%'],
             ['5.1.01', '(-) Costo de Mercancia Vendida (CMV)', (-fin.cogsBs).toFixed(2), (-fin.cogsUsd).toFixed(2), fin.totalRevenueUsd > 0 ? ((fin.cogsUsd / fin.totalRevenueUsd) * 100).toFixed(2) + '%' : '0%'],
             ['5.0.00', 'UTILIDAD BRUTA EN VENTAS', fin.grossProfitBs.toFixed(2), fin.grossProfitUsd.toFixed(2), fin.grossMarginPct.toFixed(2) + '%'],
@@ -282,15 +264,6 @@ export default function ExecutiveBI() {
             bs: fin.salesBs,
             usd: fin.salesUsd,
             pct: fin.totalRevenueUsd > 0 ? (fin.salesUsd / fin.totalRevenueUsd) * 100 : 0,
-            type: 'item'
-        },
-        {
-            code: '4.1.02',
-            label: 'Comisiones por Servicios y Recargas Telefónicas',
-            meta: `${rechargeStats.completedCount || 0} recargas (${formatBs(rechargeStats.totalNominalBs)} nominales)`,
-            bs: fin.rechargeFeeBs,
-            usd: fin.rechargeFeeUsd,
-            pct: fin.totalRevenueUsd > 0 ? (fin.rechargeFeeUsd / fin.totalRevenueUsd) * 100 : 0,
             type: 'item'
         },
         {

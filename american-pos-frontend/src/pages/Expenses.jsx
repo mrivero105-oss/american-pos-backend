@@ -1,25 +1,45 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import {
-    Plus, Search, Trash2, Calendar, Tag, DollarSign,
-    PieChart, AlertCircle, CheckCircle2, X, Activity,
-    Eye, FileText, Camera, Printer, Upload, Loader2,
-    TrendingUp, TrendingDown, ArrowUpRight, Filter,
-    Download, RefreshCw, Edit2, Zap, Building2,
-    Users, Package, Wrench, Landmark, Truck,
-    Coffee, Megaphone, Banknote, ShieldAlert,
-    CreditCard, ArrowDownRight, Layers,
-    ChevronDown, SlidersHorizontal, Image as ImageIcon
+    Plus, 
+    Search, 
+    Trash2, 
+    DollarSign, 
+    PieChart, 
+    AlertCircle, 
+    CheckCircle2, 
+    X, 
+    Eye, 
+    FileText, 
+    Camera, 
+    Printer, 
+    Upload, 
+    Loader2, 
+    TrendingDown, 
+    ArrowUpRight, 
+    Download, 
+    Edit2, 
+    Zap, 
+    Building2, 
+    Users, 
+    Package, 
+    Wrench, 
+    Landmark, 
+    Truck, 
+    Coffee, 
+    Megaphone, 
+    Banknote, 
+    CreditCard, 
+    Layers
 } from 'lucide-react';
-import { formatMoney, fetchGlobalSettings, isSingleCurrencyMode, isDollarOnlyCountry } from '../utils/format';
-import { getInvoiceUrl } from '../utils/imageUtils';
+import { fetchGlobalSettings, isSingleCurrencyMode, isDollarOnlyCountry } from '../utils/format';
 import ConfirmModal from '../components/ConfirmModal';
 import InvoiceViewerModal from '../components/InvoiceViewerModal';
 import PrinterScanModal from '../components/PrinterScanModal';
 import CameraScanModal from '../components/CameraScanModal';
 
-export const CATEGORY_CONFIG = {
+const CATEGORY_CONFIG = {
     'Servicios': { icon: Zap, color: 'text-amber-500', bg: 'bg-amber-500/10', border: 'border-amber-500/30', badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30' },
     'Alquiler': { icon: Building2, color: 'text-blue-500', bg: 'bg-blue-500/10', border: 'border-blue-500/30', badge: 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30' },
     'Nómina': { icon: Users, color: 'text-purple-500', bg: 'bg-purple-500/10', border: 'border-purple-500/30', badge: 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30' },
@@ -32,7 +52,7 @@ export const CATEGORY_CONFIG = {
     'Otros': { icon: FileText, color: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-500/30', badge: 'bg-slate-500/15 text-slate-400 border-slate-500/30' }
 };
 
-export const PAYMENT_METHODS = [
+const PAYMENT_METHODS = [
     { id: 'cash', label: 'Efectivo USD', icon: DollarSign, isCashDrawer: true },
     { id: 'cash_ves', label: 'Efectivo Bolívares (Bs)', icon: Banknote, isCashDrawer: true },
     { id: 'transfer', label: 'Transferencia Bancaria', icon: Landmark, isCashDrawer: false },
@@ -85,7 +105,6 @@ export default function Expenses() {
     });
 
     // Settings & Live BCV
-    const [settings, setSettings] = useState({ currencyMode: 'BOTH', rate: 1 });
     const [bcvRate, setBcvRate] = useState(791.3248);
     const [bcvDate, setBcvDate] = useState(new Date().toISOString().split('T')[0]);
     const [isShiftOpen, setIsShiftOpen] = useState(false);
@@ -109,13 +128,47 @@ export default function Expenses() {
     const [showPrinterModal, setShowPrinterModal] = useState(false);
     const [showCameraModal, setShowCameraModal] = useState(false);
     const [isScanningPrinter, setIsScanningPrinter] = useState(false);
-    const [isUploadingInvoice, setIsUploadingInvoice] = useState(false);
 
-    useEffect(() => {
-        loadInitialData();
+    const fetchSettings = useCallback(async () => {
+        try {
+            await fetchGlobalSettings();
+        } catch (e) {
+            console.error('Error fetching settings:', e);
+        }
     }, []);
 
-    const loadInitialData = async () => {
+    const fetchBcvRate = useCallback(async () => {
+        try {
+            const res = await api.get('/suppliers/bcv-rate');
+            if (res.data?.rate && res.data.rate > 0) {
+                setBcvRate(Number(res.data.rate));
+                if (res.data.date) setBcvDate(res.data.date);
+            }
+        } catch (e) {
+            console.warn('[EXPENSES] Error consultando tasa BCV:', e);
+        }
+    }, []);
+
+    const checkShiftStatus = useCallback(async () => {
+        try {
+            const { data } = await api.get('/cash/current');
+            setIsShiftOpen(!!data);
+        } catch (_e) {
+            setIsShiftOpen(false);
+        }
+    }, []);
+
+    const fetchExpenses = useCallback(async () => {
+        try {
+            const res = await api.get('/expenses');
+            setExpenses(Array.isArray(res.data) ? res.data : []);
+        } catch (error) {
+            console.error('Error fetching expenses:', error);
+            toast.error('Error al cargar la lista de gastos');
+        }
+    }, []);
+
+    const loadInitialData = useCallback(async () => {
         try {
             setLoading(true);
             await Promise.all([
@@ -127,47 +180,11 @@ export default function Expenses() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [fetchSettings, fetchBcvRate, fetchExpenses, checkShiftStatus]);
 
-    const fetchSettings = async () => {
-        try {
-            const s = await fetchGlobalSettings();
-            setSettings(s);
-        } catch (e) {
-            console.error('Error fetching settings:', e);
-        }
-    };
-
-    const fetchBcvRate = async () => {
-        try {
-            const res = await api.get('/suppliers/bcv-rate');
-            if (res.data?.rate && res.data.rate > 0) {
-                setBcvRate(Number(res.data.rate));
-                if (res.data.date) setBcvDate(res.data.date);
-            }
-        } catch (e) {
-            console.warn('[EXPENSES] Error consultando tasa BCV:', e);
-        }
-    };
-
-    const checkShiftStatus = async () => {
-        try {
-            const { data } = await api.get('/cash/current');
-            setIsShiftOpen(!!data);
-        } catch (_e) {
-            setIsShiftOpen(false);
-        }
-    };
-
-    const fetchExpenses = async () => {
-        try {
-            const res = await api.get('/expenses');
-            setExpenses(Array.isArray(res.data) ? res.data : []);
-        } catch (error) {
-            console.error('Error fetching expenses:', error);
-            toast.error('Error al cargar la lista de gastos');
-        }
-    };
+    useEffect(() => {
+        loadInitialData();
+    }, [loadInitialData]);
 
     // Formatters
     const formatBs = (amount) => {
@@ -415,7 +432,6 @@ export default function Expenses() {
     // Upload & Scanner Handlers
     const handleUploadInvoiceFile = async (file) => {
         if (!file) return;
-        setIsUploadingInvoice(true);
         const toastId = toast.loading('Guardando comprobante digital...');
         try {
             const formData = new FormData();
@@ -434,8 +450,6 @@ export default function Expenses() {
         } catch (error) {
             console.error('Error uploading invoice:', error);
             toast.error('Error al subir el comprobante', { id: toastId });
-        } finally {
-            setIsUploadingInvoice(false);
         }
     };
 

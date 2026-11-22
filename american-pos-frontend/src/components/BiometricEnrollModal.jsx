@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Fingerprint, ShieldCheck, CheckCircle2, Trash2, AlertCircle, X, RefreshCw, Smartphone, Laptop } from 'lucide-react';
+import { Fingerprint, ShieldCheck, CheckCircle2, Trash2, AlertCircle, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '../hooks/AuthContext';
 import biometricService from '../services/biometricService';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';

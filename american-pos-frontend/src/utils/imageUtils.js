@@ -1,4 +1,4 @@
-import api from '../services/api';
+import api, { getBaseUrl } from '../services/api';
 import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
 
 export const SUPABASE_STORAGE_URL = getSupabaseStoragePublicUrl('product-images');
@@ -15,51 +15,134 @@ export const isMobileClient = () => {
     return Boolean(isCapacitor || (isMobileUA && isNotElectron) || (isSmallScreen && isNotElectron));
 };
 
-export const getImageUrl = (uri) => {
-    if (!uri) return '';
-    // Already a valid external HTTP URL or full data URL
-    if (uri.startsWith('http') || uri.startsWith('data:')) return uri;
+const KNOWN_MEDIA_PREFIXES = [
+    'product_images/',
+    'supplier_logos/',
+    'invoices/',
+    'uploads/',
+    'display_ads/'
+];
 
-    // If it's a massive string missing the data prefix, it's a raw base64 string
-    if (uri.length > 200 && !uri.includes('/')) {
-        return `data:image/jpeg;base64,${uri}`;
+const getServerOrigin = () => {
+    const rawBase = api?.defaults?.baseURL || (typeof getBaseUrl === 'function' ? getBaseUrl() : '') || '';
+    return String(rawBase).trim().replace(/\/+$/, '').replace(/\/api$/, '');
+};
+
+/**
+ * Normaliza cualquier URI o URL de imagen a una clave canónica estable,
+ * independiente de la IP del servidor LAN, protocolo o dominio CDN.
+ * Ejemplo:
+ * - "http://192.168.1.30:3005/product_images/agua.jpg" -> "product_images/agua.jpg"
+ * - "https://xxx.supabase.co/storage/v1/object/public/product-images/agua.jpg" -> "product_images/agua.jpg"
+ * - "agua.jpg" -> "product_images/agua.jpg"
+ */
+export const normalizeImageCacheKey = (uri) => {
+    if (!uri || typeof uri !== 'string') return '';
+    const trimmed = uri.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) return trimmed;
+    if (trimmed.length > 200 && !trimmed.includes('/') && !trimmed.startsWith('http')) {
+        return `data:image/jpeg;base64,${trimmed}`;
     }
 
-    // Normalize path by removing leading slash
-    let cleanPath = uri.startsWith('/') ? uri.substring(1) : uri;
-
-    // Si es una imagen de producto (product_images/ o sin prefijo de logos/invoices/etc.)
-    const isProductImage = cleanPath.startsWith('product_images/') || 
-        (!cleanPath.startsWith('supplier_logos/') && 
-         !cleanPath.startsWith('invoices/') && 
-         !cleanPath.startsWith('uploads/') && 
-         !cleanPath.startsWith('display_ads/'));
-
-    if (isProductImage) {
-        const filename = cleanPath.replace(/^product_images\//, '');
-        // Si estamos en entorno móvil (Android APK / Navegador de celular) o no hay servidor local configurado:
-        // Cargar directamente desde Supabase Storage CDN (funciona 24/7 en WiFi y datos móviles LTE)
-        if (isMobileClient() || !api?.defaults?.baseURL) {
-            return SUPABASE_STORAGE_URL ? `${SUPABASE_STORAGE_URL}/${encodeURIComponent(filename)}` : '';
+    if (/^https?:\/\//i.test(trimmed)) {
+        try {
+            const parsed = new URL(trimmed);
+            const cleanPathname = decodeURIComponent(parsed.pathname || '').replace(/^\/+/, '');
+            const supaMatch = cleanPathname.match(/(?:^|\/)storage\/v1\/object\/public\/product-images\/(.+)$/i);
+            if (supaMatch && supaMatch[1]) {
+                return `product_images/${supaMatch[1]}`;
+            }
+            for (const prefix of KNOWN_MEDIA_PREFIXES) {
+                const idx = cleanPathname.indexOf(prefix);
+                if (idx >= 0) {
+                    return cleanPathname.slice(idx);
+                }
+            }
+            return trimmed;
+        } catch (_) {
+            return trimmed;
         }
     }
 
-    const baseUrl = api?.defaults?.baseURL || '';
-    const origin = baseUrl.replace(/\/api$/, '');
-
-    // If the database already saved it with the full known prefix
-    if (
-        cleanPath.startsWith('product_images/') ||
-        cleanPath.startsWith('supplier_logos/') ||
-        cleanPath.startsWith('invoices/') ||
-        cleanPath.startsWith('uploads/') ||
-        cleanPath.startsWith('display_ads/')
-    ) {
-        return `${origin}/${cleanPath}`;
+    const withoutQuery = trimmed.split('?')[0].split('#')[0];
+    let cleanPath = withoutQuery.replace(/^\/+/, '');
+    try {
+        cleanPath = decodeURIComponent(cleanPath);
+    } catch (_) {
+        // Mantener tal cual si contiene secuencias % no escapadas
     }
 
-    // Otherwise, assume it's just a filename and default to product_images
-    return `${origin}/product_images/${cleanPath}`;
+    if (KNOWN_MEDIA_PREFIXES.some((prefix) => cleanPath.startsWith(prefix))) {
+        return cleanPath;
+    }
+    return `product_images/${cleanPath}`;
+};
+
+/**
+ * Devuelve la lista ordenada de URLs candidatas (CDN nube y/o Servidor PC LAN)
+ * para cargar y cachear una imagen sin fallos cuando falta Supabase o cambia la red.
+ */
+export const getImageCandidateUrls = (uri) => {
+    if (!uri || typeof uri !== 'string') return [];
+    const trimmed = uri.trim();
+    if (!trimmed) return [];
+
+    if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+        return [trimmed];
+    }
+
+    if (trimmed.length > 200 && !trimmed.includes('/') && !trimmed.startsWith('http')) {
+        return [`data:image/jpeg;base64,${trimmed}`];
+    }
+
+    const origin = getServerOrigin();
+
+    if (/^https?:\/\//i.test(trimmed)) {
+        const candidates = [trimmed];
+        const canonical = normalizeImageCacheKey(trimmed);
+        if (canonical.startsWith('product_images/')) {
+            const filename = canonical.replace(/^product_images\//, '');
+            const encodedName = filename.split('/').map((seg) => encodeURIComponent(seg)).join('/');
+            const lanUrl = origin ? `${origin}/product_images/${encodedName}` : '';
+            const cloudUrl = SUPABASE_STORAGE_URL ? `${SUPABASE_STORAGE_URL}/${encodeURIComponent(filename)}` : '';
+            if (lanUrl && !candidates.includes(lanUrl)) candidates.push(lanUrl);
+            if (cloudUrl && !candidates.includes(cloudUrl)) candidates.push(cloudUrl);
+        }
+        return candidates;
+    }
+
+    const cleanPath = trimmed.replace(/^\/+/, '');
+    const isProductImage = cleanPath.startsWith('product_images/') ||
+        !KNOWN_MEDIA_PREFIXES.some((prefix) => prefix !== 'product_images/' && cleanPath.startsWith(prefix));
+
+    if (isProductImage) {
+        const filename = cleanPath.replace(/^product_images\//, '');
+        const encodedPath = filename.split('/').map((seg) => encodeURIComponent(seg)).join('/');
+        const cloudUrl = SUPABASE_STORAGE_URL ? `${SUPABASE_STORAGE_URL}/${encodeURIComponent(filename)}` : '';
+        const lanUrl = origin ? `${origin}/product_images/${encodedPath}` : '';
+
+        const ordered = [];
+        if (isMobileClient()) {
+            // Priorizar servidor PC LAN en móvil cuando no hay Supabase embebido (builds comerciales)
+            // o intentar Supabase + fallback automático a PC LAN cuando Supabase sí está configurado.
+            if (cloudUrl) ordered.push(cloudUrl);
+            if (lanUrl) ordered.push(lanUrl);
+        } else {
+            if (lanUrl) ordered.push(lanUrl);
+            if (cloudUrl) ordered.push(cloudUrl);
+        }
+        return [...new Set(ordered.filter(Boolean))];
+    }
+
+    if (!origin) return [];
+    const encodedClean = cleanPath.split('/').map((seg) => encodeURIComponent(seg)).join('/');
+    return [`${origin}/${encodedClean}`];
+};
+
+export const getImageUrl = (uri) => {
+    const candidates = getImageCandidateUrls(uri);
+    return candidates[0] || '';
 };
 
 export const getInvoiceUrl = (uri) => {

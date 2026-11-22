@@ -37,10 +37,13 @@ jobs:
 
       - name: Run ESLint strict checks
         run: |
-          npx eslint src --quiet
+          npx eslint . --max-warnings=0
           npx eslint src -c eslint.undef-check.config.js
 
-      - name: Run frontend UnifiedDB local tests
+      - name: Run frontend Vitest unit & component suite
+        run: npm run test:unit
+
+      - name: Run frontend UnifiedDB functional verification
         run: node tests/test_unified_db.cjs
 
       - name: Build production web & mobile bundles (Chromium 108+)

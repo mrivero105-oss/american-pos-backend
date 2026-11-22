@@ -1,10 +1,24 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  ArrowLeft, Users, Search, UserPlus, Phone, 
-  MessageSquare, DollarSign, X, Check, Save, RefreshCw,
-  Edit2, Trash2, Eye, Star, AlertTriangle, Mail,
-  MapPin, FileText, CheckCircle2, ChevronRight, Archive,
-  ShieldAlert, UserCheck, UserX, CreditCard
+import { useState, useEffect, useMemo } from 'react';
+import {
+  ArrowLeft, 
+  Users, 
+  Search, 
+  UserPlus, 
+  Phone, 
+  MessageSquare, 
+  X, 
+  Check, 
+  Save, 
+  RefreshCw, 
+  Edit2, 
+  Trash2, 
+  Eye, 
+  Star, 
+  AlertTriangle, 
+  Mail, 
+  MapPin, 
+  FileText, 
+  Archive
 } from 'lucide-react';
 import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
@@ -16,8 +30,6 @@ const stripAccents = (str = '') => String(str).normalize('NFD').replace(/[\u0300
 export default function MobileCustomersView({
   onSelectCustomerForSale,
   T,
-  isLight,
-  user,
   onBackToPOS,
   showToast
 }) {
@@ -63,7 +75,7 @@ export default function MobileCustomersView({
           if (localDb && localDb.customers) {
             localDb.customers.bulkPut(raw).catch(() => {});
           }
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileCustomersView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
         setIsLoading(false);
         return;
       }
@@ -78,7 +90,7 @@ export default function MobileCustomersView({
           setCustomers(localList);
         }
       }
-    } catch (_e) {}
+    } catch (caughtErr) { console.warn('[MobileCustomersView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
     setIsLoading(false);
   };
 
@@ -220,7 +232,7 @@ export default function MobileCustomersView({
           if (localDb && localDb.customers) {
             await localDb.customers.put({ ...editingCustomer, ...updated });
           }
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileCustomersView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
         showToast?.(`✅ Cliente "${payload.name}" actualizado`);
         setIsFormModalOpen(false);
         if (detailCustomer?.id === editingCustomer.id) {
@@ -241,7 +253,7 @@ export default function MobileCustomersView({
             payload,
             createdAt: new Date().toISOString()
           });
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileCustomersView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         showToast?.(`⚡ Cliente actualizado offline`);
         setIsFormModalOpen(false);
         if (detailCustomer?.id === editingCustomer.id) {
@@ -271,7 +283,7 @@ export default function MobileCustomersView({
           if (localDb && localDb.customers) {
             await localDb.customers.put(created);
           }
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileCustomersView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
         showToast?.(`✅ Cliente "${payload.name}" registrado`);
         setIsFormModalOpen(false);
       } catch (_netErr) {
@@ -288,7 +300,7 @@ export default function MobileCustomersView({
             payload: newCust,
             createdAt: new Date().toISOString()
           });
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileCustomersView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         showToast?.(`⚡ Cliente guardado offline`);
         setIsFormModalOpen(false);
       } finally {
@@ -319,7 +331,7 @@ export default function MobileCustomersView({
         if (localDb && localDb.customers) {
           await localDb.customers.delete(cust.id);
         }
-      } catch (_e) {}
+      } catch (caughtErr) { console.warn('[MobileCustomersView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
       showToast?.(`✅ Cliente "${cust.name || cust.nombre}" eliminado`);
       setDeleteConfirm(null);
       if (detailCustomer?.id === cust.id) setDetailCustomer(null);
@@ -358,6 +370,7 @@ export default function MobileCustomersView({
       setDeleteConfirm(null);
       if (detailCustomer?.id === cust.id) setDetailCustomer(null);
     } catch (err) {
+      console.warn('[MobileCustomersView] Error capturado en operación:', err?.message || err);
       showToast?.('❌ Error al archivar cliente');
     } finally {
       setIsDeleting(false);
@@ -374,6 +387,7 @@ export default function MobileCustomersView({
         setDetailCustomer(prev => ({ ...prev, isActive: true }));
       }
     } catch (err) {
+      console.warn('[MobileCustomersView] Error capturado en operación:', err?.message || err);
       showToast?.('❌ Error al reactivar cliente');
     }
   };
@@ -507,7 +521,7 @@ export default function MobileCustomersView({
               {searchQuery ? 'No se encontraron clientes con esa búsqueda' : 'No hay clientes registrados en esta categoría'}
             </p>
             <p className={`text-[11px] ${T.textMuted}`}>
-              Usa el botón "+ Nuevo" arriba para agregar un cliente
+              Usa el botón &ldquo;+ Nuevo&rdquo; arriba para agregar un cliente
             </p>
           </div>
         ) : (

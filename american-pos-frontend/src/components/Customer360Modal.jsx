@@ -1,36 +1,36 @@
-import { useState, useEffect } from 'react';
-import { 
-    X, User, Star, Award, TrendingUp, ShoppingBag, Clock, Calendar, 
-    DollarSign, ShieldCheck, Zap, History, MessageCircle, Banknote, 
-    FileText, ArrowRight, Package
+import { useState, useEffect, useCallback } from 'react';
+import {
+    X, 
+    Star, 
+    Award, 
+    TrendingUp, 
+    ShoppingBag, 
+    Clock, 
+    DollarSign, 
+    ShieldCheck, 
+    Zap, 
+    History, 
+    Banknote, 
+    FileText
 } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
 import { formatMoney } from '../utils/format';
 
-export default function Customer360Modal({ 
-    isOpen, 
-    onClose, 
-    customerId, 
-    onOpenAbono, 
-    onOpenHistory, 
-    onOpenStatement, 
-    onOpenRedeem,
-    businessSettings = {},
-    exchangeRate = 1 
+export default function Customer360Modal({
+    isOpen,
+    onClose,
+    customerId,
+    onOpenAbono,
+    onOpenHistory,
+    onOpenStatement,
+    onOpenRedeem
 }) {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        if (isOpen && customerId) {
-            fetchProfile();
-        } else {
-            setData(null);
-        }
-    }, [isOpen, customerId]);
-
-    const fetchProfile = async () => {
+    const fetchProfile = useCallback(async () => {
+        if (!customerId) return;
         try {
             setLoading(true);
             const res = await api.get(`/customers/${customerId}/profile360`);
@@ -40,14 +40,21 @@ export default function Customer360Modal({
         } finally {
             setLoading(false);
         }
-    };
+    }, [customerId]);
+
+    useEffect(() => {
+        if (isOpen && customerId) {
+            fetchProfile();
+        } else {
+            setData(null);
+        }
+    }, [isOpen, customerId, fetchProfile]);
 
     if (!isOpen) return null;
 
     const customer = data?.customer || {};
     const metrics = data?.metrics || {};
     const topProducts = data?.topProducts || [];
-    const recentSales = data?.recentSales || [];
 
     const getTierBadge = (tier) => {
         switch (tier) {

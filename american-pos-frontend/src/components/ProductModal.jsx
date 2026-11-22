@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { X, Upload, Link as LinkIcon, RefreshCw, Package, Tag, DollarSign, BarChart3, Settings2, Weight, Save, Loader2, Check, ZoomIn, ZoomOut, Scan, Printer, Layers, Search, Maximize2, Minimize2 } from 'lucide-react';
+import { X, Package, Save, Loader2, Check, Printer, Layers, Search, Maximize2, Minimize2 } from 'lucide-react';
 import { usePos } from '../hooks/PosContext';
 import { precisionRound, formatStock, isDollarOnlyCountry, isUsdOnlyMode, formatMoney } from '../utils/format';
 import { getImageUrl } from '../utils/imageUtils';
@@ -304,13 +304,13 @@ export default function ProductModal({ isOpen, onClose, onSave, product = null, 
                         try {
                             const cachedCats = JSON.parse(localStorage.getItem('pos_categories') || '[]');
                             if (cachedCats.length > 0) cats = cachedCats;
-                        } catch {}
+                        } catch (caughtErr) { console.warn('[ProductModal] Error parseando JSON local:', caughtErr?.message || caughtErr); }
                     }
                     if (cats.length === 0) {
                         try {
                             const localProds = await db.getAll('products');
                             cats = [...new Set(localProds.map(p => p.category?.trim().charAt(0).toUpperCase() + p.category?.trim().slice(1).toLowerCase()))].filter(Boolean);
-                        } catch {}
+                        } catch (caughtErr) { console.warn('[ProductModal] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                     }
                     setSuppliers(sups);
                     const uniqueCats = [...new Set(cats)].sort();
@@ -325,14 +325,21 @@ export default function ProductModal({ isOpen, onClose, onSave, product = null, 
     }, [isOpen]);
 
 
+    const exchangeRateRef = useRef(exchangeRate);
+    const isPharmacyRef = useRef(isPharmacy);
     useEffect(() => {
-        const rate = exchangeRate || 1;
+        exchangeRateRef.current = exchangeRate;
+        isPharmacyRef.current = isPharmacy;
+    }, [exchangeRate, isPharmacy]);
+
+    useEffect(() => {
+        const rate = exchangeRateRef.current || 1;
         if (isOpen) {
             if (product) {
                 const targetId = product.id;
                 setActiveVariantId(targetId);
                 setCurrentEditingProduct(product);
-                setFormData(extractProductFormData(product, rate, isPharmacy));
+                setFormData(extractProductFormData(product, rate, isPharmacyRef.current));
 
                 // Detectar variantes de familia (si vinieron en product.variants o _familyVariants)
                 const preVariants = Array.isArray(product.variants) && product.variants.length > 1
@@ -387,7 +394,7 @@ export default function ProductModal({ isOpen, onClose, onSave, product = null, 
                 setActiveVariantId(null);
                 setCurrentEditingProduct(null);
                 setFamilyVariants([]);
-                setFormData(extractProductFormData(null, rate, isPharmacy));
+                setFormData(extractProductFormData(null, rate, isPharmacyRef.current));
             }
             setLocalImageFile(null);
             setImageScale(1);
@@ -436,7 +443,7 @@ export default function ProductModal({ isOpen, onClose, onSave, product = null, 
             const next = !prev;
             try {
                 localStorage.setItem('pos_product_modal_maximized', String(next));
-            } catch {}
+            } catch (caughtErr) { console.warn('[ProductModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
             return next;
         });
     };

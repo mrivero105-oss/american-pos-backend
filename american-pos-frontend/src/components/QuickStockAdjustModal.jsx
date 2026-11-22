@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Package, Plus, Minus, Hash, Save, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Package, Plus, Minus, Hash, Save, RefreshCw } from 'lucide-react';
 import BaseModal from './BaseModal';
 import SupervisorPinModal from './SupervisorPinModal';
 import { useAuth } from '../hooks/AuthContext';
-import { formatMoney, formatStock } from '../utils/format';
+import { formatStock } from '../utils/format';
 import { getImageUrl } from '../utils/imageUtils';
 import toast from 'react-hot-toast';
 

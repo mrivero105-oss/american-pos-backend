@@ -1,6 +1,5 @@
-import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Users, Plus, X, Search, UserCheck, CheckCircle, RefreshCw, UserPlus, User, Phone, Edit3 } from 'lucide-react';
+import { ArrowLeft, Users, X, Search, CheckCircle, RefreshCw, UserPlus, User, Phone, Edit3 } from 'lucide-react';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 
 export default function MobileCustomerSelectModal({
@@ -179,7 +178,7 @@ export default function MobileCustomerSelectModal({
                     {filteredCustomers.length === 0 ? (
                       <div className="py-8 text-center space-y-2">
                         <p className="text-xs text-slate-400">
-                          No se encontraron clientes para <b className="text-white">"{customerSearch}"</b>
+                          No se encontraron clientes para <b className="text-white">&ldquo;{customerSearch}&rdquo;</b>
                         </p>
                         <button
                           type="button"
@@ -217,7 +216,7 @@ export default function MobileCustomerSelectModal({
                           }}
                           className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs cursor-pointer shadow-sm active:scale-95 transition-all"
                         >
-                          Crear cliente "{customerSearch}" ahora
+                          Crear cliente &ldquo;{customerSearch}&rdquo; ahora
                         </button>
                       </div>
                     ) : (

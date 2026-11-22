@@ -27,8 +27,6 @@ import CheckoutSplitView from './checkout/CheckoutSplitView';
 import CheckoutSuccessOverlay from './checkout/CheckoutSuccessOverlay';
 import CheckoutPaymentQrModal from './checkout/CheckoutPaymentQrModal';
 
-export { cleanMethodName };
-
 export default function CheckoutModal({
     isOpen,
     onClose,
@@ -39,7 +37,6 @@ export default function CheckoutModal({
     taxableBase = 0,
     exemptBase = 0,
     discountAmount = 0,
-    discountPercent = 0,
     taxInfo = { exemptBase: 0, taxableBase: 0 },
     ivaRate = 16,
     igtfRate = 3,
@@ -63,7 +60,6 @@ export default function CheckoutModal({
     const isVesOnly = !isUsdOnly && isVesOnlyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
     const isDual = !isUsdOnly && !isVesOnly;
     const isSingle = isUsdOnly;
-    const effectiveCurrencyMode = isUsdOnly ? 'SINGLE' : (isVesOnly ? 'VES' : 'BOTH');
     
     // Modo de Interfaz: 'express' (1-clic ultra rápido) o 'split' (pago mixto / multi-método)
     const [viewMode, setViewMode] = useState('express');
@@ -73,11 +69,8 @@ export default function CheckoutModal({
     const [paymentReferences, setPaymentReferences] = useState({});
     const [customers, setCustomers] = useState([]);
     const [selectedCustomerId, setSelectedCustomerId] = useState('');
-    const [customerSearch, setCustomerSearch] = useState('');
     const [documentType, setDocumentType] = useState('factura');
-    const [loadingCustomers, setLoadingCustomers] = useState(false);
     const [methods, setMethods] = useState([]);
-    const [loadingMethods, setLoadingMethods] = useState(false);
     const [showSuccess, setShowSuccess] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [transactionId, setTransactionId] = useState(null);
@@ -99,10 +92,14 @@ export default function CheckoutModal({
 
     // Promociones y Ofertas activas en tiempo real
     const posContext = usePos() || {};
-    const effectivePromotions = posContext?.activePromotions || [];
-    const effectiveCart = (Array.isArray(cartItems) && cartItems.length > 0) 
-        ? cartItems 
-        : (posContext?.cart || posContext?.posState?.cart || []);
+    const effectivePromotions = useMemo(
+        () => posContext?.activePromotions || [],
+        [posContext?.activePromotions]
+    );
+    const effectiveCart = useMemo(() => {
+        if (Array.isArray(cartItems) && cartItems.length > 0) return cartItems;
+        return posContext?.cart || posContext?.posState?.cart || [];
+    }, [cartItems, posContext?.cart, posContext?.posState?.cart]);
     
     // Oferta por método de pago seleccionada para la venta
     const [activePaymentPromo, setActivePaymentPromo] = useState(null);
@@ -124,45 +121,14 @@ export default function CheckoutModal({
         return null;
     }, [paymentMethodDiscounts]);
 
-    const wasOpenRef = useRef(false);
-    useEffect(() => {
-        if (isOpen && !wasOpenRef.current) {
-            wasOpenRef.current = true;
-            setLockedExchangeRate(exchangeRate || 1);
-            fetchCustomers();
-            fetchMethods();
-            setPayments({});
-            setPaymentReferences({});
-            setSelectedCustomerId(initialCustomerId || '');
-            setCustomerSearch('');
-            setDocumentType('factura');
-            setSelectedIndex(0);
-            setViewMode('express');
-            setTransactionId(null);
-            setQrModalMethod(null);
-            setQrModalUrl('');
-            setQrModalReference('');
-            setCopiedField(null);
-            setActivePaymentPromo(null);
-            setFocusedExpressMethodId('');
-        } else if (!isOpen && wasOpenRef.current) {
-            wasOpenRef.current = false;
-            setLockedExchangeRate(null);
-            setQrModalMethod(null);
-            setActivePaymentPromo(null);
-            setFocusedExpressMethodId('');
-        }
-    }, [isOpen, exchangeRate, initialCustomerId]);
-
-    const fetchCustomers = async () => {
+    const fetchCustomers = useCallback(async () => {
         try {
-            setLoadingCustomers(true);
             let custs = [];
             try {
                 const { data } = await api.get('/customers?limit=1000', { timeout: 3000 });
                 custs = Array.isArray(data) ? data : (data?.customers || []);
                 if (custs.length > 0) {
-                    try { await db.putAll('customers', custs); } catch {}
+                    try { await db.putAll('customers', custs); } catch (caughtErr) { console.warn('[CheckoutModal] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                 }
             } catch (netErr) {
                 console.warn('CheckoutModal: error de red al obtener clientes, cargando de IndexedDB:', netErr.message);
@@ -182,20 +148,17 @@ export default function CheckoutModal({
             setCustomers(custs || []);
         } catch (error) { 
             console.error('Error fetching customers:', error); 
-        } finally { 
-            setLoadingCustomers(false); 
         }
-    };
+    }, []);
 
-    const fetchMethods = async () => {
+    const fetchMethods = useCallback(async () => {
         try {
-            setLoadingMethods(true);
             let meths = [];
             try {
                 const { data } = await api.get('/settings/payment-methods', { timeout: 3000 });
                 meths = Array.isArray(data) ? data : [];
                 if (meths.length > 0) {
-                    try { localStorage.setItem('pos_payment_methods', JSON.stringify(meths)); } catch {}
+                    try { localStorage.setItem('pos_payment_methods', JSON.stringify(meths)); } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
                 }
             } catch (netErr) {
                 console.warn('CheckoutModal: error de red al obtener métodos de pago, usando caché/valores por defecto:', netErr.message);
@@ -207,7 +170,7 @@ export default function CheckoutModal({
                     if (Array.isArray(cached) && cached.length > 0) {
                         meths = cached;
                     }
-                } catch {}
+                } catch (caughtErr) { console.warn('[CheckoutModal] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             }
 
             if (!meths || meths.length === 0) {
@@ -238,10 +201,37 @@ export default function CheckoutModal({
         } catch (error) { 
             console.error('Error fetching methods:', error); 
             setMethods(DEFAULT_PAYMENT_METHODS.map(m => ({ ...m, name: cleanMethodName(m.name) })));
-        } finally { 
-            setLoadingMethods(false); 
         }
-    };
+    }, [isUsdOnly]);
+
+    const wasOpenRef = useRef(false);
+    useEffect(() => {
+        if (isOpen && !wasOpenRef.current) {
+            wasOpenRef.current = true;
+            setLockedExchangeRate(exchangeRate || 1);
+            fetchCustomers();
+            fetchMethods();
+            setPayments({});
+            setPaymentReferences({});
+            setSelectedCustomerId(initialCustomerId || '');
+            setDocumentType('factura');
+            setSelectedIndex(0);
+            setViewMode('express');
+            setTransactionId(null);
+            setQrModalMethod(null);
+            setQrModalUrl('');
+            setQrModalReference('');
+            setCopiedField(null);
+            setActivePaymentPromo(null);
+            setFocusedExpressMethodId('');
+        } else if (!isOpen && wasOpenRef.current) {
+            wasOpenRef.current = false;
+            setLockedExchangeRate(null);
+            setQrModalMethod(null);
+            setActivePaymentPromo(null);
+            setFocusedExpressMethodId('');
+        }
+    }, [isOpen, exchangeRate, initialCustomerId, fetchCustomers, fetchMethods]);
 
     // Helper para mapear y encontrar el método de pago por categoría (Blindado para Modo Offline)
     const findMethodKey = useCallback((typeKey) => {
@@ -278,10 +268,19 @@ export default function CheckoutModal({
     const toInt = (val) => Number(VortexMathEngine.toBigInt(val));
     const fromInt = (val) => VortexMathEngine.fromBigInt(BigInt(Math.round(val)));
 
-    // Helper unificado para Binance Pay (USDT): paridad 1:1 con USD (1 USDT = $1.00 USD = activeExchangeRate Bs)
-    const getEffectiveBinanceRate = useCallback(() => {
+    // Helper unificado para Binance Pay (USDT): respeta tasa P2P pactada si existe, o paridad 1:1 con BCV por defecto
+    const getEffectiveBinanceRate = useCallback((methodId = null, explicitCryptoRate = null) => {
+        const exp = Number(explicitCryptoRate);
+        if (exp > 0) return exp;
+        const targetMethod = methodId
+            ? methods.find(m => m.id === methodId || m.id === 'binance_usdt' || m.id === 'binance' || (m.currency || '').toUpperCase() === 'USDT')
+            : methods.find(m => m.id === 'binance_usdt' || m.id === 'binance' || (m.currency || '').toUpperCase() === 'USDT');
+        const methodBinRate = Number(targetMethod?.binanceRate);
+        if (methodBinRate > 0) return methodBinRate;
+        const settingsBinRate = Number(businessSettings?.binanceRate);
+        if (settingsBinRate > 0) return settingsBinRate;
         return activeExchangeRate > 0 ? activeExchangeRate : 1;
-    }, [activeExchangeRate]);
+    }, [methods, businessSettings?.binanceRate, activeExchangeRate]);
 
     const stats = useMemo(() => {
         const totalUsdInt = toInt(total);
@@ -298,9 +297,10 @@ export default function CheckoutModal({
 
             const isBinance = data.currency === 'USDT' || methodId === 'binance_usdt' || methodId.includes('binance');
             if (isBinance) {
-                activeBinanceRateUsed = activeExchangeRate;
-                const amountUsdInt = amountInt;
-                const amountVesInt = Math.round(amountInt * activeExchangeRate);
+                const binRate = getEffectiveBinanceRate(methodId, data.cryptoRate);
+                activeBinanceRateUsed = binRate;
+                const amountVesInt = Math.round(amountInt * binRate);
+                const amountUsdInt = activeExchangeRate > 0 ? Math.round(amountVesInt / activeExchangeRate) : amountInt;
 
                 const isCryptoIgtfApplicable = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
                 if (isCryptoIgtfApplicable) {
@@ -383,208 +383,8 @@ export default function CheckoutModal({
         remainingUsd
     } = stats;
 
-    const handleAmountChange = (methodId, value, currency) => {
-        const normalizedValue = value.toString().replace(',', '.');
-        const isBinance = currency === 'USDT' || methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance');
-        setPayments(prev => ({
-            ...prev,
-            [methodId]: {
-                amount: normalizedValue,
-                currency: isBinance ? 'USDT' : currency,
-                cryptoRate: isBinance ? getEffectiveBinanceRate(methodId, prev[methodId]?.cryptoRate) : undefined
-            }
-        }));
-    };
-
-    const handleFlashFill = useCallback((methodId, methodType, remBs, remUsd) => {
-        if (remBs <= 0) return;
-        const method = methods.find(m => m.id === methodId);
-        const isBinance = methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance') || (method?.currency || '').toUpperCase() === 'USDT';
-
-        if (isBinance) {
-            const methodAppliesIgtf = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
-            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
-            const existingUsdt = parseFloat(payments[methodId]?.amount) || 0;
-            let exactUsdt = precisionRound(existingUsdt + (remUsd * igtfFactor), methodAppliesIgtf ? 4 : 2);
-            if (methodAppliesIgtf && remUsd > 0 && Math.round(toInt(exactUsdt) / igtfFactor) < toInt((existingUsdt / igtfFactor) + remUsd)) {
-                exactUsdt = precisionRound(exactUsdt + 0.0001, 4);
-            }
-            const targetBs = precisionRound(exactUsdt * activeExchangeRate, 2);
-
-            setPayments(prev => ({
-                ...prev,
-                [methodId]: {
-                    amount: methodAppliesIgtf
-                        ? exactUsdt.toFixed(4).replace(/(\.\d{2})00$/, '$1')
-                        : exactUsdt.toFixed(2),
-                    currency: 'USDT',
-                    cryptoRate: activeExchangeRate,
-                    coveredBs: targetBs
-                }
-            }));
-            return;
-        }
-
-        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(methodId.toLowerCase()) || methodId.toLowerCase().includes('bs') || methodId.toLowerCase().includes('ves') || methodId.toLowerCase().includes('movil'));
-        const currency = isSingle ? 'USD' : (method?.currency || method?.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-        const existingVal = parseFloat(payments[methodId]?.amount) || 0;
-
-        if (currency === 'USD') {
-            const methodAppliesIgtf = igtfEnabled && methodId !== 'zelle' && methodId !== 'fiado';
-            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
-            let exactAmount = precisionRound(existingVal + (remUsd * igtfFactor), 4);
-            if (methodAppliesIgtf && remUsd > 0) {
-                const targetTotalUsable = toInt((existingVal / igtfFactor) + remUsd);
-                if (Math.round(toInt(exactAmount) / igtfFactor) < targetTotalUsable) {
-                    exactAmount = precisionRound(exactAmount + 0.0001, 4);
-                }
-            }
-            setPayments(prev => ({
-                ...prev,
-                [methodId]: {
-                    amount: exactAmount.toFixed(4).replace(/(\.\d{2})00$/, '$1'),
-                    currency
-                }
-            }));
-            return;
-        }
-
-        const amountVes = precisionRound(remBs + existingVal, 2);
-        setPayments(prev => ({
-            ...prev,
-            [methodId]: {
-                amount: amountVes.toFixed(2),
-                currency
-            }
-        }));
-    }, [methods, isSingle, payments, activeExchangeRate, igtfEnabled, igtfRate, businessSettings]);
-
-    // Bandera determinista para auto-enviar cuando React confirme stats.isInsufficient === false
-    const pendingAutoSubmitRef = useRef(false);
-
-    // Ejecutar Pago Exprés en 1-Clic
-    const executeExpressPayment = useCallback((typeKey, autoSubmit = true) => {
-        const targetMethod = findMethodKey(typeKey);
-        if (typeKey === 'binance' || typeKey === 'binance_usdt' || targetMethod?.currency === 'USDT') {
-            openBinanceQr(targetMethod || { id: 'binance_usdt', name: 'Binance Pay', currency: 'USDT' });
-            return;
-        }
-        if (typeKey === 'movil' || typeKey === 'pago_movil' || (targetMethod?.id || '').toLowerCase().includes('movil')) {
-            openPagoMovilQr(targetMethod || { id: 'pago_movil', name: 'Pago Móvil', currency: 'VES' });
-            return;
-        }
-        if (!targetMethod) return;
-
-        // Comprobar si este método de pago goza de una promoción/descuento activo
-        const promo = getMethodPromo(targetMethod.id, targetMethod.name);
-        const promoSavings = promo ? promo.savings : 0;
-        setActivePaymentPromo(promo || null);
-
-        // Calcular siempre sobre la base imponible neta del carrito (sin IGTF residual previo)
-        const netUsd = Math.max(0, precisionRound((Number(total) || 0) - promoSavings, 4));
-        const netVes = precisionRound(netUsd * activeExchangeRate, 2);
-
-        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
-        const currency = isSingle ? 'USD' : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-
-        const methodAppliesIgtf = igtfEnabled && currency === 'USD' && targetMethod.id !== 'zelle' && targetMethod.id !== 'fiado';
-        const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
-        let exactAmount = currency === 'USD'
-            ? precisionRound(netUsd * igtfFactor, 4)
-            : netVes;
-
-        if (methodAppliesIgtf && netUsd > 0) {
-            const principalInt = toInt(netUsd);
-            if (Math.round(toInt(exactAmount) / igtfFactor) < principalInt) {
-                exactAmount = precisionRound(exactAmount + 0.0001, 4);
-            }
-        }
-
-        if (autoSubmit) {
-            pendingAutoSubmitRef.current = true;
-        }
-
-        // Limpiar otros métodos y dejar 100% en el seleccionado
-        setPayments({
-            [targetMethod.id]: {
-                amount: currency === 'USD' ? exactAmount.toFixed(4) : exactAmount.toFixed(2),
-                currency
-            }
-        });
-    }, [findMethodKey, isSingle, total, activeExchangeRate, getMethodPromo, igtfEnabled, igtfRate]);
-
-    const [updatingBinanceRate, setUpdatingBinanceRate] = useState(false);
-
-    const handleUpdateBinanceRate = async (newRate = null, targetMethodId = null) => {
-        try {
-            setUpdatingBinanceRate(true);
-            let rateToApply = newRate;
-            if (rateToApply === null || rateToApply === undefined) {
-                const res = await api.get('/settings/binance/rate');
-                if (res.data && res.data.rate) {
-                    rateToApply = Number(res.data.rate);
-                } else {
-                    throw new Error('No se pudo obtener la tasa P2P');
-                }
-            }
-
-            const validRate = Number(rateToApply);
-            if (!validRate || validRate <= 0) {
-                if (newRate === 0) return;
-                toast.error('Tasa inválida');
-                return;
-            }
-
-            // 1. Actualizar en la lista local de métodos de pago
-            setMethods(prev => prev.map(m => {
-                if (m.id === 'binance_usdt' || m.id === 'binance' || (m.currency || '').toUpperCase() === 'USDT' || m.id === targetMethodId) {
-                    return { ...m, binanceRate: validRate };
-                }
-                return m;
-            }));
-
-            // 2. Si el modal QR de Binance está abierto, recalcular monto y regenerar QR
-            if (qrModalMethod && qrModalMethod.isBinance) {
-                const amountBs = Number(qrModalMethod.amountBs || (remainingBs > 0 ? remainingBs : totalToPayVes));
-                const newAmountUsdt = precisionRound(amountBs / validRate, 2);
-                const updated = {
-                    ...qrModalMethod,
-                    binanceRate: validRate,
-                    amountUsdt: newAmountUsdt
-                };
-                setQrModalMethod(updated);
-
-                if (updated.binanceQrMode !== 'IMAGE') {
-                    setGeneratingQrModal(true);
-                    generateBinanceQR({
-                        payId: updated.binancePayId,
-                        email: updated.binanceEmail,
-                        amountUsdt: newAmountUsdt,
-                        customImage: updated.binanceQrImage,
-                        mode: updated.binanceQrMode
-                    }).then(url => {
-                        setQrModalUrl(url || updated.binanceQrImage || '');
-                        setGeneratingQrModal(false);
-                    }).catch(() => setGeneratingQrModal(false));
-                }
-            }
-
-            // 3. Sincronizar en segundo plano con el backend
-            api.post('/settings/binance/rate', { rate: validRate }).catch(() => {});
-
-            if (newRate === null || newRate === undefined) {
-                toast.success(`Tasa P2P actualizada: ${validRate.toFixed(2)} Bs/USDT`);
-            }
-        } catch (err) {
-            console.error('Error actualizando tasa Binance:', err);
-            toast.error('Error al consultar tasa P2P');
-        } finally {
-            setUpdatingBinanceRate(false);
-        }
-    };
-
     // Apertura y control del Modal Visual de Pago Móvil & Código QR
-    const openBinanceQr = (targetMethod) => {
+    const openBinanceQr = useCallback((targetMethod) => {
         if (!targetMethod) return;
         setFocusedExpressMethodId(targetMethod.id || 'binance_usdt');
         const payId = targetMethod.binancePayId || businessSettings?.binancePayId || '';
@@ -592,13 +392,13 @@ export default function CheckoutModal({
         const customImage = targetMethod.binanceQrImage || businessSettings?.binanceQrImage || '';
         const mode = targetMethod.binanceQrMode || (customImage ? 'IMAGE' : 'AUTO');
 
-        // Paridad 1:1 con USD (1 USDT = $1.00 USD)
-        let amountUsdt = precisionRound(remainingUsd > 0 ? remainingUsd : totalToPayUsd, 2);
+        const effectiveRate = getEffectiveBinanceRate(targetMethod.id, payments[targetMethod.id]?.cryptoRate || targetMethod.binanceRate);
+        let amountBs = precisionRound(remainingBs > 0 ? remainingBs : totalToPayVes, 2);
+        let amountUsdt = effectiveRate > 0 ? precisionRound(amountBs / effectiveRate, 2) : precisionRound(remainingUsd > 0 ? remainingUsd : totalToPayUsd, 2);
         if (viewMode === 'split' && parseFloat(payments[targetMethod.id]?.amount) > 0) {
             amountUsdt = precisionRound(parseFloat(payments[targetMethod.id].amount), 2);
+            amountBs = precisionRound(amountUsdt * effectiveRate, 2);
         }
-        const effectiveRate = activeExchangeRate > 0 ? activeExchangeRate : 1;
-        const amountBs = precisionRound(amountUsdt * effectiveRate, 2);
 
         const methodWithData = {
             ...targetMethod,
@@ -633,9 +433,9 @@ export default function CheckoutModal({
                 setGeneratingQrModal(false);
             });
         }
-    };
+    }, [businessSettings?.binancePayId, businessSettings?.binanceEmail, businessSettings?.binanceQrImage, getEffectiveBinanceRate, payments, remainingBs, totalToPayVes, remainingUsd, totalToPayUsd, viewMode, paymentReferences]);
 
-    const openPagoMovilQr = (targetMethod) => {
+    const openPagoMovilQr = useCallback((targetMethod) => {
         if (!targetMethod) return;
         setFocusedExpressMethodId(targetMethod.id || 'pago_movil');
         const qmBank = targetMethod.pagoMovilBank || businessSettings?.pagoMovilBank || '';
@@ -690,7 +490,141 @@ export default function CheckoutModal({
                 setGeneratingQrModal(false);
             });
         }
+    }, [businessSettings?.pagoMovilBank, businessSettings?.pagoMovilPhone, businessSettings?.phone, businessSettings?.pagoMovilId, businessSettings?.rif, viewMode, payments, activeExchangeRate, remainingBs, totalToPayVes, paymentReferences]);
+
+    const handleAmountChange = (methodId, value, currency) => {
+        const normalizedValue = value.toString().replace(',', '.');
+        const isBinance = currency === 'USDT' || methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance');
+        setPayments(prev => ({
+            ...prev,
+            [methodId]: {
+                amount: normalizedValue,
+                currency: isBinance ? 'USDT' : currency,
+                cryptoRate: isBinance ? getEffectiveBinanceRate(methodId, prev[methodId]?.cryptoRate) : undefined
+            }
+        }));
     };
+
+    const handleFlashFill = useCallback((methodId, methodType, remBs, remUsd) => {
+        if (remBs <= 0) return;
+        const method = methods.find(m => m.id === methodId);
+        const isBinance = methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance') || (method?.currency || '').toUpperCase() === 'USDT';
+
+        if (isBinance) {
+            const binRate = getEffectiveBinanceRate(methodId, payments[methodId]?.cryptoRate);
+            const methodAppliesIgtf = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
+            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+            const existingUsdt = parseFloat(payments[methodId]?.amount) || 0;
+            const remainingUsdtEquiv = binRate > 0 ? (remBs / binRate) : remUsd;
+            let exactUsdt = precisionRound(existingUsdt + (remainingUsdtEquiv * igtfFactor), methodAppliesIgtf ? 4 : 2);
+            if (methodAppliesIgtf && remainingUsdtEquiv > 0 && Math.round(toInt(exactUsdt) / igtfFactor) < toInt((existingUsdt / igtfFactor) + remainingUsdtEquiv)) {
+                exactUsdt = precisionRound(exactUsdt + 0.0001, 4);
+            }
+            const targetBs = precisionRound(exactUsdt * binRate, 2);
+
+            setPayments(prev => ({
+                ...prev,
+                [methodId]: {
+                    amount: methodAppliesIgtf
+                        ? exactUsdt.toFixed(4).replace(/(\.\d{2})00$/, '$1')
+                        : exactUsdt.toFixed(2),
+                    currency: 'USDT',
+                    cryptoRate: binRate,
+                    coveredBs: targetBs
+                }
+            }));
+            return;
+        }
+
+        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(methodId.toLowerCase()) || methodId.toLowerCase().includes('bs') || methodId.toLowerCase().includes('ves') || methodId.toLowerCase().includes('movil'));
+        const currency = isSingle ? 'USD' : (method?.currency || method?.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
+        const existingVal = parseFloat(payments[methodId]?.amount) || 0;
+
+        if (currency === 'USD') {
+            const methodAppliesIgtf = igtfEnabled && methodId !== 'zelle' && methodId !== 'fiado';
+            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+            let exactAmount = precisionRound(existingVal + (remUsd * igtfFactor), 4);
+            if (methodAppliesIgtf && remUsd > 0) {
+                const targetTotalUsable = toInt((existingVal / igtfFactor) + remUsd);
+                if (Math.round(toInt(exactAmount) / igtfFactor) < targetTotalUsable) {
+                    exactAmount = precisionRound(exactAmount + 0.0001, 4);
+                }
+            }
+            setPayments(prev => ({
+                ...prev,
+                [methodId]: {
+                    amount: exactAmount.toFixed(4).replace(/(\.\d{2})00$/, '$1'),
+                    currency
+                }
+            }));
+            return;
+        }
+
+        const amountVes = precisionRound(remBs + existingVal, 2);
+        setPayments(prev => ({
+            ...prev,
+            [methodId]: {
+                amount: amountVes.toFixed(2),
+                currency
+            }
+        }));
+    }, [methods, isSingle, payments, igtfEnabled, igtfRate, businessSettings, getEffectiveBinanceRate]);
+
+    // Bandera determinista para auto-enviar cuando React confirme stats.isInsufficient === false
+    const pendingAutoSubmitRef = useRef(false);
+
+    // Ejecutar Pago Exprés en 1-Clic
+    const executeExpressPayment = useCallback((typeKey, autoSubmit = true) => {
+        const targetMethod = findMethodKey(typeKey);
+        if (typeKey === 'binance' || typeKey === 'binance_usdt' || targetMethod?.currency === 'USDT') {
+            openBinanceQr(targetMethod || { id: 'binance_usdt', name: 'Binance Pay', currency: 'USDT' });
+            return;
+        }
+        if (typeKey === 'movil' || typeKey === 'pago_movil' || (targetMethod?.id || '').toLowerCase().includes('movil')) {
+            openPagoMovilQr(targetMethod || { id: 'pago_movil', name: 'Pago Móvil', currency: 'VES' });
+            return;
+        }
+        if (!targetMethod) return;
+
+        // Comprobar si este método de pago goza de una promoción/descuento activo
+        const promo = getMethodPromo(targetMethod.id, targetMethod.name);
+        const promoSavings = promo ? promo.savings : 0;
+        setActivePaymentPromo(promo || null);
+
+        // Calcular siempre sobre la base imponible neta del carrito (sin IGTF residual previo)
+        const netUsd = Math.max(0, precisionRound((Number(total) || 0) - promoSavings, 4));
+        const netVes = precisionRound(netUsd * activeExchangeRate, 2);
+
+        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
+        const currency = isSingle ? 'USD' : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
+
+        const methodAppliesIgtf = igtfEnabled && currency === 'USD' && targetMethod.id !== 'zelle' && targetMethod.id !== 'fiado';
+        const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+        let exactAmount = currency === 'USD'
+            ? precisionRound(netUsd * igtfFactor, 4)
+            : netVes;
+
+        if (methodAppliesIgtf && netUsd > 0) {
+            const principalInt = toInt(netUsd);
+            if (Math.round(toInt(exactAmount) / igtfFactor) < principalInt) {
+                exactAmount = precisionRound(exactAmount + 0.0001, 4);
+            }
+        }
+
+        if (autoSubmit) {
+            pendingAutoSubmitRef.current = true;
+        }
+
+        // Limpiar otros métodos y dejar 100% en el seleccionado
+        setPayments({
+            [targetMethod.id]: {
+                amount: currency === 'USD' ? exactAmount.toFixed(4) : exactAmount.toFixed(2),
+                currency
+            }
+        });
+    }, [findMethodKey, isSingle, total, activeExchangeRate, getMethodPromo, igtfEnabled, igtfRate, openBinanceQr, openPagoMovilQr]);
+
+
 
     const handleCopyText = (text, fieldKey) => {
         if (!text) return;
@@ -905,7 +839,7 @@ export default function CheckoutModal({
                 if (form) form.requestSubmit();
             }
         }
-    }, [isOpen, viewMode, methods, selectedIndex, executeExpressPayment]);
+    }, [isOpen, viewMode, methods, selectedIndex, executeExpressPayment, findMethodKey, openBinanceQr]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -1074,7 +1008,7 @@ export default function CheckoutModal({
             // 1. LocalStorage para lectura instantánea en la misma estación
             try {
                 localStorage.setItem('isaac_pos_display_payment_sync', JSON.stringify(payload));
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 
             // 2. BroadcastChannel para sincronización inter-procesos/doble monitor (0ms)
             try {
@@ -1083,7 +1017,7 @@ export default function CheckoutModal({
                     bc.postMessage({ type: 'PAYMENT_SELECTION_UPDATE', payload });
                     bc.close();
                 }
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
             // 3. Socket.io para pantallas en red Wi-Fi / IP LAN
             if (socket && socket.connected) {
@@ -1093,9 +1027,9 @@ export default function CheckoutModal({
             // 4. CustomEvent local en ventana
             try {
                 window.dispatchEvent(new CustomEvent('isaac_pos_display_payment_local_update', { detail: payload }));
-            } catch (_) {}
-        } catch (_) {}
-    }, [isOpen, qrModalMethod, qrModalUrl, viewMode, methods, selectedIndex, focusedExpressMethodId, payments, paymentReferences, stats, activePaymentPromo, total, activeExchangeRate, user, registerId, socket, findMethodKey, isUsdOnly, businessSettings, getEffectiveBinanceRate, selectedCustomerId, customers, initialCustomerId, customerName]);
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
+        } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
+    }, [isOpen, qrModalMethod, qrModalUrl, viewMode, methods, selectedIndex, focusedExpressMethodId, payments, paymentReferences, stats, activePaymentPromo, total, activeExchangeRate, user, registerId, socket, findMethodKey, isUsdOnly, selectedCustomerId, customers, initialCustomerId, customerName]);
 
     useEffect(() => {
         broadcastPaymentSelection();
@@ -1327,7 +1261,7 @@ export default function CheckoutModal({
                 if (socket && socket.connected) {
                     socket.emit('customer_display_sale_completed', saleSuccessPayload);
                 }
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 
             setShowSuccess(true);
             setTransactionId(null);
@@ -1360,12 +1294,6 @@ export default function CheckoutModal({
 
     const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, mode, { rate: activeExchangeRate, currencyMode });
 
-    const activeCustomer = useMemo(() => {
-        if (selectedCustomerId && Array.isArray(customers)) {
-            return customers.find(c => String(c.id) === String(selectedCustomerId));
-        }
-        return null;
-    }, [selectedCustomerId, customers]);
 
     const handleResetPayment = useCallback(() => {
         setPayments({});

@@ -65,7 +65,9 @@ self.addEventListener('fetch', (event) => {
             try {
               const cache = await caches.open(CACHE_NAME);
               cache.put(event.request, networkResponse.clone());
-            } catch (_) {}
+            } catch (err) {
+              console.warn('[SW] Error guardando recurso en caché:', err?.message);
+            }
           }
           return networkResponse;
         }).catch(() => null);
@@ -98,7 +100,9 @@ self.addEventListener('fetch', (event) => {
             const cache = await caches.open(CACHE_NAME);
             cache.put('/index.html', networkResponse.clone());
             cache.put('/', networkResponse.clone());
-          } catch (_) {}
+          } catch (err) {
+            console.warn('[SW] Error cacheando shell HTML:', err?.message);
+          }
         }
         return networkResponse;
       })

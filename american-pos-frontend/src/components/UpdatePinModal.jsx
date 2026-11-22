@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Key, AlertTriangle, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, ShieldCheck } from 'lucide-react';
+import { Key, AlertTriangle, CheckCircle2, AlertCircle, Eye, EyeOff, Lock } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
 import toast from 'react-hot-toast';

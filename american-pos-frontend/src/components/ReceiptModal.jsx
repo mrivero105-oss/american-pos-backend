@@ -1,10 +1,9 @@
 import { useRef, useState, useEffect } from 'react';
-import { X, Printer, CheckCircle2, MessageCircle, Mail, Loader2, Copy, Download, ExternalLink, Phone, Check, RefreshCw, CornerUpLeft, Share2, Smartphone, FileText, Zap } from 'lucide-react';
-import { formatMoney as utilFormatMoney, formatBs, formatUSD, formatStock, isSingleCurrencyMode, isDollarOnlyCountry, isUsdOnlyMode, getTaxIdLabel, getCustomerDocLabel } from '../utils/format';
+import { X, Printer, CheckCircle2, MessageCircle, Mail, Loader2, Copy, Download, ExternalLink, Phone, Check, CornerUpLeft, Share2 } from 'lucide-react';
+import { formatMoney as utilFormatMoney, formatBs, formatUSD, formatStock, isDollarOnlyCountry, isUsdOnlyMode, getTaxIdLabel, getCustomerDocLabel } from '../utils/format';
 import BaseModal from './BaseModal';
 import { formatSaleToEscPos } from '../utils/escposFormatter';
 import { escapeHtml } from '../utils/escapeHtml';
-import axios from 'axios';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import JsBarcode from 'jsbarcode';
@@ -13,16 +12,13 @@ import html2canvas from 'html2canvas-pro';
 import mobilePrinterService from '../services/mobilePrinterService';
 
 export default function ReceiptModal({ isOpen, onClose, sale, businessSettings = {}, exchangeRate = 1, currencyMode = 'BOTH', paymentMethods = [], onRefund = null }) {
-    const [loading, setLoading] = useState(false);
     const [showEmailPrompt, setShowEmailPrompt] = useState(false);
     const [emailAddress, setEmailAddress] = useState('');
     const [sendingEmail, setSendingEmail] = useState(false);
-    const [isBluetoothPrinting, setIsBluetoothPrinting] = useState(false);
 
     const effectiveCountry = businessSettings?.country || localStorage.getItem('pos_country') || '';
     const isDollarCountry = isDollarOnlyCountry(effectiveCountry);
     const isUsdOnly = isDollarCountry || isUsdOnlyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
-    const effectiveCurrencyMode = isUsdOnly ? 'USD' : currencyMode;
     const taxIdLabel = getTaxIdLabel(effectiveCountry);
     const clientDocLabel = getCustomerDocLabel(effectiveCountry);
 
@@ -43,7 +39,6 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
     const [whatsappPhone, setWhatsappPhone] = useState('');
     const [sendingViaBot, setSendingViaBot] = useState(false);
     const [botStatus, setBotStatus] = useState('DISCONNECTED');
-    const [copiedToClipboard, setCopiedToClipboard] = useState(false);
 
     const printRef = useRef();
     const scrollContainerRef = useRef(null);
@@ -98,7 +93,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
             if (saleKey && autoPrintedSaleIdRef.current !== saleKey) {
                 autoPrintedSaleIdRef.current = saleKey;
                 if (sale?.id) {
-                    try { sessionStorage.setItem('last_local_printed_sale_id', String(sale.id)); } catch (_) {}
+                    try { sessionStorage.setItem('last_local_printed_sale_id', String(sale.id)); } catch (caughtErr) { console.warn('[ReceiptModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
                 }
                 const timer = setTimeout(() => {
                     if (handlePrintRef.current) {
@@ -108,7 +103,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                 return () => clearTimeout(timer);
             }
         }
-    }, [isOpen, sale?.id, sale?._autoPrint, sale?._autoPrintNonce, businessSettings?.autoPrintReceipt]);
+    }, [isOpen, sale, businessSettings?.autoPrintReceipt]);
 
     // Auto-cerrar el recibo después de cobrar si el cajero no interactúa con el modal
     useEffect(() => {
@@ -123,7 +118,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         }, 3200);
 
         return () => clearTimeout(closeTimer);
-    }, [isOpen, sale?.id, sale?._autoPrint, autoClosePaused, showWhatsAppModal, showEmailPrompt, capturingImage, businessSettings?.autoCloseReceipt, onClose]);
+    }, [isOpen, sale, autoClosePaused, showWhatsAppModal, showEmailPrompt, capturingImage, businessSettings?.autoCloseReceipt, onClose]);
 
     // Permitir cerrar con Enter o Escape inmediatamente
     useEffect(() => {
@@ -141,15 +136,14 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
     if (!isOpen || !sale) return null;
 
     const isSingle = isUsdOnly;
-    const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, isUsdOnly ? 'USD' : mode, { rate: isUsdOnly ? 1 : exchangeRate, currencyMode: isUsdOnly ? 'USD' : currencyMode });
+    const effectiveRate = isUsdOnly ? 1 : Number(sale?.exchangeRate || exchangeRate || 1);
+    const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, isUsdOnly ? 'USD' : mode, { rate: effectiveRate, currencyMode: isUsdOnly ? 'USD' : currencyMode });
 
     const documentTitle = sale?.documentType === 'nota_entrega' 
         ? 'Nota de Entrega' 
         : (sale?.documentType === 'cotizacion' || sale?.documentType === 'presupuesto'
             ? 'Cotización'
             : (sale?.sriAccessKey ? 'Factura Electrónica' : 'Factura'));
-
-    const effectiveRate = isUsdOnly ? 1 : Number(sale?.exchangeRate || exchangeRate || 1);
     const saleItems = Array.isArray(sale.SaleItems) ? sale.SaleItems : (Array.isArray(sale.items) ? sale.items : []);
     const totalUnitsCount = saleItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
 
@@ -172,14 +166,16 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
 
     const parseTemplate = (template, variables) => {
         if (!template) return '';
-        let result = template;
-        for (const [key, value] of Object.entries(variables)) {
-            result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'gi'), escapeHtml(value || ''));
-        }
-        return result
+        return template
             .split('\n')
             .filter(line => line.trim() !== '')
-            .map((line) => `<p style="margin:2px 0;">${escapeHtml(line)}</p>`)
+            .map((rawLine) => {
+                let escapedLine = escapeHtml(rawLine);
+                for (const [key, value] of Object.entries(variables)) {
+                    escapedLine = escapedLine.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'gi'), escapeHtml(value || ''));
+                }
+                return `<p style="margin:2px 0;">${escapedLine}</p>`;
+            })
             .join('');
     };
 
@@ -295,18 +291,19 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
             `;
         }
 
+        const safeWidth = /^(58|80|210)mm$/i.test(String(printWidth || '')) ? String(printWidth) : '80mm';
         return `
             <!DOCTYPE html>
             <html>
                 <head>
                     <meta charset="UTF-8">
-                    <title>${documentTitle} #${receiptNum}</title>
+                    <title>${escapeHtml(documentTitle)} #${escapeHtml(receiptNum)}</title>
                     <style>
                         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
                         * { box-sizing: border-box; }
                         body { 
                             font-family: 'JetBrains Mono', 'Roboto Mono', 'SFMono-Regular', Consolas, 'Courier New', monospace; 
-                            width: ${printWidth}; 
+                            width: ${safeWidth}; 
                             margin: 0 auto; 
                             padding: 4px; 
                             font-size: 11px; 
@@ -346,7 +343,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         const activePrinter = localStorage.getItem('pos_station_printer') || businessSettings.printerName || '';
 
         if (sale?.id) {
-            try { sessionStorage.setItem('last_local_printed_sale_id', String(sale.id)); } catch (e) {}
+            try { sessionStorage.setItem('last_local_printed_sale_id', String(sale.id)); } catch (caughtErr) { console.warn('[ReceiptModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         }
 
         const hasCashTransaction = (currentSale) => {
@@ -381,7 +378,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         const buildEscPosTicket = () => formatSaleToEscPos(
             sale,
             { ...businessSettings, printerName: activePrinter, receiptOnlyBs: isOnlyBs, isUsdOnly },
-            isUsdOnly ? 1 : exchangeRate,
+            effectiveRate,
             isUsdOnly ? 'USD' : (isOnlyBs ? 'VES' : currencyMode),
             paymentMethods
         );
@@ -439,7 +436,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                                 sequence: businessSettings.drawerSequence,
                                 autoPrint: Boolean(isAutoPrint)
                             });
-                        } catch (e) {}
+                        } catch (caughtErr) { console.warn('[ReceiptModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
                     }
                     toast.success('Comprobante enviado a la impresora');
                 } else if (!isAutoPrint) {
@@ -453,12 +450,11 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
             }
         } else {
             // Mobile execution
-            setIsBluetoothPrinting(true);
             try {
                 await mobilePrinterService.printSaleMobile({
                     sale,
                     businessSettings: { ...businessSettings, printerName: activePrinter, receiptOnlyBs: isOnlyBs, isUsdOnly },
-                    exchangeRate: isUsdOnly ? 1 : exchangeRate,
+                    exchangeRate: effectiveRate,
                     currencyMode: isUsdOnly ? 'USD' : (isOnlyBs ? 'VES' : currencyMode),
                     paymentMethods,
                     htmlContent: html
@@ -469,8 +465,6 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                 if (!isAutoPrint) {
                     fallbackPrint();
                 }
-            } finally {
-                setIsBluetoothPrinting(false);
             }
         }
     };
@@ -534,7 +528,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                 const pCurr = isCrypto ? (isUsdOnly ? 'USD' : 'VES') : (isUsdOnly ? 'USD' : (p.currency || 'VES'));
                 let amt = p.amount;
                 if (isCrypto && !isUsdOnly) {
-                    amt = p.convertedAmountBs || (p.amount && p.cryptoRate ? Number(p.amount) * Number(p.cryptoRate) : (sale.totalBs || (sale.total * (exchangeRate || 1))));
+                    amt = p.convertedAmountBs || (p.amount && p.cryptoRate ? Number(p.amount) * Number(p.cryptoRate) : (sale.totalBs || (sale.total * effectiveRate)));
                 }
                 const pRef = String(p.reference || p.ref || p.paymentReference || (idx === 0 ? fallbackSaleReference : '') || '').trim();
                 lines.push(`  ✓ ${formatPaymentMethodName(p.method, pCurr)}: ${renderFormatMoney(amt, pCurr)}${pRef ? ` (Ref: #${pRef})` : ''}`);
@@ -562,54 +556,6 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         return clean;
     };
 
-    const handleOneTouchWhatsApp = () => {
-        const clean = getCleanPhoneForWhatsApp();
-        const textReceipt = buildTextReceipt();
-        const encodedText = encodeURIComponent(textReceipt);
-
-        const openDirectWhatsApp = () => {
-            const waDeepLink = clean 
-                ? `whatsapp://send?phone=${clean}&text=${encodedText}` 
-                : `whatsapp://send?text=${encodedText}`;
-            const waWebLink = clean 
-                ? `https://api.whatsapp.com/send?phone=${clean}&text=${encodedText}` 
-                : `https://api.whatsapp.com/send?text=${encodedText}`;
-
-            // En Android nativo / Capacitor, window.open está bloqueado por defecto.
-            // window.location.href activa directamente el Intent nativo de la app WhatsApp.
-            const isCapacitorOrMobile = typeof window !== 'undefined' && (
-                (window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform()) || 
-                /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-            );
-
-            if (isCapacitorOrMobile) {
-                toast.success('📱 Abriendo WhatsApp...');
-                window.location.href = waDeepLink;
-                // Si la app nativa no responde en 1.5s, redirigir a api.whatsapp.com
-                setTimeout(() => {
-                    try { window.location.href = waWebLink; } catch (_e) {}
-                }, 1500);
-            } else {
-                toast.success('📱 Abriendo WhatsApp...');
-                window.open(waWebLink, '_blank');
-            }
-        };
-
-        if (typeof navigator !== 'undefined' && navigator.share && !(window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform())) {
-            navigator.share({
-                title: `${documentTitle} #${receiptNum}`,
-                text: textReceipt
-            }).then(() => {
-                toast.success('¡Ticket compartido con éxito!');
-            }).catch((err) => {
-                if (err.name !== 'AbortError') {
-                    openDirectWhatsApp();
-                }
-            });
-        } else {
-            openDirectWhatsApp();
-        }
-    };
 
     const handleWhatsAppShare = async () => {
         if (!printRef.current) {
@@ -643,7 +589,6 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
 
             const rawPhone = sale.customerPhone || sale.Customer?.phone || '';
             setWhatsappPhone(rawPhone.replace(/[^0-9+]/g, ''));
-            setCopiedToClipboard(false);
             setShowWhatsAppModal(true);
         } catch (err) {
             console.error('Error capturando imagen del ticket:', err);
@@ -809,7 +754,6 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         // Copiar texto de la factura al portapapeles
         try {
             navigator.clipboard.writeText(textReceipt);
-            setCopiedToClipboard(true);
             toast.success('📋 Factura copiada al portapapeles');
         } catch (e) {
             console.warn('Clipboard writeText notice', e);
@@ -830,9 +774,9 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         const text = buildTextReceipt();
         try {
             await navigator.clipboard.writeText(text);
-            setCopiedToClipboard(true);
             toast.success('📋 ¡Factura completa copiada al portapapeles!');
         } catch (e) {
+            console.warn('[ReceiptModal] Error capturado en operación:', e?.message || e);
             const textArea = document.createElement("textarea");
             textArea.value = text;
             textArea.style.position = "fixed";
@@ -842,9 +786,9 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
             textArea.select();
             try {
                 document.execCommand('copy');
-                setCopiedToClipboard(true);
                 toast.success('📋 ¡Factura copiada al portapapeles!');
             } catch (err) {
+                console.warn('[ReceiptModal] Error capturado en operación:', err?.message || err);
                 toast.error('No se pudo copiar el texto');
             }
             document.body.removeChild(textArea);
@@ -904,7 +848,6 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                     new ClipboardItem({ 'image/png': whatsappImageBlob })
                 ]);
                 imageCopied = true;
-                setCopiedToClipboard(true);
                 toast.success('📋 ¡Imagen copiada al portapapeles! Puedes pegarla con Ctrl + V', { duration: 6000 });
             } catch (clipErr) {
                 console.warn('Clipboard write notice:', clipErr);
@@ -1110,7 +1053,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                         {/* 1. Encabezado de la Empresa */}
                         <div className="text-center mb-3">
                             {businessSettings.logo && sale.documentType !== 'nota_entrega' && (
-                                <img src={businessSettings.logo} alt="Logo" className="h-12 sm:h-14 mx-auto mb-2 object-contain grayscale logo-print" />
+                                <img src={businessSettings.logo.startsWith('/') && typeof window !== 'undefined' && window.__ISAAC_SERVER_ORIGIN__ ? `${window.__ISAAC_SERVER_ORIGIN__}${businessSettings.logo}` : businessSettings.logo} alt="Logo" className="h-12 sm:h-14 mx-auto mb-2 object-contain grayscale logo-print" />
                             )}
                             
                             {/* Nombre del Establecimiento */}

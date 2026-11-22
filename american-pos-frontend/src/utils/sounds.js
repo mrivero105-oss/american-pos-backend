@@ -82,7 +82,7 @@ const playTone = (freq, type, duration, volume = 0.1, delay = 0) => {
             try {
                 oscillator.disconnect();
                 gainNode.disconnect();
-            } catch (_e) {}
+            } catch { /* Nodos de audio ya desconectados */ }
         };
 
         oscillator.start(startTime);
@@ -153,12 +153,12 @@ export const playDeleteSound = () => {
             try {
                 osc.disconnect();
                 gain.disconnect();
-            } catch (_e) {}
+            } catch { /* Nodos de audio ya desconectados */ }
         };
 
         osc.start(startTime);
         osc.stop(stopTime);
-    } catch (_err) {}
+    } catch { /* WebAudio opcional no disponible */ }
 };
 
 /**

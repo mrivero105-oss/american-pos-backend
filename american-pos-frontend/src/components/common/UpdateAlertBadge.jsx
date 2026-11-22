@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Rocket, Download, Loader2, CheckCircle2 } from 'lucide-react';
+import { Download, Loader2, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/AuthContext';
@@ -14,7 +14,7 @@ export default function UpdateAlertBadge() {
     const [downloaded, setDownloaded] = useState(false);
     const navigate = useNavigate();
 
-    const checkUpdateStatus = async () => {
+    const checkUpdateStatus = useCallback(async () => {
         if (!canCheckUpdates) return;
         try {
             const { data } = await api.get('/system/updater/status');
@@ -22,9 +22,10 @@ export default function UpdateAlertBadge() {
                 setUpdateStatus(data);
             }
         } catch (error) {
+            console.warn('[UpdateAlertBadge] Error capturado en operación:', error?.message || error);
             // Silently continue if background check fails
         }
-    };
+    }, [canCheckUpdates]);
 
     useEffect(() => {
         if (!canCheckUpdates) {
@@ -61,7 +62,7 @@ export default function UpdateAlertBadge() {
             clearInterval(interval);
             if (unsubscribe && typeof unsubscribe === 'function') unsubscribe();
         };
-    }, [canCheckUpdates]);
+    }, [canCheckUpdates, checkUpdateStatus]);
 
     if (!canCheckUpdates || !updateStatus || !updateStatus.isUpdateAvailable) {
         return null;
@@ -103,6 +104,7 @@ export default function UpdateAlertBadge() {
                     setDownloading(false);
                 }
             } catch (err) {
+                console.warn('[UpdateAlertBadge] Error capturado en operación:', err?.message || err);
                 toast.error('Error al iniciar la descarga');
                 setDownloading(false);
             }

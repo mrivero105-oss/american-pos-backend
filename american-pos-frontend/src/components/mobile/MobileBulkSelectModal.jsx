@@ -1,7 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  X, Package, Check, ShoppingCart, Plus, Minus, 
-  Sparkles, Layers, Box, Tag, Info
+import { useState, useEffect } from 'react';
+import {
+  X, 
+  Package, 
+  ShoppingCart, 
+  Plus, 
+  Minus, 
+  Layers, 
+  Box
 } from 'lucide-react';
 
 const triggerHaptic = (ms = 12) => {
@@ -9,7 +14,7 @@ const triggerHaptic = (ms = 12) => {
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       navigator.vibrate(ms);
     }
-  } catch (_) {}
+  } catch { /* Vibración háptica opcional no soportada */ }
 };
 
 /**
@@ -23,8 +28,7 @@ export default function MobileBulkSelectModal({
   product,
   exchangeRate = 950,
   onConfirmSelection,
-  T = {},
-  isLight = false
+  T = {}
 }) {
   const [selectedType, setSelectedType] = useState(() => {
     if (Array.isArray(product?.Presentations) && product.Presentations.length > 0) {

@@ -152,11 +152,67 @@ router.get('/health', requirePermission('canManageSettings'), async (req, res) =
                 quarantineRate,
                 lastSyncTimestamp: new Date().toISOString()
             },
+            apm: (() => {
+                try {
+                    const snap = require('../utils/telemetryCollector').getSnapshot();
+                    return {
+                        httpLatency: snap.http.latency,
+                        totalRequests: snap.http.totalRequests,
+                        slowDbQueries: snap.database.totalSlowQueries,
+                        eventLoop: snap.eventLoop
+                    };
+                } catch (_) {
+                    return null;
+                }
+            })(),
             lanCluster
         });
     } catch (error) {
         console.error('System health check error:', error);
         res.status(500).json({ error: 'Error al consultar la telemetría del sistema: ' + error.message });
+    }
+});
+
+/**
+ * GET /system/telemetry - Full APM Telemetry (HTTP p50/p95/p99, Slow Queries > 200ms, Event Loop, Pool & Cache L1)
+ */
+router.get('/telemetry', requirePermission('canManageSettings'), async (req, res) => {
+    try {
+        const telemetryCollector = require('../utils/telemetryCollector');
+        const cacheService = require('../utils/cacheService');
+        const snapshot = telemetryCollector.getSnapshot();
+
+        const pool = sequelize?.connectionManager?.pool;
+        const poolStats = pool ? {
+            max: pool.max || 30,
+            min: pool.min || 3,
+            size: pool.size || 0,
+            available: pool.available || 0,
+            using: pool.using || 0,
+            waiting: pool.waiting || 0
+        } : null;
+
+        let rollupCount = 0;
+        try {
+            const rows = await sequelize.query(
+                `SELECT COUNT(*)::int AS cnt FROM public.daily_sales_rollups`,
+                { type: sequelize.QueryTypes.SELECT }
+            );
+            rollupCount = Number(rows?.[0]?.cnt || 0);
+        } catch (_) {}
+
+        res.json({
+            status: 'OK',
+            ...snapshot,
+            cacheL1: cacheService.getStats(),
+            databasePool: poolStats,
+            rollups: {
+                cachedDayRows: rollupCount
+            }
+        });
+    } catch (error) {
+        console.error('System telemetry error:', error);
+        res.status(500).json({ error: 'Error al generar reporte APM: ' + error.message });
     }
 });
 
@@ -522,12 +578,27 @@ const saveUpdaterConfig = (config) => {
     }
 };
 
+const UPDATER_CACHE_TTL_MS = 15 * 60 * 1000;
+const UPDATER_ERROR_COOLDOWN_MS = 15 * 60 * 1000;
+let updaterStatusCache = {
+    payload: null,
+    expiresAt: 0,
+    lastFailureLoggedAt: 0
+};
+
 /**
  * GET /system/updater/status - Check current app version vs GitHub Releases & Git status
  */
 router.get('/updater/status', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const config = getUpdaterConfig();
+        const forceRefresh = req.query?.force === '1' || req.query?.force === 'true';
+        const now = Date.now();
+
+        if (!forceRefresh && updaterStatusCache.payload && now < updaterStatusCache.expiresAt) {
+            return res.json(updaterStatusCache.payload);
+        }
+
         let currentVersion = '2.0.2';
         try {
             const pkgPath = path.join(__dirname, '..', 'package.json');
@@ -537,7 +608,7 @@ router.get('/updater/status', requirePermission('canManageSettings'), async (req
             }
         } catch (e) {}
 
-        // Check Git workspace status
+        // Check Git workspace status (local, rápido)
         let gitInfo = { isGitWorkspace: false, branch: '', statusSummary: '' };
         try {
             const { execSync } = require('child_process');
@@ -545,20 +616,41 @@ router.get('/updater/status', requirePermission('canManageSettings'), async (req
             const gitStatus = execSync('git status -s', { cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: 2000 }).trim();
             gitInfo = {
                 isGitWorkspace: true,
-                branch: gitBranch || 'main',
+                branch: gitBranch || 'master',
                 statusSummary: gitStatus ? `${gitStatus.split('\n').length} archivos modificados localmente` : 'Árbol de trabajo limpio (Clean)'
             };
         } catch (gitErr) {
             gitInfo = { isGitWorkspace: false, branch: '', statusSummary: 'Entorno de producción empaquetado (.exe / Asar)' };
         }
 
-        // Check GitHub Releases by downloading latest.yml directly (Rate limit immune)
         let latestRelease = null;
         let isUpdateAvailable = false;
+        let checkHadNetworkFailure = false;
+
+        if (!config.autoUpdateEnabled && !forceRefresh) {
+            const responsePayload = {
+                success: true,
+                currentVersion,
+                isUpdateAvailable: false,
+                config,
+                latestRelease: null,
+                gitInfo,
+                platform: process.platform,
+                nodeVersion: process.version
+            };
+            updaterStatusCache = {
+                payload: responsePayload,
+                expiresAt: now + UPDATER_CACHE_TTL_MS,
+                lastFailureLoggedAt: updaterStatusCache.lastFailureLoggedAt
+            };
+            return res.json(responsePayload);
+        }
+
+        // Check GitHub Releases by downloading latest.yml directly (Rate limit immune)
         try {
             const githubYmlUrl = `https://github.com/${config.githubOwner}/${config.githubRepo}/releases/latest/download/latest.yml`;
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
 
             const response = await fetch(githubYmlUrl, {
                 headers: { 'User-Agent': 'IsaacPOS-Updater-Service/2.0' },
@@ -600,11 +692,15 @@ router.get('/updater/status', requirePermission('canManageSettings'), async (req
                         downloadUrl: exeDownloadUrl
                     };
                 }
-            } else {
+            } else if (response.status !== 404) {
                 console.log(`[GitHub Updater] Error fetching latest.yml. Status: ${response.status}`);
             }
         } catch (netErr) {
-            console.warn('[GitHub Updater] Check failed or timed out:', netErr.message);
+            checkHadNetworkFailure = true;
+            if (now - updaterStatusCache.lastFailureLoggedAt >= UPDATER_ERROR_COOLDOWN_MS) {
+                updaterStatusCache.lastFailureLoggedAt = now;
+                console.warn('[GitHub Updater] Check skipped/timed out (próximo reintento en 15m):', netErr.message);
+            }
         }
 
         if (gitInfo.isGitWorkspace) {
@@ -613,13 +709,25 @@ router.get('/updater/status', requirePermission('canManageSettings'), async (req
                 const { promisify } = require('util');
                 const execFileAsync = promisify(execFile);
                 const repoCwd = path.join(__dirname, '..');
+                const targetBranch = gitInfo.branch && gitInfo.branch !== 'HEAD' ? gitInfo.branch : 'master';
 
                 await execFileAsync('git', ['fetch'], { cwd: repoCwd, timeout: 10000 });
-                const { stdout: behindRaw } = await execFileAsync('git', ['rev-list', 'HEAD..origin/main', '--count'], {
-                    cwd: repoCwd,
-                    encoding: 'utf8',
-                    timeout: 3000
-                });
+                let behindRaw = '0';
+                try {
+                    const resRev = await execFileAsync('git', ['rev-list', `HEAD..origin/${targetBranch}`, '--count'], {
+                        cwd: repoCwd,
+                        encoding: 'utf8',
+                        timeout: 3000
+                    });
+                    behindRaw = resRev.stdout;
+                } catch (_branchErr) {
+                    const resFallback = await execFileAsync('git', ['rev-list', 'HEAD..origin/master', '--count'], {
+                        cwd: repoCwd,
+                        encoding: 'utf8',
+                        timeout: 3000
+                    });
+                    behindRaw = resFallback.stdout;
+                }
                 const behind = String(behindRaw || '').trim();
                 if (parseInt(behind, 10) > 0) {
                     isUpdateAvailable = true;
@@ -638,7 +746,7 @@ router.get('/updater/status', requirePermission('canManageSettings'), async (req
             }
         }
 
-        res.json({
+        const responsePayload = {
             success: true,
             currentVersion,
             isUpdateAvailable,
@@ -647,7 +755,13 @@ router.get('/updater/status', requirePermission('canManageSettings'), async (req
             gitInfo,
             platform: process.platform,
             nodeVersion: process.version
-        });
+        };
+        updaterStatusCache = {
+            payload: responsePayload,
+            expiresAt: now + (checkHadNetworkFailure ? UPDATER_ERROR_COOLDOWN_MS : UPDATER_CACHE_TTL_MS),
+            lastFailureLoggedAt: updaterStatusCache.lastFailureLoggedAt
+        };
+        res.json(responsePayload);
     } catch (error) {
         console.error('Error fetching updater status:', error);
         res.status(500).json({ error: 'Error al consultar el estado de actualizaciones: ' + error.message });
@@ -673,6 +787,7 @@ router.post('/updater/config', isSuperAdmin, async (req, res) => {
 
         const success = saveUpdaterConfig({ githubOwner: cleanOwner, githubRepo: cleanRepo, autoUpdateEnabled });
         if (success) {
+            updaterStatusCache.expiresAt = 0;
             res.json({ success: true, message: 'Configuración del repositorio de actualizaciones guardada correctamente.' });
         } else {
             res.status(500).json({ error: 'No se pudo guardar la configuración en el archivo local.' });
@@ -789,6 +904,80 @@ router.get('/maintenance/status', requirePermission('canManageSettings'), async 
     } catch (error) {
         console.error('Error getting maintenance status:', error);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /system/lan-cert
+ * Entrega únicamente el certificado X.509 público para instalar confianza en terminales/móviles LAN.
+ * Nunca expone la clave privada.
+ */
+router.get('/lan-cert', (req, res) => {
+    try {
+        const activeUserDataDir = (process.env.USER_DATA_PATH && process.env.USER_DATA_PATH.trim())
+            || require('../config/paths').BASE_PATH;
+        const { CERT_FILENAME, ensureLanTlsCredentials } = require('../utils/lanTlsCert');
+
+        let certPem = null;
+        if (process.env.SSL_CERT_PATH) {
+            const customCertPath = path.resolve(process.env.SSL_CERT_PATH);
+            if (fs.existsSync(customCertPath)) {
+                certPem = fs.readFileSync(customCertPath, 'utf8');
+            }
+        }
+        if (!certPem) {
+            const autoCertPath = path.join(activeUserDataDir, 'certs', CERT_FILENAME);
+            if (fs.existsSync(autoCertPath)) {
+                certPem = fs.readFileSync(autoCertPath, 'utf8');
+            } else if (req.query.generate === '1' || process.env.ENABLE_LAN_TLS === 'true') {
+                certPem = ensureLanTlsCredentials(activeUserDataDir).cert;
+            }
+        }
+
+        if (!certPem || !certPem.includes('BEGIN CERTIFICATE')) {
+            return res.status(404).json({ error: 'Certificado TLS LAN no generado aún.' });
+        }
+
+        res.setHeader('Content-Type', 'application/x-pem-file; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="isaac-pos-lan.crt"');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).send(certPem);
+    } catch (error) {
+        console.error('Error serving LAN TLS certificate:', error);
+        return res.status(500).json({ error: 'Error al leer certificado TLS LAN: ' + error.message });
+    }
+});
+
+/**
+ * GET /system/lan-cert/info
+ * Telemetría del certificado TLS LAN activo (sin claves privadas).
+ */
+router.get('/lan-cert/info', requirePermission('canManageSettings'), (req, res) => {
+    try {
+        const crypto = require('crypto');
+        const activeUserDataDir = (process.env.USER_DATA_PATH && process.env.USER_DATA_PATH.trim())
+            || require('../config/paths').BASE_PATH;
+        const { CERT_FILENAME, collectLanSanTargets } = require('../utils/lanTlsCert');
+        const autoCertPath = path.join(activeUserDataDir, 'certs', CERT_FILENAME);
+        const customCertPath = process.env.SSL_CERT_PATH ? path.resolve(process.env.SSL_CERT_PATH) : null;
+        const targetCertPath = (customCertPath && fs.existsSync(customCertPath)) ? customCertPath : autoCertPath;
+
+        if (!fs.existsSync(targetCertPath)) {
+            return res.json({ configured: false, targets: collectLanSanTargets() });
+        }
+
+        const x509 = new crypto.X509Certificate(fs.readFileSync(targetCertPath, 'utf8'));
+        return res.json({
+            configured: true,
+            fingerprint256: x509.fingerprint256,
+            validFrom: x509.validFrom,
+            validTo: x509.validTo,
+            subject: x509.subject,
+            subjectAltName: x509.subjectAltName,
+            targets: collectLanSanTargets()
+        });
+    } catch (error) {
+        return res.status(500).json({ configured: false, error: error.message });
     }
 });
 

@@ -1,12 +1,25 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-    X, Save, Plus, Minus, Check, Trash2, Search, Package, Printer, 
-    Camera, Upload, Eye, FileText, CheckCircle2, Loader2, Paperclip,
+import {
+    X, 
+    Save, 
+    Plus, 
+    Minus, 
+    Check, 
+    Trash2, 
+    Search, 
+    Package, 
+    Printer, 
+    Camera, 
+    Upload, 
+    Eye, 
+    FileText, 
+    CheckCircle2, 
+    Loader2, 
     MessageCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { getImageUrl, getInvoiceUrl } from '../utils/imageUtils';
+import { getImageUrl } from '../utils/imageUtils';
 import BaseModal from './BaseModal';
 import PrinterScanModal from './PrinterScanModal';
 import CameraScanModal from './CameraScanModal';

@@ -1,7 +1,16 @@
-import React, { useState, useRef } from 'react';
-import { 
-  X, Camera, RefreshCw, Search, ScanBarcode, 
-  Package, Sliders, ShieldAlert, Layers, Calendar, Scale, Info
+import { useState, useRef } from 'react';
+import {
+  X, 
+  Camera, 
+  RefreshCw, 
+  Search, 
+  ScanBarcode, 
+  Package, 
+  Sliders, 
+  ShieldAlert, 
+  Layers, 
+  Calendar, 
+  Scale
 } from 'lucide-react';
 import CachedImage from '../CachedImage';
 

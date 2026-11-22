@@ -47,7 +47,7 @@ export const stopAI = () => {
         if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
         }
-    } catch (e) {
+    } catch {
         // safe fallback
     }
 };
@@ -123,7 +123,7 @@ export const speakAI = (message) => {
     }, 400);
 };
 
-export const testVoiceAI = (sampleText = 'Voz de Asistente IA de American POS activada y lista para trabajar.') => {
+export const testVoiceAI = (sampleText = 'Voz de Asistente IA de Isaac POS activada y lista para trabajar.') => {
     stopAI();
     speakAI(sampleText);
 };

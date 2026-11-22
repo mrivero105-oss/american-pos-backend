@@ -1,12 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import {
-    Users, Calendar, FileText, PlusCircle, CheckCircle2,
-    Download, DollarSign, Briefcase, Building2, ShieldAlert,
-    Printer, Search, RefreshCw, UserPlus
+    Users, 
+    Calendar, 
+    FileText, 
+    PlusCircle, 
+    Printer, 
+    Search, 
+    UserPlus
 } from 'lucide-react';
 import api from '../services/api';
-import { usePos } from '../hooks/PosContext';
+import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 const showToast = (msg, type = 'info') => {
@@ -16,7 +20,8 @@ const showToast = (msg, type = 'info') => {
 };
 
 export default function PayrollManager() {
-    const { exchangeRate, settings: storeConfig } = usePos();
+    const exchangeRate = useBusinessSettingsStore((s) => s.rate);
+    const storeConfig = useBusinessSettingsStore((s) => s.businessInfo);
     const { confirm, confirmDialog } = useConfirmDialog();
     const bcvRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
 
@@ -78,7 +83,7 @@ export default function PayrollManager() {
         };
     });
 
-    const fetchEmployees = async () => {
+    const fetchEmployees = useCallback(async () => {
         setLoading(true);
         try {
             const [empRes, usrRes] = await Promise.all([
@@ -95,17 +100,17 @@ export default function PayrollManager() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
-    const fetchPeriods = async () => {
+    const fetchPeriods = useCallback(async () => {
         setLoading(true);
         try {
             const res = await api.get('/payroll/periods');
             if ((res.data?.success || res.data?.ok)) {
                 const list = res.data.periods || [];
                 setPeriods(list);
-                if (!selectedPeriodForReceipts && list.length > 0) {
-                    setSelectedPeriodForReceipts(list[0].id);
+                if (list.length > 0) {
+                    setSelectedPeriodForReceipts(prev => prev || list[0].id);
                 }
             }
         } catch (err) {
@@ -113,9 +118,9 @@ export default function PayrollManager() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
-    const fetchReceipts = async (periodId) => {
+    const fetchReceipts = useCallback(async (periodId) => {
         if (!periodId) return;
         setLoading(true);
         try {
@@ -128,18 +133,18 @@ export default function PayrollManager() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
         fetchEmployees();
         fetchPeriods();
-    }, []);
+    }, [fetchEmployees, fetchPeriods]);
 
     useEffect(() => {
         if (activeTab === 'recibos' && selectedPeriodForReceipts) {
             fetchReceipts(selectedPeriodForReceipts);
         }
-    }, [activeTab, selectedPeriodForReceipts]);
+    }, [activeTab, selectedPeriodForReceipts, fetchReceipts]);
 
     // Sync POS Operators into Payroll Employees with 1 click
     const handleSyncPosOperators = async () => {
@@ -853,7 +858,7 @@ export default function PayrollManager() {
 
                     {receipts.length === 0 ? (
                         <div className="bg-white dark:bg-slate-900 p-12 rounded-lg border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-                            No existen recibos calculados para este período. En la pestaña "Quincenas y Liquidación", presione "Calcular" sobre el período deseado.
+                            No existen recibos calculados para este período. En la pestaña &ldquo;Quincenas y Liquidación&rdquo;, presione &ldquo;Calcular&rdquo; sobre el período deseado.
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

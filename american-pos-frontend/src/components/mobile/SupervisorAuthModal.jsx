@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ShieldAlert, Fingerprint, KeyRound, X, CheckCircle2, AlertCircle, RefreshCw, UserCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import biometricService from '../../services/biometricService';
@@ -13,8 +13,7 @@ export default function SupervisorAuthModal({
   reason = 'Esta acción requiere aprobación de supervisor',
   actionType = 'mobile_authorization',
   referenceId = null,
-  isLight = false,
-  T = {}
+  isLight = false
 }) {
   const { user: currentUser } = useAuth();
   const [pin, setPin] = useState('');

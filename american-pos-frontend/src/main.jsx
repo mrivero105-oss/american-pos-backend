@@ -4,10 +4,10 @@ import { HashRouter, Routes, Route } from 'react-router-dom'
 import App from './App.jsx'
 import './index.css'
 import './win7.css'
-import { ThemeProvider } from './hooks/ThemeContext'
-import { AuthProvider } from './hooks/AuthContext'
-import { SocketProvider } from './hooks/SocketContext'
-import { PosProvider } from './hooks/PosContext'
+import { ThemeProvider } from './providers/ThemeProvider'
+import { AuthProvider } from './providers/AuthProvider'
+import { SocketProvider } from './providers/SocketProvider'
+import { PosProvider } from './providers/PosProvider'
 
 // Fallback legacy desactivado en Windows 10/11 para preservar diseño UHD y paletas vibrantes
 // document.documentElement.classList.remove('win7');

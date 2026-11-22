@@ -1,11 +1,27 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  ArrowLeft, FileText, Search, RefreshCw, Share2, 
-  Receipt, CheckCircle, Clock, AlertTriangle, Cloud, 
-  Smartphone, DollarSign, X, Printer, Eye, RotateCcw,
-  Check, User, Calendar, CreditCard, Package, ChevronRight,
-  ShieldAlert, Info, Tag, SlidersHorizontal, ChevronDown, ChevronUp,
-  Percent, Handshake, Utensils, MessageCircle, Send
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  ArrowLeft, 
+  FileText, 
+  Search, 
+  RefreshCw, 
+  Share2, 
+  Receipt, 
+  CheckCircle, 
+  Clock, 
+  X, 
+  Printer, 
+  Eye, 
+  RotateCcw, 
+  Calendar, 
+  Package, 
+  ShieldAlert, 
+  SlidersHorizontal, 
+  ChevronDown, 
+  ChevronUp, 
+  Percent, 
+  Handshake, 
+  Utensils, 
+  Send
 } from 'lucide-react';
 import api from '../../services/api';
 import localDb from '../../db/localDb';
@@ -20,7 +36,6 @@ export default function MobileSalesView({
   isSyncing = false,
   onSyncNow,
   onRefresh,
-  onViewTicket,
   onShareWhatsApp,
   onPrintTicket,
   onSaleCancelled,
@@ -45,7 +60,6 @@ export default function MobileSalesView({
 
   // Modales de detalle y anulación
   const [selectedSaleDetail, setSelectedSaleDetail] = useState(null);
-  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [saleToCancel, setSaleToCancel] = useState(null);
   const [cancelReason, setCancelReason] = useState('Error de cobro / digitación');
   const [cancelNotes, setCancelNotes] = useState('');
@@ -104,7 +118,7 @@ export default function MobileSalesView({
 
         return `${d.getDate()}/${d.getMonth() + 1}, ${timePart}`;
       }
-    } catch (_) {}
+    } catch { /* Timestamp inválido, manteniendo cadena vacía */ }
     return String(dateStr);
   }, []);
 
@@ -328,7 +342,6 @@ export default function MobileSalesView({
   const handleOpenDetail = async (sale) => {
     setSelectedSaleDetail(sale);
     if ((!sale.items || sale.items.length === 0) && (!sale.SaleItems || sale.SaleItems.length === 0) && sale.id) {
-      setIsLoadingDetails(true);
       try {
         const res = await api.get(`/sales/${sale.id}`, { timeout: 4000 });
         if (res.data) {
@@ -340,8 +353,6 @@ export default function MobileSalesView({
         }
       } catch (_err) {
         // Modo offline
-      } finally {
-        setIsLoadingDetails(false);
       }
     }
   };
@@ -408,7 +419,7 @@ export default function MobileSalesView({
           try {
             if (localDb && localDb.sales) await localDb.sales.put(updated);
             await primaryDb.put('sales', updated);
-          } catch (_) {}
+          } catch (caughtErr) { console.warn('[MobileSalesView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
           onSaleCancelled?.(saleId, updated);
           showToast?.('✅ Venta anulada exitosamente en el servidor');
         } catch (apiErr) {
@@ -425,7 +436,7 @@ export default function MobileSalesView({
                 payload,
                 createdAt: new Date().toISOString()
               });
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[MobileSalesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
             onSaleCancelled?.(saleId, updated);
             showToast?.('⚡ Venta anulada offline (se sincronizará con la PC al reconectar)');
           } else {
@@ -873,7 +884,6 @@ export default function MobileSalesView({
               );
 
               const itemsList = Array.isArray(sale.items) ? sale.items : Array.isArray(sale.SaleItems) ? sale.SaleItems : [];
-              const itemsCount = itemsList.length > 0 ? itemsList.length : (Number(sale.itemsCount) || 1);
 
               return (
                 <div 

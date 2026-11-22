@@ -2,7 +2,7 @@ import { useState, useEffect, memo, useRef } from 'react';
 import { Search, X } from 'lucide-react';
 import { usePos } from '../hooks/PosContext';
 
-const HeaderSearch = memo(() => {
+const HeaderSearch = memo(function HeaderSearch() {
     const { searchTerm, setSearchTerm } = usePos();
     const [displaySearchTerm, setDisplaySearchTerm] = useState(searchTerm || '');
     const lastNotifiedValue = useRef(searchTerm || '');

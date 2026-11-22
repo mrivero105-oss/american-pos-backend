@@ -1,71 +1,86 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const qrcode = require('qrcode');
-const AIService = require('./AIService');
+const { fork } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { BASE_PATH } = require('../config/paths');
+let AIServiceRef = null;
+const getAIService = () => (AIServiceRef || (AIServiceRef = require('./AIService')));
+const {
+    cleanLockFiles,
+    pruneChromeBloatCache,
+    getExecutablePath,
+    getAuthDataPath,
+    getSessionStatePath,
+    readSessionState,
+    writeSessionState,
+    cleanPhoneNumber,
+    formatPurchaseOrderMessage
+} = require('./whatsappUtils');
 
-const cleanLockFiles = (dir) => {
-    try {
-        if (!fs.existsSync(dir)) return;
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-                cleanLockFiles(fullPath);
-            } else if (entry.isFile() && (entry.name === 'LOCK' || entry.name.toLowerCase().includes('singletonlock'))) {
-                try {
-                    fs.unlinkSync(fullPath);
-                    console.log(`[WHATSAPP] Removed stale lock: ${fullPath}`);
-                } catch (e) {}
-            }
-        }
-    } catch (e) {}
-};
-
-const getExecutablePath = () => {
-    const localAppData = process.env.LOCALAPPDATA || '';
-    const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
-    const progFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
-
-    const possiblePaths = [
-        path.join(progFiles, 'Google\\Chrome\\Application\\chrome.exe'),
-        path.join(progFilesX86, 'Google\\Chrome\\Application\\chrome.exe'),
-        path.join(localAppData, 'Google\\Chrome\\Application\\chrome.exe'),
-        path.join(progFiles, 'Microsoft\\Edge\\Application\\msedge.exe'),
-        path.join(progFilesX86, 'Microsoft\\Edge\\Application\\msedge.exe'),
-        path.join(localAppData, 'Microsoft\\Edge\\Application\\msedge.exe'),
-        process.env.CHROME_BIN
-    ].filter(Boolean);
-
-    for (const p of possiblePaths) {
-        try {
-            if (fs.existsSync(p)) return p;
-        } catch (e) {}
-    }
-    return undefined;
-};
+const CRASH_BACKOFF_STEPS_MS = [2000, 5000, 10000];
+const CRASH_WINDOW_RESET_MS = 10 * 60 * 1000;
 
 class WhatsappBotService {
     constructor() {
         this.client = null;
         this.qrCodeUrl = null;
         this.status = 'DISCONNECTED';
+        this.lastError = null;
         this.companyId = null;
-        this.humanInterventionChats = new Map(); // chatId -> timestamp expiración de pausa
-        this.botSentMessageIds = new Set(); // Para no pausar el bot por sus propios mensajes
-        this.botSendingToChat = new Map(); // chatId -> timestamp ventana activa de envío del bot
-        this.chatHistory = new Map(); // chatId -> Array<{ role: 'user'|'model', content: string, timestamp: number }>
-        this.pendingBursts = new Map(); // chatId -> { texts: string[], lastMsg: Message, timer: Timeout }
+        this.companyName = null;
+        this.humanInterventionChats = new Map();
+        this.botSentMessageIds = new Set();
+        this.botSendingToChat = new Map();
+        this.chatHistory = new Map();
+        this.pendingBursts = new Map();
         this.initTimeout = null;
         this.qrAttempts = 0;
         this.maxQrAttempts = 4;
+        this._isAutoStartRun = false;
+        this._activeInitToken = null;
+        this._initInFlight = null;
+
+        // Estado del proceso hijo aislado
+        this._worker = null;
+        this._workerReqSeq = 0;
+        this._pendingRpc = new Map();
+        this._intentionalStop = false;
+        this._crashCount = 0;
+        this._lastCrashAt = 0;
+        this._restartTimer = null;
+        this.maxCrashRestarts = 3;
+        this.crashBackoffStepsMs = [...CRASH_BACKOFF_STEPS_MS];
+        this._activeWorkerScript = null;
+    }
+
+    _emitStatus() {
+        try {
+            if (!global.io) return;
+            const payload = this.getStatus();
+            const targetRoom = (this.companyId && this.companyId !== 'default')
+                ? String(this.companyId)
+                : String(process.env.DEFAULT_COMPANY_ID || '2');
+            global.io.to(targetRoom).emit('whatsapp_status', payload);
+        } catch (_e) {}
+    }
+
+    _getAuthDataPath() {
+        return getAuthDataPath();
+    }
+
+    _getSessionStatePath(authDataPath) {
+        return getSessionStatePath(authDataPath);
+    }
+
+    _readSessionState(authDataPath) {
+        return readSessionState(authDataPath);
+    }
+
+    _writeSessionState(authDataPath, patch) {
+        return writeSessionState(authDataPath, patch);
     }
 
     _recordChatTurn(chatId, role, content) {
         if (!chatId || !content || !content.trim()) return;
         let list = this.chatHistory.get(chatId) || [];
-        // Limpiar historial si tiene más de 45 minutos de inactividad
         const now = Date.now();
         if (list.length > 0 && (now - (list[list.length - 1].timestamp || 0) > 45 * 60 * 1000)) {
             list = [];
@@ -87,525 +102,505 @@ class WhatsappBotService {
         return list.map(item => ({ role: item.role, content: item.content }));
     }
 
-    async init(companyId = 'default', options = {}) {
-        const isAutoStart = Boolean(options?.autoStart);
-        this.qrAttempts = 0;
-        this.maxQrAttempts = isAutoStart ? 4 : 12;
+    _rejectAllPendingRpc(reason) {
+        for (const [reqId, pending] of this._pendingRpc.entries()) {
+            clearTimeout(pending.timer);
+            pending.reject(new Error(reason));
+            this._pendingRpc.delete(reqId);
+        }
+    }
 
-        if (this.client) {
+    _sendRpc(type, payload = {}, timeoutMs = 20000) {
+        if (!this._worker || !this._worker.connected) {
+            return Promise.reject(new Error('El proceso trabajador de WhatsApp no está activo'));
+        }
+        this._workerReqSeq += 1;
+        const reqId = this._workerReqSeq;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this._pendingRpc.delete(reqId);
+                reject(new Error(`Timeout IPC de WhatsApp para ${type} (${timeoutMs}ms)`));
+            }, timeoutMs);
+            if (typeof timer.unref === 'function') timer.unref();
+            this._pendingRpc.set(reqId, { resolve, reject, timer });
             try {
-                await this.client.destroy();
-            } catch (_) {}
-            this.client = null;
-        }
-
-        const currentInitToken = Symbol('wa_init');
-        this._activeInitToken = currentInitToken;
-
-        this.companyId = (!companyId || companyId === 'DEFAULT_COMPANY') ? 'default' : companyId;
-        this.status = 'INITIALIZING';
-        console.log(`[WHATSAPP] Inicializando cliente para empresa "${this.companyId}"...`);
-
-        const execPath = getExecutablePath();
-        if (!execPath) {
-            console.log('[WHATSAPP] ℹ️ Navegador Chromium/Edge no detectado en el host. Bot en modo pasivo.');
-            this.status = 'DISCONNECTED';
-            return;
-        }
-
-        const puppeteerOptions = {
-            headless: true,
-            executablePath: execPath,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-first-run',
-                '--disable-extensions',
-                '--disable-default-apps',
-                '--disable-background-networking',
-                '--mute-audio',
-                '--js-flags=--max-old-space-size=256'
-            ]
-        };
-
-        const authDataPath = process.env.USER_DATA_PATH 
-            ? path.join(process.env.USER_DATA_PATH, '.wwebjs_auth') 
-            : path.join(BASE_PATH, '.wwebjs_auth');
-
-        // Eliminar posibles bloqueos huérfanos de Chrome
-        cleanLockFiles(authDataPath);
-
-        // Timeout preventivo para no quedar en INITIALIZING infinito
-        if (this.initTimeout) clearTimeout(this.initTimeout);
-        this.initTimeout = setTimeout(() => {
-            if (this.status === 'INITIALIZING') {
-                console.warn('[WHATSAPP] ⚠️ Timeout de inicialización (45s). Restableciendo a DISCONNECTED para permitir reintento.');
-                this.status = 'DISCONNECTED';
-                if (this.client) {
-                    try { this.client.destroy(); } catch (_) {}
-                    this.client = null;
-                }
+                this._worker.send({ ...payload, type, reqId });
+            } catch (err) {
+                clearTimeout(timer);
+                this._pendingRpc.delete(reqId);
+                reject(err);
             }
-        }, 45000);
+        });
+    }
 
+    async _teardownWorkerProcess({ sendShutdown = true } = {}) {
+        const worker = this._worker;
+        if (!worker) return;
+        if (sendShutdown && worker.connected) {
+            try {
+                await Promise.race([
+                    this._sendRpc('shutdown', {}, 2500),
+                    new Promise((resolve) => setTimeout(resolve, 2600))
+                ]);
+            } catch (_e) {}
+        }
+        this._rejectAllPendingRpc('Proceso de WhatsApp detenido');
+        if (this._worker === worker) {
+            this._worker = null;
+        }
         try {
-            this.client = new Client({
-                authStrategy: new LocalAuth({ dataPath: authDataPath }),
-                puppeteer: puppeteerOptions
-            });
-        } catch (instErr) {
-            console.warn('[WHATSAPP] No se pudo instanciar cliente WhatsApp:', instErr.message);
-            if (this.initTimeout) clearTimeout(this.initTimeout);
-            this.status = 'DISCONNECTED';
-            this.client = null;
-            return;
+            if (!worker.killed && worker.exitCode === null) {
+                worker.kill('SIGTERM');
+            }
+        } catch (_e) {}
+    }
+
+    async _teardownStaleClient(authDataPath, { nextStatus = 'DISCONNECTED', lastError = null, pruneCache = false, includeServiceWorkerCache = false, stopWorker = true } = {}) {
+        this._activeInitToken = null;
+        if (this.initTimeout) {
+            clearTimeout(this.initTimeout);
+            this.initTimeout = null;
+        }
+        const staleClient = this.client;
+        this.client = null;
+        this.status = nextStatus;
+        this.qrCodeUrl = null;
+        this.lastError = lastError;
+        this._emitStatus();
+
+        if (staleClient) {
+            try {
+                await Promise.race([
+                    staleClient.destroy(),
+                    new Promise((resolve) => setTimeout(resolve, 2500))
+                ]);
+            } catch (_e) {}
         }
 
-        this.client.on('qr', async (qr) => {
-            if (this._activeInitToken !== currentInitToken) return;
-            if (this.initTimeout) clearTimeout(this.initTimeout);
-            this.qrAttempts += 1;
-            if (this.qrAttempts > this.maxQrAttempts) {
-                console.log(`[WHATSAPP] ⏸️ Sin escaneo tras ${this.maxQrAttempts} códigos QR; pausando cliente en segundo plano hasta vinculación manual.`);
-                const staleClient = this.client;
-                this.client = null;
-                this.status = 'DISCONNECTED';
-                this.qrCodeUrl = null;
-                if (staleClient) {
-                    try { await staleClient.destroy(); } catch (_) {}
+        if (stopWorker && this._worker) {
+            const prevIntentional = this._intentionalStop;
+            this._intentionalStop = true;
+            await this._teardownWorkerProcess({ sendShutdown: true });
+            this._intentionalStop = prevIntentional;
+        }
+
+        if (authDataPath) {
+            cleanLockFiles(authDataPath);
+            if (pruneCache) {
+                pruneChromeBloatCache(authDataPath, { includeServiceWorkerCache });
+            }
+        }
+    }
+
+    async _handleIncomingConsolidated({ msgRefId, senderChat, bodyText, audioMedia, imageMedia }) {
+        try {
+            const text = (bodyText || '').trim();
+
+            // 1. Comprobar si hay intervención humana activa en este chat
+            const humanExpiry = this.humanInterventionChats.get(senderChat);
+            if (humanExpiry && Date.now() < humanExpiry) {
+                console.log(`[WHATSAPP] 👤 Chat ${senderChat} atendido manualmente. Bot en pausa.`);
+                return;
+            }
+
+            // 2. Solicitud explícita de atención humana
+            const isAskingForHuman = /(quiero\s+hablar\s+con\s+(?:una\s+persona|alguien|el\s+due[nñ]o|un\s+humano|asesor)|atenci[oó]n\s+humana|p[aá]same\s+con\s+(?:alguien|un\s+humano|el\s+due[nñ]o)|comunicar(?:me)?\s+con\s+(?:un\s+humano|una\s+persona))/i.test(text);
+            if (isAskingForHuman) {
+                this.humanInterventionChats.set(senderChat, Date.now() + 30 * 60 * 1000);
+                this.botSendingToChat.set(senderChat, Date.now() + 12000);
+                const humanReplyText = '¡Con gusto! 👤 Te estoy transfiriendo con nuestro equipo de atención humana. En unos momentos uno de nuestros encargados te responderá directamente por aquí. ¡Gracias por tu paciencia! 😊';
+                this._recordChatTurn(senderChat, 'user', text);
+                this._recordChatTurn(senderChat, 'model', humanReplyText);
+                const res = await this._sendRpc('ai_reply_command', {
+                    msgRefId,
+                    senderChat,
+                    mode: 'reply_or_send',
+                    text: humanReplyText
+                });
+                for (const id of res?.sentIds || []) this.botSentMessageIds.add(id);
+                return;
+            }
+
+            // 3. Filtrar notificaciones bancarias u operadoras que no sean comprobantes
+            const isAutomatedServiceMsg = /(recarga\s+exitosa|saldo\s+(?:actual|disponible)|pagomovil\s+bdv\s+informa|notificaci[oó]n\s+de\s+d[eé]bito|clave\s+din[aá]mica|c[oó]digo\s+de\s+verificaci[oó]n|transferencia\s+recibida\s+de\s+un\s+banco)/i.test(text);
+            if (isAutomatedServiceMsg && !text.toLowerCase().includes('comprobante') && !text.toLowerCase().includes('pago') && !text.toLowerCase().includes('ref')) {
+                console.log('[WHATSAPP] 🚫 Mensaje automático de servicio/banco ignorado.');
+                return;
+            }
+
+            const history = this._getChatHistory(senderChat);
+            const hadRecentBotActivity = history.some(h => h.role === 'model');
+
+            // 4. Agradecimientos y despedidas
+            const isGratitudeOrFarewell = /^(gracias|muchas\s+gracias|much[ií]simas\s+gracias|grx|mil\s+gracias|gracias\s+amigo|gracias\s+amiga|chao|adios|adi[oó]s|hasta\s+luego|feliz\s+(?:d[ií]a|tarde|noche)|buen\s+d[ií]a|que\s+tengas?\s+buen\s+d[ií]a|que\s+pase\s+buen\s+d[ií]a|igualmente)$/i.test(text);
+            if (isGratitudeOrFarewell) {
+                if (!hadRecentBotActivity && history.length > 0) {
+                    return;
+                }
+                this.botSendingToChat.set(senderChat, Date.now() + 12000);
+                const bizName = this.companyName || process.env.BUSINESS_NAME || 'nuestra tienda';
+                const farewellText = `¡Siempre a tu orden! 😊 Ha sido un verdadero placer atenderte. En *${bizName}* estamos a tu servicio cuando lo necesites. ¡Que tengas un excelente día! ✨`;
+                this._recordChatTurn(senderChat, 'user', text);
+                this._recordChatTurn(senderChat, 'model', farewellText);
+                const res = await this._sendRpc('ai_reply_command', {
+                    msgRefId,
+                    senderChat,
+                    mode: 'reply_or_send',
+                    text: farewellText,
+                    reaction: '❤️'
+                });
+                for (const id of res?.sentIds || []) this.botSentMessageIds.add(id);
+                return;
+            }
+
+            // 5. Confirmaciones cortas
+            const isShortAck = /^(ok|okay|dale|listo|perfecto|chevere|ch[eé]vere|fino|entendido|am[eé]n|amen|jaja|jajaja|bueno|ya|👍|👌|👏|🙏|❤️|😊|🙌)$/i.test(text);
+            if (isShortAck) {
+                if (hadRecentBotActivity) {
+                    await this._sendRpc('ai_reply_command', {
+                        msgRefId,
+                        senderChat,
+                        mode: 'react_only',
+                        reaction: '👍'
+                    }).catch(() => {});
                 }
                 return;
             }
-            console.log(`[WHATSAPP] QR Code generado (${this.qrAttempts}/${this.maxQrAttempts})`);
-            this.status = 'QR_READY';
-            try {
-                this.qrCodeUrl = await qrcode.toDataURL(qr);
-            } catch (err) {
-                console.error('[WHATSAPP] Error generando DataURL del QR:', err);
+
+            if (!text && !audioMedia && !imageMedia) {
+                return;
             }
-        });
 
-        this.client.on('ready', () => {
-            if (this._activeInitToken !== currentInitToken) return;
-            if (this.initTimeout) clearTimeout(this.initTimeout);
-            this.qrAttempts = 0;
-            console.log('[WHATSAPP] ¡Cliente conectado y listo!');
-            this.status = 'CONNECTED';
-            this.qrCodeUrl = null;
-            this.humanInterventionChats.clear();
-        });
+            // 6. Consultar el Motor Comercial / IA usando el pool PostgreSQL del proceso principal
+            console.log(`[WHATSAPP] 🤖 Consultando IA para cliente ${senderChat}...`);
+            const aiResult = await getAIService().askCustomerBot(
+                this.companyId || 'default',
+                text,
+                history,
+                true,
+                audioMedia || null,
+                imageMedia || null,
+                senderChat
+            );
 
-        this.client.on('auth_failure', msg => {
-            if (this.initTimeout) clearTimeout(this.initTimeout);
-            console.error('[WHATSAPP] Fallo en autenticación', msg);
-            this.status = 'AUTH_FAILED';
-            this.qrCodeUrl = null;
-        });
+            let aiResponseText = '';
+            let mediaPath = null;
+            let mediaUrl = null;
+            let mediaBase64 = null;
 
-        this.client.on('disconnected', async (reason) => {
-            if (this.initTimeout) clearTimeout(this.initTimeout);
-            console.log('[WHATSAPP] Cliente desconectado', reason);
-            if (this.client) {
-                try { await this.client.destroy(); } catch (e) { console.error('[WHATSAPP] Error destroy:', e); }
+            if (aiResult && typeof aiResult === 'object') {
+                aiResponseText = (aiResult.text || '').trim();
+                mediaPath = aiResult.mediaPath || null;
+                mediaUrl = aiResult.mediaUrl || null;
+                mediaBase64 = aiResult.mediaBase64 || null;
+            } else if (typeof aiResult === 'string') {
+                aiResponseText = aiResult.trim();
             }
-            this.status = 'DISCONNECTED';
-            this.client = null;
-            this.qrCodeUrl = null;
-        });
 
-        const processConsolidatedMessage = async (senderChat, msg, combinedBodyText) => {
-            try {
-                const bodyText = (combinedBodyText || '').trim();
+            if (aiResponseText && !aiResponseText.includes('IGNORE_MESSAGE')) {
+                this._recordChatTurn(senderChat, 'user', text || '[Media]');
+                this._recordChatTurn(senderChat, 'model', aiResponseText);
 
-                // 2. Comprobar si hay intervención humana activa en este chat
-                const humanExpiry = this.humanInterventionChats.get(senderChat);
-                if (humanExpiry && Date.now() < humanExpiry) {
-                    console.log(`[WHATSAPP] 👤 Chat ${senderChat} está siendo atendido manualmente por el cajero/dueño. Bot en pausa.`);
-                    return;
-                }
+                await new Promise(r => setTimeout(r, 700));
 
-                // 3. Comprobar si el cliente solicita explícitamente atención humana
-                const isAskingForHuman = /(quiero\s+hablar\s+con\s+(?:una\s+persona|alguien|el\s+due[nñ]o|un\s+humano|asesor)|atenci[oó]n\s+humana|p[aá]same\s+con\s+(?:alguien|un\s+humano|el\s+due[nñ]o)|comunicar(?:me)?\s+con\s+(?:un\s+humano|una\s+persona))/i.test(bodyText);
-                if (isAskingForHuman) {
-                    this.humanInterventionChats.set(senderChat, Date.now() + 30 * 60 * 1000); // 30 min de pausa
-                    this.botSendingToChat.set(senderChat, Date.now() + 12000);
-                    const humanReplyText = '¡Con gusto! 👤 Te estoy transfiriendo con nuestro equipo de atención humana. En unos momentos uno de nuestros encargados te responderá directamente por aquí. ¡Gracias por tu paciencia! 😊';
-                    this._recordChatTurn(senderChat, 'user', bodyText);
-                    this._recordChatTurn(senderChat, 'model', humanReplyText);
-                    const humanMsg = await msg.reply(humanReplyText, undefined, { sendSeen: false });
-                    if (humanMsg?.id?.id) this.botSentMessageIds.add(humanMsg.id.id);
-                    if (humanMsg?.id?._serialized) this.botSentMessageIds.add(humanMsg.id._serialized);
-                    return;
-                }
-
-                // 4. Filtrar mensajes automáticos de operadores o bancos que no sean comprobantes
-                const isAutomatedServiceMsg = /(recarga\s+exitosa|saldo\s+(?:actual|disponible)|pagomovil\s+bdv\s+informa|notificaci[oó]n\s+de\s+d[eé]bito|clave\s+din[aá]mica|c[oó]digo\s+de\s+verificaci[oó]n|transferencia\s+recibida\s+de\s+un\s+banco)/i.test(bodyText);
-                if (isAutomatedServiceMsg && !bodyText.toLowerCase().includes('comprobante') && !bodyText.toLowerCase().includes('pago') && !bodyText.toLowerCase().includes('ref')) {
-                    console.log(`[WHATSAPP] 🚫 Mensaje automático de servicio/banco ignorado.`);
-                    return;
-                }
-
-                // Obtener el historial propio en RAM (100% inmune a errores @lid de WhatsApp Web)
-                const history = this._getChatHistory(senderChat);
-                const hadRecentBotActivity = history.some(h => h.role === 'model');
-
-                // 5. Agradecimientos, despedidas y confirmaciones simples
-                const isGratitudeOrFarewell = /^(gracias|muchas\s+gracias|much[ií]simas\s+gracias|grx|mil\s+gracias|gracias\s+amigo|gracias\s+amiga|chao|adios|adi[oó]s|hasta\s+luego|feliz\s+(?:d[ií]a|tarde|noche)|buen\s+d[ií]a|que\s+tengas?\s+buen\s+d[ií]a|que\s+pase\s+buen\s+d[ií]a|igualmente)$/i.test(bodyText.trim());
-                if (isGratitudeOrFarewell) {
-                    if (!hadRecentBotActivity && history.length > 0) {
-                        console.log(`[WHATSAPP] 🚫 Despedida/agradecimiento en chat personal sin contexto del bot ignorado.`);
-                        return;
-                    }
-                    console.log(`[WHATSAPP] 💬 Mensaje de agradecimiento/despedida ("${bodyText}"). Respondiendo amablemente...`);
-                    if (msg && typeof msg.react === 'function') {
-                        try { await msg.react('❤️'); } catch (e) {}
-                    }
-                    try {
-                        this.botSendingToChat.set(senderChat, Date.now() + 12000);
-                        const bizName = this.companyName || process.env.BUSINESS_NAME || 'nuestra tienda';
-                        const farewellText = `¡Siempre a tu orden! 😊 Ha sido un verdadero placer atenderte. En *${bizName}* estamos a tu servicio cuando lo necesites. ¡Que tengas un excelente día! ✨`;
-                        this._recordChatTurn(senderChat, 'user', bodyText);
-                        this._recordChatTurn(senderChat, 'model', farewellText);
-                        const farewellMsg = await msg.reply(farewellText, undefined, { sendSeen: false });
-                        if (farewellMsg?.id?.id) this.botSentMessageIds.add(farewellMsg.id.id);
-                        if (farewellMsg?.id?._serialized) this.botSentMessageIds.add(farewellMsg.id._serialized);
-                    } catch (e) {
-                        console.warn('[WHATSAPP] Error al responder despedida:', e.message);
-                    }
-                    return;
-                }
-
-                const isShortAck = /^(ok|okay|dale|listo|perfecto|chevere|ch[eé]vere|fino|entendido|am[eé]n|amen|jaja|jajaja|bueno|ya|👍|👌|👏|🙏|❤️|😊|🙌)$/i.test(bodyText.trim());
-                if (isShortAck) {
-                    if (hadRecentBotActivity && msg && typeof msg.react === 'function') {
-                        console.log(`[WHATSAPP] 💬 Confirmación corta recibida ("${bodyText}"). Reaccionando con 👍...`);
-                        try { await msg.react('👍'); } catch (e) {}
-                    }
-                    return;
-                }
-
-                console.log(`[WHATSAPP] 📩 Mensaje entrante de ${senderChat}: "${bodyText.replace(/\n/g, ' | ')}"`);
-
-                let audioMedia = null;
-                let imageMedia = null;
-
-                if (msg.hasMedia) {
-                    try {
-                        const downloaded = await msg.downloadMedia();
-                        if (downloaded) {
-                            if (msg.type === 'ptt' || msg.type === 'audio') {
-                                audioMedia = downloaded;
-                                console.log(`[WHATSAPP] 🎙️ Audio recibido, procesando con Gemini...`);
-                            } else if (msg.type === 'image') {
-                                imageMedia = downloaded;
-                                console.log(`[WHATSAPP] 📷 Imagen recibida, analizando con Gemini...`);
-                            }
-                        }
-                    } catch (mediaErr) {
-                        console.warn('[WHATSAPP] Error descargando multimedia:', mediaErr.message);
-                    }
-                }
-
-                if (!bodyText && !audioMedia && !imageMedia) {
-                    console.log('[WHATSAPP] Mensaje sin texto ni contenido multimedia legible, omitiendo.');
-                    return;
-                }
-
-                // 6. Consultar el Motor Comercial / Inteligencia Artificial con sesión individual por cliente
-                console.log(`[WHATSAPP] 🤖 Consultando IA para cliente ${senderChat}...`);
-                const aiResult = await AIService.askCustomerBot(this.companyId || 'default', bodyText, history, true, audioMedia, imageMedia, senderChat);
-
-                let aiResponseText = '';
-                let mediaPath = null;
-                let mediaUrl = null;
-                let mediaBase64 = null;
-
-                if (aiResult && typeof aiResult === 'object') {
-                    aiResponseText = (aiResult.text || '').trim();
-                    mediaPath = aiResult.mediaPath || null;
-                    mediaUrl = aiResult.mediaUrl || null;
-                    mediaBase64 = aiResult.mediaBase64 || null;
-                } else if (typeof aiResult === 'string') {
-                    aiResponseText = aiResult.trim();
-                }
-
-                // 7. Si la IA decide que el mensaje tiene relevancia comercial, responder
-                if (aiResponseText && !aiResponseText.includes('IGNORE_MESSAGE')) {
-                    this._recordChatTurn(senderChat, 'user', bodyText || '[Media]');
-                    this._recordChatTurn(senderChat, 'model', aiResponseText);
-
-                    // Pausa humana natural (700ms) para evitar comportamiento robótico
-                    await new Promise(r => setTimeout(r, 700));
-
-                    let mediaToSend = null;
-
-                    if (mediaBase64) {
-                        try {
-                            const rawB64 = mediaBase64.includes('base64,') ? mediaBase64.split('base64,')[1] : mediaBase64;
-                            mediaToSend = new MessageMedia('image/jpeg', rawB64, 'imagen.jpg');
-                        } catch (b64Err) {
-                            console.warn('[WHATSAPP] Error preparando imagen base64:', b64Err.message);
-                        }
-                    } else if (mediaPath && fs.existsSync(mediaPath)) {
-                        try {
-                            mediaToSend = MessageMedia.fromFilePath(mediaPath);
-                            console.log(`[WHATSAPP] 🖼️ Foto del producto cargada: ${path.basename(mediaPath)}`);
-                        } catch (mediaErr) {
-                            console.warn('[WHATSAPP] Error cargando imagen local:', mediaErr.message);
-                        }
-                    } else if (mediaUrl) {
-                        try {
-                            mediaToSend = await MessageMedia.fromUrl(mediaUrl, { unsafeMime: true });
-                            console.log(`[WHATSAPP] 🌐 Foto remota descargada: ${mediaUrl.substring(0, 50)}...`);
-                        } catch (mediaErr) {
-                            console.warn('[WHATSAPP] Error descargando imagen remota:', mediaErr.message);
-                        }
-                    }
-
-                    let sent = false;
-
-                    // Intentar enviar primero como foto compacta con precio en el caption
-                    if (mediaToSend && this.client) {
-                        try {
-                            mediaToSend = await this.resizeMedia(mediaToSend, 360, 0.85);
-                        } catch (resErr) {
-                            console.warn('[WHATSAPP] Error optimizando tamaño de imagen:', resErr.message);
-                        }
-
-                        console.log(`[WHATSAPP] 📸 Enviando foto compacta con precio y descripción a ${senderChat}...`);
-                        try {
-                            this.botSendingToChat.set(senderChat, Date.now() + 12000);
-                            const sentMsg = await this.client.sendMessage(senderChat, mediaToSend, { caption: aiResponseText, sendSeen: false });
-                            if (sentMsg?.id?.id) this.botSentMessageIds.add(sentMsg.id.id);
-                            if (sentMsg?.id?._serialized) this.botSentMessageIds.add(sentMsg.id._serialized);
-                            sent = true;
-                            console.log(`[WHATSAPP] ✅ Foto con precio enviada exitosamente.`);
-                        } catch (sendMediaErr) {
-                            console.warn('[WHATSAPP] Falló envío con imagen, procediendo con texto:', sendMediaErr.message);
-                        }
-                    }
-
-                    // Si no había imagen o falló el envío de foto, enviar como mensaje de texto estándar
-                    if (!sent) {
-                        console.log(`[WHATSAPP] 📤 Enviando respuesta a ${senderChat}: "${aiResponseText.substring(0, 80)}..."`);
-                        try {
-                            this.botSendingToChat.set(senderChat, Date.now() + 12000);
-                            const replyMsg = await msg.reply(aiResponseText, undefined, { sendSeen: false });
-                            if (replyMsg?.id?.id) this.botSentMessageIds.add(replyMsg.id.id);
-                            if (replyMsg?.id?._serialized) this.botSentMessageIds.add(replyMsg.id._serialized);
-                            sent = true;
-                        } catch (replyErr) {
-                            console.warn('[WHATSAPP] msg.reply falló, intentando client.sendMessage fallback:', replyErr.message);
-                        }
-
-                        if (!sent && this.client) {
-                            try {
-                                this.botSendingToChat.set(senderChat, Date.now() + 12000);
-                                const sendMsg = await this.client.sendMessage(senderChat, aiResponseText, { sendSeen: false });
-                                if (sendMsg?.id?.id) this.botSentMessageIds.add(sendMsg.id.id);
-                                if (sendMsg?.id?._serialized) this.botSentMessageIds.add(sendMsg.id._serialized);
-                                sent = true;
-                            } catch (sendErr) {
-                                console.error('[WHATSAPP] Error crítico al enviar mensaje:', sendErr.message);
-                            }
-                        }
-
-                        if (sent) {
-                            console.log(`[WHATSAPP] ✅ Respuesta de texto entregada a ${senderChat}`);
-                        }
-                    }
-
-                } else {
-                    console.log(`[WHATSAPP] 🚫 Mensaje fuera de contexto o spam ignorado.`);
-                }
-
-            } catch (error) {
-                console.error('[WHATSAPP] Error en procesamiento de mensaje:', error.message || error);
+                this.botSendingToChat.set(senderChat, Date.now() + 12000);
+                const sendRes = await this._sendRpc('ai_reply_command', {
+                    msgRefId,
+                    senderChat,
+                    mode: 'reply_or_send',
+                    text: aiResponseText,
+                    mediaPath,
+                    mediaUrl,
+                    mediaBase64
+                }, 45000);
+                for (const id of sendRes?.sentIds || []) this.botSentMessageIds.add(id);
             }
-        };
-
-        const handleIncomingMessage = async (msg) => {
-            try {
-                // 1. Solo responder a chats válidos (no estados, no grupos, no mensajes propios)
-                if (!msg || msg.from === 'status@broadcast' || msg.isGroupMsg || msg.fromMe) return;
-
-                const senderChat = msg.from;
-                const bodyText = (msg.body || '').trim();
-
-                // Si el mensaje trae audio o imagen, procesar de inmediato (con lo que hubiera en buffer si existía)
-                if (msg.hasMedia) {
-                    const existingBurst = this.pendingBursts.get(senderChat);
-                    if (existingBurst) {
-                        clearTimeout(existingBurst.timer);
-                        this.pendingBursts.delete(senderChat);
-                        const merged = [...existingBurst.texts, bodyText].filter(Boolean).join('\n');
-                        await processConsolidatedMessage(senderChat, msg, merged);
-                    } else {
-                        await processConsolidatedMessage(senderChat, msg, bodyText);
-                    }
-                    return;
-                }
-
-                // Agrupador de ráfagas de mensajes de texto (Message Debouncer de 1.8s)
-                // Si el cliente escribe en 2 o 3 mensajes seguidos ("Hola" / "Tienes mostaza"), responde 1 sola vez
-                const existing = this.pendingBursts.get(senderChat);
-                if (existing) {
-                    clearTimeout(existing.timer);
-                    if (bodyText) existing.texts.push(bodyText);
-                    existing.lastMsg = msg;
-                    existing.timer = setTimeout(() => {
-                        const finalBurst = this.pendingBursts.get(senderChat);
-                        this.pendingBursts.delete(senderChat);
-                        if (finalBurst) {
-                            processConsolidatedMessage(senderChat, finalBurst.lastMsg, finalBurst.texts.join('\n'));
-                        }
-                    }, 1800);
-                } else {
-                    const burst = {
-                        texts: bodyText ? [bodyText] : [],
-                        lastMsg: msg,
-                        timer: setTimeout(() => {
-                            const finalBurst = this.pendingBursts.get(senderChat);
-                            this.pendingBursts.delete(senderChat);
-                            if (finalBurst) {
-                                processConsolidatedMessage(senderChat, finalBurst.lastMsg, finalBurst.texts.join('\n'));
-                            }
-                        }, 1800)
-                    };
-                    this.pendingBursts.set(senderChat, burst);
-                }
-            } catch (err) {
-                console.error('[WHATSAPP] Error en handleIncomingMessage:', err.message || err);
-            }
-        };
-
-        this.client.on('message', handleIncomingMessage);
-
-        try {
-            this.client.initialize().catch(async (err) => {
-                console.warn('[WHATSAPP] Error en initialize:', err.message);
-                if (this.client) {
-                    try { await this.client.destroy(); } catch (e) {}
-                }
-                this.status = 'DISCONNECTED';
-                this.client = null;
-                this.qrCodeUrl = null;
-            });
-        } catch (initErr) {
-            console.warn('[WHATSAPP] WhatsApp Bot init error:', initErr.message);
-            this.status = 'DISCONNECTED';
-            this.client = null;
-            this.qrCodeUrl = null;
+        } catch (err) {
+            console.error('[WHATSAPP] Error procesando mensaje desde worker:', err?.message || err);
         }
     }
 
-    async resizeMedia(media, maxDimension = 360, quality = 0.85) {
-        if (!media || !media.data || !this.client || !this.client.pupPage) return media;
-        try {
-            const mime = media.mimetype || 'image/jpeg';
-            const dataUri = `data:${mime};base64,${media.data}`;
+    _handleWorkerExit(worker, code, signal, { workerScriptPath }) {
+        if (this._worker !== worker) return;
+        this._worker = null;
+        this._rejectAllPendingRpc(`Worker WhatsApp terminado (code=${code}, signal=${signal})`);
 
-            const resizedBase64 = await this.client.pupPage.evaluate(async (src, maxDim, q) => {
-                return new Promise((resolve) => {
-                    const img = new Image();
-                    img.onload = () => {
-                        let w = img.naturalWidth || img.width;
-                        let h = img.naturalHeight || img.height;
+        if (this._intentionalStop) {
+            this.status = 'DISCONNECTED';
+            this.qrCodeUrl = null;
+            this._emitStatus();
+            return;
+        }
 
-                        if (w <= 0 || h <= 0) return resolve(null);
+        const now = Date.now();
+        if (now - this._lastCrashAt > CRASH_WINDOW_RESET_MS) {
+            this._crashCount = 0;
+        }
+        this._lastCrashAt = now;
+        this._crashCount += 1;
 
-                        if (w > maxDim || h > maxDim) {
-                            if (w >= h) {
-                                h = Math.round((h * maxDim) / w);
-                                w = maxDim;
-                            } else {
-                                w = Math.round((w * maxDim) / h);
-                                h = maxDim;
-                            }
-                        }
+        this.status = 'DISCONNECTED';
+        this.qrCodeUrl = null;
 
-                        const canvas = document.createElement('canvas');
-                        canvas.width = w;
-                        canvas.height = h;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, w, h);
-                        const res = canvas.toDataURL('image/jpeg', q);
-                        resolve(res.replace(/^data:image\/jpeg;base64,/, ''));
-                    };
-                    img.onerror = () => resolve(null);
-                    img.src = src;
+        if (this._crashCount > this.maxCrashRestarts) {
+            this.lastError = 'El proceso aislado de WhatsApp se detuvo repetidamente y fue pausado para proteger el sistema.';
+            this._emitStatus();
+            console.error(`[WHATSAPP] 🛑 Worker alcanzó límite de reinicios (${this.maxCrashRestarts}). Deteniendo backoff.`);
+            return;
+        }
+
+        const idx = Math.min(this._crashCount - 1, this.crashBackoffStepsMs.length - 1);
+        const delayMs = this.crashBackoffStepsMs[idx];
+        this.lastError = `Proceso aislado de WhatsApp reiniciando en ${Math.round(delayMs / 1000)}s (intento ${this._crashCount}/${this.maxCrashRestarts})...`;
+        this._emitStatus();
+        console.warn(`[WHATSAPP] ⚠️ Worker finalizó inesperadamente (code=${code}, signal=${signal}). Reiniciando en ${delayMs}ms (${this._crashCount}/${this.maxCrashRestarts})...`);
+
+        if (this._restartTimer) clearTimeout(this._restartTimer);
+        this._restartTimer = setTimeout(() => {
+            this._restartTimer = null;
+            if (!this._intentionalStop) {
+                this.init(this.companyId || 'default', {
+                    forceRestart: true,
+                    workerScriptPath
+                }).catch((e) => {
+                    console.warn('[WHATSAPP] Fallo al reiniciar worker:', e?.message || e);
                 });
-            }, dataUri, maxDimension, quality);
-
-            if (resizedBase64) {
-                const filename = media.filename ? media.filename.replace(/\.[^.]+$/, '.jpg') : 'product.jpg';
-                return new MessageMedia('image/jpeg', resizedBase64, filename);
             }
-        } catch (e) {
-            console.warn('[WHATSAPP] Aviso al redimensionar imagen (usando original):', e.message);
+        }, delayMs);
+        if (typeof this._restartTimer.unref === 'function') {
+            this._restartTimer.unref();
         }
-        return media;
     }
 
-    /**
-     * Limpia y formatea un número telefónico para WhatsApp (ej: 04121234567 -> 584121234567)
-     */
+    async _spawnWorker(workerScriptPath) {
+        this._activeWorkerScript = workerScriptPath;
+        const worker = fork(workerScriptPath, [], {
+            env: {
+                ...process.env,
+                ELECTRON_RUN_AS_NODE: '1'
+            },
+            execArgv: [],
+            stdio: ['ignore', 'inherit', 'inherit', 'ipc']
+        });
+        this._worker = worker;
+
+        let readyResolved = false;
+        const readyPromise = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                if (!readyResolved) {
+                    readyResolved = true;
+                    reject(new Error('Timeout esperando arranque del worker aislado de WhatsApp'));
+                }
+            }, 10000);
+            if (typeof timer.unref === 'function') timer.unref();
+
+            const onMessage = (msg) => {
+                if (!msg || typeof msg !== 'object') return;
+                if (msg.type === 'worker_ready') {
+                    if (!readyResolved) {
+                        readyResolved = true;
+                        clearTimeout(timer);
+                        resolve();
+                    }
+                    return;
+                }
+                if (msg.type === 'rpc_result' && msg.reqId !== undefined) {
+                    const pending = this._pendingRpc.get(msg.reqId);
+                    if (pending) {
+                        clearTimeout(pending.timer);
+                        this._pendingRpc.delete(msg.reqId);
+                        if (msg.ok) pending.resolve(msg.data);
+                        else pending.reject(new Error(msg.error || 'Error RPC en worker WhatsApp'));
+                    }
+                    return;
+                }
+                if (msg.type === 'status_update') {
+                    this.status = msg.status || this.status;
+                    this.qrCodeUrl = msg.qrCodeUrl !== undefined ? msg.qrCodeUrl : null;
+                    this.lastError = msg.lastError !== undefined ? msg.lastError : null;
+                    if (typeof msg.qrAttempts === 'number') this.qrAttempts = msg.qrAttempts;
+                    if (typeof msg.maxQrAttempts === 'number') this.maxQrAttempts = msg.maxQrAttempts;
+                    if (typeof msg._isAutoStartRun === 'boolean') this._isAutoStartRun = msg._isAutoStartRun;
+                    if (msg.companyId) this.companyId = msg.companyId;
+                    if (this.status === 'CONNECTED') {
+                        this._crashCount = 0;
+                        this.humanInterventionChats.clear();
+                    }
+                    this._emitStatus();
+                    return;
+                }
+                if (msg.type === 'incoming_consolidated') {
+                    this._handleIncomingConsolidated(msg).catch(() => {});
+                }
+            };
+
+            worker.on('message', onMessage);
+            worker.once('error', (err) => {
+                if (!readyResolved) {
+                    readyResolved = true;
+                    clearTimeout(timer);
+                    reject(err);
+                }
+            });
+            worker.once('exit', (code, signal) => {
+                if (!readyResolved) {
+                    readyResolved = true;
+                    clearTimeout(timer);
+                    reject(new Error(`Worker WhatsApp cerró durante el arranque (code=${code})`));
+                }
+                this._handleWorkerExit(worker, code, signal, { workerScriptPath });
+            });
+        });
+
+        await readyPromise;
+        return worker;
+    }
+
+    async init(companyId = 'default', options = {}) {
+        const isAutoStart = Boolean(options?.autoStart);
+        const forceRestart = Boolean(options?.forceRestart);
+        const workerScriptPath = options?.workerScriptPath
+            || process.env.WHATSAPP_WORKER_SCRIPT
+            || path.join(__dirname, 'whatsappWorker.js');
+        const isCustomWorkerScript = Boolean(options?.workerScriptPath || process.env.WHATSAPP_WORKER_SCRIPT);
+
+        if (this._restartTimer) {
+            clearTimeout(this._restartTimer);
+            this._restartTimer = null;
+        }
+        this._intentionalStop = false;
+
+        const authDataPath = this._getAuthDataPath();
+        const sessionState = this._readSessionState(authDataPath);
+
+        if (isAutoStart) {
+            if (sessionState && sessionState.linked === false) {
+                console.log('[WHATSAPP] ℹ️ Bot sin sesión vinculada previa; omitiendo auto-inicio de navegador en arranque.');
+                this.status = 'DISCONNECTED';
+                this.qrCodeUrl = null;
+                this.lastError = null;
+                return this.getStatus();
+            }
+            if (!sessionState && !fs.existsSync(path.join(authDataPath, 'session'))) {
+                this._writeSessionState(authDataPath, { linked: false, reason: 'never_linked' });
+                console.log('[WHATSAPP] ℹ️ Sin perfil previo de WhatsApp Web; esperando vinculación manual.');
+                this.status = 'DISCONNECTED';
+                this.qrCodeUrl = null;
+                this.lastError = null;
+                return this.getStatus();
+            }
+        }
+
+        if (!forceRestart) {
+            if (this._initInFlight) {
+                if (!isAutoStart) {
+                    this._isAutoStartRun = false;
+                    this.maxQrAttempts = 12;
+                }
+                return this._initInFlight;
+            }
+            if (this.client || this._worker) {
+                if (this.status === 'CONNECTED') {
+                    this._emitStatus();
+                    return this.getStatus();
+                }
+                if (this.status === 'QR_READY' && this.qrCodeUrl) {
+                    this._isAutoStartRun = false;
+                    this.maxQrAttempts = 12;
+                    if (this._worker) {
+                        this._sendRpc('promote_manual', { maxQrAttempts: 12 }).catch(() => {});
+                    }
+                    this._emitStatus();
+                    return this.getStatus();
+                }
+                if (this.status === 'INITIALIZING') {
+                    if (!isAutoStart) {
+                        this._isAutoStartRun = false;
+                        this.maxQrAttempts = 12;
+                        if (this._worker) {
+                            this._sendRpc('promote_manual', { maxQrAttempts: 12 }).catch(() => {});
+                        }
+                        this._emitStatus();
+                    }
+                    return this.getStatus();
+                }
+            }
+        } else if (this._initInFlight) {
+            try { await this._initInFlight; } catch (_e) {}
+        }
+
+        const runSetup = async () => {
+            await this._teardownStaleClient(authDataPath, {
+                nextStatus: 'INITIALIZING',
+                pruneCache: true,
+                includeServiceWorkerCache: false,
+                stopWorker: true
+            });
+
+            this._intentionalStop = false;
+            this._isAutoStartRun = isAutoStart;
+            this.qrAttempts = 0;
+            this.maxQrAttempts = isAutoStart ? 4 : 12;
+            this.companyId = (!companyId || companyId === 'DEFAULT_COMPANY') ? 'default' : companyId;
+            this.status = 'INITIALIZING';
+            this.qrCodeUrl = null;
+            this.lastError = null;
+            this._emitStatus();
+
+            if (!isCustomWorkerScript) {
+                const execPath = getExecutablePath();
+                if (!execPath) {
+                    console.log('[WHATSAPP] ℹ️ Navegador Chromium/Edge no detectado en el host. Bot en modo pasivo.');
+                    this.status = 'DISCONNECTED';
+                    this.lastError = 'No se detectó Google Chrome ni Microsoft Edge instalado en este equipo.';
+                    this._emitStatus();
+                    return this.getStatus();
+                }
+            }
+
+            try {
+                await this._spawnWorker(workerScriptPath);
+                const initRes = await this._sendRpc('init', {
+                    companyId: this.companyId,
+                    authDataPath,
+                    options: {
+                        autoStart: isAutoStart,
+                        forceRestart
+                    }
+                }, 20000);
+                if (initRes && typeof initRes === 'object' && initRes.status) {
+                    this.status = initRes.status;
+                    if (initRes.lastError !== undefined) this.lastError = initRes.lastError;
+                    if (initRes.qrCodeUrl !== undefined) this.qrCodeUrl = initRes.qrCodeUrl;
+                }
+            } catch (err) {
+                console.warn('[WHATSAPP] Error iniciando worker aislado:', err?.message || err);
+                await this._teardownStaleClient(authDataPath, {
+                    nextStatus: 'DISCONNECTED',
+                    lastError: `Error iniciando el trabajador aislado de WhatsApp: ${err?.message || err}`,
+                    stopWorker: true
+                });
+            }
+
+            return this.getStatus();
+        };
+
+        this._initInFlight = runSetup();
+        try {
+            return await this._initInFlight;
+        } finally {
+            this._initInFlight = null;
+        }
+    }
+
     cleanPhoneNumber(phone) {
-        if (!phone || typeof phone !== 'string') return '';
-        let cleaned = phone.replace(/\D/g, '');
-        if (!cleaned) return '';
-        
-        // Si comienza con 0 (ej: 0412, 0424, 0414, 0416, 0426)
-        if (cleaned.startsWith('0') && cleaned.length >= 10) {
-            cleaned = '58' + cleaned.substring(1);
-        }
-        // Si no tiene código de país y son 10 dígitos (ej: 4121234567)
-        if (cleaned.length === 10 && (cleaned.startsWith('412') || cleaned.startsWith('414') || cleaned.startsWith('424') || cleaned.startsWith('416') || cleaned.startsWith('426'))) {
-            cleaned = '58' + cleaned;
-        }
-        return cleaned;
+        return cleanPhoneNumber(phone);
     }
 
-    /**
-     * Formatea una orden de compra en un mensaje profesional de WhatsApp
-     */
-    formatPurchaseOrderMessage({ orderId, businessName, supplierName, supplierContact, orderDate, items, total, notes, referenceNumber }) {
-        const orderShort = orderId ? `#${orderId.slice(0, 8).toUpperCase()}` : '#NUEVO';
-        const dateStr = orderDate || new Date().toLocaleDateString('es-VE');
-        const store = businessName || 'Isaac POS';
-        
-        let itemsList = '';
-        if (Array.isArray(items)) {
-            itemsList = items.map((item, idx) => {
-                const qty = item.quantity || 1;
-                const unitName = item.bulkUnitName ? ` (${item.bulkUnitName})` : '';
-                const costStr = item.cost ? ` | Est: $${Number(item.cost).toFixed(2)}` : '';
-                return `  ${idx + 1}. *${qty}* x ${item.name}${unitName}${costStr}`;
-            }).join('\n');
-        } else {
-            itemsList = '  • Sin items especificados';
-        }
-
-        const totalFormatted = total ? `\n💵 *TOTAL ESTIMADO:* $${Number(total).toFixed(2)}` : '';
-        const refFormatted = referenceNumber ? `\n🔖 *REFERENCIA / CONTROL:* ${referenceNumber}` : '';
-        const notesFormatted = notes ? `\n📌 *NOTAS:* ${notes}` : '\n📌 *INDICACIONES:* Por favor confirmar disponibilidad, recepción y tiempo estimado de entrega.';
-
-        return `📦 *ORDEN DE COMPRA - ${store.toUpperCase()}*\n` +
-               `🔢 *Nº ORDEN:* ${orderShort}\n` +
-               `👤 *PROVEEDOR:* ${supplierName || 'Proveedor'}${supplierContact ? ` (Atenc: ${supplierContact})` : ''}\n` +
-               `📅 *FECHA:* ${dateStr}` +
-               `${refFormatted}\n\n` +
-               `🛒 *DETALLE DE PRODUCTOS:* \n${itemsList}\n` +
-               `${totalFormatted}\n` +
-               `${notesFormatted}\n\n` +
-               `_Mensaje generado automáticamente desde Isaac POS_`;
+    formatPurchaseOrderMessage(params) {
+        return formatPurchaseOrderMessage(params);
     }
 
-    /**
-     * Envía un mensaje directo a un número de teléfono usando el bot conectado
-     */
     async sendDirectMessage(phone, messageText) {
         const cleanPhone = this.cleanPhoneNumber(phone);
         if (!cleanPhone) {
@@ -615,25 +610,19 @@ class WhatsappBotService {
         const chatId = `${cleanPhone}@c.us`;
         const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(messageText)}`;
 
-        if (this.status === 'CONNECTED' && this.client) {
+        if (this.status === 'CONNECTED' && this._worker) {
             try {
-                console.log(`[WHATSAPP] 📤 Enviando mensaje a ${chatId}...`);
                 this.botSendingToChat.set(chatId, Date.now() + 12000);
-                const sentMsg = await this.client.sendMessage(chatId, messageText);
-                if (sentMsg?.id?.id) this.botSentMessageIds.add(sentMsg.id.id);
-                if (sentMsg?.id?._serialized) {
-                    this.botSentMessageIds.add(sentMsg.id._serialized);
-                }
-                return {
-                    success: true,
-                    botSent: true,
-                    phone: cleanPhone,
+                const res = await this._sendRpc('send_direct', {
+                    cleanPhone,
                     chatId,
-                    whatsappUrl,
-                    message: 'Pedido enviado exitosamente al WhatsApp del proveedor'
-                };
+                    messageText,
+                    whatsappUrl
+                }, 25000);
+                for (const id of res?.sentIds || []) this.botSentMessageIds.add(id);
+                if (res?.response) return res.response;
             } catch (err) {
-                console.warn(`[WHATSAPP] Error enviando vía bot a ${chatId}:`, err.message);
+                console.warn(`[WHATSAPP] Error RPC sendDirectMessage:`, err.message);
                 return {
                     success: true,
                     botSent: false,
@@ -644,6 +633,21 @@ class WhatsappBotService {
                     message: 'Bot ocupado o error de conexión. Se generó el enlace directo a WhatsApp.'
                 };
             }
+        }
+
+        if (this.status === 'CONNECTED' && this.client && typeof this.client.sendMessage === 'function') {
+            this.botSendingToChat.set(chatId, Date.now() + 12000);
+            const sentMsg = await this.client.sendMessage(chatId, messageText);
+            if (sentMsg?.id?.id) this.botSentMessageIds.add(sentMsg.id.id);
+            if (sentMsg?.id?._serialized) this.botSentMessageIds.add(sentMsg.id._serialized);
+            return {
+                success: true,
+                botSent: true,
+                phone: cleanPhone,
+                chatId,
+                whatsappUrl,
+                message: 'Pedido enviado exitosamente al WhatsApp del proveedor'
+            };
         }
 
         return {
@@ -657,19 +661,16 @@ class WhatsappBotService {
         };
     }
 
-    /**
-     * Envía un archivo multimedia (imagen de factura/ticket) a un teléfono mediante el bot
-     */
     async sendMediaMessage(phone, base64Data, mimeType = 'image/png', caption = '', filename = 'ticket.png') {
         const cleanPhone = this.cleanPhoneNumber(phone);
         if (!cleanPhone) {
             throw new Error('Número de teléfono no válido o sin formato');
         }
 
-        let chatId = `${cleanPhone}@c.us`;
+        const chatId = `${cleanPhone}@c.us`;
         const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}`;
 
-        if (this.status !== 'CONNECTED' || !this.client) {
+        if (this.status !== 'CONNECTED' || (!this._worker && !this.client)) {
             return {
                 success: false,
                 botSent: false,
@@ -681,101 +682,113 @@ class WhatsappBotService {
             };
         }
 
-        // 1. Resolver el JID real de WhatsApp (soporta formatos LID y verificación de existencia)
-        try {
-            const numberId = await this.client.getNumberId(cleanPhone);
-            if (numberId?._serialized) {
-                chatId = numberId._serialized;
-                console.log(`[WHATSAPP] 📍 JID resuelto para ${cleanPhone}: ${chatId}`);
+        if (this._worker) {
+            try {
+                this.botSendingToChat.set(chatId, Date.now() + 12000);
+                const res = await this._sendRpc('send_media', {
+                    cleanPhone,
+                    base64Data,
+                    mimeType,
+                    caption,
+                    filename,
+                    whatsappUrl
+                }, 35000);
+                for (const id of res?.sentIds || []) this.botSentMessageIds.add(id);
+                if (res?.response) return res.response;
+            } catch (err) {
+                console.warn(`[WHATSAPP] Error RPC sendMediaMessage:`, err.message);
+                return {
+                    success: false,
+                    botSent: false,
+                    botConnected: true,
+                    botError: err.message,
+                    phone: cleanPhone,
+                    chatId,
+                    whatsappUrl,
+                    message: `Error al enviar con el bot: ${err.message}`
+                };
             }
-        } catch (numErr) {
-            console.warn('[WHATSAPP] Aviso al validar número en WhatsApp:', numErr.message);
         }
 
-        try {
-            console.log(`[WHATSAPP] 📤 Enviando imagen de factura a ${chatId}...`);
-            // Limpiar encabezado data:image/... si viene incluido
-            const rawBase64 = base64Data.includes('base64,') ? base64Data.split('base64,')[1] : base64Data;
-            const media = new MessageMedia(mimeType, rawBase64, filename);
-            
-            const options = caption ? { caption } : {};
-            this.botSendingToChat.set(chatId, Date.now() + 12000);
-            const sentMsg = await this.client.sendMessage(chatId, media, options);
-            if (sentMsg?.id?.id) this.botSentMessageIds.add(sentMsg.id.id);
-            if (sentMsg?.id?._serialized) {
-                this.botSentMessageIds.add(sentMsg.id._serialized);
-            }
-            return {
-                success: true,
-                botSent: true,
-                botConnected: true,
-                phone: cleanPhone,
-                chatId,
-                message: 'Factura enviada exitosamente como imagen por WhatsApp'
-            };
-        } catch (err) {
-            console.warn(`[WHATSAPP] Error enviando imagen vía bot a ${chatId}:`, err.message);
-
-            // Fallback inmediato: Si WhatsApp Web rechaza la imagen, enviar el comprobante en formato texto
-            if (caption) {
-                try {
-                    console.log(`[WHATSAPP] ⚠️ Intentando enviar factura en texto como alternativa a ${chatId}...`);
-                    this.botSendingToChat.set(chatId, Date.now() + 12000);
-                    const sentTextMsg = await this.client.sendMessage(chatId, caption);
-                    if (sentTextMsg?.id?.id) this.botSentMessageIds.add(sentTextMsg.id.id);
-                    if (sentTextMsg?.id?._serialized) {
-                        this.botSentMessageIds.add(sentTextMsg.id._serialized);
-                    }
-                    return {
-                        success: true,
-                        botSent: true,
-                        botConnected: true,
-                        mediaFailed: true,
-                        phone: cleanPhone,
-                        chatId,
-                        message: 'Factura enviada como texto por WhatsApp (el cliente ya tiene su detalle completo).'
-                    };
-                } catch (textFallbackErr) {
-                    console.error('[WHATSAPP] Error en envío alternativo de texto:', textFallbackErr.message);
-                }
-            }
-
-            return {
-                success: false,
-                botSent: false,
-                botConnected: true,
-                botError: err.message,
-                phone: cleanPhone,
-                chatId,
-                whatsappUrl,
-                message: `Error al enviar con el bot: ${err.message}`
-            };
-        }
+        return {
+            success: false,
+            botSent: false,
+            botConnected: false,
+            phone: cleanPhone,
+            chatId,
+            whatsappUrl,
+            message: 'El Bot de WhatsApp no está conectado actualmente en el sistema.'
+        };
     }
 
     getStatus() {
         return {
             status: this.status,
-            qrCodeUrl: this.qrCodeUrl
+            qrCodeUrl: this.qrCodeUrl,
+            lastError: this.lastError,
+            qrAttempts: this.qrAttempts,
+            maxQrAttempts: this.maxQrAttempts
         };
     }
 
+    _pruneChromeBloatCache(authDataPath, options) {
+        return pruneChromeBloatCache(authDataPath, options);
+    }
+
+    async shutdown() {
+        this._intentionalStop = true;
+        if (this._restartTimer) {
+            clearTimeout(this._restartTimer);
+            this._restartTimer = null;
+        }
+        for (const entry of this.pendingBursts.values()) {
+            if (entry?.timer) clearTimeout(entry.timer);
+        }
+        this.pendingBursts.clear();
+        await this._teardownStaleClient(this._getAuthDataPath(), {
+            nextStatus: 'DISCONNECTED',
+            pruneCache: true,
+            includeServiceWorkerCache: false,
+            stopWorker: true
+        });
+    }
+
     async logout() {
-        if (this.client) {
+        this._intentionalStop = true;
+        if (this._restartTimer) {
+            clearTimeout(this._restartTimer);
+            this._restartTimer = null;
+        }
+        const authDataPath = this._getAuthDataPath();
+        const wasConnected = this.status === 'CONNECTED';
+        this._writeSessionState(authDataPath, { linked: false, reason: 'manual_logout' });
+
+        if (this._worker) {
             try {
-                await this.client.logout();
+                await Promise.race([
+                    this._sendRpc('logout', { authDataPath }, 3500),
+                    new Promise((resolve) => setTimeout(resolve, 3600))
+                ]);
+            } catch (e) {
+                console.error('[WHATSAPP] Error en logout worker:', e.message);
+            }
+        } else if (wasConnected && this.client) {
+            try {
+                await Promise.race([
+                    this.client.logout(),
+                    new Promise((resolve) => setTimeout(resolve, 2500))
+                ]);
             } catch (e) {
                 console.error('[WHATSAPP] Error en logout', e.message);
             }
-            try {
-                await this.client.destroy();
-            } catch (e) {
-                console.error('[WHATSAPP] Error en destroy', e.message);
-            }
-            this.client = null;
         }
-        this.status = 'DISCONNECTED';
-        this.qrCodeUrl = null;
+
+        await this._teardownStaleClient(authDataPath, {
+            nextStatus: 'DISCONNECTED',
+            pruneCache: true,
+            includeServiceWorkerCache: true,
+            stopWorker: true
+        });
     }
 }
 

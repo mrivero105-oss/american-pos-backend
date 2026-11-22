@@ -1,15 +1,23 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  ArrowLeft, RefreshCw, ShieldCheck, Wifi, WifiOff, 
-  Database, Server, CheckCircle, AlertTriangle, Layers, 
-  Activity, ArrowDownCircle, Zap, Sparkles, DownloadCloud, Check, Landmark
+import { useState, useEffect } from 'react';
+import {
+  ArrowLeft, 
+  RefreshCw, 
+  ShieldCheck, 
+  Database, 
+  Layers, 
+  Activity, 
+  ArrowDownCircle, 
+  Zap, 
+  Sparkles, 
+  DownloadCloud, 
+  Check, 
+  Landmark
 } from 'lucide-react';
 import api from '../../services/api';
 import otaUpdateService from '../../services/otaUpdateService';
 import cloudRateSyncService from '../../services/cloudRateSyncService';
 
 export default function MobileSyncCenterView({
-  isOnline = true,
   socketConnected = true,
   pendingSalesCount = 0,
   productsCount = 0,
@@ -17,7 +25,6 @@ export default function MobileSyncCenterView({
   onSyncNow,
   onRefreshCatalog,
   T,
-  isLight,
   onBackToPOS,
   showToast,
   onOpenServerConfig
@@ -34,7 +41,6 @@ export default function MobileSyncCenterView({
     const saved = localStorage.getItem('pos_rate_updated_at');
     return saved ? new Date(saved).toLocaleTimeString() : null;
   });
-  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
 
   const handleRefreshCloudRate = async () => {
     setIsUpdatingRate(true);
@@ -64,9 +70,6 @@ export default function MobileSyncCenterView({
       }
       if (data?.updatedAt) {
         setRateUpdatedAt(new Date(data.updatedAt).toLocaleTimeString());
-      }
-      if (data?.isConnected !== undefined) {
-        setIsRealtimeConnected(data.isConnected);
       }
       if (data?.rateChanged && showToast) {
         showToast(`⚡ Tasa actualizada automáticamente: ${data.rate} Bs/$`, 'success');

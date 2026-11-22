@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { ShoppingCart, Trash2, X, User, UserCheck, Percent, PauseCircle, Store, ArrowRight, Utensils } from 'lucide-react';
 
@@ -13,9 +12,7 @@ export default function MobileCartSheet({
   enrichedCart,
   products,
   isUnlimitedStockProduct,
-  requestSupervisorAuth,
   clearCart,
-  showToast,
   customerName,
   customerDoc,
   onOpenCustomerSelect,
@@ -186,7 +183,7 @@ export default function MobileCartSheet({
                       </span>
                       {orderNotes && (
                         <span className="text-[10px] text-slate-400 truncate italic">
-                          • "{orderNotes}"
+                          • &ldquo;{orderNotes}&rdquo;
                         </span>
                       )}
                     </div>

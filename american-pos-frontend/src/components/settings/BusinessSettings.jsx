@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import api from '../../services/api';
 import SupervisorAuthModal from '../SupervisorAuthModal';
 import { getTaxIdLabel, getTaxIdPlaceholder } from '../../utils/format';
+import { getImageUrl } from '../../utils/imageUtils';
 
 /**
  * Recorta automáticamente bordes blancos o transparentes vacíos de un logo
@@ -112,7 +113,7 @@ const trimAndCropImage = (imgSrc) => {
     });
 };
 
-export const BUSINESS_MODES = [
+const BUSINESS_MODES = [
     { id: 'STANDARD', label: 'Bodega / Supermercado (Comercio General)', icon: '🛒', desc: 'Ventas al mayor y detal, múltiples unidades y control de inventario general' },
     { id: 'PHARMACY', label: 'Farmacia / Droguería (Control Clínico)', icon: '💊', desc: 'Control de lotes, vencimiento FEFO, componente activo y recetas' },
     { id: 'CLOTHING', label: 'Tienda de Ropa & Boutique', icon: '👗', desc: 'Control de matriz de tallas, colores y colecciones de temporada' }
@@ -121,11 +122,8 @@ export const BUSINESS_MODES = [
 export default function BusinessSettings({
     business,
     setBusiness,
-    systemPrinters = [],
     saving,
-    onSave,
-    onTestPrint,
-    onTestDrawer
+    onSave
 }) {
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [isTrimming, setIsTrimming] = useState(false);
@@ -153,10 +151,11 @@ export default function BusinessSettings({
         if (!business.logo) return;
         setIsTrimming(true);
         try {
-            const trimmed = await trimAndCropImage(business.logo);
+            const trimmed = await trimAndCropImage(getImageUrl(business.logo) || business.logo);
             setBusiness(prev => ({ ...prev, logo: trimmed }));
             toast.success('¡Logotipo ajustado al marco exitosamente! Guarda los cambios.', { icon: '✂️' });
         } catch (e) {
+            console.warn('[BusinessSettings] Error capturado en operación:', e?.message || e);
             toast.error('No se pudo recortar la imagen');
         } finally {
             setIsTrimming(false);
@@ -175,6 +174,7 @@ export default function BusinessSettings({
             localStorage.removeItem('initial_setup_completed');
             window.location.reload();
         } catch (e) {
+            console.warn('[BusinessSettings] Error capturado en operación:', e?.message || e);
             toast.error('Error al solicitar reconfiguración');
         }
     };
@@ -299,7 +299,7 @@ export default function BusinessSettings({
                             <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center p-2 shrink-0 shadow-2xs overflow-hidden relative">
                                 {business.logo ? (
                                     <img 
-                                        src={business.logo} 
+                                        src={getImageUrl(business.logo) || business.logo} 
                                         alt="Logo del negocio" 
                                         className="w-full h-full object-contain"
                                     />

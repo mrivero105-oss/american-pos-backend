@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Store, Share2, Copy, Check, Utensils, QrCode } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
@@ -8,10 +8,7 @@ export default function MobilePreSaleSentModal({
   onClose,
   T,
   businessInfo = {},
-  printPreSaleBluetoothReceipt,
   showToast,
-  onOpenThermalPrinterSettings,
-  sharePreSaleWhatsApp,
   triggerHaptic = () => {}
 }) {
   const barcodeRef = useRef(null);
@@ -132,7 +129,7 @@ export default function MobilePreSaleSentModal({
               {preSaleSentModal.orderNotes && (
                 <div className="flex justify-between text-[11px] pt-0.5 border-t border-slate-500/20">
                   <span className={T.textMuted}>Nota cocina:</span>
-                  <span className="font-bold text-amber-400 truncate max-w-[170px] italic">"{preSaleSentModal.orderNotes}"</span>
+                  <span className="font-bold text-amber-400 truncate max-w-[170px] italic">&ldquo;{preSaleSentModal.orderNotes}&rdquo;</span>
                 </div>
               )}
             </div>

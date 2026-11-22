@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { getTerminalId } from '../utils/terminalIdentity';
+import secureMobileStorage from '../utils/secureMobileStorage';
 
 export const PosNativeHardware = (typeof window !== 'undefined' && window.__posNativeHardwarePlugin)
     ? window.__posNativeHardwarePlugin
@@ -164,7 +165,9 @@ export const checkServerDetailedHealth = async (customUrl = null, timeoutMs = 30
                         url: targetUrl
                     };
                 }
-            } catch (e2) {}
+            } catch (e2) {
+                console.warn('[API] Sonda fallback /ping no respondió:', e2?.message);
+            }
         }
         return {
             healthy: false,
@@ -204,7 +207,9 @@ export const scanLocalSubnetServers = async (progressCb = null, onFound = null) 
                 const sHost = udpRes.server.host || udpRes.server.ip;
                 if (sHost) candidates.add(sHost);
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn('[API] Error en descubrimiento UDP LAN:', e?.message);
+        }
     }
 
     // 2. Add local machine loopback
@@ -217,12 +222,10 @@ export const scanLocalSubnetServers = async (progressCb = null, onFound = null) 
     }
 
     // 3. Dynamic Native Android Subnet Detection
-    let detectedSubnet = null;
     if (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform()) {
         try {
             const net = await PosNativeHardware.getNetworkInfo();
             if (net && net.subnet) {
-                detectedSubnet = net.subnet;
                 if (net.gateway) candidates.add(net.gateway);
                 const dynHosts = [2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 20, 50, 100, 200, 254];
                 dynHosts.forEach(n => candidates.add(`${net.subnet}${n}`));
@@ -236,7 +239,9 @@ export const scanLocalSubnetServers = async (progressCb = null, onFound = null) 
                     }
                 }
             }
-        } catch (_err) {}
+        } catch (netErr) {
+            console.warn('[API] No se pudo obtener info de red nativa:', netErr?.message);
+        }
     }
 
     // 4. Infer subnet from saved IP or location hostname if available
@@ -369,7 +374,9 @@ export const autoDiscoverServer = async () => {
                         }
                     }
                 }
-            } catch (_udpErr) {}
+            } catch (udpErr) {
+                console.warn('[API] Falló sonda UDP autoDiscoverServer:', udpErr?.message);
+            }
         }
 
         // Localhost only if server role
@@ -405,7 +412,9 @@ export const autoDiscoverServer = async () => {
                             }
                         }
                     }
-                } catch (_e) {}
+                } catch (netErr) {
+                    console.warn('[API] Error leyendo subred nativa en autoDiscover:', netErr?.message);
+                }
             }
 
             if (typeof window !== 'undefined' && window.location && window.location.hostname) {
@@ -474,11 +483,11 @@ api.interceptors.request.use((config) => {
             return Promise.reject(new Error('Sin servidor configurado'));
         }
     }
-    const token = localStorage.getItem('auth_token');
+    const token = secureMobileStorage.getToken();
     if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
         config.headers['Authorization'] = `Bearer ${token}`;
     }
-    const envSyncKey = import.meta.env.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key');
+    const envSyncKey = localStorage.getItem('sync_secret_key');
     if (envSyncKey && !config.headers['x-sync-key'] && !config.headers['X-Sync-Key']) {
         config.headers['x-sync-key'] = envSyncKey;
     }
@@ -492,7 +501,9 @@ api.interceptors.request.use((config) => {
         if (termId && !config.headers['x-terminal-id'] && !config.headers['X-Terminal-Id']) {
             config.headers['x-terminal-id'] = termId;
         }
-    } catch (_) {}
+    } catch (termErr) {
+        console.warn('[API] Error adjuntando terminalId:', termErr?.message);
+    }
     return config;
 });
 
@@ -514,8 +525,13 @@ api.interceptors.response.use(
                 }
             } else if (error.response.status === 403) {
                 const data = error.response.data;
-                if (data && (data.error === 'licencia_requerida' || data.error === 'licencia_invalida')) {
-                    console.warn('[API] Requerimiento de licencia detectado:', data.message);
+                if (data && (
+                    data.error === 'licencia_requerida' ||
+                    data.error === 'licencia_invalida' ||
+                    data.error === 'licencia_suspendida' ||
+                    data.error === 'licencia_verificacion_requerida'
+                )) {
+                    console.warn('[API] Requerimiento de licencia detectado:', data.message || data.reason || data.error);
                     window.dispatchEvent(new CustomEvent('license-required', { detail: data }));
                 }
             }

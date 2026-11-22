@@ -1,44 +1,85 @@
-import { useState, useEffect } from 'react';
-import { MessageCircle, QrCode, LogOut, Loader2, Play, X, CheckCircle2, ShieldCheck, RefreshCw, Smartphone, Send } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { MessageCircle, LogOut, Loader2, Play, X, CheckCircle2, RefreshCw, Smartphone, AlertTriangle, RotateCcw } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import { useSocket } from '../hooks/SocketContext';
 
 export default function WhatsappBotModal({ isOpen, onClose }) {
     const [status, setStatus] = useState('DISCONNECTED');
     const [qrCodeUrl, setQrCodeUrl] = useState(null);
+    const [lastError, setLastError] = useState(null);
     const [loading, setLoading] = useState(false);
     const [isActionLoading, setIsActionLoading] = useState(false);
+    const [initializingSeconds, setInitializingSeconds] = useState(0);
+    const { socket } = useSocket() || {};
 
-    const fetchStatus = async () => {
+    const applyStatusData = useCallback((data) => {
+        if (!data || !data.status) return;
+        setStatus(data.status);
+        setQrCodeUrl(data.qrCodeUrl || null);
+        setLastError(data.lastError || null);
+    }, []);
+
+    const fetchStatus = useCallback(async () => {
         try {
             const { data } = await api.get('/whatsapp/status');
-            setStatus(data.status);
-            setQrCodeUrl(data.qrCodeUrl);
+            applyStatusData(data);
         } catch (error) {
             console.error('Error fetching WhatsApp status:', error);
         }
-    };
+    }, [applyStatusData]);
 
     useEffect(() => {
-        if (isOpen) {
-            setLoading(true);
-            fetchStatus().finally(() => setLoading(false));
-            const interval = setInterval(fetchStatus, 3000);
-            return () => clearInterval(interval);
+        if (!isOpen) return;
+        setLoading(true);
+        fetchStatus().finally(() => setLoading(false));
+    }, [isOpen, fetchStatus]);
+
+    // Actualización instantánea por Socket.IO cuando backend cambia a QR_READY / CONNECTED
+    useEffect(() => {
+        if (!isOpen || !socket) return;
+        socket.on('whatsapp_status', applyStatusData);
+        return () => socket.off('whatsapp_status', applyStatusData);
+    }, [isOpen, socket, applyStatusData]);
+
+    // Polling adaptativo rápido (1s mientras inicia Chrome, 4s en reposo/QR)
+    useEffect(() => {
+        if (!isOpen) return;
+        const pollMs = status === 'INITIALIZING' ? 1000 : 4000;
+        const interval = setInterval(fetchStatus, pollMs);
+        return () => clearInterval(interval);
+    }, [isOpen, status, fetchStatus]);
+
+    // Contador visual de espera cuando está iniciando el navegador
+    useEffect(() => {
+        if (!isOpen || status !== 'INITIALIZING') {
+            setInitializingSeconds(0);
+            return;
         }
-    }, [isOpen]);
+        const timer = setInterval(() => {
+            setInitializingSeconds((prev) => prev + 1);
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [isOpen, status]);
 
     if (!isOpen) return null;
 
-    const handleStart = async () => {
+    const handleStart = async (forceRestart = false) => {
         try {
             setIsActionLoading(true);
+            setLastError(null);
+            setInitializingSeconds(0);
             setStatus('INITIALIZING');
-            await api.post('/whatsapp/start');
-            toast.success('Iniciando servicio de WhatsApp...');
-            setTimeout(fetchStatus, 1500);
+            const { data } = await api.post('/whatsapp/start', { forceRestart });
+            applyStatusData(data);
+            if (!forceRestart && data?.status !== 'QR_READY' && data?.status !== 'CONNECTED') {
+                toast.success('Iniciando servicio de WhatsApp...');
+            }
+            setTimeout(fetchStatus, 800);
         } catch (error) {
-            toast.error('Error al iniciar servicio de WhatsApp');
+            const errMsg = error?.response?.data?.error || 'Error al iniciar servicio de WhatsApp';
+            toast.error(errMsg);
+            setLastError(errMsg);
             setStatus('DISCONNECTED');
         } finally {
             setIsActionLoading(false);
@@ -52,7 +93,8 @@ export default function WhatsappBotModal({ isOpen, onClose }) {
             toast.success('Servicio de WhatsApp desconectado');
             setStatus('DISCONNECTED');
             setQrCodeUrl(null);
-        } catch (error) {
+            setLastError(null);
+        } catch (_error) {
             toast.error('Error al desconectar servicio');
         } finally {
             setIsActionLoading(false);
@@ -180,15 +222,15 @@ export default function WhatsappBotModal({ isOpen, onClose }) {
                                 <button
                                     onClick={onClose}
                                     disabled={isActionLoading}
-                                    className="flex-1 h-10 px-4 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-300 font-semibold text-xs border border-rose-200 dark:border-rose-900/50 transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                                    className="flex-1 h-10 px-4 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                                 >
                                     <X size={14} />
-                                    <span>Cancelar</span>
+                                    <span>Cerrar</span>
                                 </button>
                             </div>
                         </div>
                     ) : isInitializing ? (
-                        <div className="flex flex-col items-center gap-3 py-6 text-center max-w-sm">
+                        <div className="flex flex-col items-center gap-3 py-5 text-center max-w-sm w-full">
                             <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-xl flex items-center justify-center border border-indigo-200 dark:border-indigo-800">
                                 <Loader2 className="w-6 h-6 animate-spin" />
                             </div>
@@ -196,8 +238,28 @@ export default function WhatsappBotModal({ isOpen, onClose }) {
                                 Inicializando Servicio de WhatsApp...
                             </h4>
                             <p className="text-xs text-slate-500 dark:text-slate-400">
-                                Preparando la sesión. En unos segundos se generará el código QR para escanear.
+                                Preparando sesión segura de WhatsApp Web{initializingSeconds > 0 ? ` (${initializingSeconds}s)` : ''}. Normalmente toma entre 4 y 12 segundos.
                             </p>
+                            {initializingSeconds >= 8 && (
+                                <div className="flex gap-2 w-full mt-2">
+                                    <button
+                                        onClick={() => handleStart(true)}
+                                        disabled={isActionLoading}
+                                        className="flex-1 h-9 px-3 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 font-semibold text-xs border border-indigo-200 dark:border-indigo-800 transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                    >
+                                        <RotateCcw size={13} />
+                                        <span>Reintentar</span>
+                                    </button>
+                                    <button
+                                        onClick={handleLogout}
+                                        disabled={isActionLoading}
+                                        className="flex-1 h-9 px-3 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-300 font-semibold text-xs border border-rose-200 dark:border-rose-900/50 transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                    >
+                                        <X size={13} />
+                                        <span>Cancelar</span>
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <div className="flex flex-col items-center w-full max-w-sm py-2">
@@ -205,18 +267,24 @@ export default function WhatsappBotModal({ isOpen, onClose }) {
                                 <MessageCircle size={28} />
                             </div>
                             <h4 className="text-base font-bold text-slate-900 dark:text-white mb-1.5">
-                                Servicio de WhatsApp Desconectado
+                                {status === 'AUTH_FAILED' ? 'Error de Autenticación' : 'Servicio de WhatsApp Desconectado'}
                             </h4>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mb-5 leading-relaxed">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
                                 Al conectar el servicio, podrás enviar recibos de compra, tickets digitales y estados de cuenta directamente a tus clientes.
                             </p>
+                            {lastError && (
+                                <div className="w-full mb-4 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2 text-left">
+                                    <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+                                    <span>{lastError}</span>
+                                </div>
+                            )}
                             <button
-                                onClick={handleStart}
+                                onClick={() => handleStart(false)}
                                 disabled={isActionLoading}
                                 className="w-full h-10 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                             >
                                 {isActionLoading ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
-                                <span>Iniciar y Conectar WhatsApp</span>
+                                <span>{lastError ? 'Reintentar Conexión' : 'Iniciar y Conectar WhatsApp'}</span>
                             </button>
                         </div>
                     )}

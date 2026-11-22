@@ -1,35 +1,28 @@
 import { useState, useEffect, useRef, useMemo, memo, lazy, Suspense } from 'react';
-import { 
+import {
     Search, 
     RefreshCw, 
-    Zap, 
-    X,
-    LayoutGrid,
-    List,
-    Square,
-    Circle,
-    Scan,
-    PackageX,
-    PackageCheck,
-    CloudOff,
-    Users,
-    UserPlus,
-    ChevronDown,
-    CheckCircle2,
-    Pencil,
+    X, 
+    LayoutGrid, 
+    List, 
+    Scan, 
+    PackageX, 
+    CloudOff, 
+    Users, 
+    UserPlus, 
+    CheckCircle2, 
+    Pencil, 
     Filter
 } from 'lucide-react';
 import ProductItem from './ProductItem';
 import StationProductView from './StationProductView';
-import { groupProductsByFamily } from '../utils/productFamilies';
 const MobileBarcodeScannerModal = lazy(() => import('./MobileBarcodeScannerModal'));
 import { usePos } from '../hooks/PosContext';
 import useHorizontalScroll from '../hooks/useHorizontalScroll';
 import { hapticTap } from '../utils/haptics';
-import { isUsdOnlyMode, isDollarOnlyCountry } from '../utils/format';
 
 // Native-speed uncontrolled SearchBox with zero IME/keyboard interference
-const SearchBox = memo(({ searchTerm, onSearchChange, onBarcodeScan, searchInputRef, onKeyDown, onOpenScanner, totalCount }) => {
+const SearchBox = memo(function SearchBox({ searchTerm, onSearchChange, onBarcodeScan, searchInputRef, onKeyDown, onOpenScanner, totalCount }) {
     const internalRef = useRef(null);
     const inputRef = searchInputRef || internalRef;
     const [hasText, setHasText] = useState(Boolean(searchTerm));
@@ -221,7 +214,7 @@ const SearchBox = memo(({ searchTerm, onSearchChange, onBarcodeScan, searchInput
     );
 });
 
-const ProductGrid = memo(({
+const ProductGrid = memo(function ProductGrid({
     loading,
     allProducts,
     filteredProducts,
@@ -237,7 +230,6 @@ const ProductGrid = memo(({
     selectedIndex,
     setSelectedIndex,
     searchInputRef,
-    posViewMode,
     setPosViewMode,
     viewLayout = 'grid',
     setViewLayout,
@@ -251,17 +243,22 @@ const ProductGrid = memo(({
     onOpenNewCustomer,
     onEditCustomer,
     customers = []
-}) => {
+}) {
     const categoryRef = useHorizontalScroll();
     const gridContainerRef = useRef(null);
+    const firstVirtualItemRef = useRef(null);
     const customerDropdownRef = useRef(null);
     const customerSearchInputRef = useRef(null);
     const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
     const [customerSearchTerm, setCustomerSearchTerm] = useState('');
     const [highlightedCustomerIndex, setHighlightedCustomerIndex] = useState(-1);
-    const isMobileDevice = typeof window !== 'undefined' && window.innerWidth < 640;
-    const [visibleLimit, setVisibleLimit] = useState(isMobileDevice ? 30 : 120);
     const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
+    const [viewportMetrics, setViewportMetrics] = useState(() => ({
+        width: typeof window !== 'undefined' ? Math.max(320, window.innerWidth - 380) : 960,
+        height: typeof window !== 'undefined' ? Math.max(400, window.innerHeight - 200) : 640
+    }));
+    const [scrollTop, setScrollTop] = useState(0);
+    const [measuredRowHeights, setMeasuredRowHeights] = useState({ grid: 256, grid_round: 260, list: 74 });
 
     // Filtrar clientes para el selector de cabecera
     const filteredCustomersList = useMemo(() => {
@@ -330,10 +327,7 @@ const ProductGrid = memo(({
         window.addEventListener('keydown', handlePosShortcuts);
         return () => window.removeEventListener('keydown', handlePosShortcuts);
     }, [isCustomerDropdownOpen, searchInputRef]);
-    const { 
-        setCurrencyMode: setContextCurrencyMode, 
-        isUsdOnly, 
-        country, 
+    const {
         allowedCategories: posAllowedCategories,
         allowedProducts: posAllowedProducts
     } = usePos();
@@ -378,42 +372,134 @@ const ProductGrid = memo(({
     }, [hasStationLimit, unifiedProducts, viewLayout]);
 
 
-    // Reset visible limit on search or category filter to minimize DOM footprint
+    // Medir viewport del contenedor de productos con ResizeObserver para virtualización real O(1) en DOM
     useEffect(() => {
-        setVisibleLimit(isMobileDevice ? 30 : 120);
+        const el = gridContainerRef.current;
+        if (!el) return;
+        const updateMetrics = () => {
+            const w = el.clientWidth || 0;
+            const h = el.clientHeight || 0;
+            if (w > 0 && h > 0) {
+                setViewportMetrics(prev => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+            }
+        };
+        updateMetrics();
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(updateMetrics);
+            ro.observe(el);
+            return () => ro.disconnect();
+        }
+        window.addEventListener('resize', updateMetrics);
+        return () => window.removeEventListener('resize', updateMetrics);
+    }, []);
+
+    // Cálculo determinista de ventana virtual (mantiene ~24-56 nodos DOM sin importar si hay 1,500 o 50,000 productos)
+    const VIRTUAL_THRESHOLD = 60;
+    const shouldVirtualize = !isStationSingleProduct && unifiedProducts.length > VIRTUAL_THRESHOLD;
+    const isSmallViewport = viewportMetrics.width < 640;
+    const padX = isSmallViewport ? 20 : 28;
+    const contentWidth = Math.max(215, viewportMetrics.width - padX);
+    const gapPx = viewLayout === 'list'
+        ? 8
+        : (viewLayout === 'grid_round' ? (isSmallViewport ? 12 : 14) : (isSmallViewport ? 10 : 12));
+    const gridCols = viewLayout === 'list'
+        ? 1
+        : Math.max(1, Math.floor((contentWidth + gapPx) / (215 + gapPx)));
+    const defaultRowHeight = viewLayout === 'list'
+        ? 74
+        : (viewLayout === 'grid_round'
+            ? Math.min(350, Math.max(215, Math.floor((contentWidth - (gridCols - 1) * gapPx) / gridCols)))
+            : 256);
+    const activeRowHeight = measuredRowHeights[viewLayout] || defaultRowHeight;
+    const rowStride = activeRowHeight + gapPx;
+    const totalRows = Math.ceil(unifiedProducts.length / gridCols);
+    const OVERSCAN_ROWS = 3;
+
+    const { visibleProducts, startIndex, topSpacerPx, bottomSpacerPx } = useMemo(() => {
+        if (!shouldVirtualize) {
+            return {
+                visibleProducts: unifiedProducts,
+                startIndex: 0,
+                topSpacerPx: 0,
+                bottomSpacerPx: 0
+            };
+        }
+        const safeScrollTop = Math.max(0, scrollTop);
+        const startRow = Math.max(0, Math.floor(safeScrollTop / rowStride) - OVERSCAN_ROWS);
+        const endRow = Math.min(totalRows, Math.ceil((safeScrollTop + viewportMetrics.height) / rowStride) + OVERSCAN_ROWS);
+        const sIdx = startRow * gridCols;
+        const eIdx = Math.min(unifiedProducts.length, endRow * gridCols);
+        return {
+            visibleProducts: unifiedProducts.slice(sIdx, eIdx),
+            startIndex: sIdx,
+            topSpacerPx: startRow * rowStride,
+            bottomSpacerPx: Math.max(0, (totalRows - endRow) * rowStride)
+        };
+    }, [shouldVirtualize, unifiedProducts, scrollTop, rowStride, totalRows, viewportMetrics.height, gridCols]);
+
+    // Medir altura real de la primera tarjeta montada para que la barra de scroll sea exacta
+    useEffect(() => {
+        if (!shouldVirtualize) return;
+        const itemEl = firstVirtualItemRef.current;
+        if (!itemEl) return;
+        const measure = () => {
+            const h = Math.round(itemEl.getBoundingClientRect().height);
+            if (h >= 48 && h <= 600) {
+                setMeasuredRowHeights(prev => (Math.abs((prev[viewLayout] || 0) - h) <= 3 ? prev : { ...prev, [viewLayout]: h }));
+            }
+        };
+        measure();
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(measure);
+            ro.observe(itemEl);
+            return () => ro.disconnect();
+        }
+    }, [shouldVirtualize, viewLayout, gridCols, visibleProducts.length]);
+
+    // Resetear scroll al cambiar búsqueda, categoría o vista
+    useEffect(() => {
+        setScrollTop(0);
         if (gridContainerRef.current) {
             gridContainerRef.current.scrollTop = 0;
         }
-    }, [searchTerm, category, isMobileDevice]);
+    }, [searchTerm, category, viewLayout]);
 
-
-    // Auto-scroll to selected index if keyboard navigation is used
+    // Auto-scroll hacia el elemento seleccionado con teclado (incluso fuera de la ventana virtual montada)
     useEffect(() => {
-        if (selectedIndex !== -1) {
-            if (selectedIndex >= visibleLimit - 8) {
-                setVisibleLimit(prev => Math.max(prev + (isMobileDevice ? 24 : 48), selectedIndex + 20));
+        if (selectedIndex < 0 || !gridContainerRef.current) return;
+        const container = gridContainerRef.current;
+        if (shouldVirtualize) {
+            const targetRow = Math.floor(selectedIndex / gridCols);
+            const rowTop = targetRow * rowStride;
+            const rowBottom = rowTop + rowStride;
+            const viewTop = container.scrollTop;
+            const viewBottom = viewTop + container.clientHeight;
+            if (rowTop < viewTop) {
+                container.scrollTop = rowTop;
+                setScrollTop(rowTop);
+            } else if (rowBottom > viewBottom) {
+                const nextTop = Math.max(0, rowBottom - container.clientHeight + 24);
+                container.scrollTop = nextTop;
+                setScrollTop(nextTop);
             }
-            if (gridContainerRef.current) {
-                const selectedEl = document.getElementById(`product-${unifiedProducts[selectedIndex]?.id}`);
-                if (selectedEl) {
-                    selectedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }
-            }
+            return;
         }
-    }, [selectedIndex, unifiedProducts, visibleLimit, isMobileDevice]);
+        const selectedEl = document.getElementById(`product-${unifiedProducts[selectedIndex]?.id}`);
+        if (selectedEl) {
+            selectedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }, [selectedIndex, unifiedProducts, shouldVirtualize, gridCols, rowStride]);
 
     const scrollTickingRef = useRef(false);
 
     const handleGridScroll = (e) => {
+        if (!shouldVirtualize) return;
         if (!scrollTickingRef.current) {
             scrollTickingRef.current = true;
             const target = e.currentTarget;
             requestAnimationFrame(() => {
                 if (target) {
-                    const { scrollTop, scrollHeight, clientHeight } = target;
-                    if (scrollHeight - scrollTop - clientHeight < 450) {
-                        setVisibleLimit(prev => Math.min(prev + (isMobileDevice ? 16 : 32), unifiedProducts.length));
-                    }
+                    setScrollTop(target.scrollTop);
                 }
                 scrollTickingRef.current = false;
             });
@@ -881,36 +967,49 @@ const ProductGrid = memo(({
                         ))}
                     </div>
                 ) : (
-                    <div className={
-                        viewLayout === 'list' 
-                            ? 'flex flex-col gap-2' 
-                            : viewLayout === 'grid_round'
-                                ? 'grid gap-3 sm:gap-3.5 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
-                                : 'grid gap-2.5 sm:gap-3 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
-                    }>
-                        {unifiedProducts.slice(0, visibleLimit).map((product, index) => (
-                            <div
-                                key={product.id}
-                                className={
-                                    (viewLayout === 'list' ? 'min-h-[68px] h-auto cv-auto-row' : 
-                                    viewLayout === 'grid_round' ? 'aspect-square w-full max-w-[350px] mx-auto cv-auto-card' : 
-                                    'h-full flex flex-col cv-auto-card')
-                                }
-                            >
-                                <ProductItem
-                                    product={product}
-                                    onAdd={handleAddToCart}
-                                    onEdit={handleQuickEdit}
-                                    isAdmin={isAdmin}
-                                    currencyMode={currencyMode}
-                                    exchangeRate={exchangeRate}
-                                    isSelected={index === selectedIndex}
-                                    viewMode="NORMAL"
-                                    viewLayout={viewLayout}
-                                    intelligence={stockIntelligence[product.id]}
-                                />
-                            </div>
-                        ))}
+                    <div
+                        style={shouldVirtualize ? { paddingTop: `${topSpacerPx}px`, paddingBottom: `${bottomSpacerPx}px` } : undefined}
+                    >
+                        <div
+                            className={
+                                viewLayout === 'list' 
+                                    ? 'flex flex-col gap-2' 
+                                    : viewLayout === 'grid_round'
+                                        ? 'grid gap-3 sm:gap-3.5 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
+                                        : 'grid gap-2.5 sm:gap-3 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
+                            }
+                            style={shouldVirtualize && viewLayout !== 'list'
+                                ? { gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }
+                                : undefined}
+                        >
+                            {visibleProducts.map((product, localIdx) => {
+                                const absIndex = startIndex + localIdx;
+                                return (
+                                    <div
+                                        key={product.id}
+                                        ref={localIdx === 0 ? firstVirtualItemRef : undefined}
+                                        className={
+                                            (viewLayout === 'list' ? 'min-h-[68px] h-auto' : 
+                                            viewLayout === 'grid_round' ? 'aspect-square w-full max-w-[350px] mx-auto' : 
+                                            'h-full flex flex-col')
+                                        }
+                                    >
+                                        <ProductItem
+                                            product={product}
+                                            onAdd={handleAddToCart}
+                                            onEdit={handleQuickEdit}
+                                            isAdmin={isAdmin}
+                                            currencyMode={currencyMode}
+                                            exchangeRate={exchangeRate}
+                                            isSelected={absIndex === selectedIndex}
+                                            viewMode="NORMAL"
+                                            viewLayout={viewLayout}
+                                            intelligence={stockIntelligence[product.id]}
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                 )}
             </div>

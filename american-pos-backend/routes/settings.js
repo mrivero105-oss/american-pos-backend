@@ -1,11 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const { readJson, writeJson, getUserSettings } = require('../utils/helpers');
+const { readJson, writeJson, getUserSettings, normalizeCompanyId } = require('../utils/helpers');
 const { verifyToken, isAdmin, requirePermission, computeDisplayPairingToken } = require('../middleware/auth');
 const { BASE_PATH, SETTINGS_FILE, PAYMENT_METHODS_FILE } = require('../config/paths');
 const cache = require('../utils/cacheService');
 const { User } = require('../database/models');
 const SupabaseSyncService = require('../services/SupabaseSyncService');
+const SettingsStoreService = require('../services/SettingsStoreService');
+const validate = require('../middleware/validate');
+const {
+    positiveRateSchema,
+    taxesSchema,
+    paymentMethodsSchema,
+    setupSchema,
+    regionSchema,
+    autoLaunchSchema,
+    printRawSchema,
+    networkPrinterSchema,
+    dbConfigSchema
+} = require('../schemas/settingsSchema');
 
 const getCachedSettings = () => {
     let settings = cache.get('all_settings');
@@ -144,8 +157,8 @@ router.get('/rate', async (req, res) => {
             console.log(`[RATE DEBUG] GET /rate - User: ${req.user?.id || 'guest'}, Company: ${companyId}, Rate: ${userSettings.exchangeRate}, Mode: ${currencyMode}`);
         }
 
-        // Si la auto-actualización está activa y hace más de 1 hora que no se sincroniza, refrescar en segundo plano
-        if (!isUsdSingleCountry && userSettings.autoUpdateRate !== false) {
+        // Si la auto-actualización está activa, solo sesiones autenticadas disparan refresco reactivo (evita SSRF/scraping por tráfico público anónimo)
+        if (!isUsdSingleCountry && userSettings.autoUpdateRate !== false && !req.user?.isPublicContext && req.user?.role !== 'public_guest') {
             const lastSync = userSettings.lastRateSyncAt ? new Date(userSettings.lastRateSyncAt).getTime() : 0;
             if (Date.now() - lastSync > 1000 * 60 * 60) {
                 const BCVAutoSyncService = require('../services/BCVAutoSyncService');
@@ -224,11 +237,11 @@ router.get('/binance', async (req, res) => {
     }
 });
 
-router.post('/binance/rate', async (req, res) => {
+router.post('/binance/rate', validate(positiveRateSchema), async (req, res) => {
     try {
-        const role = req.user?.role?.toLowerCase();
+        const { isCompanyAdminRole } = require('../constants/roles');
         const hasPermission = req.user?.permissions?.canManageSettings;
-        const isAuthorized = role === 'admin' || role === 'superadmin' || hasPermission;
+        const isAuthorized = isCompanyAdminRole(req.user?.role) || hasPermission;
         if (!isAuthorized) {
             return res.status(403).json({ error: 'Acceso denegado: Se requieren permisos de administrador o gestión de configuración' });
         }
@@ -247,8 +260,7 @@ router.post('/binance/rate', async (req, res) => {
         if (companyId === '2' && allSettings['default']) {
             allSettings['default'].binanceRate = parsedRate;
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
 
         const io = req.app.get('io') || global.io;
         if (io) {
@@ -263,11 +275,11 @@ router.post('/binance/rate', async (req, res) => {
     }
 });
 
-router.post('/rate', async (req, res) => {
+router.post('/rate', validate(positiveRateSchema), async (req, res) => {
     try {
-        const role = req.user?.role?.toLowerCase();
+        const { isCompanyAdminRole } = require('../constants/roles');
         const hasPermission = req.user?.permissions?.canManageSettings;
-        const isAuthorized = role === 'admin' || role === 'superadmin' || hasPermission;
+        const isAuthorized = isCompanyAdminRole(req.user?.role) || hasPermission;
         if (!isAuthorized) {
             return res.status(403).json({ error: 'Acceso denegado: Se requieren permisos de administrador o gestión de configuración' });
         }
@@ -300,8 +312,7 @@ router.post('/rate', async (req, res) => {
                 lastRateSyncAt: userSettings.lastRateSyncAt
             };
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         if (req.user?.id) {
             cache.del(`user_currency_${req.user.id}`);
         }
@@ -336,12 +347,30 @@ router.get('/business', async (req, res) => {
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const userSettings = getUserSettings(allSettings, companyId);
         const bInfo = userSettings.businessInfo || { businessMode: 'STANDARD' };
+        const taxCfg = userSettings.taxConfig || {};
+        const igtfEnabledVal = taxCfg.igtfEnabled !== undefined
+            ? Boolean(taxCfg.igtfEnabled)
+            : Boolean(userSettings.igtfEnabled);
+        const igtfRateVal = Number(taxCfg.igtfRate ?? userSettings.igtfRate ?? 3) || 0;
+        const ivaEnabledVal = taxCfg.ivaEnabled !== false && userSettings.ivaEnabled !== false;
+        const ivaRateVal = Number(taxCfg.ivaRate ?? userSettings.ivaRate ?? 16) || 0;
         
         const methods = userSettings.paymentMethods || [];
         const pmMethod = methods.find(m => m.id === 'pago_movil' || m.pagoMovilBank || m.pagoMovilPhone || m.pagoMovilId) || {};
 
         res.json({
             ...bInfo,
+            taxConfig: {
+                ...taxCfg,
+                ivaEnabled: ivaEnabledVal,
+                ivaRate: ivaRateVal,
+                igtfEnabled: igtfEnabledVal,
+                igtfRate: igtfRateVal
+            },
+            ivaEnabled: ivaEnabledVal,
+            ivaRate: ivaRateVal,
+            igtfEnabled: igtfEnabledVal,
+            igtfRate: igtfRateVal,
             broadcastPrintingEnabled: bInfo.broadcastPrintingEnabled === true,
             networkPrinterEnabled: bInfo.networkPrinterEnabled === true,
             pagoMovilBank: bInfo.pagoMovilBank || pmMethod.pagoMovilBank || '',
@@ -444,8 +473,7 @@ router.post('/business', async (req, res) => {
             }
         }
         allSettings[companyId] = userSettings;
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         if (req.user?.id) {
             cache.del(`user_currency_${req.user.id}`);
         }
@@ -581,7 +609,7 @@ router.get('/payment-methods', async (req, res) => {
     }
 });
 
-router.post('/payment-methods', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/payment-methods', requirePermission('canManageSettings'), validate(paymentMethodsSchema), async (req, res) => {
     try {
         const { paymentMethods } = req.body;
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
@@ -622,8 +650,7 @@ router.post('/payment-methods', requirePermission('canManageSettings'), async (r
                 allSettings['default'].businessInfo = { ...allSettings['default'].businessInfo, ...userSettings.businessInfo };
             }
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         res.json({ success: true, paymentMethods });
     } catch (error) {
         console.error('Update payment methods error:', error);
@@ -649,7 +676,7 @@ router.get('/taxes', async (req, res) => {
     }
 });
 
-router.post('/taxes', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/taxes', requirePermission('canManageSettings'), validate(taxesSchema), async (req, res) => {
     try {
         const taxConfig = req.body;
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
@@ -660,8 +687,7 @@ router.post('/taxes', requirePermission('canManageSettings'), async (req, res) =
         if (companyId === '2' && allSettings['default']) {
             allSettings['default'].taxConfig = taxConfig;
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         res.json({ success: true, taxConfig });
     } catch (error) {
         console.error('Update taxes error:', error);
@@ -682,7 +708,7 @@ router.get('/is-setup', async (req, res) => {
     }
 });
 
-router.post('/setup', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/setup', requirePermission('canManageSettings'), validate(setupSchema), async (req, res) => {
     try {
         const { country, businessName } = req.body;
         if (!country) return res.status(400).json({ error: 'El país es requerido para la configuración' });
@@ -717,8 +743,7 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
             allSettings['default'] = { ...userSettings };
         }
         userSettings.wizardCompleted = true; // Marcar como completado
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         if (req.user?.id) {
             cache.del(`user_currency_${req.user.id}`);
         }
@@ -742,7 +767,7 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
 });
 
 // Change region / country preset mid-lifecycle (from Settings page - Owner/Superadmin only)
-router.post('/region', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/region', requirePermission('canManageSettings'), validate(regionSchema), async (req, res) => {
     try {
         const userRole = String(req.user?.role || '').toLowerCase();
         const isOwner = ['superadmin', 'owner', 'dueño', 'dueno'].includes(userRole);
@@ -780,8 +805,7 @@ router.post('/region', requirePermission('canManageSettings'), async (req, res) 
         if (companyId === '2' && allSettings['default']) {
             allSettings['default'] = { ...userSettings };
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
 
         // Invalidate user-specific currency cache
         if (req.user?.id) {
@@ -814,71 +838,32 @@ router.post('/region', requirePermission('canManageSettings'), async (req, res) 
 
 router.get('/auto-launch', async (req, res) => {
     try {
-        const { execSync } = require('child_process');
-        let enabled = false;
-        try {
-            const regOutput = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS"', { encoding: 'utf-8' });
-            if (regOutput && regOutput.includes('Isaac POS')) {
-                enabled = true;
-            }
-        } catch (e) {
-            try {
-                const legacyOutput = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS"', { encoding: 'utf-8' });
-                if (legacyOutput && legacyOutput.includes('American POS')) {
-                    enabled = true;
-                }
-            } catch (err) {
-                const allSettings = getCachedSettings();
-                enabled = !!allSettings.autoLaunch;
+        const autoLaunchManager = require('../utils/autoLaunchManager');
+        const userDataPath = process.env.USER_DATA_PATH || BASE_PATH;
+        let enabled = await autoLaunchManager.getWindowsAutoLaunchStatus({ userDataPath });
+        if (!enabled) {
+            const allSettings = getCachedSettings();
+            if (allSettings && typeof allSettings.autoLaunch === 'boolean') {
+                enabled = allSettings.autoLaunch;
             }
         }
-        res.json({ enabled });
+        res.json({ enabled: Boolean(enabled) });
     } catch (error) {
         res.status(500).json({ error: 'Error al obtener estado de inicio automático' });
     }
 });
 
-router.post('/auto-launch', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/auto-launch', requirePermission('canManageSettings'), validate(autoLaunchSchema), async (req, res) => {
     try {
-        const { enabled } = req.body;
-        const { execSync } = require('child_process');
-        const os = require('os');
-        const path = require('path');
-        const fs = require('fs');
+        const enabled = Boolean(req.body?.enabled);
+        const autoLaunchManager = require('../utils/autoLaunchManager');
+        const userDataPath = process.env.USER_DATA_PATH || BASE_PATH;
 
-        let targetPath = process.execPath;
-        if (targetPath.toLowerCase().includes('node.exe') || targetPath.toLowerCase().includes('electron.exe')) {
-            const defaultInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Isaac POS', 'Isaac POS.exe');
-            const fallbackInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'IsaacPOS', 'Isaac POS.exe');
-            const legacyInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'American POS', 'American POS.exe');
-            if (fs.existsSync(defaultInstallPath)) {
-                targetPath = defaultInstallPath;
-            } else if (fs.existsSync(fallbackInstallPath)) {
-                targetPath = fallbackInstallPath;
-            } else if (fs.existsSync(legacyInstallPath)) {
-                targetPath = legacyInstallPath;
-            }
-        }
-
-        const isDev = targetPath.toLowerCase().includes('node.exe') || targetPath.toLowerCase().includes('electron.exe');
-
-        if (enabled && !isDev) {
-            try {
-                execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS" /f', { stdio: 'ignore' });
-            } catch (e) {}
-            try {
-                execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS" /t REG_SZ /d "\\"${targetPath}\\"" /f`, { stdio: 'ignore' });
-            } catch (e) {
-                console.error('Reg add error:', e);
-            }
-        } else if (!enabled || isDev) {
-            try {
-                execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS" /f', { stdio: 'ignore' });
-            } catch (e) {}
-            try {
-                execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS" /f', { stdio: 'ignore' });
-            } catch (e) {}
-        }
+        const result = await autoLaunchManager.configureWindowsAutoLaunch(enabled, {
+            userDataPath,
+            isPackaged: !process.execPath.toLowerCase().includes('node.exe') && !process.execPath.toLowerCase().includes('electron.exe'),
+            processExecPath: process.execPath
+        });
 
         try {
             let settings = readJson(SETTINGS_FILE) || {};
@@ -887,7 +872,11 @@ router.post('/auto-launch', requirePermission('canManageSettings'), async (req, 
             cache.del('all_settings');
         } catch (e) {}
 
-        res.json({ success: true, enabled });
+        if (!result.success) {
+            return res.status(500).json({ success: false, error: result.error || 'No se pudo actualizar el inicio automático' });
+        }
+
+        res.json({ success: true, enabled, mechanism: result.mechanism });
     } catch (error) {
         console.error('Error setting auto-launch:', error);
         res.status(500).json({ error: 'Error al actualizar el inicio automático' });
@@ -906,11 +895,29 @@ router.post('/email-test', requirePermission('canManageSettings'), async (req, r
     }
 });
 
-router.post('/test-network-printer', async (req, res) => {
+const isSafeLanPrinterHost = (rawHost) => {
+    const h = String(rawHost || '').trim().toLowerCase();
+    if (!h || h.length > 120) return false;
+    if (h === 'localhost') return true;
+    if (/^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(h)) {
+        return true;
+    }
+    return /^[a-z0-9][a-z0-9-]*\.local$/.test(h);
+};
+
+const isSafeSerialPortName = (rawPort) => {
+    const p = String(rawPort || '').trim();
+    return /^COM\d{1,3}$/i.test(p) || /^\/dev\/tty[A-Za-z0-9_-]+$/.test(p);
+};
+
+router.post('/test-network-printer', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const { host, port } = req.body;
         if (!host) {
             return res.status(400).json({ error: 'Debe ingresar la dirección IP de la impresora de red' });
+        }
+        if (!isSafeLanPrinterHost(host)) {
+            return res.status(400).json({ error: 'Solo se permiten direcciones IP de red local privada (LAN) o nombres .local para impresoras.' });
         }
         const NetworkPrinterService = require('../services/NetworkPrinterService');
         const allSettings = getCachedSettings();
@@ -934,7 +941,7 @@ router.post('/test-network-printer', async (req, res) => {
  * GET /settings/scan-network-printers
  * Escanea la subred local buscando impresoras térmicas con puerto 9100 abierto
  */
-router.get('/scan-network-printers', async (req, res) => {
+router.get('/scan-network-printers', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const NetworkPrinterService = require('../services/NetworkPrinterService');
         const printers = await NetworkPrinterService.scanSubnetForPrinters(9100, 350);
@@ -953,9 +960,12 @@ router.get('/scan-network-printers', async (req, res) => {
  * POST /settings/test-cluster-printers
  * Dispara un pulso de diagnóstico integral a las 3 impresoras del clúster
  */
-router.post('/test-cluster-printers', async (req, res) => {
+router.post('/test-cluster-printers', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const { networkHost, networkPort } = req.body;
+        if (networkHost && !isSafeLanPrinterHost(networkHost)) {
+            return res.status(400).json({ error: 'Solo se permiten direcciones IP de red local privada (LAN) para impresoras.' });
+        }
         const io = req.app.get('io') || global.io;
         const companyId = req.user?.companyId || 'default';
 
@@ -1021,7 +1031,7 @@ router.get('/system-printers', async (req, res) => {
  * POST /settings/print-raw
  * Envía datos RAW (ESC/POS) a una impresora local de Windows vía backend
  */
-router.post('/print-raw', verifyToken, async (req, res) => {
+router.post('/print-raw', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), validate(printRawSchema), async (req, res) => {
     try {
         const { printerName, content, printMode, autoPrint = false } = req.body;
         const LocalPrinterService = require('../services/LocalPrinterService');
@@ -1153,7 +1163,7 @@ router.post('/open-drawer', verifyToken, async (req, res) => {
 // --- RUTAS DE PROTOCOLO DE BALANZA / BÁSCULA DE MOSTRADOR ---
 const ScaleService = require('../services/ScaleService');
 
-router.get('/scale/ports', verifyToken, async (req, res) => {
+router.get('/scale/ports', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const ports = await ScaleService.listPorts();
         res.json({ success: true, ports });
@@ -1162,9 +1172,12 @@ router.get('/scale/ports', verifyToken, async (req, res) => {
     }
 });
 
-router.get('/scale/read', verifyToken, async (req, res) => {
+router.get('/scale/read', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const port = req.query.port || 'COM1';
+        if (!isSafeSerialPortName(port)) {
+            return res.status(400).json({ success: false, error: 'Nombre de puerto serial inválido' });
+        }
         const baudRate = parseInt(req.query.baudRate, 10) || 9600;
         const result = await ScaleService.readWeight(port, baudRate);
         res.json(result);
@@ -1173,9 +1186,12 @@ router.get('/scale/read', verifyToken, async (req, res) => {
     }
 });
 
-router.post('/scale/tare', verifyToken, async (req, res) => {
+router.post('/scale/tare', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const port = req.body.port || 'COM1';
+        if (!isSafeSerialPortName(port)) {
+            return res.status(400).json({ success: false, error: 'Nombre de puerto serial inválido' });
+        }
         const result = await ScaleService.sendCommand(port, 'T');
         res.json(result);
     } catch (err) {
@@ -1183,9 +1199,12 @@ router.post('/scale/tare', verifyToken, async (req, res) => {
     }
 });
 
-router.post('/scale/zero', verifyToken, async (req, res) => {
+router.post('/scale/zero', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const port = req.body.port || 'COM1';
+        if (!isSafeSerialPortName(port)) {
+            return res.status(400).json({ success: false, error: 'Nombre de puerto serial inválido' });
+        }
         const result = await ScaleService.sendCommand(port, 'Z');
         res.json(result);
     } catch (err) {
@@ -1266,7 +1285,7 @@ router.get('/db-config', requirePermission('canManageSettings'), (req, res) => {
  * POST /settings/db-config
  * Guarda la configuración físicamente en disco y prueba la conectividad si es servidor.
  */
-router.post('/db-config', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/db-config', requirePermission('canManageSettings'), validate(dbConfigSchema), async (req, res) => {
     if (!isLocalLoopbackRequest(req)) {
         return res.status(403).json({
             success: false,
@@ -1443,7 +1462,7 @@ router.get('/customer-display', (req, res) => {
     }
 });
 
-router.post('/customer-display', (req, res) => {
+router.post('/customer-display', async (req, res) => {
     try {
         if (!canManageDisplayAds(req)) {
             return res.status(403).json({
@@ -1464,8 +1483,7 @@ router.post('/customer-display', (req, res) => {
             allSettings['default'].customerDisplay = normalized;
         }
 
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
 
         const io = req.app.get('io') || global.io;
         if (io) {

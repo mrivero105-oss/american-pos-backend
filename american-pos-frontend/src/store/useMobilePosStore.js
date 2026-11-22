@@ -19,7 +19,9 @@ const flushPendingStorageNow = () => {
       } else {
         localStorage.setItem(ACTIVE_CART_STORAGE_KEY, JSON.stringify(pendingCartToFlush));
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error guardando carrito pendiente:', err?.message);
+    }
   }
   if (heldFlushTimer !== null) {
     clearTimeout(heldFlushTimer);
@@ -29,7 +31,9 @@ const flushPendingStorageNow = () => {
         HELD_SALES_STORAGE_KEY,
         JSON.stringify(Array.isArray(pendingHeldToFlush) ? pendingHeldToFlush : [])
       );
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error guardando ventas en espera:', err?.message);
+    }
   }
 };
 
@@ -79,7 +83,9 @@ const persistCartSafe = (cart) => {
         localStorage.setItem(ACTIVE_CART_STORAGE_KEY, JSON.stringify(pendingCartToFlush));
       }
       db.put('metadata', { key: ACTIVE_CART_STORAGE_KEY, value: pendingCartToFlush || [] }).catch(() => {});
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error persistiendo carrito:', err?.message);
+    }
   }, 120);
 };
 
@@ -94,7 +100,9 @@ const persistHeldSalesSafe = (heldSales) => {
     try {
       localStorage.setItem(HELD_SALES_STORAGE_KEY, JSON.stringify(safeList));
       db.put('metadata', { key: HELD_SALES_STORAGE_KEY, value: safeList }).catch(() => {});
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error persistiendo ventas en espera:', err?.message);
+    }
   }, 120);
 };
 
@@ -103,7 +111,7 @@ const persistHeldSalesSafe = (heldSales) => {
  * Aísla el estado del carrito, descuentos, ventas en espera y navegación móvil,
  * garantizando persistencia ante cierres accidentales o actualizaciones OTA.
  */
-export const useMobilePosStore = create((set, get) => ({
+export const useMobilePosStore = create((set) => ({
   activeModule: 'pos',
   setActiveModule: (mod) =>
     set((state) => ({

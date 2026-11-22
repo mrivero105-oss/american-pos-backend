@@ -1,4 +1,3 @@
-import React from 'react';
 import { X, Mail } from 'lucide-react';
 import BaseModal from './BaseModal';
 import Logo from './Logo';

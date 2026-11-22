@@ -1,32 +1,23 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
-    ClipboardCheck,
-    Barcode,
-    Search,
-    Plus,
-    Minus,
-    Trash2,
-    Save,
-    RotateCcw,
-    AlertTriangle,
-    CheckCircle2,
-    TrendingDown,
-    TrendingUp,
-    DollarSign,
-    Filter,
-    Download,
-    Layers,
-    FileSpreadsheet,
-    HelpCircle,
-    Info,
-    RefreshCw,
+    ClipboardCheck, 
+    Barcode, 
+    Search, 
+    Plus, 
+    Minus, 
+    Trash2, 
+    RotateCcw, 
+    CheckCircle2, 
+    TrendingDown, 
+    TrendingUp, 
+    Download, 
+    Layers, 
+    RefreshCw, 
     Package
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { useAuth } from '../hooks/AuthContext';
-import { useSocket } from '../hooks/SocketContext';
-import { formatMoney, fetchGlobalSettings } from '../utils/format';
+import { fetchGlobalSettings } from '../utils/format';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 const formatSmartUsd = (val) => {
@@ -42,8 +33,6 @@ const formatBs = (val) => {
 };
 
 export default function PhysicalInventoryAudit() {
-    const { user } = useAuth();
-    const { socket } = useSocket();
     const { confirm, confirmDialog } = useConfirmDialog();
 
     // Catálogo completo de productos para búsqueda y carga rápida
@@ -265,7 +254,7 @@ export default function PhysicalInventoryAudit() {
         try {
             localStorage.removeItem('isaac_physical_audit_draft');
             localStorage.removeItem('isaac_physical_audit_notes');
-        } catch {}
+        } catch (caughtErr) { console.warn('[PhysicalInventoryAudit] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         toast.success('Sesión de auditoría reiniciada');
     };
 

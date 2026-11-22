@@ -1,4 +1,3 @@
-import React from 'react';
 import logoLight from '../assets/isaac-logo-horizontal.png';
 import logoDark from '../assets/isaac-logo-horizontal-dark.png';
 import emblemLight from '../assets/isaac-emblem.png';
@@ -11,19 +10,15 @@ import emblemDark from '../assets/isaac-emblem-dark.png';
  * - Fondos oscuros (Chasis Studio, Titanium, Login, Splash): logotipo con texto blanco brillante luminiscente.
  * - Modo compacto/colapsado: emblema oficial con circuitos y sello de ventas.
  */
-export default function Logo({ 
-    className = "", 
+export default function Logo({
+    className = "",
     imgClassName = "",
-    showSlogan = false, 
-    compact = false, 
-    hideText = false, 
-    lightText = false, 
+    compact = false,
+    hideText = false,
+    lightText = false,
     darkText = false,
-    showImageOnly = false,
     size = "md",
-    badgeClassName = "",
-    stacked = false,
-    variant = "auto", // 'auto' | 'light' | 'dark'
+    variant = "auto",
     style = {}
 }) {
     // Resolver variante según props explícitas o modo automático (Tailwind dark)

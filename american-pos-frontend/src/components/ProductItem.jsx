@@ -1,11 +1,11 @@
 import { useMemo, memo, useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Package, Edit, Plus, Scale, Layers, ShoppingBag, Zap, Box, X, ArrowLeft, ChevronRight } from 'lucide-react';
+import { Package, Edit, Scale, Layers, ShoppingBag, Zap, Box, X, ArrowLeft, ChevronRight } from 'lucide-react';
 import { formatMoney, formatStock, formatStockUnit, isUsdOnlyMode, isDollarOnlyCountry, formatPhysicalStock } from '../utils/format';
 import { CachedImage } from './CachedImage';
 import { getImageUrl } from '../utils/imageUtils';
 
-const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, exchangeRate, isSelected, viewMode = 'NORMAL', viewLayout = 'grid', intelligence }) => {
+const ProductItem = memo(function ProductItem({ product, onAdd, onEdit, isAdmin, currencyMode, exchangeRate, isSelected, viewMode = 'NORMAL', viewLayout = 'grid', intelligence }) {
     const isUsdOnly = isUsdOnlyMode({ currencyMode }) || isDollarOnlyCountry(localStorage.getItem('pos_country'));
     const isService = Boolean(product.isService || String(product.category || '').trim().toLowerCase() === 'servicios');
     const isCashAdvance = isService && /\bavance\b/i.test(String(product.name || ''));
@@ -69,20 +69,6 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
         return formatMoney(mbPrice, null, { rate: exchangeRate, currencyMode });
     }, [isService, hasDynamicPresentations, product.midBulkPrice, product.price, product.unitsPerMidBulk, exchangeRate, currencyMode]);
 
-    const familyPriceInfo = useMemo(() => {
-        if (!product.isFamily || !Array.isArray(product.variants) || product.variants.length === 0) return null;
-        const prices = product.variants.map(v => Number(v.price) || 0).filter(p => p > 0);
-        if (prices.length === 0) return null;
-        const min = Math.min(...prices);
-        const max = Math.max(...prices);
-        return {
-            min,
-            max,
-            isRange: min !== max,
-            minBs: formatMoney(min, 'VES', { rate: exchangeRate, currencyMode: 'VES' }),
-            minUsd: formatMoney(min, 'USD', { rate: exchangeRate, currencyMode: 'USD' }),
-        };
-    }, [product.isFamily, product.variants, exchangeRate]);
 
     const humanStockFormatted = useMemo(() => {
         if (isService) return '∞ Servicio';
@@ -150,7 +136,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
         }
 
         return `${total} un`;
-    }, [isService, product.stockQuantity, product.unitsPerBulk, product.bulkUnitName, product.unitsPerMidBulk, product.midBulkUnitName, isWeighed, weightUnit]);
+    }, [isService, product.stockQuantity, product.stockUnits, product.Presentations, product.unitsPerBulk, product.bulkUnitName, product.unitsPerMidBulk, product.midBulkUnitName, isWeighed, weightUnit]);
 
     const shortStockFormatted = useMemo(() => {
         if (!humanStockFormatted) return '';
@@ -165,7 +151,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
             return;
         }
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
-            try { navigator.vibrate(25); } catch (_) {}
+            try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no soportada */ }
         }
         onAdd(product);
     }, [isService, onAdd, product]);
@@ -175,7 +161,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
         e?.stopPropagation();
         if (!isService && product.stockQuantity <= 0 && !product.allowNegative) return;
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
-            try { navigator.vibrate(30); } catch (_) {}
+            try { navigator.vibrate(30); } catch { /* Vibración háptica opcional no soportada */ }
         }
         onAdd(product, 1, false, isBulk, isMidBulk, presentation);
     }, [isService, onAdd, product]);
@@ -212,7 +198,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
             isLongPressRef.current = true;
             setIsHolding(false);
             if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                try { navigator.vibrate(60); } catch (_) {}
+                try { navigator.vibrate(60); } catch { /* Vibración háptica opcional no soportada */ }
             }
             if (onEdit) {
                 onEdit(product);
@@ -620,7 +606,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
                                         e.stopPropagation();
                                         if (isOutOfStock) return;
                                         if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                                            try { navigator.vibrate(25); } catch (_) {}
+                                            try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no soportada */ }
                                         }
                                         if (hasPresentations) {
                                             setSelectedVariantForPres(v);
@@ -694,7 +680,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
                                     e.preventDefault();
                                     e.stopPropagation();
                                     if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                                        try { navigator.vibrate(25); } catch (_) {}
+                                        try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no soportada */ }
                                     }
                                     onAdd(selectedVariantForPres, 1, false, false, false);
                                     handleCloseFamilyPicker();
@@ -747,7 +733,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
                                             e.preventDefault();
                                             e.stopPropagation();
                                             if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                                                try { navigator.vibrate(25); } catch (_) {}
+                                                try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no soportada */ }
                                             }
                                             onAdd(selectedVariantForPres, 1, false, false, false, pres);
                                             handleCloseFamilyPicker();
@@ -880,7 +866,7 @@ const ProductItem = memo(({ product, onAdd, onEdit, isAdmin, currencyMode, excha
                                             e.preventDefault();
                                             e.stopPropagation();
                                             if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                                                try { navigator.vibrate(25); } catch (_) {}
+                                                try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no soportada */ }
                                             }
                                             onAdd(v, 1, false, false, false);
                                         }}

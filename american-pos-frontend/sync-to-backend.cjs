@@ -20,10 +20,13 @@ const buildTimeIso = new Date().toISOString();
 
 const srcDir = path.resolve(__dirname, 'dist');
 const mobileDistDir = path.resolve(__dirname, 'dist-mobile');
+const os = require('os');
+const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+const extraUltraPublicDir = process.env.ISAAC_ULTRA_PUBLIC_DIR || path.join(localAppData, 'Programs', 'Isaac POS Ultra', 'public');
 const targetDirs = [
   path.resolve(__dirname, '../american-pos-backend/public'),
-  'C:\\Users\\mrive\\AppData\\Local\\Programs\\Isaac POS Ultra\\public'
-];
+  extraUltraPublicDir
+].filter(Boolean);
 
 const crypto = require('crypto');
 
@@ -112,6 +115,20 @@ for (const targetDir of targetDirs) {
         console.warn(`[BUILD SYNC] Limpieza de assets antiguos omitida:`, rmErr.message);
       }
     }
+    const srcFontsDir = path.join(srcDir, 'fonts');
+    const currentFontFiles = new Set(fs.existsSync(srcFontsDir) ? fs.readdirSync(srcFontsDir) : []);
+    const targetFontsDir = path.join(targetDir, 'fonts');
+    if (fs.existsSync(targetFontsDir) && currentFontFiles.size > 0) {
+      try {
+        for (const f of fs.readdirSync(targetFontsDir)) {
+          if (!currentFontFiles.has(f)) {
+            fs.rmSync(path.join(targetFontsDir, f), { recursive: true, force: true });
+          }
+        }
+      } catch (rmFontErr) {
+        console.warn(`[BUILD SYNC] Limpieza de fuentes antiguas omitida:`, rmFontErr.message);
+      }
+    }
     const legacyPocketLicense = path.join(targetDir, 'pocket-license.html');
     if (fs.existsSync(legacyPocketLicense)) {
       try {
@@ -153,9 +170,16 @@ if (fs.existsSync(ultraRoot) && fs.existsSync(backendRoot)) {
     'routes/whatsapp.js',
     'routes/branches.js',
     'routes/cash.js',
+    'routes/reports.js',
     'routes/users.js',
     'routes/recharges.js',
+    'routes/publicAi.js',
+    'services/StockIntelligenceService.js',
+    'services/product/productMediaService.js',
     'config/dbConfigManager.js',
+    'config/secretVault.js',
+    'utils/dpapiCrypto.js',
+    'utils/hardware-id.js',
     'database/connection.js',
     'database/models/User.js',
     'database/models/TelecomRecharge.js',

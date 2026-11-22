@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { Banknote, CreditCard, RefreshCw, FileText, Share2, UserCheck, AlertTriangle, X, CheckCircle } from 'lucide-react';
 
@@ -12,6 +11,8 @@ export default function MobileCheckoutModal({
   totalUSD,
   totalBS,
   taxUSD,
+  currentIgtfUSD = 0,
+  igtfRate = 3,
   exchangeRate,
   customerDoc,
   setCustomerDoc,
@@ -41,9 +42,6 @@ export default function MobileCheckoutModal({
   splitPaidUSD,
   splitRemainingUSD,
   splitChangeUSD,
-  pagoMovilPhone,
-  pagoMovilId,
-  pagoMovilBank,
   businessInfo,
   paymentReference,
   setPaymentReference,
@@ -149,7 +147,12 @@ export default function MobileCheckoutModal({
               <div>
                 <p className="text-[10px] font-bold text-[#94a3b8] uppercase tracking-wider">Total a Liquidar</p>
                 <p className="font-black text-xl text-[#34d399] font-mono">${totalUSD.toFixed(2)}</p>
-                <p className="text-[10px] text-[#64748b] font-semibold mt-0.5">IVA 16% incluido (${taxUSD.toFixed(2)})</p>
+                <p className="text-[10px] text-[#64748b] font-semibold mt-0.5">
+                  IVA 16% incluido (${taxUSD.toFixed(2)})
+                  {currentIgtfUSD > 0 && (
+                    <span className="text-amber-400 font-bold ml-1.5">• IGTF {igtfRate}% (+${currentIgtfUSD.toFixed(2)})</span>
+                  )}
+                </p>
               </div>
               <div className="text-right">
                 <p className="text-[10px] font-bold text-[#94a3b8] uppercase tracking-wider">Bolívares (Tasa {exchangeRate.toFixed(2)})</p>
@@ -397,8 +400,12 @@ export default function MobileCheckoutModal({
                               onClick={() => {
                                 triggerHaptic(12);
                                 playScanSound();
-                                setAmountPaidBS(totalBS.toFixed(2));
-                                setAmountPaidUSD('');
+                                if (selectedMethod === 'Efectivo USD' || selectedMethod === 'Zelle' || selectedMethod === 'Mixto') {
+                                  handleSelectPaymentMethod('Efectivo Bs');
+                                } else {
+                                  setAmountPaidBS(totalBS.toFixed(2));
+                                  setAmountPaidUSD('');
+                                }
                               }}
                               className={`px-2.5 py-1 rounded-xl text-xs font-black shrink-0 cursor-pointer active:scale-95 transition-colors ${
                                 amountPaidBS === totalBS.toFixed(2) && !amountPaidUSD

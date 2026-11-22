@@ -6,11 +6,19 @@ using System.IO.Compression;
 class Packager {
     private static readonly HashSet<string> ExcludedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
         ".wwebjs_auth",
+        ".test_wwebjs_auth",
         ".wwebjs_cache",
+        "auto-backups",
         "backups",
+        "invoices",
+        "product_images",
+        "supplier_logos",
+        "scratch",
         "logs",
         "dist_installer",
         "dist_final_installer",
+        "dist_modern",
+        "dist_release",
         ".git",
         "bin",
         "obj"
@@ -27,6 +35,15 @@ class Packager {
     };
 
     private static readonly HashSet<string> ExcludedExactFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        ".env",
+        "settings.json",
+        "db-config.json",
+        ".dbcfg.key.dpapi",
+        "secrets.vault.json",
+        ".secrets.key.dpapi",
+        "cloud_mirror_config.json",
+        "private.pem",
+        "serviceAccountKey.json",
         "backup_debug.log",
         "real_token.json",
         "app_payload.zip"
@@ -42,6 +59,16 @@ class Packager {
         foreach (string file in Directory.GetFiles(currentDir)) {
             string fileName = Path.GetFileName(file);
             if (ExcludedExactFiles.Contains(fileName)) continue;
+            if (fileName.StartsWith(".env.", StringComparison.OrdinalIgnoreCase) ||
+                (fileName.IndexOf("private", StringComparison.OrdinalIgnoreCase) >= 0 && fileName.EndsWith(".pem", StringComparison.OrdinalIgnoreCase)) ||
+                fileName.EndsWith(".pfx", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".p12", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".key", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".sqlite-wal", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".sqlite-shm", StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
 
             if (currentDir.Equals(rootDir, StringComparison.OrdinalIgnoreCase)) {
                 bool skip = false;

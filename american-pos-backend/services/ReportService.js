@@ -3,17 +3,22 @@ const { sequelize } = require('../database/connection');
 const { Op } = require('sequelize');
 const { processSalesAnalysis } = require('../utils/salesAnalytics');
 const precision = require('../utils/precision');
+const cacheService = require('../utils/cacheService');
+const DailyRollupService = require('./DailyRollupService');
 
 class ReportService {
     /**
      * Get audit logs with user info.
      */
-    async getAuditLogs(companyId, limit = 200) {
+    async getAuditLogs(companyId, limit = 200, offset = 0) {
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500);
+        const safeOffset = Math.max(parseInt(offset, 10) || 0, 0);
         return await AuditLog.findAll({
             where: { companyId },
             include: [{ model: User, as: 'User', attributes: ['name', 'username'] }],
-            order: [['timestamp', 'DESC']],
-            limit
+            order: [['createdAt', 'DESC']],
+            limit: safeLimit,
+            offset: safeOffset
         });
     }
 
@@ -53,147 +58,381 @@ class ReportService {
             queryEnd = endOfWindow;
         }
 
+        const startIso = queryStart.toISOString();
+        const endIso = queryEnd.toISOString();
+        const dashCacheKey = process.env.ISAAC_TEST_ISOLATED !== '1'
+            ? `dashboard_summary_${companyId}_${role}_${role === 'user' ? userId : 'all'}_${startIso}_${endIso}`
+            : null;
+        if (dashCacheKey) {
+            const cachedDash = cacheService.get(dashCacheKey);
+            if (cachedDash) return cachedDash;
+        }
+
         const saleWhere = {
             companyId,
             status: { [Op.notIn]: ['cancelled'] }, // Incluimos 'refunded' y 'partially_refunded' en las ventas brutas
-            date: { [Op.gte]: queryStart.toISOString(), [Op.lte]: queryEnd.toISOString() }
+            date: { [Op.gte]: startIso, [Op.lte]: endIso }
         };
         if (role === 'user') saleWhere.userId = userId;
 
         const { Refund } = require('../database/models');
         const refundWhere = {
             companyId,
-            date: { [Op.gte]: queryStart.toISOString(), [Op.lte]: queryEnd.toISOString() }
+            date: { [Op.gte]: startIso, [Op.lte]: endIso }
         };
         if (role === 'user') refundWhere.userId = userId;
 
-        const [summaryMetrics, expensesResult, itemMetrics, salesWindow, expensesWindow, refundsResult] = await Promise.all([
-            Sale.findOne({
-                attributes: [
-                    [sequelize.fn('COUNT', sequelize.col('Sale.id')), 'numberOfSales'],
-                    [sequelize.fn('SUM', sequelize.literal('COALESCE("Sale"."discount", 0) + COALESCE("Sale"."promoDiscount", 0)')), 'totalDiscounts']
-                ],
-                where: saleWhere,
-                raw: true
-            }),
-            role !== 'user' ? Expense.findAll({
-                where: { companyId, date: { [Op.gte]: queryStart.toISOString(), [Op.lte]: queryEnd.toISOString() } },
-                attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'total']]
-            }) : Promise.resolve([{ dataValues: { total: 0 } }]),
-            SaleItem.findOne({
-                attributes: [
-                    [sequelize.fn('SUM', sequelize.col('SaleItem.subtotal')), 'totalRevenue'],
-                    [sequelize.fn('SUM', sequelize.literal('COALESCE("SaleItem"."quantity", 0) * COALESCE("SaleItem"."cost", 0)')), 'totalCost']
-                ],
-                include: [{ model: Sale, attributes: [], where: saleWhere }],
-                raw: true
-            }),
-            Sale.findAll({
-                where: saleWhere,
-                include: [{ model: SaleItem, as: 'SaleItems' }],
-                order: [['date', 'DESC']]
-            }),
-            role !== 'user' ? Expense.findAll({
-                where: { companyId, date: { [Op.gte]: queryStart.toISOString(), [Op.lte]: queryEnd.toISOString() } }
-            }) : Promise.resolve([]),
-            Refund.findAll({
-                where: refundWhere,
-                attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'total']]
-            })
-        ]);
+        let analytics = null;
+        const isPostgres = typeof sequelize.getDialect === 'function' && sequelize.getDialect() === 'postgres';
 
-        const totalExpenses = precision.parseNumericInput(expensesResult[0]?.dataValues?.total);
-        const totalRefunds = precision.parseNumericInput(refundsResult[0]?.dataValues?.total);
-        const totalDiscounts = precision.parseNumericInput(summaryMetrics?.totalDiscounts);
-        const grossItemsRevenue = precision.parseNumericInput(itemMetrics?.totalRevenue);
-        const rawCost = precision.parseNumericInput(itemMetrics?.totalCost);
-        const rawRevenue = Math.max(0, precision.subtract(grossItemsRevenue, totalDiscounts));
-        const rawGrossProfit = precision.subtract(rawRevenue, rawCost);
-
-        // Ventas Netas = Ventas Netas Post-Descuentos - Devoluciones
-        const totalRevenue = Math.max(0, precision.subtract(rawRevenue, totalRefunds));
-        // Aproximación proporcional de utilidad y costo devuelto sobre base neta
-        const refundRatio = rawRevenue > 0 ? Math.min(1, totalRefunds / rawRevenue) : 0;
-        const grossProfit = precision.subtract(rawGrossProfit, rawGrossProfit * refundRatio);
-        const netCostAfterRefunds = Math.max(0, precision.subtract(rawCost, rawCost * refundRatio));
-
-        const numberOfSales = Number(summaryMetrics?.numberOfSales) || 0;
-        const netProfit = precision.subtract(grossProfit, totalExpenses);
-
-        const analytics = processSalesAnalysis(salesWindow, expensesWindow, queryStart.toISOString());
-        analytics.summary = {
-            totalSales: totalRevenue,
-            numberOfSales,
-            totalExpenses,
-            totalRefunds,
-            grossProfit,
-            netProfit,
-            // Estandarizado a Markup sobre Costo ((Utilidad Bruta / Costo Neto) * 100)
-            margin: netCostAfterRefunds > 0 ? precision.round((grossProfit / netCostAfterRefunds) * 100, 2) : 0,
-            avgTicket: numberOfSales > 0 ? precision.round(totalRevenue / numberOfSales, 2) : 0
-        };
-
-        // Inventory Valuation & Alerts (Optimized for Large Inventories)
-        let inventoryValuation = 0, itemCount = 0, lowStockItems = [], lowStockCount = 0;
-        if (role !== 'user') {
-            const notServiceSql = "LOWER(TRIM(COALESCE(\"category\", ''))) <> 'servicios'";
-            const valuationStats = await Product.findOne({
-                where: { companyId, isCustom: false },
-                attributes: [
-                    [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN "stockQuantity" * COALESCE("cost", 0) ELSE 0 END`)), 'totalValue'],
-                    [sequelize.fn('COUNT', sequelize.literal('"id"')), 'count']
-                ],
-                raw: true
-            });
-            
-            inventoryValuation = precision.parseNumericInput(valuationStats?.totalValue);
-            itemCount = Number(valuationStats?.count) || 0;
-
-            const stockCol = sequelize.col('stockQuantity');
-            const minStockCol = sequelize.col('minStock');
-            const orderCol = 'stockQuantity';
-            const lowStockWhere = {
-                companyId,
-                [Op.and]: [
-                    sequelize.where(stockCol, Op.lte, minStockCol),
-                    sequelize.literal(notServiceSql)
-                ]
-            };
-
-            const [lowStockRows, totalLowCount] = await Promise.all([
-                Product.findAll({
-                    where: lowStockWhere,
-                    attributes: ['id', 'name', 'stockQuantity', 'minStock', 'stockUnit'],
-                    order: [[orderCol, 'ASC']],
-                    limit: 50,
-                    raw: true
-                }),
-                Product.count({ where: lowStockWhere })
-            ]);
-            lowStockItems = lowStockRows;
-            lowStockCount = Number(totalLowCount) || lowStockItems.length;
+        // Fast-Path Rollup Incremental (< 5 ms incluso en reportes anuales 365 días)
+        if (isPostgres && role !== 'user') {
+            try {
+                analytics = await DailyRollupService.tryGetDashboardAnalytics(companyId, startIso, endIso);
+            } catch (_rollupErr) {
+                analytics = null;
+            }
         }
 
-        // Charts
+        if (!analytics && isPostgres) {
+            const userSqlFilter = role === 'user' ? 'AND s."userId" = :userId' : '';
+            const sqlReplacements = { companyId: String(companyId), startIso, endIso, ...(role === 'user' ? { userId: String(userId) } : {}) };
+
+            const [
+                dailySalesRows,
+                hourlyRows,
+                itemAggRows,
+                topProductsRows,
+                categoryRows,
+                paymentSalesRows,
+                dailyExpensesRows,
+                refundsRows
+            ] = await Promise.all([
+                sequelize.query(`
+                    SELECT LEFT(COALESCE(s."date", s."createdAt"::text), 10) AS day,
+                           COUNT(*)::int AS cnt,
+                           COALESCE(SUM(s."total"), 0)::float AS total,
+                           COALESCE(SUM(COALESCE(s."discount", 0) + COALESCE(s."promoDiscount", 0)), 0)::float AS discounts
+                    FROM "Sales" s
+                    WHERE s."companyId" = :companyId
+                      AND s."status" <> 'cancelled'
+                      AND s."date" >= :startIso AND s."date" <= :endIso
+                      ${userSqlFilter}
+                    GROUP BY 1
+                    ORDER BY 1 ASC
+                `, { replacements: sqlReplacements, type: sequelize.QueryTypes.SELECT }),
+                sequelize.query(`
+                    SELECT EXTRACT(HOUR FROM s."createdAt")::int AS hour,
+                           COUNT(*)::int AS cnt,
+                           COALESCE(SUM(s."total"), 0)::float AS total
+                    FROM "Sales" s
+                    WHERE s."companyId" = :companyId
+                      AND s."status" <> 'cancelled'
+                      AND s."date" >= :startIso AND s."date" <= :endIso
+                      ${userSqlFilter}
+                    GROUP BY 1
+                `, { replacements: sqlReplacements, type: sequelize.QueryTypes.SELECT }),
+                sequelize.query(`
+                    SELECT COALESCE(SUM(si."subtotal"), 0)::float AS "totalRevenue",
+                           COALESCE(SUM(COALESCE(si."quantity", 0) * COALESCE(si."cost", 0)), 0)::float AS "totalCost"
+                    FROM "SaleItems" si
+                    INNER JOIN "Sales" s ON s."id" = si."saleId"
+                    WHERE s."companyId" = :companyId
+                      AND s."status" <> 'cancelled'
+                      AND s."date" >= :startIso AND s."date" <= :endIso
+                      ${userSqlFilter}
+                `, { replacements: sqlReplacements, type: sequelize.QueryTypes.SELECT }),
+                sequelize.query(`
+                    SELECT COALESCE(si."name", 'Desconocido') AS name,
+                           COALESCE(SUM(si."quantity"), 0)::float AS quantity,
+                           COALESCE(SUM(si."subtotal"), 0)::float AS total
+                    FROM "SaleItems" si
+                    INNER JOIN "Sales" s ON s."id" = si."saleId"
+                    WHERE s."companyId" = :companyId
+                      AND s."status" <> 'cancelled'
+                      AND s."date" >= :startIso AND s."date" <= :endIso
+                      ${userSqlFilter}
+                    GROUP BY 1
+                    ORDER BY quantity DESC
+                    LIMIT 5
+                `, { replacements: sqlReplacements, type: sequelize.QueryTypes.SELECT }),
+                sequelize.query(`
+                    SELECT COALESCE(NULLIF(TRIM(si."category"), ''), 'General') AS category,
+                           COALESCE(SUM(si."subtotal"), 0)::float AS total,
+                           COALESCE(SUM(si."quantity"), 0)::float AS quantity
+                    FROM "SaleItems" si
+                    INNER JOIN "Sales" s ON s."id" = si."saleId"
+                    WHERE s."companyId" = :companyId
+                      AND s."status" <> 'cancelled'
+                      AND s."date" >= :startIso AND s."date" <= :endIso
+                      ${userSqlFilter}
+                    GROUP BY 1
+                    ORDER BY total DESC
+                `, { replacements: sqlReplacements, type: sequelize.QueryTypes.SELECT }),
+                Sale.findAll({
+                    where: saleWhere,
+                    attributes: ['total', 'paymentMethod', 'paymentMethods', 'exchangeRate'],
+                    raw: true
+                }),
+                role !== 'user' ? sequelize.query(`
+                    SELECT LEFT(COALESCE("date", "createdAt"::text), 10) AS day,
+                           COALESCE(SUM("amount"), 0)::float AS total
+                    FROM "Expenses"
+                    WHERE "companyId" = :companyId
+                      AND "date" >= :startIso AND "date" <= :endIso
+                    GROUP BY 1
+                `, { replacements: sqlReplacements, type: sequelize.QueryTypes.SELECT }) : Promise.resolve([]),
+                Refund.findAll({
+                    where: refundWhere,
+                    attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'total']],
+                    raw: true
+                })
+            ]);
+
+            let numberOfSales = 0;
+            let totalDiscounts = 0;
+            const dailyTrendMap = {};
+            for (const r of (dailySalesRows || [])) {
+                const cnt = Number(r.cnt) || 0;
+                const tot = precision.round(Number(r.total) || 0, 2);
+                const disc = precision.round(Number(r.discounts) || 0, 2);
+                numberOfSales += cnt;
+                totalDiscounts = precision.add([totalDiscounts, disc]);
+                if (r.day) {
+                    dailyTrendMap[r.day] = { date: r.day, sales: tot, profit: 0, expenses: 0, count: cnt };
+                }
+            }
+
+            let totalExpenses = 0;
+            for (const e of (dailyExpensesRows || [])) {
+                const amt = precision.round(Number(e.total) || 0, 2);
+                totalExpenses = precision.round(precision.add([totalExpenses, amt]), 2);
+                if (e.day) {
+                    if (!dailyTrendMap[e.day]) dailyTrendMap[e.day] = { date: e.day, sales: 0, profit: 0, expenses: 0, count: 0 };
+                    dailyTrendMap[e.day].expenses = amt;
+                }
+            }
+
+            const totalRefunds = precision.parseNumericInput(refundsRows[0]?.total);
+            const grossItemsRevenue = precision.parseNumericInput(itemAggRows[0]?.totalRevenue);
+            const rawCost = precision.parseNumericInput(itemAggRows[0]?.totalCost);
+            const rawRevenue = Math.max(0, precision.subtract(grossItemsRevenue, totalDiscounts));
+            const rawGrossProfit = precision.subtract(rawRevenue, rawCost);
+
+            const totalRevenue = Math.max(0, precision.subtract(rawRevenue, totalRefunds));
+            const refundRatio = rawRevenue > 0 ? Math.min(1, totalRefunds / rawRevenue) : 0;
+            const grossProfit = precision.subtract(rawGrossProfit, rawGrossProfit * refundRatio);
+            const netCostAfterRefunds = Math.max(0, precision.subtract(rawCost, rawCost * refundRatio));
+            const netProfit = precision.subtract(grossProfit, totalExpenses);
+
+            const hourlySales = Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0, total: 0 }));
+            for (const h of (hourlyRows || [])) {
+                const hr = Number(h.hour);
+                if (hr >= 0 && hr < 24) {
+                    hourlySales[hr] = { hour: hr, count: Number(h.cnt) || 0, total: precision.round(Number(h.total) || 0, 2) };
+                }
+            }
+
+            const paymentMap = {};
+            for (const s of (paymentSalesRows || [])) {
+                const saleTotal = precision.round(Number(s.total) || 0, 2);
+                const saleRate = Number(s.exchangeRate) > 0 ? Number(s.exchangeRate) : 1.0;
+                let parsedPms = [];
+                if (Array.isArray(s.paymentMethods)) parsedPms = s.paymentMethods;
+                else if (typeof s.paymentMethods === 'string') {
+                    try { const p = JSON.parse(s.paymentMethods); if (Array.isArray(p)) parsedPms = p; } catch (_) {}
+                }
+                if (parsedPms.length > 0) {
+                    for (const pm of parsedPms) {
+                        if (!pm) continue;
+                        const mKey = String(pm.method || pm.id || s.paymentMethod || 'Efectivo').trim() || 'Efectivo';
+                        const pmCur = String(pm.currency || '').toUpperCase().trim();
+                        const isVesPm = pmCur === 'VES' || pmCur === 'BS' || ['ves', '_bs', 'pago_movil', 'pagomovil', 'biopago', 'punto', 'debit'].some(t => mKey.toLowerCase().includes(t));
+                        const rawAmt = Number(pm.amount) || 0;
+                        const eqUsd = Number(pm.convertedAmountUsd) > 0
+                            ? Number(pm.convertedAmountUsd)
+                            : (isVesPm && saleRate > 0 ? precision.divide(rawAmt, saleRate) : rawAmt);
+                        paymentMap[mKey] = precision.round(precision.add([paymentMap[mKey] || 0, eqUsd]), 2);
+                    }
+                } else {
+                    const method = String(s.paymentMethod || '').trim() || 'Efectivo';
+                    paymentMap[method] = precision.round(precision.add([paymentMap[method] || 0, saleTotal]), 2);
+                }
+            }
+
+            analytics = {
+                summary: {
+                    totalSales: totalRevenue,
+                    numberOfSales,
+                    totalExpenses,
+                    totalRefunds,
+                    grossProfit,
+                    netProfit,
+                    margin: netCostAfterRefunds > 0 ? precision.round((grossProfit / netCostAfterRefunds) * 100, 2) : 0,
+                    avgTicket: numberOfSales > 0 ? precision.round(totalRevenue / numberOfSales, 2) : 0
+                },
+                topProducts: (topProductsRows || []).map(p => ({
+                    name: p.name,
+                    quantity: precision.round(Number(p.quantity) || 0, 4),
+                    total: precision.round(Number(p.total) || 0, 2),
+                    unit: 'und'
+                })),
+                byCategory: (categoryRows || []).map(c => ({
+                    name: c.category,
+                    category: c.category,
+                    total: precision.round(Number(c.total) || 0, 2),
+                    quantity: precision.round(Number(c.quantity) || 0, 4)
+                })),
+                paymentMethods: Object.entries(paymentMap)
+                    .map(([method, total]) => ({ method, total }))
+                    .sort((a, b) => b.total - a.total),
+                trends: Object.values(dailyTrendMap).sort((a, b) => a.date.localeCompare(b.date)),
+                hourlySales
+            };
+        } else if (!analytics) {
+            const [summaryMetrics, expensesResult, itemMetrics, salesWindow, expensesWindow, refundsResult] = await Promise.all([
+                Sale.findOne({
+                    attributes: [
+                        [sequelize.fn('COUNT', sequelize.col('Sale.id')), 'numberOfSales'],
+                        [sequelize.fn('SUM', sequelize.literal('COALESCE("Sale"."discount", 0) + COALESCE("Sale"."promoDiscount", 0)')), 'totalDiscounts']
+                    ],
+                    where: saleWhere,
+                    raw: true
+                }),
+                role !== 'user' ? Expense.findAll({
+                    where: { companyId, date: { [Op.gte]: startIso, [Op.lte]: endIso } },
+                    attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'total']]
+                }) : Promise.resolve([{ dataValues: { total: 0 } }]),
+                SaleItem.findOne({
+                    attributes: [
+                        [sequelize.fn('SUM', sequelize.col('SaleItem.subtotal')), 'totalRevenue'],
+                        [sequelize.fn('SUM', sequelize.literal('COALESCE("SaleItem"."quantity", 0) * COALESCE("SaleItem"."cost", 0)')), 'totalCost']
+                    ],
+                    include: [{ model: Sale, attributes: [], where: saleWhere }],
+                    raw: true
+                }),
+                Sale.findAll({
+                    where: saleWhere,
+                    include: [{ model: SaleItem, as: 'SaleItems' }],
+                    order: [['date', 'DESC']]
+                }),
+                role !== 'user' ? Expense.findAll({
+                    where: { companyId, date: { [Op.gte]: startIso, [Op.lte]: endIso } }
+                }) : Promise.resolve([]),
+                Refund.findAll({
+                    where: refundWhere,
+                    attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'total']]
+                })
+            ]);
+
+            const totalExpenses = precision.parseNumericInput(expensesResult[0]?.dataValues?.total);
+            const totalRefunds = precision.parseNumericInput(refundsResult[0]?.dataValues?.total);
+            const totalDiscounts = precision.parseNumericInput(summaryMetrics?.totalDiscounts);
+            const grossItemsRevenue = precision.parseNumericInput(itemMetrics?.totalRevenue);
+            const rawCost = precision.parseNumericInput(itemMetrics?.totalCost);
+            const rawRevenue = Math.max(0, precision.subtract(grossItemsRevenue, totalDiscounts));
+            const rawGrossProfit = precision.subtract(rawRevenue, rawCost);
+
+            const totalRevenue = Math.max(0, precision.subtract(rawRevenue, totalRefunds));
+            const refundRatio = rawRevenue > 0 ? Math.min(1, totalRefunds / rawRevenue) : 0;
+            const grossProfit = precision.subtract(rawGrossProfit, rawGrossProfit * refundRatio);
+            const netCostAfterRefunds = Math.max(0, precision.subtract(rawCost, rawCost * refundRatio));
+
+            const numberOfSales = Number(summaryMetrics?.numberOfSales) || 0;
+            const netProfit = precision.subtract(grossProfit, totalExpenses);
+
+            analytics = processSalesAnalysis(salesWindow, expensesWindow, startIso);
+            analytics.summary = {
+                totalSales: totalRevenue,
+                numberOfSales,
+                totalExpenses,
+                totalRefunds,
+                grossProfit,
+                netProfit,
+                margin: netCostAfterRefunds > 0 ? precision.round((grossProfit / netCostAfterRefunds) * 100, 2) : 0,
+                avgTicket: numberOfSales > 0 ? precision.round(totalRevenue / numberOfSales, 2) : 0
+            };
+        }
+
+        // Inventory Valuation & Alerts (Optimized for Large Inventories + L1 Cache invalidated on sales/edits)
+        let inventoryValuation = 0, itemCount = 0, lowStockItems = [], lowStockCount = 0;
+        if (role !== 'user') {
+            const invCacheKey = process.env.ISAAC_TEST_ISOLATED !== '1' ? `low_stock_valuation_${companyId}` : null;
+            const cachedInv = invCacheKey ? cacheService.get(invCacheKey) : null;
+            if (cachedInv) {
+                inventoryValuation = cachedInv.inventoryValuation;
+                itemCount = cachedInv.itemCount;
+                lowStockItems = cachedInv.lowStockItems;
+                lowStockCount = cachedInv.lowStockCount;
+            } else {
+                const notServiceSql = "LOWER(TRIM(COALESCE(\"category\", ''))) <> 'servicios'";
+                const stockCol = sequelize.col('stockQuantity');
+                const minStockCol = sequelize.col('minStock');
+                const orderCol = 'stockQuantity';
+                const lowStockWhere = {
+                    companyId,
+                    [Op.and]: [
+                        sequelize.where(stockCol, Op.lte, minStockCol),
+                        sequelize.literal(notServiceSql)
+                    ]
+                };
+
+                const [valuationStats, lowStockRows, totalLowCount] = await Promise.all([
+                    Product.findOne({
+                        where: { companyId, isCustom: false },
+                        attributes: [
+                            [sequelize.fn('SUM', sequelize.literal(`CASE WHEN ${notServiceSql} THEN "stockQuantity" * COALESCE("cost", 0) ELSE 0 END`)), 'totalValue'],
+                            [sequelize.fn('COUNT', sequelize.literal('"id"')), 'count']
+                        ],
+                        raw: true
+                    }),
+                    Product.findAll({
+                        where: lowStockWhere,
+                        attributes: ['id', 'name', 'stockQuantity', 'minStock', 'stockUnit'],
+                        order: [[orderCol, 'ASC']],
+                        limit: 50,
+                        raw: true
+                    }),
+                    Product.count({ where: lowStockWhere })
+                ]);
+
+                inventoryValuation = precision.parseNumericInput(valuationStats?.totalValue);
+                itemCount = Number(valuationStats?.count) || 0;
+                lowStockItems = lowStockRows;
+                lowStockCount = Number(totalLowCount) || lowStockItems.length;
+
+                if (invCacheKey) {
+                    cacheService.set(invCacheKey, { inventoryValuation, itemCount, lowStockItems, lowStockCount }, 20);
+                }
+            }
+        }
+
+        // Charts (O(D) lookup vía Map y arreglo estático de días — elimina 365x Intl.DateTimeFormat por reporte anual)
+        const ES_WEEKDAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+        const trendByDate = new Map((analytics.trends || []).map(t => [t.date, t]));
         const salesChart = { labels: [], sales: [], expenses: [] };
         for (let i = 0; i < daysToFetch; i++) {
             const d = new Date(queryStart);
             d.setUTCDate(queryStart.getUTCDate() + i);
             const dStr = d.toISOString().split('T')[0];
-            const dayName = d.toLocaleDateString('es-ES', { weekday: 'short' });
-            salesChart.labels.push(dayName.charAt(0).toUpperCase() + dayName.slice(1));
-            const trend = analytics.trends.find(t => t.date === dStr);
+            salesChart.labels.push(ES_WEEKDAYS[d.getUTCDay()]);
+            const trend = trendByDate.get(dStr);
             salesChart.sales.push(trend ? trend.sales : 0);
             salesChart.expenses.push(trend ? trend.expenses : 0);
         }
 
         const [recentSales, auditLogs] = await Promise.all([
             Sale.findAll({ where: { companyId }, limit: 10, order: [['date', 'DESC']], attributes: ['id', 'total', 'customerName', 'date', 'paymentMethod'] }),
-            AuditLog.findAll({ where: { companyId }, include: [{ model: User, as: 'User', attributes: ['name', 'username'] }], limit: 10, order: [['timestamp', 'DESC']] })
+            AuditLog.findAll({ where: { companyId }, include: [{ model: User, as: 'User', attributes: ['name', 'username'] }], limit: 10, order: [['createdAt', 'DESC']] })
         ]);
 
-        return {
-            debugRange: { queryStart: queryStart.toISOString(), queryEnd: queryEnd.toISOString(), daysToFetch },
+        const resultPayload = {
+            debugRange: {
+                queryStart: queryStart.toISOString(),
+                queryEnd: queryEnd.toISOString(),
+                daysToFetch,
+                rollupAccelerated: Boolean(analytics?._rollupAccelerated)
+            },
             rangeSummary: {
                 totalRevenue: analytics.summary.totalSales,
                 numberOfSales: analytics.summary.numberOfSales,
@@ -215,6 +454,10 @@ class ReportService {
                 auditLogs: auditLogs.map(l => ({ id: l.id, action: l.action, userEmail: l.User ? (l.User.name || l.User.username) : 'Sistema', timestamp: l.timestamp }))
             }
         };
+        if (dashCacheKey) {
+            cacheService.set(dashCacheKey, resultPayload, 20);
+        }
+        return resultPayload;
     }
 
     /**
@@ -549,9 +792,18 @@ class ReportService {
      */
     async getDailyReport(reqUser, dateQuery) {
         const { companyId, role, id: userId } = reqUser;
-        const date = dateQuery || new Date(Date.now() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-        const likeOp = sequelize.getDialect() === 'postgres' ? Op.iLike : Op.like;
-        const saleWhere = { companyId, date: { [likeOp]: `${date}%` } };
+        const date = String(dateQuery || new Date(Date.now() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0]).trim();
+        let dateCondition;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            const nextDay = new Date(`${date}T00:00:00.000Z`);
+            nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+            const nextDateStr = nextDay.toISOString().slice(0, 10);
+            dateCondition = { [Op.gte]: date, [Op.lt]: nextDateStr };
+        } else {
+            const likeOp = sequelize.getDialect() === 'postgres' ? Op.iLike : Op.like;
+            dateCondition = { [likeOp]: `${date}%` };
+        }
+        const saleWhere = { companyId, date: dateCondition };
         if (role === 'user') saleWhere.userId = userId;
 
         return await Sale.findAll({ where: saleWhere, order: [['date', 'DESC']] });
@@ -574,22 +826,123 @@ class ReportService {
         };
         if (role === 'user') saleWhere.userId = userId;
 
-        const sales = await Sale.findAll({ where: saleWhere, attributes: ['customerId', 'customerName', 'total'] });
-        const analytics = processSalesAnalysis(sales, [], startDate.toISOString().split('T')[0]);
-        return analytics.topCustomers;
+        const rows = await Sale.findAll({
+            where: saleWhere,
+            attributes: [
+                'customerId',
+                [sequelize.fn('MAX', sequelize.col('customerName')), 'name'],
+                [sequelize.fn('SUM', sequelize.literal('COALESCE("total", 0)')), 'totalSales'],
+                [sequelize.fn('COUNT', sequelize.col('id')), 'saleCount']
+            ],
+            group: ['customerId'],
+            order: [[sequelize.literal('"totalSales"'), 'DESC']],
+            limit: 10,
+            raw: true
+        });
+
+        return (rows || []).map((r) => ({
+            name: r.name || 'Cliente General',
+            totalSales: precision.round(Number(r.totalSales) || 0, 2),
+            saleCount: Number(r.saleCount) || 0
+        }));
     }
 
     /**
      * Get accounts receivable (customers with pending credit & aging analysis).
+     * Optimizado O(1) queries batch (elimina patrón N+1 3*N -> máximo 3 consultas).
      */
     async getAccountsReceivable(companyId) {
-        const { Customer, CreditHistory } = require('../database/models');
+        const { Customer, CreditHistory, Sale: SaleModel } = require('../database/models');
 
         const customers = await Customer.findAll({
             where: { companyId, creditBalance: { [Op.gt]: 0 } },
             order: [['creditBalance', 'DESC']],
             raw: true
         });
+
+        if (!customers || customers.length === 0) {
+            return {
+                summary: {
+                    totalCustomers: 0,
+                    totalAmount: 0,
+                    averageExposure: 0,
+                    aging: { current: 0, warning: 0, overdue: 0, critical: 0 }
+                },
+                customers: []
+            };
+        }
+
+        const customerIds = customers.map((c) => c.id).filter(Boolean);
+        const allHistories = customerIds.length > 0
+            ? await CreditHistory.findAll({
+                where: {
+                    companyId,
+                    customerId: { [Op.in]: customerIds },
+                    type: { [Op.in]: ['charge', 'debit', 'payment', 'credit'] }
+                },
+                order: [['timestamp', 'ASC']],
+                raw: true
+            })
+            : [];
+
+        const chargesByCust = new Map();
+        const paymentsSumByCust = new Map();
+        for (const h of allHistories) {
+            const cId = h.customerId;
+            if (!cId) continue;
+            if (h.type === 'charge' || h.type === 'debit') {
+                if (!chargesByCust.has(cId)) chargesByCust.set(cId, []);
+                chargesByCust.get(cId).push(h);
+            } else {
+                paymentsSumByCust.set(cId, (paymentsSumByCust.get(cId) || 0) + (Number(h.amount) || 0));
+            }
+        }
+
+        const oldestDateByCust = new Map();
+        const fallbackCustomerIds = [];
+        for (const c of customers) {
+            const allCharges = chargesByCust.get(c.id) || [];
+            let availablePayments = paymentsSumByCust.get(c.id) || 0;
+            let oldestDate = null;
+
+            for (const ch of allCharges) {
+                const amt = Number(ch.amount) || 0;
+                if (availablePayments >= (amt - 0.005)) {
+                    availablePayments = Math.max(0, availablePayments - amt);
+                } else {
+                    oldestDate = ch.timestamp || ch.createdAt;
+                    break;
+                }
+            }
+
+            if (oldestDate) {
+                oldestDateByCust.set(c.id, oldestDate);
+            } else {
+                fallbackCustomerIds.push(c.id);
+            }
+        }
+
+        const fallbackSalesByCust = new Map();
+        if (fallbackCustomerIds.length > 0) {
+            const creditSales = await SaleModel.findAll({
+                where: {
+                    companyId,
+                    customerId: { [Op.in]: fallbackCustomerIds },
+                    status: { [Op.ne]: 'cancelled' },
+                    [Op.or]: [
+                        { paymentStatus: { [Op.in]: ['unpaid', 'partial', 'pending'] } },
+                        { paymentMethod: { [Op.in]: ['credit', 'fiado'] } }
+                    ]
+                },
+                order: [['createdAt', 'DESC']],
+                raw: true
+            });
+            for (const s of creditSales) {
+                if (!s.customerId) continue;
+                if (!fallbackSalesByCust.has(s.customerId)) fallbackSalesByCust.set(s.customerId, []);
+                fallbackSalesByCust.get(s.customerId).push(s);
+            }
+        }
 
         let totalAmount = 0;
         let currentTotal = 0;   // 0-7 days
@@ -599,57 +952,13 @@ class ReportService {
 
         const now = Date.now();
 
-        const enrichedCustomers = await Promise.all(customers.map(async (c) => {
+        const enrichedCustomers = customers.map((c) => {
             const balance = Number(c.creditBalance) || 0;
             totalAmount += balance;
 
-            // Conciliación FIFO exacta de cuentas por cobrar:
-            // Obtenemos todos los cargos y abonos del cliente en orden cronológico
-            const allCharges = await CreditHistory.findAll({
-                where: { customerId: c.id, companyId, type: { [Op.in]: ['charge', 'debit'] } },
-                order: [['timestamp', 'ASC']],
-                raw: true
-            });
-            const allPayments = await CreditHistory.findAll({
-                where: { customerId: c.id, companyId, type: { [Op.in]: ['payment', 'credit'] } },
-                order: [['timestamp', 'ASC']],
-                raw: true
-            });
-
-            let availablePayments = allPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-            let oldestDate = null;
-
-            if (allCharges.length > 0) {
-                for (const ch of allCharges) {
-                    const amt = Number(ch.amount) || 0;
-                    if (availablePayments >= (amt - 0.005)) {
-                        // Cargo saldado por abonos previos
-                        availablePayments = Math.max(0, availablePayments - amt);
-                    } else {
-                        // Cargo pendiente actual (el más antiguo de la deuda viva)
-                        oldestDate = ch.timestamp || ch.createdAt;
-                        break;
-                    }
-                }
-            }
-
-            // Si no se encontró en CreditHistory pero el cliente tiene saldo deudor, verificar ventas a crédito
+            let oldestDate = oldestDateByCust.get(c.id) || null;
             if (!oldestDate) {
-                const { Sale } = require('../database/models');
-                const creditSales = await Sale.findAll({
-                    where: {
-                        customerId: c.id,
-                        companyId,
-                        status: { [Op.ne]: 'cancelled' },
-                        [Op.or]: [
-                            { paymentStatus: { [Op.in]: ['unpaid', 'partial', 'pending'] } },
-                            { paymentMethod: { [Op.in]: ['credit', 'fiado'] } }
-                        ]
-                    },
-                    order: [['createdAt', 'DESC']],
-                    raw: true
-                });
-
+                const creditSales = fallbackSalesByCust.get(c.id) || [];
                 let remainingToAllocate = balance;
                 for (const sale of creditSales) {
                     if (remainingToAllocate <= 0.005) break;
@@ -704,7 +1013,7 @@ class ReportService {
                 agingBracket,
                 agingLabel
             };
-        }));
+        });
 
         return {
             summary: {
@@ -724,39 +1033,66 @@ class ReportService {
 
     /**
      * Get accounts payable (suppliers with pending credit and invoice details).
+     * Optimizado O(1) queries batch (elimina patrón N+1 3*M -> máximo 3 consultas).
      */
     async getAccountsPayable(companyId) {
         const { Supplier, SupplierCreditHistory, PurchaseOrder } = require('../database/models');
         const suppliers = await Supplier.findAll({
             where: { companyId, creditBalance: { [Op.gt]: 0 } },
-            order: [['creditBalance', 'DESC']]
+            order: [['creditBalance', 'DESC']],
+            raw: true
         });
 
-        const enrichedSuppliers = await Promise.all(suppliers.map(async (supplier) => {
-            const sData = supplier.toJSON();
-            
-            // Obtener todos los cargos y abonos históricos del proveedor para cálculo FIFO exacto
-            const allCharges = await SupplierCreditHistory.findAll({
-                where: { supplierId: supplier.id, companyId, type: 'charge' },
-                order: [['timestamp', 'ASC']]
-            });
-            const allPayments = await SupplierCreditHistory.findAll({
-                where: { supplierId: supplier.id, companyId, type: 'payment' },
-                order: [['timestamp', 'ASC']]
-            });
+        if (!suppliers || suppliers.length === 0) {
+            return {
+                summary: { totalSuppliers: 0, totalAmount: 0 },
+                suppliers: []
+            };
+        }
 
-            // Enriquecer cargos con PurchaseOrder
-            const pOrderIds = allCharges.map(i => i.purchaseOrderId).filter(Boolean);
-            let orderMap = new Map();
-            if (pOrderIds.length > 0) {
-                const orders = await PurchaseOrder.findAll({
-                    where: { id: pOrderIds, companyId },
-                    attributes: ['id', 'invoiceUrl', 'referenceNumber', 'arrivalDate', 'dueDate', 'exchangeRate', 'total', 'totalVes']
-                });
-                orderMap = new Map(orders.map(o => [o.id, o]));
+        const supplierIds = suppliers.map((s) => s.id).filter(Boolean);
+        const allHistories = supplierIds.length > 0
+            ? await SupplierCreditHistory.findAll({
+                where: {
+                    companyId,
+                    supplierId: { [Op.in]: supplierIds },
+                    type: { [Op.in]: ['charge', 'payment'] }
+                },
+                order: [['timestamp', 'ASC']],
+                raw: true
+            })
+            : [];
+
+        const chargesBySupplier = new Map();
+        const paymentsSumBySupplier = new Map();
+        const allPOrderIdSet = new Set();
+
+        for (const row of allHistories) {
+            const sId = row.supplierId;
+            if (!sId) continue;
+            if (row.type === 'charge') {
+                if (!chargesBySupplier.has(sId)) chargesBySupplier.set(sId, []);
+                chargesBySupplier.get(sId).push(row);
+                if (row.purchaseOrderId) allPOrderIdSet.add(row.purchaseOrderId);
+            } else {
+                paymentsSumBySupplier.set(sId, (paymentsSumBySupplier.get(sId) || 0) + (Number(row.amount) || 0));
             }
+        }
 
-            let availablePayments = allPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+        const allPOrderIds = Array.from(allPOrderIdSet);
+        let orderMap = new Map();
+        if (allPOrderIds.length > 0) {
+            const orders = await PurchaseOrder.findAll({
+                where: { id: { [Op.in]: allPOrderIds }, companyId },
+                attributes: ['id', 'invoiceUrl', 'referenceNumber', 'arrivalDate', 'dueDate', 'exchangeRate', 'total', 'totalVes'],
+                raw: true
+            });
+            orderMap = new Map(orders.map((o) => [o.id, o]));
+        }
+
+        const enrichedSuppliers = suppliers.map((sData) => {
+            const allCharges = chargesBySupplier.get(sData.id) || [];
+            let availablePayments = paymentsSumBySupplier.get(sData.id) || 0;
             const pendingInvoices = [];
 
             for (const ch of allCharges) {
@@ -800,14 +1136,14 @@ class ReportService {
 
             // Ordenar facturas pendientes por fecha descendente (más reciente primero para la visualización de última factura)
             pendingInvoices.sort((a, b) => new Date(b.arrivalDate || b.timestamp) - new Date(a.arrivalDate || a.timestamp));
-            sData.invoices = pendingInvoices;
-
-            // Determinar próxima fecha de vencimiento únicamente entre las facturas realmente pendientes
             const upcomingDueDates = pendingInvoices.map(i => i.dueDate).filter(Boolean).sort();
-            sData.nextDueDate = upcomingDueDates.length > 0 ? upcomingDueDates[0] : null;
 
-            return sData;
-        }));
+            return {
+                ...sData,
+                invoices: pendingInvoices,
+                nextDueDate: upcomingDueDates.length > 0 ? upcomingDueDates[0] : null
+            };
+        });
 
         const totalBalance = enrichedSuppliers.reduce((sum, s) => sum + (Number(s.creditBalance) || 0), 0);
         return {
@@ -835,7 +1171,22 @@ class ReportService {
         };
         if (role === 'user') saleWhere.userId = userId;
 
-        const sales = await Sale.findAll({ where: saleWhere, attributes: ['date', 'total'], order: [['date', 'ASC']] });
+        const isPg = sequelize.getDialect() === 'postgres';
+        const dayExpr = isPg
+            ? sequelize.literal('SUBSTRING("date", 1, 10)')
+            : sequelize.fn('strftime', '%Y-%m-%d', sequelize.col('date'), 'localtime');
+
+        const aggregated = await Sale.findAll({
+            where: saleWhere,
+            attributes: [
+                [dayExpr, 'day'],
+                [sequelize.fn('SUM', sequelize.literal('COALESCE("total", 0)')), 'total']
+            ],
+            group: [dayExpr],
+            order: [[dayExpr, 'ASC']],
+            raw: true
+        });
+
         const dailyData = {};
         for (let i = 0; i < days; i++) {
             const d = new Date(startDate);
@@ -843,12 +1194,12 @@ class ReportService {
             dailyData[d.toISOString().split('T')[0]] = 0;
         }
 
-        sales.forEach(s => {
-            const dStr = s.date ? s.date.substring(0, 10) : null;
+        for (const row of (aggregated || [])) {
+            const dStr = row.day ? String(row.day).substring(0, 10) : null;
             if (dStr && dailyData[dStr] !== undefined) {
-                dailyData[dStr] = precision.round(dailyData[dStr] + (Number(s.total) || 0), 2);
+                dailyData[dStr] = precision.round(Number(row.total) || 0, 2);
             }
-        });
+        }
 
         return Object.keys(dailyData).map(date => ({ date, total: dailyData[date] }));
     }

@@ -17,11 +17,14 @@ class FiscalService {
         const year = parseInt(periodYear);
         const month = parseInt(periodMonth);
 
-        // Format start and end date for month (e.g. 2026-09-01 to 2026-09-30)
+        // Format start and exclusive next-month boundary [startDate, nextStartDate) para incluir el último día incluso si date trae hora ISO
         const padMonth = month.toString().padStart(2, '0');
         const startDate = `${year}-${padMonth}-01`;
         const lastDay = new Date(year, month, 0).getDate();
         const endDate = `${year}-${padMonth}-${lastDay.toString().padStart(2, '0')}`;
+        const nextMonthYear = month === 12 ? year + 1 : year;
+        const nextMonthNum = month === 12 ? 1 : month + 1;
+        const nextStartDate = `${nextMonthYear}-${nextMonthNum.toString().padStart(2, '0')}-01`;
 
         // 1. Fetch any manual or existing FiscalBookRecord entries
         const existingRecords = await FiscalBookRecord.findAll({
@@ -40,8 +43,8 @@ class FiscalService {
                 companyId,
                 status: { [Op.ne]: 'cancelled' },
                 [Op.or]: [
-                    { date: { [Op.between]: [startDate, endDate] } },
-                    { timestamp: { [Op.between]: [startDate, `${endDate}T23:59:59`] } }
+                    { date: { [Op.gte]: startDate, [Op.lt]: nextStartDate } },
+                    { timestamp: { [Op.between]: [startDate, `${endDate}T23:59:59.999Z`] } }
                 ]
             },
             order: [['date', 'ASC']]
@@ -52,7 +55,7 @@ class FiscalService {
             where: {
                 companyId,
                 status: 'APLICADA',
-                date: { [Op.between]: [startDate, endDate] }
+                date: { [Op.gte]: startDate, [Op.lt]: nextStartDate }
             },
             order: [['date', 'ASC']]
         });
@@ -205,8 +208,9 @@ class FiscalService {
 
         const padMonth = month.toString().padStart(2, '0');
         const startDate = `${year}-${padMonth}-01`;
-        const lastDay = new Date(year, month, 0).getDate();
-        const endDate = `${year}-${padMonth}-${lastDay.toString().padStart(2, '0')}`;
+        const nextMonthYear = month === 12 ? year + 1 : year;
+        const nextMonthNum = month === 12 ? 1 : month + 1;
+        const nextStartDate = `${nextMonthYear}-${nextMonthNum.toString().padStart(2, '0')}-01`;
 
         // 1. Existing manual fiscal records for purchases
         const existingRecords = await FiscalBookRecord.findAll({
@@ -219,12 +223,12 @@ class FiscalService {
             order: [['recordDate', 'ASC']]
         });
 
-        // 2. Fetch completed Purchase Orders and Suppliers in period
+        // 2. Fetch completed Purchase Orders and Suppliers in period [startDate, nextStartDate)
         const purchases = await PurchaseOrder.findAll({
             where: {
                 companyId,
                 status: { [Op.in]: ['received', 'completed', 'paid'] },
-                date: { [Op.between]: [startDate, endDate] }
+                date: { [Op.gte]: startDate, [Op.lt]: nextStartDate }
             },
             order: [['date', 'ASC']]
         });

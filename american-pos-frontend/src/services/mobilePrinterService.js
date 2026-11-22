@@ -6,7 +6,7 @@
  *  3. Silent Iframe Web Print (Standard browser fallback without blank popup windows)
  */
 
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { formatSaleToEscPos } from '../utils/escposFormatter';
 import { PosNativeHardware } from './api';
 
@@ -73,7 +73,7 @@ class MobilePrinterService {
                         }
                     }
                     if (this.characteristic) break;
-                } catch (_e) {}
+                } catch { /* Servicio GATT opcional no presente en este dispositivo */ }
             }
 
             if (!this.characteristic) {
@@ -282,7 +282,9 @@ class MobilePrinterService {
                             localStorage.setItem('pos_mobile_bt_printer_last', targetMac);
                             console.log('[NativePrinter] Auto-detectada impresora vinculada:', paired[0].name, targetMac);
                         }
-                    } catch (_pErr) {}
+                    } catch (pErr) {
+                        console.warn('[NativePrinter] No se pudo consultar impresoras vinculadas:', pErr?.message);
+                    }
                 }
 
                 const base64Data = this.toBase64(escPosContent);
@@ -427,7 +429,9 @@ class MobilePrinterService {
         for (const listener of this.queueListeners) {
             try {
                 listener(status);
-            } catch (_) {}
+            } catch (err) {
+                console.warn('[PrinterSpooler] Error en listener de cola:', err?.message);
+            }
         }
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('pos-printer-spooler-status', { detail: status }));

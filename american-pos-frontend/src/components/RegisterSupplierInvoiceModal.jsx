@@ -1,20 +1,32 @@
 import { useState, useEffect, useRef } from 'react';
-import { 
-    X, FileText, Upload, Calendar, DollarSign, 
-    Truck, Hash, Clock, CheckCircle2, AlertCircle, 
-    ScanLine, RefreshCw, FileUp, ArrowRight, Printer,
-    Eye, Trash2, Loader2, Check, ShieldCheck, History
+import {
+    FileText, 
+    Calendar, 
+    DollarSign, 
+    Truck, 
+    Hash, 
+    Clock, 
+    CheckCircle2, 
+    ScanLine, 
+    RefreshCw, 
+    FileUp, 
+    ArrowRight, 
+    Printer, 
+    Eye, 
+    Trash2, 
+    Loader2, 
+    Check, 
+    History
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import BaseModal from './BaseModal';
 import PrinterScanModal from './PrinterScanModal';
 import InvoiceViewerModal from './InvoiceViewerModal';
-import { fetchGlobalSettings, formatMoney } from '../utils/format';
+import { fetchGlobalSettings } from '../utils/format';
 
 export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSuccess, defaultSupplier = null }) {
     const [suppliers, setSuppliers] = useState([]);
-    const [loadingSuppliers, setLoadingSuppliers] = useState(false);
     const [submitting, setSubmitting] = useState(false);
 
     // Form fields
@@ -29,7 +41,6 @@ export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSucces
     // File / Scanner states
     const [selectedFile, setSelectedFile] = useState(null);
     const [scannedInvoiceUrl, setScannedInvoiceUrl] = useState(null);
-    const [filePreview, setFilePreview] = useState(null);
     const fileInputRef = useRef(null);
 
     // Printer Scan Modal state
@@ -69,19 +80,15 @@ export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSucces
         setNotes('');
         setSelectedFile(null);
         setScannedInvoiceUrl(null);
-        setFilePreview(null);
         setAiExtractionInfo(null);
     };
 
     const loadSuppliers = async () => {
         try {
-            setLoadingSuppliers(true);
             const res = await api.get('/suppliers');
             setSuppliers(Array.isArray(res.data) ? res.data : []);
         } catch (err) {
             console.error('Error loading suppliers:', err);
-        } finally {
-            setLoadingSuppliers(false);
         }
     };
 
@@ -193,13 +200,6 @@ export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSucces
             }
             setSelectedFile(file);
             setScannedInvoiceUrl(null);
-            if (file.type.startsWith('image/')) {
-                const reader = new FileReader();
-                reader.onload = (ev) => setFilePreview(ev.target.result);
-                reader.readAsDataURL(file);
-            } else {
-                setFilePreview('PDF');
-            }
 
             // Auto-trigger AI Extraction
             handleExtractDataFromInvoice(file);
@@ -225,7 +225,6 @@ export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSucces
                 const invoiceUrl = res.data.invoiceUrl;
                 setScannedInvoiceUrl(invoiceUrl);
                 setSelectedFile(null);
-                setFilePreview(invoiceUrl);
                 setIsPrinterModalOpen(false);
                 toast.success('¡Factura física escaneada con éxito!');
 
@@ -569,7 +568,6 @@ export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSucces
                                     type="button"
                                     onClick={() => {
                                         setScannedInvoiceUrl(null);
-                                        setFilePreview(null);
                                         setAiExtractionInfo(null);
                                     }}
                                     className="min-w-[38px] min-h-[38px] flex items-center justify-center p-2 text-rose-500 hover:bg-rose-500/10 rounded-xl transition-colors cursor-pointer"
@@ -629,7 +627,6 @@ export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSucces
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 setSelectedFile(null);
-                                                setFilePreview(null);
                                                 setAiExtractionInfo(null);
                                             }}
                                             className="min-w-[38px] min-h-[38px] flex items-center justify-center p-2 text-rose-500 hover:bg-rose-500/10 rounded-xl transition-colors cursor-pointer"
@@ -649,7 +646,7 @@ export default function RegisterSupplierInvoiceModal({ isOpen, onClose, onSucces
                                         </div>
                                     </div>
                                     <p className="text-xs font-black text-slate-700 dark:text-slate-200 uppercase tracking-wide">
-                                        Arrastra un archivo PDF / Imagen o usa el botón "Escanear con Impresora"
+                                        Arrastra un archivo PDF / Imagen o usa el botón &ldquo;Escanear con Impresora&rdquo;
                                     </p>
                                     <p className="text-[10px] text-slate-400">
                                         Formatos soportados: PDF, JPG, PNG, Escaneo WIA (Hasta 15MB) • <strong>Extracción y Tasa BCV Histórica</strong>

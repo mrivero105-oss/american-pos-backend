@@ -1,16 +1,38 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { 
-    X, Save, Banknote, CreditCard, DollarSign, Calendar, 
-    CheckCircle2, Circle, Wallet, Send, RefreshCcw, QrCode, Copy, Check,
-    Maximize2, Minimize2, Building2, Smartphone, ArrowRight, Clock,
-    Receipt, Calculator, AlertCircle, MessageCircle, CheckCheck, Coins, ShieldCheck
+import {
+    X, 
+    Save, 
+    Banknote, 
+    CreditCard, 
+    DollarSign, 
+    Calendar, 
+    CheckCircle2, 
+    Circle, 
+    Wallet, 
+    Send, 
+    RefreshCcw, 
+    QrCode, 
+    Copy, 
+    Check, 
+    Maximize2, 
+    Minimize2, 
+    Building2, 
+    Receipt, 
+    Calculator, 
+    MessageCircle, 
+    CheckCheck, 
+    Coins, 
+    ShieldCheck
 } from 'lucide-react';
 import api from '../services/api';
 import ConfirmModal from './ConfirmModal';
-import { 
-    formatMoney, formatBs, formatUSD, getGlobalSettings, 
-    isSingleCurrencyMode, isDollarOnlyCountry, precisionRound 
+import {
+    formatBs, 
+    getGlobalSettings, 
+    isSingleCurrencyMode, 
+    isDollarOnlyCountry, 
+    precisionRound
 } from '../utils/format';
 import { generateBinanceQR } from '../utils/binanceQR';
 import BaseModal from './BaseModal';
@@ -71,29 +93,8 @@ export default function AbonoModal({ isOpen, onClose, onSave, customer = null, p
     const exchangeRate = Number(globalSettings?.exchangeRate || globalSettings?.rate || 1);
     const effectiveBinanceRate = binanceRate > 0 ? binanceRate : exchangeRate;
 
-    // Reset y carga al abrir el modal
-    useEffect(() => {
-        if (isOpen) {
-            setFormData({
-                amount: '',
-                method: 'cash',
-                notes: 'Abono manual a cuenta de cliente'
-            });
-            setPendingSales([]);
-            setSelectedSaleIds([]);
-            setReference('');
-            setCashReceived('');
-            setShowBinanceQr(false);
-
-            if (customer?.id) {
-                fetchPendingSales();
-            }
-            fetchFinancialSettings();
-        }
-    }, [isOpen, customer?.id]);
-
     // Consultar configuraciones financieras de la empresa y Binance
-    const fetchFinancialSettings = async () => {
+    const fetchFinancialSettings = useCallback(async () => {
         try {
             const [binanceRes, businessRes] = await Promise.allSettled([
                 api.get('/settings/binance'),
@@ -125,8 +126,45 @@ export default function AbonoModal({ isOpen, onClose, onSave, customer = null, p
                     zelleEmail: bInfo.zelleEmail || bInfo.email || ''
                 });
             }
-        } catch (_) {}
-    };
+        } catch (caughtErr) { console.warn('[AbonoModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
+    }, []);
+
+    // Cargar historial de ventas a crédito pendientes del cliente
+    const fetchPendingSales = useCallback(async () => {
+        if (!customer?.id) return;
+        try {
+            setLoadingSales(true);
+            const { data } = await api.get(`/sales?customerId=${customer.id}&paymentMethod=fiado&status=completed`);
+            const sales = data.data || [];
+            const filtered = sales.filter(s => s.paymentStatus !== 'paid');
+            setPendingSales(filtered);
+        } catch (error) {
+            console.error('Error fetching pending sales:', error);
+        } finally {
+            setLoadingSales(false);
+        }
+    }, [customer?.id]);
+
+    // Reset y carga al abrir el modal
+    useEffect(() => {
+        if (isOpen) {
+            setFormData({
+                amount: '',
+                method: 'cash',
+                notes: 'Abono manual a cuenta de cliente'
+            });
+            setPendingSales([]);
+            setSelectedSaleIds([]);
+            setReference('');
+            setCashReceived('');
+            setShowBinanceQr(false);
+
+            if (customer?.id) {
+                fetchPendingSales();
+            }
+            fetchFinancialSettings();
+        }
+    }, [isOpen, customer?.id, fetchPendingSales, fetchFinancialSettings]);
 
     // Actualizar tasa P2P de Binance en vivo
     const handleFetchLiveBinanceRate = async () => {
@@ -141,24 +179,10 @@ export default function AbonoModal({ isOpen, onClose, onSave, customer = null, p
                 toast.error('No se pudo obtener la tasa en vivo');
             }
         } catch (err) {
+            console.warn('[AbonoModal] Error capturado en operación:', err?.message || err);
             toast.error('Error al consultar tasa P2P');
         } finally {
             setLoadingBinanceRate(false);
-        }
-    };
-
-    // Cargar historial de ventas a crédito pendientes del cliente
-    const fetchPendingSales = async () => {
-        try {
-            setLoadingSales(true);
-            const { data } = await api.get(`/sales?customerId=${customer.id}&paymentMethod=fiado&status=completed`);
-            const sales = data.data || [];
-            const filtered = sales.filter(s => s.paymentStatus !== 'paid');
-            setPendingSales(filtered);
-        } catch (error) {
-            console.error('Error fetching pending sales:', error);
-        } finally {
-            setLoadingSales(false);
         }
     };
 
@@ -171,7 +195,7 @@ export default function AbonoModal({ isOpen, onClose, onSave, customer = null, p
         if (!isNaN(s) && s > 0) return s;
         let pms = sale.paymentMethods;
         if (typeof pms === 'string') {
-            try { pms = JSON.parse(pms); } catch (_) {}
+            try { pms = JSON.parse(pms); } catch (caughtErr) { console.warn('[AbonoModal] Error parseando JSON local:', caughtErr?.message || caughtErr); }
         }
         if (Array.isArray(pms) && pms.length > 0) {
             const pmSum = pms.reduce((acc, p) => acc + (parseFloat(p?.amount) || 0), 0);

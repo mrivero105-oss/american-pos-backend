@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, History, ArrowUpRight, ArrowDownLeft, Calendar, FileText, RefreshCcw, Download } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import api from '../services/api';
 import { formatMoney } from '../utils/format';
+import { escapeHtml } from '../utils/escapeHtml';
 import { useAuth } from '../hooks/AuthContext';
 import BaseModal from './BaseModal';
 
@@ -14,13 +15,8 @@ export default function CreditHistoryModal({ isOpen, onClose, customerId, onView
     const pdfRef = useRef(null);
     const { user } = useAuth();
 
-    useEffect(() => {
-        if (isOpen && customerId) {
-            fetchHistory();
-        }
-    }, [isOpen, customerId]);
-
-    const fetchHistory = async () => {
+    const fetchHistory = useCallback(async () => {
+        if (!customerId) return;
         try {
             setLoading(true);
             const res = await api.get(`/customers/${customerId}/credit-history`);
@@ -31,7 +27,13 @@ export default function CreditHistoryModal({ isOpen, onClose, customerId, onView
         } finally {
             setLoading(false);
         }
-    };
+    }, [customerId]);
+
+    useEffect(() => {
+        if (isOpen && customerId) {
+            fetchHistory();
+        }
+    }, [isOpen, customerId, fetchHistory]);
 
     const generatePDF = async () => {
         if (!pdfRef.current || !customerInfo) return;
@@ -39,15 +41,80 @@ export default function CreditHistoryModal({ isOpen, onClose, customerId, onView
         try {
             setPrinting(true);
             const printContent = pdfRef.current.innerHTML;
-            const printWindow = window.open('', '_blank');
+            const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+            if (!printWindow) return;
+            const safeTitleName = escapeHtml(String(customerInfo.name || '').replace(/\s+/g, '_'));
             
             printWindow.document.write(`
                 <!DOCTYPE html>
                 <html>
                     <head>
-                        <title>Estado_Cuenta_${customerInfo.name.replace(/\s+/g, '_')}</title>
-                        <script src="https://cdn.tailwindcss.com"></script>
+                        <meta charset="utf-8" />
+                        <title>Estado_Cuenta_${safeTitleName}</title>
                         <style>
+                            * { box-sizing: border-box; }
+                            body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; background: #fff; color: #1e293b; margin: 0; padding: 16px; }
+                            .max-w-4xl { max-width: 896px; margin: 0 auto; }
+                            .pt-8 { padding-top: 2rem; }
+                            .p-5 { padding: 1.25rem; }
+                            .p-12 { padding: 2rem; }
+                            .px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+                            .py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+                            .py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+                            .py-4 { padding-top: 1rem; padding-bottom: 1rem; }
+                            .pb-2 { padding-bottom: 0.5rem; }
+                            .pb-6 { padding-bottom: 1.5rem; }
+                            .mb-4 { margin-bottom: 1rem; }
+                            .mb-8 { margin-bottom: 2rem; }
+                            .mb-10 { margin-bottom: 2.5rem; }
+                            .mt-1 { margin-top: 0.25rem; }
+                            .mt-2 { margin-top: 0.5rem; }
+                            .mt-12 { margin-top: 3rem; }
+                            .ml-2 { margin-left: 0.5rem; }
+                            .flex { display: flex; }
+                            .flex-1 { flex: 1; }
+                            .justify-between { justify-content: space-between; }
+                            .items-start { align-items: flex-start; }
+                            .gap-4 { gap: 1rem; }
+                            .inline-block { display: inline-block; }
+                            .w-full { width: 100%; }
+                            .text-left { text-align: left; }
+                            .text-right { text-align: right; }
+                            .text-center { text-align: center; }
+                            .uppercase { text-transform: uppercase; }
+                            .font-black { font-weight: 800; }
+                            .font-bold { font-weight: 700; }
+                            .font-medium { font-weight: 500; }
+                            .text-3xl { font-size: 1.75rem; line-height: 2rem; margin: 0; }
+                            .text-xl { font-size: 1.25rem; line-height: 1.75rem; margin: 0; }
+                            .text-sm { font-size: 0.875rem; }
+                            .text-xs { font-size: 0.75rem; }
+                            .text-\\[10px\\] { font-size: 10px; }
+                            .tracking-tighter { letter-spacing: -0.04em; }
+                            .tracking-tight { letter-spacing: -0.02em; }
+                            .tracking-widest { letter-spacing: 0.08em; }
+                            .tracking-wider { letter-spacing: 0.05em; }
+                            .bg-slate-50 { background: #f8fafc; }
+                            .bg-slate-100 { background: #f1f5f9; }
+                            .bg-red-100 { background: #fee2e2; }
+                            .bg-emerald-100 { background: #d1fae5; }
+                            .text-slate-900 { color: #0f172a; }
+                            .text-slate-800 { color: #1e293b; }
+                            .text-slate-700 { color: #334155; }
+                            .text-slate-600 { color: #475569; }
+                            .text-slate-500 { color: #64748b; }
+                            .text-red-600, .text-red-500 { color: #dc2626; }
+                            .text-emerald-600, .text-emerald-500 { color: #059669; }
+                            .rounded-lg { border-radius: 0.5rem; }
+                            .rounded-xl { border-radius: 0.75rem; }
+                            .rounded-2xl { border-radius: 1rem; }
+                            .border { border: 1px solid #e2e8f0; }
+                            .border-b { border-bottom: 1px solid #e2e8f0; }
+                            .border-b-2 { border-bottom: 2px solid #f1f5f9; }
+                            .border-b-\\[3px\\] { border-bottom: 3px solid #e2e8f0; }
+                            .border-slate-100 { border-color: #f1f5f9; }
+                            .border-slate-200 { border-color: #e2e8f0; }
+                            table { width: 100%; border-collapse: collapse; }
                             @media print {
                                 @page { size: A4 portrait; margin: 20mm; }
                                 body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }

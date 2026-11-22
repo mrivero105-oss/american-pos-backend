@@ -8,12 +8,10 @@ import {
     SlidersHorizontal, ShoppingBag, Tag, Volume2, Columns2, Grid2x2, Cpu
 } from 'lucide-react';
 import { useTheme } from '../hooks/ThemeContext';
-import { useAuth } from '../hooks/AuthContext';
 import BaseModal from './BaseModal';
 import VoiceSoundSettings from './settings/VoiceSoundSettings';
 
 export default function AppearanceModal({ isOpen, onClose }) {
-    const { user } = useAuth();
     
     const { 
         theme, setTheme, 

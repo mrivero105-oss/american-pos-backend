@@ -5,6 +5,13 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    exploreBackupSchema,
+    encryptBackupSchema,
+    restorePathSchema,
+    cloudMirrorSyncSchema
+} = require('../schemas/backupSchema');
 const { sequelize } = require('../database/connection');
 
 // El directorio de respaldos debe estar en UserData para ser escribible en producción
@@ -265,7 +272,7 @@ const isPathInsideRoots = (candidatePath, roots, allowExactRoot = false) => {
 };
 
 // Ruta para abrir la carpeta de respaldos en el explorador de archivos
-router.post('/explore', (req, res) => {
+router.post('/explore', validate(exploreBackupSchema), (req, res) => {
     console.log('[Backup Route] POST /explore triggered');
     try {
         const cloudMirrorService = require('../services/CloudMirrorService');
@@ -342,7 +349,7 @@ router.post('/cloud-mirror/browse', async (req, res) => {
     }
 });
 
-router.post('/cloud-mirror/sync-now', (req, res) => {
+router.post('/cloud-mirror/sync-now', validate(cloudMirrorSyncSchema), (req, res) => {
     try {
         const cloudMirrorService = require('../services/CloudMirrorService');
         const { filename } = req.body || {};
@@ -584,7 +591,7 @@ router.get('/download/:filename', (req, res) => {
 /**
  * POST /encrypt - Cifra un archivo de respaldo existente con AES-256-GCM
  */
-router.post('/encrypt', async (req, res) => {
+router.post('/encrypt', validate(encryptBackupSchema), async (req, res) => {
     try {
         const { filename, password } = req.body;
         if (!filename) return res.status(400).json({ error: 'Nombre de archivo requerido' });
@@ -616,7 +623,7 @@ router.post('/encrypt', async (req, res) => {
 });
 
 // Ruta para restaurar una copia de seguridad desde una ruta absoluta (seleccionada manualmente)
-router.post('/restore-path', async (req, res) => {
+router.post('/restore-path', validate(restorePathSchema), async (req, res) => {
     console.log('[Backup Route] POST /restore-path triggered');
     try {
         const { filePath } = req.body;

@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { X, Save, AlertTriangle, Percent, ArrowUp, ArrowDown, Edit3, Layers, Building, DollarSign } from 'lucide-react';
+import { Save, AlertTriangle, Percent, ArrowUp, ArrowDown, Edit3, DollarSign } from 'lucide-react';
 import BaseModal from './BaseModal';
 import SupervisorPinModal from './SupervisorPinModal';
 import { useAuth } from '../hooks/AuthContext';
 import toast from 'react-hot-toast';
 
-export default function BulkEditModal({ isOpen, onClose, onSave, selectedCount, products = [], categories = [], suppliers = [] }) {
+export default function BulkEditModal({ isOpen, onClose, onSave, products = [], categories = [], suppliers = [] }) {
     const { user, hasPermission } = useAuth();
     const userRole = (user?.role || '').toLowerCase();
     const isCashier = ['cashier', 'cajero', 'waiter', 'mesero'].includes(userRole);
