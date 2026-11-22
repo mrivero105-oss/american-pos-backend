@@ -46,7 +46,7 @@ jobs:
       - name: Run frontend UnifiedDB functional verification
         run: node tests/test_unified_db.cjs
 
-      - name: Build production web & mobile bundles (Chromium 108+)
+      - name: Build production Desktop (Chrome 130+) & Mobile (Android WebView) bundles
         run: |
           npm run build
           npm run build:mobile
@@ -162,7 +162,8 @@ jobs:
             tests/test_phase1_security_and_integrity.test.mjs \
             tests/test_performance_999_pillars.test.mjs \
             tests/test_online_licensing.test.mjs \
-            tests/test_hardening_10_of_10.test.mjs
+            tests/test_hardening_10_of_10.test.mjs \
+            tests/test_phase3_modern_stack.test.mjs
 
   e2e-playwright:
     name: Full-Stack Real Browser E2E (Playwright + PG16)
@@ -239,8 +240,8 @@ jobs:
           path: american-pos-frontend/test-results
           retention-days: 3
 
-  windows-dual-packaging-check:
-    name: Windows Dual Electron (22 Legacy + 45 Modern) & Scripts Verification
+  windows-modern-packaging-check:
+    name: Windows Modern Electron 45 (7/7 Fuses + mobile-ota) & Scripts Verification
     runs-on: windows-latest
     needs: [frontend-lint-and-build, backend-tests-postgres]
     env:
@@ -288,21 +289,23 @@ jobs:
         working-directory: american-pos-backend
         run: npm ci
 
-      - name: Verify Electron 22 (Win7/8.1) & Electron 45 (Win10/11 + Fuses) unpacked builds
+      - name: Verify Electron 45 Modern (Win10/11 + 7/7 Fuses + mobile-ota) unpacked build
         working-directory: american-pos-backend
         run: |
-          npm run pack:legacy
           npm run pack:modern
           node -e "
             const fs = require('fs');
             const path = require('path');
             const { pathToFileURL } = require('url');
-            for (const dir of ['dist_final_installer/win-unpacked', 'dist_modern/win-unpacked']) {
-              const res = fs.readdirSync(dir + '/resources');
-              if (!res.includes('app.asar')) throw new Error('Missing app.asar in ' + dir);
-              if (res.some(f => f.startsWith('.env'))) throw new Error('Secret leak .env in ' + dir);
-              console.log('Verified clean unpacked build:', dir);
+            const dir = 'dist_modern/win-unpacked';
+            const res = fs.readdirSync(dir + '/resources');
+            if (!res.includes('app.asar')) throw new Error('Missing app.asar in ' + dir);
+            if (res.some(f => f.startsWith('.env'))) throw new Error('Secret leak .env in ' + dir);
+            const otaDir = path.join(dir, 'resources', 'mobile-ota');
+            if (!fs.existsSync(path.join(otaDir, 'dist.zip')) || !fs.existsSync(path.join(otaDir, 'version.json'))) {
+              throw new Error('Missing mobile-ota extraResources (dist.zip / version.json) in ' + otaDir);
             }
+            console.log('Verified clean unpacked Modern build + mobile-ota:', dir);
             (async () => {
               const fusesMod = await import(pathToFileURL(path.resolve('node_modules/@electron/fuses/dist/index.js')).href);
               const wire = await fusesMod.getCurrentFuseWire(path.resolve('dist_modern/win-unpacked/Isaac POS.exe'));
@@ -321,6 +324,6 @@ jobs:
                   throw new Error('Unexpected Electron fuse state for ' + name);
                 }
               }
-              console.log('Verified Electron 45 Modern security fuses.');
+              console.log('Verified Electron 45 Modern 7/7 security fuses.');
             })().catch((e) => { console.error(e); process.exit(1); });
           "

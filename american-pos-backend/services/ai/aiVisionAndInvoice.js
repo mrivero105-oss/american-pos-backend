@@ -215,11 +215,11 @@ Responde ÚNICAMENTE con un objeto JSON válido con esta estructura exacta (usa 
 
         for (const modelName of modelsToTry) {
             try {
-                const m = aiService.genAI.getGenerativeModel({
+                result = await aiService.genAI.generateContent({
                     model: modelName,
+                    contents,
                     generationConfig: { responseMimeType: 'application/json', temperature: 0.1 }
                 });
-                result = await m.generateContent(contents);
                 if (result && result.response) {
                     console.log(`[ISAAC AI] Extracción exitosa con modelo: ${modelName}`);
                     break;
@@ -441,9 +441,11 @@ Responde ÚNICAMENTE con un objeto JSON válido con este formato:
         let rawText = '';
         for (const modelName of modelsToTry) {
             try {
-                const m = aiService.genAI.getGenerativeModel({ model: modelName });
-                const result = await m.generateContent(contents);
-                rawText = result.response.text();
+                const result = await aiService.genAI.generateContent({
+                    model: modelName,
+                    contents
+                });
+                rawText = result.text || result.response.text();
                 if (rawText) {
                     console.log(`[ISAAC AI] Metadata extraction successful with model: ${modelName}`);
                     break;
@@ -646,9 +648,11 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
         let rawText = '';
         for (const modelName of modelsToTry) {
             try {
-                const m = aiService.genAI.getGenerativeModel({ model: modelName });
-                const result = await m.generateContent(contents);
-                rawText = result.response.text();
+                const result = await aiService.genAI.generateContent({
+                    model: modelName,
+                    contents
+                });
+                rawText = result.text || result.response.text();
                 if (rawText) {
                     console.log(`[ISAAC AI] Reconcile successfully completed with model: ${modelName}`);
                     break;

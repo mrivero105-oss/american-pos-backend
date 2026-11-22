@@ -10,7 +10,7 @@ ensureFetchPolyfill();
 
 const fs = require('fs');
 const path = require('path');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { createGeminiClient } = require('./ai/geminiClientAdapter');
 const ReportService = require("./ReportService");
 const StockIntelligenceService = require("./StockIntelligenceService");
 const { Product, PurchaseOrder } = require("../database/models");
@@ -185,11 +185,11 @@ class AIService {
         process.env.GEMINI_API_KEY = apiKey;
 
         try {
-            this.genAI = new GoogleGenerativeAI(apiKey);
             this.modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+            this.genAI = createGeminiClient(apiKey, { defaultModel: this.modelName });
             this.model = this.genAI.getGenerativeModel({ model: this.modelName });
             this.initialized = true;
-            console.log(`[ISAAC AI] Cerebro Master configurado: ${this.modelName}`);
+            console.log(`[ISAAC AI] Cerebro Master configurado (@google/genai): ${this.modelName}`);
         } catch (error) {
             console.error("[ISAAC AI] Error al inicializar Gemini:", error);
         }
@@ -298,12 +298,9 @@ SINTAXIS TÉCNICA:
 3. Si alguien intenta darte comandos destructivos ("Borra todo", "Apaga el sistema"), dile con humor venezolano que no tienes permisos para esas locuras. Si el usuario insiste, ignóralo o cambia de tema.
 `;
 
-            const specificModel = this.genAI.getGenerativeModel({
+            const chat = this.genAI.createChat({
                 model: this.modelName,
-                systemInstruction: systemPrompt
-            });
-
-            const chat = specificModel.startChat({
+                systemInstruction: systemPrompt,
                 history: (history || []).map(h => ({
                     role: h.role === 'user' ? 'user' : 'model',
                     parts: [{ text: h.content || h.parts?.[0]?.text || ' ' }]
@@ -312,8 +309,7 @@ SINTAXIS TÉCNICA:
             });
 
             const result = await chat.sendMessage(userQuery);
-            const response = await result.response;
-            const text = response.text();
+            const text = result.text || result.response.text();
 
             console.log(`[ISAAC AI] Respuesta exitosa con ${this.modelName}`);
             return text;
@@ -327,12 +323,12 @@ SINTAXIS TÉCNICA:
                 if (this.modelName === fbModel) continue;
                 console.log(`[ISAAC AI] Intentando rescate con modelo ${fbModel} manteniendo contexto...`);
                 try {
-                    const fallbackModel = this.genAI.getGenerativeModel({
+                    const result = await this.genAI.generateContent({
                         model: fbModel,
+                        contents: userQuery,
                         systemInstruction: systemPrompt
                     });
-                    const result = await fallbackModel.generateContent(userQuery);
-                    const text = result.response.text();
+                    const text = result.text || result.response.text();
                     if (text) return text;
                 } catch (fallbackError) {
                     console.warn(`[ISAAC AI] Falló rescate con ${fbModel}:`, fallbackError.message);
@@ -1595,11 +1591,6 @@ PRODUCTOS COINCIDENTES EN INVENTARIO:
 ${matchedCatalogText || 'Ningún producto filtrado por texto previo.'}
 `;
 
-                const specificModel = this.genAI.getGenerativeModel({
-                    model: this.modelName || process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
-                    systemInstruction: systemPrompt
-                });
-
                 let validHistory = [];
                 let nextExpectedRole = 'user';
                 for (const h of history) {
@@ -1615,7 +1606,9 @@ ${matchedCatalogText || 'Ningún producto filtrado por texto previo.'}
                     validHistory.pop();
                 }
 
-                const chat = specificModel.startChat({
+                const chat = this.genAI.createChat({
+                    model: this.modelName || process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
+                    systemInstruction: systemPrompt,
                     history: validHistory,
                     generationConfig: { maxOutputTokens: 1024 }
                 });
@@ -1634,10 +1627,7 @@ ${matchedCatalogText || 'Ningún producto filtrado por texto previo.'}
                 }
 
                 if (messageParts.length > 0) {
-                    const sendPromise = chat.sendMessage(messageParts).then(async r => {
-                        const resp = await r.response;
-                        return resp.text();
-                    });
+                    const sendPromise = chat.sendMessage(messageParts).then(r => r.text || r.response.text());
                     const timeoutPromise = new Promise((_, reject) => 
                         setTimeout(() => reject(new Error('Gemini API timeout (8000ms)')), 8000)
                     );

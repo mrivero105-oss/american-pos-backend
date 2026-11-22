@@ -7,9 +7,22 @@ const validate = (schema) => (req, res, next) => {
         });
 
         // Replace original with validated/cleaned/coerced data
-        req.body = parsed.body || req.body;
-        req.query = parsed.query || req.query;
-        req.params = parsed.params || req.params;
+        // En Express 5, req.query es un getter de solo lectura en el prototipo IncomingMessage:
+        // usamos Object.defineProperty para exponer el objeto query validado/coerced sin TypeError.
+        if (parsed.body !== undefined) {
+            req.body = parsed.body;
+        }
+        if (parsed.query !== undefined) {
+            Object.defineProperty(req, 'query', {
+                value: parsed.query,
+                configurable: true,
+                enumerable: true,
+                writable: true
+            });
+        }
+        if (parsed.params !== undefined) {
+            req.params = parsed.params;
+        }
 
         return next();
     } catch (error) {

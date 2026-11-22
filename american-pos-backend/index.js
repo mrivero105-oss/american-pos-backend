@@ -209,7 +209,6 @@ if (!process.env.DB_DIALECT) {
     process.env.DB_DIALECT = 'postgres';
 }
 const express = require('express');
-require('express-async-errors');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
@@ -483,7 +482,7 @@ const startServer = (ports, userDataPath = null) => {
             };
 
             app.use(cors(corsOptions));
-            app.options('*', cors(corsOptions));
+            app.options('/{*splat}', cors(corsOptions));
             app.use(cookieParser());
             app.use(compression());
 
@@ -768,7 +767,7 @@ const startServer = (ports, userDataPath = null) => {
             });
 
             // SPA Direct Browser Navigation for Mobile & Desktop
-            app.get(['/mobile', '/mobile-pos', '/login', '/pos', '/dashboard', '/inventory', '/customers', '/sales-history', '/sales-manager', '/cash-register', '/recharges', '/display', '/customer-display', '/store*'], (req, res, next) => {
+            app.get(['/mobile', '/mobile-pos', '/login', '/pos', '/dashboard', '/inventory', '/customers', '/sales-history', '/sales-manager', '/cash-register', '/recharges', '/display', '/customer-display', '/store{*splat}'], (req, res, next) => {
                 // If it's an API request (requesting JSON, AJAX, or carrying auth/sync tokens), pass through to API routes
                 const isApiRequest = req.headers.authorization || req.headers['x-sync-key'] || req.xhr || req.headers['x-requested-with'] || (req.headers.accept?.includes('application/json') && !req.headers.accept?.includes('text/html'));
                 if (isApiRequest) {
@@ -1331,7 +1330,7 @@ const startServer = (ports, userDataPath = null) => {
             // 🔒 Endpoints de WhatsApp (Protegidos con verifyToken / RBAC)
             app.use(['/whatsapp', '/api/whatsapp'], whatsappRoutes);
 
-            app.all('*', (req, res) => {
+            app.use((req, res) => {
                 const apiPrefixes = [
                     '/auth', '/products', '/sales', '/customers', '/suppliers',
                     '/cash', '/reports', '/settings', '/purchase-orders', '/refunds',
