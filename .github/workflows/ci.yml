@@ -240,7 +240,7 @@ jobs:
           retention-days: 3
 
   windows-dual-packaging-check:
-    name: Windows Dual Electron (22 Legacy + 31 Modern) & Scripts Verification
+    name: Windows Dual Electron (22 Legacy + 45 Modern) & Scripts Verification
     runs-on: windows-latest
     needs: [frontend-lint-and-build, backend-tests-postgres]
     env:
@@ -288,17 +288,38 @@ jobs:
         working-directory: american-pos-backend
         run: npm ci
 
-      - name: Verify Electron 22 (Win7/8.1) & Electron 31 (Win10/11) unpacked builds
+      - name: Verify Electron 22 (Win7/8.1) & Electron 45 (Win10/11 + Fuses) unpacked builds
         working-directory: american-pos-backend
         run: |
           npm run pack:legacy
           npm run pack:modern
           node -e "
             const fs = require('fs');
+            const path = require('path');
+            const { pathToFileURL } = require('url');
             for (const dir of ['dist_final_installer/win-unpacked', 'dist_modern/win-unpacked']) {
               const res = fs.readdirSync(dir + '/resources');
               if (!res.includes('app.asar')) throw new Error('Missing app.asar in ' + dir);
               if (res.some(f => f.startsWith('.env'))) throw new Error('Secret leak .env in ' + dir);
               console.log('Verified clean unpacked build:', dir);
             }
+            (async () => {
+              const fusesMod = await import(pathToFileURL(path.resolve('node_modules/@electron/fuses/dist/index.js')).href);
+              const wire = await fusesMod.getCurrentFuseWire(path.resolve('dist_modern/win-unpacked/Isaac POS.exe'));
+              const { FuseV1Options, FuseState } = fusesMod;
+              const checks = [
+                ['EnableCookieEncryption', FuseState.ENABLE],
+                ['EnableNodeOptionsEnvironmentVariable', FuseState.DISABLE],
+                ['EnableNodeCliInspectArguments', FuseState.DISABLE],
+                ['EnableEmbeddedAsarIntegrityValidation', FuseState.ENABLE],
+                ['OnlyLoadAppFromAsar', FuseState.ENABLE],
+                ['GrantFileProtocolExtraPrivileges', FuseState.DISABLE]
+              ];
+              for (const [name, expected] of checks) {
+                if (wire[FuseV1Options[name]] !== expected) {
+                  throw new Error('Unexpected Electron fuse state for ' + name);
+                }
+              }
+              console.log('Verified Electron 45 Modern security fuses.');
+            })().catch((e) => { console.error(e); process.exit(1); });
           "

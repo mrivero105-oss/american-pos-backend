@@ -7,7 +7,7 @@
  * sin depender de que la PC Servidor esté encendida o alcanzable en la red.
  */
 
-import PUBLIC_RSA_KEY_PEM from '../config/licensePublicKey.pem?raw';
+import PUBLIC_RSA_KEY_PEM from '../config/licensePublicKey';
 
 let cachedRsaPublicKey = null;
 let cachedParsedRsaKey = null;

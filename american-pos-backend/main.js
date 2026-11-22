@@ -22,8 +22,11 @@ if (isLegacyWin || process.env.DISABLE_GPU === 'true') {
     app.commandLine.appendSwitch('enable-smooth-scrolling');
     app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
     app.commandLine.appendSwitch('force_high_performance_gpu');
-    if (isWin11) {
+    const chromeMajor = parseInt(String(process.versions.chrome || '0').split('.')[0], 10) || 0;
+    if (isWin11 && chromeMajor > 0 && chromeMajor < 130) {
         app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization,UseSkiaRenderer');
+    } else if (isWin11) {
+        app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization');
     }
 }
 
@@ -551,8 +554,12 @@ function createWindow(serverPort) {
         log(`FAILED TO LOAD: ${errorCode} - ${errorDescription}`);
     });
 
-    mainWindow.webContents.on('crashed', () => {
-        log('Renderer process CRASHED. Attempting recovery...');
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+        const reason = details && details.reason ? details.reason : 'unknown';
+        const exitCode = details && typeof details.exitCode === 'number' ? details.exitCode : -1;
+        log(`Renderer process gone (reason=${reason}, exitCode=${exitCode}).`);
+        if (reason === 'clean-exit') return;
+        log('Attempting automatic renderer recovery...');
         setTimeout(() => {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.reload();

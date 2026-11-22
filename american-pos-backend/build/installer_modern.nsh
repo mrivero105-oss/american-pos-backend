@@ -1,6 +1,6 @@
 ; ==============================================================================
 ; Isaac POS - Custom NSIS Configuration (Edición Moderna Windows 10 / 11)
-; Motor: Electron 31.4.0 (Chromium 128 + Node.js 20 LTS)
+; Motor: Electron 45.4.1 (Chromium 156 + Node.js 24.22)
 ; Base de Datos Predeterminada: PostgreSQL 16
 ; ==============================================================================
 !include "LogicLib.nsh"

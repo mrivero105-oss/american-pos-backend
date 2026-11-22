@@ -5,7 +5,7 @@ const keyState = {
     privateKey: null
 };
 
-vi.mock('../../src/config/licensePublicKey.pem?raw', () => ({
+vi.mock('../../src/config/licensePublicKey', () => ({
     default: ''
 }));
 
@@ -71,7 +71,7 @@ describe('clientLicenseValidator (RSA-SHA256 Offline + Normalización HWID)', ()
 
     it('verifica criptográficamente una licencia v2 firmada con RSA-SHA256 real y rechaza adulteración', async () => {
         vi.resetModules();
-        vi.doMock('../../src/config/licensePublicKey.pem?raw', () => ({
+        vi.doMock('../../src/config/licensePublicKey', () => ({
             default: keyState.publicPem
         }));
         const { validateLicenseKeyLocally } = await import('../../src/utils/clientLicenseValidator');
@@ -102,7 +102,7 @@ describe('clientLicenseValidator (RSA-SHA256 Offline + Normalización HWID)', ()
 
     it('verifica licencias RSA v2 en formato Full Base64 (552 chars) usando fallback BigInt JS puro cuando WebCrypto no está disponible (HTTP LAN / WebView)', async () => {
         vi.resetModules();
-        vi.doMock('../../src/config/licensePublicKey.pem?raw', () => ({
+        vi.doMock('../../src/config/licensePublicKey', () => ({
             default: keyState.publicPem
         }));
 

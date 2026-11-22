@@ -23,7 +23,7 @@ try {
     Pop-Location
 }
 
-# 2. Compilar Instaladores Principales (Servidor, Terminal, Ultra) con motor Moderno (Electron 31)
+# 2. Compilar Instaladores Principales (Servidor, Terminal, Ultra) con motor Moderno (Electron 45)
 Write-Host "`n>>> [2/5] Generando Instaladores Principales (Servidor, Terminal, Ultra)..." -ForegroundColor Yellow
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$rootDir\build_ultra\compilar_ambos_instaladores.ps1" -Engine modern
 if ($LASTEXITCODE -ne 0) { throw "compilar_ambos_instaladores fallo con codigo $LASTEXITCODE" }
@@ -33,8 +33,8 @@ Write-Host "`n>>> [3/5] Generando Instalador Windows 7 / 8 / 8.1 (Legacy)..." -F
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$rootDir\compilar_instalador_win7_8.ps1"
 if ($LASTEXITCODE -ne 0) { throw "compilar_instalador_win7_8 fallo con codigo $LASTEXITCODE" }
 
-# 4. Compilar Instalador Moderno (Windows 10 / 11 - Electron 31)
-Write-Host "`n>>> [4/5] Generando Instalador Windows 10 / 11 (Moderno - Electron 31)..." -ForegroundColor Yellow
+# 4. Compilar Instalador Moderno (Windows 10 / 11 - Electron 45)
+Write-Host "`n>>> [4/5] Generando Instalador Windows 10 / 11 (Moderno - Electron 45)..." -ForegroundColor Yellow
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$rootDir\compilar_instalador_moderno_win10_11.ps1"
 if ($LASTEXITCODE -ne 0) { throw "compilar_instalador_moderno_win10_11 fallo con codigo $LASTEXITCODE" }
 

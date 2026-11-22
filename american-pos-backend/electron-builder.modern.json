@@ -1,7 +1,16 @@
 {
   "appId": "com.isaacpos.frontend",
   "productName": "Isaac POS",
-  "electronVersion": "31.4.0",
+  "electronVersion": "45.4.1",
+  "electronFuses": {
+    "runAsNode": true,
+    "enableCookieEncryption": true,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true,
+    "grantFileProtocolExtraPrivileges": false
+  },
   "compression": "normal",
   "npmRebuild": false,
   "asar": true,

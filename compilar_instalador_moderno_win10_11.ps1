@@ -5,8 +5,8 @@
 #   dist_installers\4_IsaacPOS_Windows10_11_Modern_Setup.exe
 #   4_IsaacPOS_Windows10_11_Modern_Setup.exe (en la raíz del proyecto)
 #
-# Motor: Electron 31.4.0 (Chromium 128 + Node.js 20 LTS embebidos)
-# Características: Aceleración por hardware completa, DirectWrite y máxima seguridad
+# Motor: Electron 45.4.1 (Chromium 156 + Node.js 24.22 embebidos + Electron Fuses)
+# Características: Aceleración por hardware completa, DirectWrite, ASAR Integrity y máxima seguridad
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -18,7 +18,7 @@ $installerName = "4_IsaacPOS_Windows10_11_Modern_Setup.exe"
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "   ISAAC POS - Compilador Moderno (Windows 10 / 11)      " -ForegroundColor Cyan
-Write-Host "   Motor: Electron 31.4.0 (Chromium 128 + Node 20 LTS)   " -ForegroundColor Cyan
+Write-Host "   Motor: Electron 45.4.1 (Chromium 156 + Node 24.22)    " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 1. Asegurar directorio de destino
@@ -34,7 +34,7 @@ if (Test-Path "$backendDir\dist_modern") {
 }
 
 # 3. Compilar instalador NSIS con electron-builder apuntando a configuración moderna
-Write-Host "`n[2/3] Compilando instalador NSIS con motor Electron 31.4.0..." -ForegroundColor Yellow
+Write-Host "`n[2/3] Compilando instalador NSIS con motor Electron 45.4.1 + Electron Fuses..." -ForegroundColor Yellow
 Push-Location $backendDir
 try {
     cmd.exe /c "npx electron-builder --config electron-builder.modern.json"
@@ -69,7 +69,7 @@ if (Test-Path $builtInstaller) {
     Write-Host "Ubicacion        : $targetExe" -ForegroundColor White
     Write-Host "Firma Digital    : $sigLabel" -ForegroundColor White
     Write-Host "Compatibilidad   : Windows 10 (x64), Windows 11 (x64)" -ForegroundColor White
-    Write-Host "Motor Embebido   : Electron 31.4.0 (Chromium 128 / Node 20 LTS)" -ForegroundColor White
+    Write-Host "Motor Embebido   : Electron 45.4.1 (Chromium 156 / Node 24.22 + Fuses)" -ForegroundColor White
     Write-Host "==========================================================`n" -ForegroundColor Green
 } else {
     Write-Error "No se encontro el instalador generado en: $builtInstaller"

@@ -481,13 +481,13 @@ test.describe.serial('E2E POS Integral', () => {
     await page.getByRole('button', { name: /Finalizar y Salir/i }).click();
 
     const closeReportBtn = page.getByRole('button', { name: /Cerrar Reporte/i });
-    if (await closeReportBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    if (await closeReportBtn.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false)) {
       await closeReportBtn.click();
     }
 
     // Si aparece el modal de identificación de terminal tras cerrar la caja sin nombre asignado, completarlo desde UI
     const setupNameInput = page.locator('input[placeholder*="Caja Principal"]');
-    if (await setupNameInput.isVisible({ timeout: 2_500 }).catch(() => false)) {
+    if (await setupNameInput.waitFor({ state: 'visible', timeout: 3_500 }).then(() => true).catch(() => false)) {
       await setupNameInput.fill('Caja E2E');
       await page.getByRole('button', { name: /Guardar Identificador/i }).click();
       await expect(setupNameInput).toBeHidden({ timeout: 5_000 });

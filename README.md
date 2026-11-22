@@ -5,7 +5,7 @@ Plataforma comercial Punto de Venta (POS) + ERP multi-vertical orientada a opera
 ## Arquitectura del Monorepo
 
 - `american-pos-backend/`: API Express + Socket.IO + Sequelize (PostgreSQL 16), motor de precisión aritmética (`VortexMathEngine`), facturación/contabilidad automática, impresión térmica/red/fiscal, respaldos cifrados AES-256-GCM y proceso principal de Electron (`main.js`).
-- `american-pos-frontend/`: SPA React 18 + Vite 7 + Tailwind CSS v4 + IndexedDB/Android SQLite WAL (`unifiedDb` / `syncManager`) + app móvil Android Capacitor (`android/`).
+- `american-pos-frontend/`: SPA React 19 + Vite 8 + Tailwind CSS v4 + IndexedDB/Android SQLite WAL (`unifiedDb` / `syncManager`) + app móvil Android Capacitor (`android/`).
 - `cloud_license_server/`: Gateway remoto de validación y suspensión de licencias RSA-2048 en dos runtimes (`node-server/` Express + `supabase/functions/license-gateway/` Edge Function).
 - `generator_apk_project/`: Aplicación Android auxiliar para generación de llaves RSA v2.
 
@@ -44,9 +44,9 @@ npm --prefix american-pos-frontend run build
 # Bundle Móvil optimizado (dist-mobile/)
 npm --prefix american-pos-frontend run build:mobile
 
-# Instaladores Windows (Modern Electron 31 / Legacy Electron 22)
-npm --prefix american-pos-backend run build:modern
-npm --prefix american-pos-backend run build:legacy
+# Instaladores Windows (Modern Electron 45 + Fuses / Legacy Electron 22)
+npm --prefix american-pos-backend run dist:modern
+npm --prefix american-pos-backend run dist:legacy
 ```
 
 ### Pruebas y Calidad (100% Aisladas en `americanpos_test`)
