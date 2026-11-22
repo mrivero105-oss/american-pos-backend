@@ -139,7 +139,7 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
 
                     INSERT INTO "AuditLogs" (
                         "id", "userId", "companyId", "action", "description", 
-                        "entityId", "oldValue", "newValue", "timestamp", "createdAt", "updatedAt"
+                        "entityId", "oldValue", "newValue", "timestamp", "previousHash", "createdAt", "updatedAt"
                     ) VALUES (
                         gen_random_uuid()::text,
                         v_user_id,
@@ -150,6 +150,7 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
                         NULL,
                         v_new_json::text,
                         to_char(clock_timestamp(), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                        'DB_TRIGGER_ROW_AUDIT',
                         clock_timestamp(),
                         clock_timestamp()
                     );
@@ -182,7 +183,7 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
 
                     INSERT INTO "AuditLogs" (
                         "id", "userId", "companyId", "action", "description", 
-                        "entityId", "oldValue", "newValue", "timestamp", "createdAt", "updatedAt"
+                        "entityId", "oldValue", "newValue", "timestamp", "previousHash", "createdAt", "updatedAt"
                     ) VALUES (
                         gen_random_uuid()::text,
                         v_user_id,
@@ -193,6 +194,7 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
                         v_old_diff::text,
                         v_new_diff::text,
                         to_char(clock_timestamp(), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                        'DB_TRIGGER_ROW_AUDIT',
                         clock_timestamp(),
                         clock_timestamp()
                     );
@@ -207,7 +209,7 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
 
                     INSERT INTO "AuditLogs" (
                         "id", "userId", "companyId", "action", "description", 
-                        "entityId", "oldValue", "newValue", "timestamp", "createdAt", "updatedAt"
+                        "entityId", "oldValue", "newValue", "timestamp", "previousHash", "createdAt", "updatedAt"
                     ) VALUES (
                         gen_random_uuid()::text,
                         v_user_id,
@@ -218,6 +220,7 @@ async function initializeDatabaseSecurity(sequelizeInstance) {
                         v_old_json::text,
                         NULL,
                         to_char(clock_timestamp(), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                        'DB_TRIGGER_ROW_AUDIT',
                         clock_timestamp(),
                         clock_timestamp()
                     );

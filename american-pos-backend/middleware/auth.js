@@ -641,8 +641,6 @@ const requirePermission = (permissionInput) => {
                 case 'canManageSettings':
                     return (
                         act === 'RECONFIGURE_BUSINESS_RUBRO' ||
-                        act === 'APERTURA DE GAVETA (CONFIGURACIÓN)' ||
-                        act === 'APERTURA DE GAVETA (CONFIGURACION)' ||
                         act === 'MANAGE_SETTINGS'
                     );
                 case 'canOpenDrawer':

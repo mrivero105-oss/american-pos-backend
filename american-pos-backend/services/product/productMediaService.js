@@ -163,27 +163,25 @@ async function searchImagesIA(productId, fallbackName = '', fallbackCategory = '
     }
 }
 
-async function downloadAndSetImage(productId, imageUrl) {
+async function downloadAndSetImage(productId, imageUrl, _fallbackName = '', _fallbackCategory = '', reqUser = null) {
     try {
         let product = null;
         if (productId && productId !== 'new' && !productId.toString().startsWith('local-')) {
-            product = await Product.findByPk(productId);
+            const where = { id: String(productId) };
+            if (reqUser && reqUser.companyId) {
+                where.companyId = String(reqUser.companyId);
+            }
+            product = await Product.findOne({ where });
+            if (!product) {
+                throw new Error('Producto no encontrado en la empresa autorizada.');
+            }
         }
 
-        console.log(`[IA IMAGE] Intentando descargar imagen seleccionada desde: ${imageUrl}`);
+        console.log(`[IA IMAGE] Validando y descargando imagen segura desde: ${imageUrl}`);
 
-        const axios = require('axios');
-        const response = await axios.get(imageUrl, {
-            responseType: 'arraybuffer',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-            },
-            timeout: 15000
-        });
-
-        const buffer = Buffer.from(response.data);
-        const filename = `ai_product_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+        const { fetchSafeImageBuffer } = require('../../utils/safeHttpImage');
+        const { buffer, ext } = await fetchSafeImageBuffer(imageUrl, { maxBytes: 8 * 1024 * 1024, timeoutMs: 15000 });
+        const filename = `ai_product_${Date.now()}_${Math.floor(Math.random() * 1000)}${ext || '.jpg'}`;
         const imageUri = saveAndReplicateProductImage(filename, buffer);
         if (product) {
             await product.update({ imageUri, imageUrl: imageUri });
@@ -196,9 +194,13 @@ async function downloadAndSetImage(productId, imageUrl) {
     }
 }
 
-async function updateBarcodeIA(productId) {
+async function updateBarcodeIA(productId, reqUser = null) {
     try {
-        const product = await Product.findByPk(productId);
+        const where = { id: String(productId) };
+        if (reqUser && reqUser.companyId) {
+            where.companyId = String(reqUser.companyId);
+        }
+        const product = await Product.findOne({ where });
         if (!product) throw new Error('Producto no encontrado');
 
         console.log(`[IA BARCODE] Buscando código para: ${product.name}`);

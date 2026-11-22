@@ -123,8 +123,9 @@ router.get('/pdf', async (req, res) => {
             categories[cat].push(p);
         });
 
-        // 4. Generar PDF
-        const baseUrl = `${req.protocol}://${req.hostname}:3005`;
+        // 4. Generar PDF (usar loopback local fijo para evitar SSRF vía cabecera Host)
+        const serverPort = process.env.PORT || 3005;
+        const baseUrl = `http://127.0.0.1:${serverPort}`;
         const pdfBuffer = await CatalogPdfGenerator.generate(
             userSettings.businessInfo || {},
             categories,

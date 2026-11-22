@@ -320,105 +320,27 @@ router.post('/download-logo', async (req, res) => {
         const { imageUrl, supplierId } = req.body;
         if (!imageUrl) return res.status(400).json({ error: 'URL de imagen requerida' });
 
-        const isSafeExternalUrl = (rawUrl) => {
-            try {
-                const parsed = new URL(rawUrl);
-                if (!['http:', 'https:'].includes(parsed.protocol)) return false;
-                const host = parsed.hostname.toLowerCase();
-                if (
-                    host === 'localhost' ||
-                    host === '0.0.0.0' ||
-                    host === '[::1]' ||
-                    host === '::1' ||
-                    host.endsWith('.local') ||
-                    /^127\./.test(host) ||
-                    /^10\./.test(host) ||
-                    /^192\.168\./.test(host) ||
-                    /^169\.254\./.test(host) ||
-                    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
-                ) {
-                    return false;
-                }
-                return true;
-            } catch (_) {
-                return false;
-            }
-        };
-
-        if (!isSafeExternalUrl(imageUrl)) {
-            return res.status(400).json({ error: 'URL de imagen inválida o restringida por políticas de seguridad.' });
+        const { fetchSafeImageBuffer } = require('../utils/safeHttpImage');
+        let downloaded;
+        try {
+            downloaded = await fetchSafeImageBuffer(imageUrl, { maxBytes: 5 * 1024 * 1024, timeoutMs: 10000 });
+        } catch (fetchErr) {
+            return res.status(400).json({ error: fetchErr.message || 'URL de imagen inválida o restringida por políticas de seguridad.' });
         }
 
-        const downloadBuffer = (targetUrl, redirectDepth = 0) => {
-            return new Promise((resolve, reject) => {
-                if (redirectDepth > 4) return reject(new Error('Demasiadas redirecciones'));
-                if (!isSafeExternalUrl(targetUrl)) return reject(new Error('Redirección a URL no permitida'));
-
-                const parsed = new URL(targetUrl);
-                const client = parsed.protocol === 'https:' ? https : http;
-                const reqHttp = client.get(targetUrl, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                        'Referer': parsed.origin
-                    },
-                    timeout: 10000
-                }, (resp) => {
-                    if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
-                        const nextUrl = resp.headers.location.startsWith('http')
-                            ? resp.headers.location
-                            : new URL(resp.headers.location, targetUrl).toString();
-                        return downloadBuffer(nextUrl, redirectDepth + 1).then(resolve).catch(reject);
-                    }
-
-                    if (resp.statusCode !== 200) {
-                        return reject(new Error(`El servidor de la imagen respondió con HTTP ${resp.statusCode}`));
-                    }
-
-                    const contentType = resp.headers['content-type'] || '';
-                    const chunks = [];
-                    resp.on('data', chunk => chunks.push(chunk));
-                    resp.on('end', () => {
-                        resolve({
-                            buffer: Buffer.concat(chunks),
-                            contentType
-                        });
-                    });
-                    resp.on('error', reject);
-                });
-
-                reqHttp.on('error', reject);
-                reqHttp.on('timeout', () => { reqHttp.destroy(); reject(new Error('Tiempo de espera agotado al descargar la imagen')); });
-            });
-        };
-
-        const { buffer, contentType } = await downloadBuffer(imageUrl);
-
-        let ext = '.png';
-        if (contentType.includes('jpeg') || contentType.includes('jpg')) ext = '.jpg';
-        else if (contentType.includes('webp')) ext = '.webp';
-        else if (contentType.includes('svg')) ext = '.svg';
-        else if (contentType.includes('gif')) ext = '.gif';
-        else {
-            const rawExt = path.extname(imageUrl.split('?')[0]).toLowerCase();
-            if (['.png', '.jpg', '.jpeg', '.webp', '.svg', '.gif'].includes(rawExt)) {
-                ext = rawExt;
-            }
-        }
-
-        const filename = `supplier-${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`;
+        const { buffer, ext } = downloaded;
+        const filename = `supplier-${Date.now()}-${Math.round(Math.random() * 1E9)}${ext || '.png'}`;
         
         // Replicar en todas las rutas candidatas para garantizar cero 404
         replicateLogoBuffer(filename, buffer);
 
         const logoUri = `supplier_logos/${filename}`;
 
-        // Persistir en base de datos
+        // Persistir en base de datos (aislado estrictamente a la empresa del usuario)
         if (supplierId) {
-            const finalCompanyId = req.user?.companyId || 'default';
-            const isSuperOrAdmin = req.user?.role === 'admin' || req.user?.role === 'superadmin';
-            const companyCondition = (finalCompanyId === '2' || finalCompanyId === 'default' || isSuperOrAdmin)
-                ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }, { companyId: null }] }
+            const finalCompanyId = String(req.user?.companyId || 'default');
+            const companyCondition = (finalCompanyId === '2' || finalCompanyId === 'default')
+                ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }] }
                 : { companyId: finalCompanyId };
 
             const targetSupplier = await Supplier.findOne({ where: { id: String(supplierId), ...companyCondition } });

@@ -614,11 +614,46 @@ function setupIpcHandlers() {
             return false;
         }
         const url = event.senderFrame?.url;
-        if (!url || (!url.startsWith('http://localhost:') && !url.startsWith('http://127.0.0.1:') && !url.startsWith('http://[::1]:') && !url.startsWith('file://'))) {
+        if (!url || (
+            !url.startsWith('http://localhost:') &&
+            !url.startsWith('https://localhost:') &&
+            !url.startsWith('http://127.0.0.1:') &&
+            !url.startsWith('https://127.0.0.1:') &&
+            !url.startsWith('http://[::1]:') &&
+            !url.startsWith('https://[::1]:') &&
+            !url.startsWith('file://')
+        )) {
             log('Acceso IPC denegado por origen de URL no autorizado: ' + url);
             return false;
         }
         return true;
+    };
+
+    // Verifica sesión JWT activa desde la cookie httpOnly de Electron (evita uso de IPC sensibles por XSS/sesión anónima)
+    const getAuthenticatedIpcUser = async () => {
+        try {
+            const secret = process.env.JWT_SECRET;
+            if (!secret) return null;
+            const cookies = await session.defaultSession.cookies.get({ name: 'authToken' });
+            if (!Array.isArray(cookies) || cookies.length === 0) return null;
+            const jwt = require('jsonwebtoken');
+            for (const c of cookies) {
+                if (!c || !c.value) continue;
+                try {
+                    const decoded = jwt.verify(c.value, secret, { algorithms: ['HS256'] });
+                    if (decoded && (decoded.id || decoded.userId)) {
+                        return decoded;
+                    }
+                } catch (_) {}
+            }
+        } catch (_) {}
+        return null;
+    };
+
+    const isPrivilegedIpcRole = (user) => {
+        if (!user) return false;
+        const role = String(user.role || '').toLowerCase().trim();
+        return ['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'supervisor', 'gerente'].includes(role);
     };
 
     ipcMain.on('get-machine-id-sync', (event) => {
@@ -852,9 +887,14 @@ function setupIpcHandlers() {
         if (!verifyIpcSender(event)) {
             return { success: false, error: 'Origen de IPC no autorizado ni autenticado' };
         }
+        const ipcUser = await getAuthenticatedIpcUser();
+        if (!ipcUser) {
+            log('[SECURITY] Bloqueado IPC open-drawer sin sesión autenticada.');
+            return { success: false, error: 'Sesión autenticada requerida para abrir la gaveta.' };
+        }
 
         const safePrinterName = await resolveTargetPrinter(printerName);
-        log(`Attempting to open drawer on printer: "${safePrinterName || 'NONE'}" (requested: "${printerName || ''}") with sequence: ${sequence || 'default'}`);
+        log(`Attempting to open drawer on printer: "${safePrinterName || 'NONE'}" by user=${ipcUser.id || ipcUser.userId} (requested: "${printerName || ''}") with sequence: ${sequence || 'default'}`);
         if (!safePrinterName) {
             log('No physical printer available for open-drawer');
             return { success: false, error: 'No se detectó una impresora térmica conectada' };
@@ -866,7 +906,7 @@ function setupIpcHandlers() {
 
         if (sequence) {
             try {
-                bytes = String(sequence).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+                bytes = String(sequence).split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n >= 0 && n <= 255);
                 if (bytes.length === 0) bytes = defaultCodes;
             } catch (e) {
                 log(`Error parsing custom sequence: ${e.message}`);
@@ -885,12 +925,12 @@ function setupIpcHandlers() {
             log(`Fast RawPrinter drawer kick notice (${fastErr.message}), trying fallback...`);
         }
 
-        const byteString = bytes.join(',');
+        const bytesBase64 = Buffer.from(bytes).toString('base64');
 
         return new Promise((resolve) => {
             try {
                 const { spawn } = require('child_process');
-                const escapedPrinterName = safePrinterName.replace(/'/g, "''");
+                // Script PowerShell 100% estático: impresora y bytes viajan por variables de entorno (inmune a inyección ASCII/Unicode)
                 const psScript = `
 $code = @'
 using System;
@@ -939,9 +979,11 @@ public class RawPrinterHelper {
         return bSuccess;
     }
 }
-'@; 
-Add-Type -TypeDefinition $code; 
-$success = [RawPrinterHelper]::SendBytesToPrinter('${escapedPrinterName}', [byte[]]('${byteString}' -split ','));
+'@;
+Add-Type -TypeDefinition $code;
+$printerTarget = $env:ISAAC_PRINTER_NAME;
+$rawBytes = [Convert]::FromBase64String($env:ISAAC_RAW_B64);
+$success = [RawPrinterHelper]::SendBytesToPrinter($printerTarget, $rawBytes);
 if ($success) { exit 0 } else { exit 1 }`;
 
                 const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
@@ -949,9 +991,17 @@ if ($success) { exit 0 } else { exit 1 }`;
                 log(`Spawning C# interop drawer process for: "${safePrinterName}"`);
                 const child = spawn('powershell.exe', [
                     '-NoProfile',
+                    '-NonInteractive',
                     '-ExecutionPolicy', 'Bypass',
                     '-EncodedCommand', encodedScript
-                ], { windowsHide: true });
+                ], {
+                    windowsHide: true,
+                    env: {
+                        ...process.env,
+                        ISAAC_PRINTER_NAME: safePrinterName,
+                        ISAAC_RAW_B64: bytesBase64
+                    }
+                });
 
                 child.on('error', (err) => {
                     log(`[CRITICAL] Error al lanzar proceso hijo (PowerShell) en open-drawer: ${err.message}`);
@@ -1029,7 +1079,7 @@ if ($success) { exit 0 } else { exit 1 }`;
                 return resolve({ success: false, error: 'Lectura de balanza serial disponible en Windows.' });
             }
 
-            const safePort = String(portName || 'COM1').trim().toUpperCase();
+            const safePort = String(portName || 'COM1').trim().toUpperCase().replace(/^\\\\\.\\/, '');
             if (!/^COM\d{1,3}$/.test(safePort)) {
                 return resolve({ success: false, error: `Puerto serial inválido: ${portName}` });
             }
@@ -1039,7 +1089,7 @@ if ($success) { exit 0 } else { exit 1 }`;
             const psScaleScript = `
 $port = $null
 try {
-    $port = New-Object System.IO.Ports.SerialPort '${safePort}', ${safeBaud}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One
+    $port = New-Object System.IO.Ports.SerialPort $env:ISAAC_SCALE_PORT, ([int]$env:ISAAC_SCALE_BAUD), [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One
     $port.ReadTimeout = 1500
     $port.Open()
     $line = $port.ReadLine()
@@ -1052,7 +1102,10 @@ try {
 }
 `;
             const encodedScript = Buffer.from(psScaleScript, 'utf16le').toString('base64');
-            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript], { windowsHide: true });
+            const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript], {
+                windowsHide: true,
+                env: { ...process.env, ISAAC_SCALE_PORT: safePort, ISAAC_SCALE_BAUD: String(safeBaud) }
+            });
             
             let output = '';
             let errorOut = '';
@@ -1119,11 +1172,10 @@ try {
             try {
                 const { spawn } = require('child_process');
 
-                // Content to Bytes (UTF8 or ASCII)
-                const bytes = Buffer.from(content, 'utf8');
-                const byteString = Array.from(bytes).join(',');
+                // Payload vía stdin Base64 e impresora vía env (elimina RCE Unicode y límite de 32KB de CreateProcess)
+                const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content || '', 'utf8');
+                const payloadB64 = bytes.toString('base64');
 
-                const escapedPrinterName = safePrinterName.replace(/'/g, "''");
                 const psScript = `
 $code = @'
 using System;
@@ -1172,19 +1224,27 @@ public class RawPrinterHelper {
         return bSuccess;
     }
 }
-'@; 
-Add-Type -TypeDefinition $code; 
-$success = [RawPrinterHelper]::SendBytesToPrinter('${escapedPrinterName}', [byte[]]('${byteString}' -split ','));
+'@;
+Add-Type -TypeDefinition $code;
+$rawB64 = [Console]::In.ReadToEnd().Trim();
+$rawBytes = [Convert]::FromBase64String($rawB64);
+$success = [RawPrinterHelper]::SendBytesToPrinter($env:ISAAC_PRINTER_NAME, $rawBytes);
 if ($success) { exit 0 } else { exit 1 }`;
 
-                // Encode to avoid newline/quote parsing errors
                 const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
 
                 const child = spawn('powershell.exe', [
                     '-NoProfile',
+                    '-NonInteractive',
                     '-ExecutionPolicy', 'Bypass',
                     '-EncodedCommand', encodedScript
-                ], { windowsHide: true });
+                ], {
+                    windowsHide: true,
+                    env: { ...process.env, ISAAC_PRINTER_NAME: safePrinterName }
+                });
+                if (child.stdin) {
+                    child.stdin.end(payloadB64, 'utf8');
+                }
 
                 child.on('error', (err) => {
                     log(`[CRITICAL] Error al lanzar proceso hijo (PowerShell) en print-raw: ${err.message}`);
@@ -1352,14 +1412,25 @@ if ($success) { exit 0 } else { exit 1 }`;
             const os = require('os');
             const { shell } = require('electron');
             let url = downloadUrl;
-            const OFFICIAL_RELEASE_PREFIX = 'https://github.com/mrivero105-oss/american-pos-backend/releases/download/';
+            const OFFICIAL_RELEASE_ORIGIN = 'https://github.com';
+            const OFFICIAL_RELEASE_PATH_PREFIX = '/mrivero105-oss/american-pos-backend/releases/download/';
             if (url && typeof url === 'string') {
                 try {
-                    const parsed = new URL(url);
-                    if (parsed.protocol !== 'https:' || !url.startsWith(OFFICIAL_RELEASE_PREFIX)) {
-                        log(`[SECURITY] Blocked download-update from untrusted URL: ${url}`);
+                    const parsed = new URL(url.trim());
+                    const normalizedHref = parsed.href;
+                    const safePathSegments = parsed.pathname.split('/').filter(Boolean);
+                    const hasTraversal = safePathSegments.some((seg) => seg === '.' || seg === '..') || url.includes('..');
+                    if (
+                        parsed.protocol !== 'https:' ||
+                        parsed.origin !== OFFICIAL_RELEASE_ORIGIN ||
+                        !parsed.pathname.startsWith(OFFICIAL_RELEASE_PATH_PREFIX) ||
+                        hasTraversal ||
+                        !normalizedHref.startsWith(`${OFFICIAL_RELEASE_ORIGIN}${OFFICIAL_RELEASE_PATH_PREFIX}`)
+                    ) {
+                        log(`[SECURITY] Blocked download-update from untrusted/traversal URL: ${url}`);
                         return { success: false, error: 'URL de actualización no autorizada. Solo se permiten descargas desde el repositorio oficial verificado.' };
                     }
+                    url = normalizedHref;
                 } catch (e) {
                     return { success: false, error: 'URL de actualización inválida.' };
                 }
@@ -1531,16 +1602,35 @@ if ($success) { exit 0 } else { exit 1 }`;
                             }
                         );
                     });
-                    if (sigStatus === 'HashMismatch' || sigStatus === 'NotTrusted') {
+                    if (sigStatus === 'HashMismatch' || sigStatus === 'NotTrusted' || sigStatus === 'UnknownError') {
                         log(`[SECURITY] Blocked update with compromised Authenticode status (${sigStatus}): ${resolvedPath}`);
                         try { fs.unlinkSync(resolvedPath); } catch (_) {}
                         global.downloadedUpdatePath = null;
                         global.downloadedUpdateMeta = null;
                         return { success: false, error: `Actualización bloqueada por firma Authenticode inválida (${sigStatus}).` };
                     }
-                    if (process.env.REQUIRE_AUTHENTICODE_SIGNATURE === 'true' && sigStatus !== 'Valid') {
-                        log(`[SECURITY] Blocked unsigned update (${sigStatus}) because REQUIRE_AUTHENTICODE_SIGNATURE=true`);
-                        return { success: false, error: `Instalador sin firma Authenticode válida (${sigStatus}).` };
+                    if (sigStatus !== 'Valid') {
+                        if (process.env.REQUIRE_AUTHENTICODE_SIGNATURE === 'true') {
+                            log(`[SECURITY] Blocked unsigned update (${sigStatus}) because REQUIRE_AUTHENTICODE_SIGNATURE=true`);
+                            try { fs.unlinkSync(resolvedPath); } catch (_) {}
+                            global.downloadedUpdatePath = null;
+                            global.downloadedUpdateMeta = null;
+                            return { success: false, error: `Instalador sin firma Authenticode válida (${sigStatus}).` };
+                        }
+                        // Sin firma Authenticode válida, exigir confirmación interactiva explícita del usuario en el proceso principal (nunca ejecución silenciosa por XSS)
+                        const confirmRes = await dialog.showMessageBox(mainWindow || undefined, {
+                            type: 'warning',
+                            buttons: ['Cancelar instalación', 'Instalar actualización oficial'],
+                            defaultId: 0,
+                            cancelId: 0,
+                            title: 'Verificación de Seguridad de Actualización',
+                            message: 'El instalador descargado pasó la verificación SHA-512 oficial, pero no posee firma Authenticode comercial.',
+                            detail: `Estado de firma: ${sigStatus}\nOrigen: ${global.downloadedUpdateMeta?.url || 'GitHub Releases Oficial'}\n\n¿Desea continuar con la instalación?`
+                        });
+                        if (confirmRes.response !== 1) {
+                            log(`[SECURITY] Usuario canceló instalación sin firma Authenticode (${sigStatus}).`);
+                            return { success: false, error: 'Instalación cancelada por el usuario (sin firma Authenticode).' };
+                        }
                     }
                 }
             } catch (hashErr) {
@@ -1580,6 +1670,12 @@ if ($success) { exit 0 } else { exit 1 }`;
 
     ipcMain.handle('test-db-connection', async (event, config) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
+        const ipcUser = await getAuthenticatedIpcUser();
+        const dbCurrentlyUp = Boolean(activeServerHandle && typeof activeServerHandle.isDbReady === 'function' ? activeServerHandle.isDbReady() : true);
+        if (dbCurrentlyUp && !isPrivilegedIpcRole(ipcUser)) {
+            log('[SECURITY] Bloqueado IPC test-db-connection sin rol privilegiado.');
+            return { success: false, error: 'Se requiere sesión de Administrador para probar conexiones de base de datos.' };
+        }
         try {
             const DbConfigManager = require('./config/dbConfigManager');
             return await DbConfigManager.testConnection(config);
@@ -1600,6 +1696,12 @@ if ($success) { exit 0 } else { exit 1 }`;
 
     ipcMain.handle('save-db-config-and-restart', async (event, config) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
+        const ipcUser = await getAuthenticatedIpcUser();
+        const dbCurrentlyUp = Boolean(activeServerHandle && typeof activeServerHandle.isDbReady === 'function' ? activeServerHandle.isDbReady() : true);
+        if (dbCurrentlyUp && !isPrivilegedIpcRole(ipcUser)) {
+            log('[SECURITY] Bloqueado IPC save-db-config-and-restart sin rol privilegiado.');
+            return { success: false, error: 'Se requiere sesión de Administrador para modificar la configuración de base de datos.' };
+        }
         try {
             const DbConfigManager = require('./config/dbConfigManager');
             const saveRes = DbConfigManager.saveConfig(config);
@@ -1634,7 +1736,31 @@ app.whenReady().then(async () => {
     setupIpcHandlers();
 
     // Interceptar aperturas de ventanas nuevas (target="_blank") y adjuntos <webview>
+    const isAllowedMovilwayUrl = (rawUrl) => {
+        const src = String(rawUrl || '').trim();
+        if (!src || src === 'about:blank') return true;
+        try {
+            const parsed = new URL(src);
+            const host = parsed.hostname.toLowerCase();
+            return parsed.protocol === 'https:' && (
+                host === 'movilway.net' || host.endsWith('.movilway.net') ||
+                host === 'movilway.com' || host.endsWith('.movilway.com')
+            );
+        } catch (_) {
+            return false;
+        }
+    };
+
     app.on('web-contents-created', (event, contents) => {
+        if (typeof contents.getType === 'function' && contents.getType() === 'webview') {
+            contents.on('will-navigate', (navEvent, targetUrl) => {
+                if (!isAllowedMovilwayUrl(targetUrl)) {
+                    log(`[SECURITY] Bloqueada navegación de <webview> hacia origen no autorizado: ${targetUrl}`);
+                    navEvent.preventDefault();
+                }
+            });
+        }
+
         contents.on('will-attach-webview', (waEvent, webPreferences, params) => {
             delete webPreferences.preload;
             delete webPreferences.preloadURL;
@@ -1645,20 +1771,8 @@ app.whenReady().then(async () => {
             webPreferences.webSecurity = true;
 
             const src = String(params?.src || '').trim();
-            if (!src || src === 'about:blank') return;
-            try {
-                const parsed = new URL(src);
-                const host = parsed.hostname.toLowerCase();
-                const isAllowedMovilway = parsed.protocol === 'https:' && (
-                    host === 'movilway.net' || host.endsWith('.movilway.net') ||
-                    host === 'movilway.com' || host.endsWith('.movilway.com')
-                );
-                if (!isAllowedMovilway) {
-                    log(`[SECURITY] Bloqueado <webview> hacia origen no autorizado: ${src}`);
-                    waEvent.preventDefault();
-                }
-            } catch (_) {
-                log(`[SECURITY] Bloqueado <webview> con URL inválida: ${src}`);
+            if (!isAllowedMovilwayUrl(src)) {
+                log(`[SECURITY] Bloqueado <webview> hacia origen no autorizado: ${src}`);
                 waEvent.preventDefault();
             }
         });

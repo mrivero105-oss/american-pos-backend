@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const ScannerService = require('../services/ScannerService');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, requirePermission } = require('../middleware/auth');
 
-router.get('/devices', verifyToken, async (req, res) => {
+const requireScannerAccess = requirePermission('canManageInventory', 'canManagePurchases', 'canCreateProducts', 'canManageSettings');
+
+router.get('/devices', verifyToken, requireScannerAccess, async (req, res) => {
     try {
         const devices = await ScannerService.getConnectedScanners();
         res.json({
@@ -18,7 +20,7 @@ router.get('/devices', verifyToken, async (req, res) => {
     }
 });
 
-router.post('/scan', verifyToken, async (req, res) => {
+router.post('/scan', verifyToken, requireScannerAccess, async (req, res) => {
     try {
         const result = await ScannerService.scanDocument(req.body);
         res.json({

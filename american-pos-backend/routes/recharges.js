@@ -421,7 +421,7 @@ router.put('/:id/complete', async (req, res) => {
 /**
  * PUT /:id/cancel - Anular recarga y revertir ingreso de caja si existía
  */
-router.put('/:id/cancel', async (req, res) => {
+router.put('/:id/cancel', requirePermission('canVoidSales', 'canManageCashShift'), async (req, res) => {
     try {
         await ensureTableReady();
         const { id } = req.params;
@@ -459,7 +459,7 @@ router.put('/:id/cancel', async (req, res) => {
 /**
  * POST /wallet-balance - Actualizar saldo disponible en bolsa Movilway
  */
-router.post('/wallet-balance', async (req, res) => {
+router.post('/wallet-balance', requirePermission('canManageSettings', 'canManageCashShift'), async (req, res) => {
     try {
         const compId = String(req.user?.companyId || '2');
         const balance = Number(req.body?.balanceBs ?? req.body?.saldo ?? 0);

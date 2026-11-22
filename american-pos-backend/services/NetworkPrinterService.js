@@ -315,7 +315,7 @@ class NetworkPrinterService {
             content += BOLD_ON + 'CANT  PRODUCTO\n' + BOLD_OFF;
             content += '--------------------------------\n';
 
-            const items = sale.items || sale.saleItems || [];
+            const items = sale.SaleItems || sale.items || sale.saleItems || [];
             for (const item of items) {
                 const name = (item.productName || item.name || 'Producto').substring(0, 26);
                 const qty = item.quantity || 1;
@@ -336,7 +336,7 @@ class NetworkPrinterService {
             content += `Cliente / Mesa: ${customerName}\n`;
             content += '--------------------------------\n';
 
-            const items = sale.items || sale.saleItems || [];
+            const items = sale.SaleItems || sale.items || sale.saleItems || [];
             for (const item of items) {
                 const name = (item.productName || item.name || 'Producto').substring(0, 26);
                 const qty = item.quantity || 1;
@@ -360,7 +360,7 @@ class NetworkPrinterService {
             content += '--------------------------------\n';
             content += ALIGN_LEFT;
 
-            const items = sale.items || sale.saleItems || [];
+            const items = sale.SaleItems || sale.items || sale.saleItems || [];
             for (const item of items) {
                 const name = (item.productName || item.name || 'Producto').substring(0, 24);
                 const qty = item.quantity || 1;

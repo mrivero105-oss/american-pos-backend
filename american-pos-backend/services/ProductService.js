@@ -951,54 +951,61 @@ class ProductService {
         const userSettings = getUserSettings(allSettings, reqUser.companyId);
         const posRate = precision.parseNumericInput(userSettings?.exchangeRate || userSettings?.bcvRate || 0);
 
-        const products = await Product.findAll({ where: whereClause });
         let updatedCount = 0;
-        const updates = products.map(p => {
-            const currentPrice = precision.parseNumericInput(p.price || 0);
-            const currentCost = precision.parseNumericInput(p.cost || 0);
-            let newPrice = currentPrice;
-            let nextMargin = precision.parseNumericInput(p.margin || 0);
+        await sequelize.transaction(async (t) => {
+            const products = await Product.findAll({
+                where: whereClause,
+                order: [['id', 'ASC']],
+                lock: t.LOCK.UPDATE,
+                transaction: t
+            });
 
-            if (adjustmentType === 'percentage') {
-                const percentVal = precision.divide(numericValue, 100);
-                if (direction === 'increase') {
-                    const multiplier = precision.add([1, percentVal]);
-                    newPrice = precision.multiply(currentPrice, multiplier);
+            for (const p of products) {
+                const currentPrice = precision.parseNumericInput(p.price || 0);
+                const currentCost = precision.parseNumericInput(p.cost || 0);
+                let newPrice = currentPrice;
+                let nextMargin = precision.parseNumericInput(p.margin || 0);
+
+                if (adjustmentType === 'percentage') {
+                    const percentVal = precision.divide(numericValue, 100);
+                    if (direction === 'increase') {
+                        const multiplier = precision.add([1, percentVal]);
+                        newPrice = precision.multiply(currentPrice, multiplier);
+                    } else {
+                        const multiplier = precision.subtract(1, percentVal);
+                        newPrice = precision.multiply(currentPrice, multiplier);
+                    }
+                    if (currentCost > 0) {
+                        nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
+                    }
+                } else if (adjustmentType === 'margin') {
+                    // Estandarizado a Markup sobre Costo: Precio = Costo * (1 + margen% / 100)
+                    if (currentCost <= 0) {
+                        continue;
+                    }
+                    const safeMargin = Math.max(0, numericValue);
+                    const multiplier = precision.add([1, precision.divide(safeMargin, 100)]);
+                    newPrice = precision.multiply(currentCost, multiplier);
+                    nextMargin = precision.round(safeMargin, 4);
                 } else {
-                    const multiplier = precision.subtract(1, percentVal);
-                    newPrice = precision.multiply(currentPrice, multiplier);
+                    newPrice = direction === 'increase'
+                        ? precision.add([currentPrice, numericValue])
+                        : precision.subtract(currentPrice, numericValue);
+                    if (currentCost > 0) {
+                        nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
+                    }
                 }
-                if (currentCost > 0) {
-                    nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
-                }
-            } else if (adjustmentType === 'margin') {
-                // Estandarizado a Markup sobre Costo: Precio = Costo * (1 + margen% / 100)
-                if (currentCost <= 0) {
-                    return Promise.resolve(null);
-                }
-                const safeMargin = Math.max(0, numericValue);
-                const multiplier = precision.add([1, precision.divide(safeMargin, 100)]);
-                newPrice = precision.multiply(currentCost, multiplier);
-                nextMargin = precision.round(safeMargin, 4);
-            } else {
-                newPrice = direction === 'increase'
-                    ? precision.add([currentPrice, numericValue])
-                    : precision.subtract(currentPrice, numericValue);
-                if (currentCost > 0) {
-                    nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
-                }
-            }
 
-            newPrice = Math.max(0, newPrice < 0.10 ? precision.round(newPrice, 4) : precision.round(newPrice, 2));
-            const patch = { price: newPrice, margin: nextMargin };
-            if (posRate > 0) {
-                patch.priceBs = precision.round(precision.multiply(newPrice, posRate), 2);
+                newPrice = Math.max(0, newPrice < 0.10 ? precision.round(newPrice, 4) : precision.round(newPrice, 2));
+                const patch = { price: newPrice, margin: nextMargin };
+                if (posRate > 0) {
+                    patch.priceBs = precision.round(precision.multiply(newPrice, posRate), 2);
+                }
+                await p.update(patch, { transaction: t });
+                updatedCount += 1;
             }
-            updatedCount += 1;
-            return p.update(patch);
         });
 
-        await Promise.all(updates);
         this.invalidateCatalogCache();
         await this._logAudit(reqUser, 'PRODUCT_BULK_PRICE_ADJUST', `Ajuste masivo (${adjustmentType}): ${direction || 'set'} de ${numericValue}${adjustmentType === 'fixed' ? '$' : '%'} para ${updatedCount} productos.`, 'BULK', null, null);
 
@@ -2061,12 +2068,12 @@ class ProductService {
         return productMediaService.searchImagesIA(productId, fallbackName, fallbackCategory);
     }
 
-    async downloadAndSetImage(productId, imageUrl, fallbackName = '', fallbackCategory = '') {
-        return productMediaService.downloadAndSetImage(productId, imageUrl, fallbackName, fallbackCategory);
+    async downloadAndSetImage(productId, imageUrl, fallbackName = '', fallbackCategory = '', reqUser = null) {
+        return productMediaService.downloadAndSetImage(productId, imageUrl, fallbackName, fallbackCategory, reqUser);
     }
 
-    async updateBarcodeIA(productId) {
-        return productMediaService.updateBarcodeIA(productId);
+    async updateBarcodeIA(productId, reqUser = null) {
+        return productMediaService.updateBarcodeIA(productId, reqUser);
     }
 
     async recordWaste(reqUser, productId, body) {

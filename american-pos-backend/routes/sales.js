@@ -863,10 +863,24 @@ router.post('/', validate(saleSchema), async (req, res) => {
                         });
                     }
 
+                    const isSafeLanPrinterHost = (rawHost) => {
+                        const h = String(rawHost || '').trim().toLowerCase();
+                        if (!h || h.length > 253) return false;
+                        return (
+                            /^192\.168\.\d{1,3}\.\d{1,3}$/.test(h) ||
+                            /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h) ||
+                            /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h) ||
+                            /^[a-z0-9-]+\.(local|lan)$/i.test(h)
+                        );
+                    };
+
                     for (const netPr of targetPrinters) {
                         const host = netPr.host || netPr.ip;
                         const port = parseInt(netPr.port, 10) || 9100;
-                        if (!host) continue;
+                        if (!host || !isSafeLanPrinterHost(host) || port < 1 || port > 65535) {
+                            if (host) console.warn(`[NetworkPrinter] Host/puerto de impresora bloqueado por política LAN: ${host}:${port}`);
+                            continue;
+                        }
 
                         const customBiz = { ...bizInfo, networkPrinterRole: netPr.role || bizInfo.networkPrinterRole || 'MIRROR' };
                         NetworkPrinterService.printSale(host, port, safeSale, customBiz).then(printRes => {
@@ -893,7 +907,11 @@ router.post('/', validate(saleSchema), async (req, res) => {
                                 lowerMsg.includes('cliente') || 
                                 lowerMsg.includes('stock') || 
                                 error.message.includes('INTEGRITY_ERROR') || 
-                                error.message.includes('AUTH_REQUIRED');
+                                error.message.includes('AUTH_REQUIRED') ||
+                                error.message.includes('CAJA_CERRADA') ||
+                                error.message.includes('ESTACION_RESTRINGIDA') ||
+                                error.message.includes('TRANSACCION_DUPLICADA') ||
+                                error.message.includes('FRAUDE_');
         res.status(isBusinessError ? 400 : 500).json({ error: error.message, message: error.message });
     }
 });
@@ -901,7 +919,7 @@ router.post('/', validate(saleSchema), async (req, res) => {
 /**
  * GET /reports/controlled-meds - Official Controlled Medications Report (Libro Psicotrópicos)
  */
-router.get('/reports/controlled-meds', async (req, res) => {
+router.get('/reports/controlled-meds', require('../middleware/auth').requirePermission('canViewReports'), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const items = await SaleItem.findAll({

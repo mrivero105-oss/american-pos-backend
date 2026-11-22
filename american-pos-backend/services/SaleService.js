@@ -96,9 +96,12 @@ class SaleService {
         saleData.clientTransactionId = clientTransactionId;
         saleData.id = clientTransactionId;
 
-        // 1A. Verificación Persistente en DB (A prueba de caídas o reinicios del servidor Node.js)
+        // 1A. Verificación Persistente en DB (A prueba de caídas o reinicios del servidor Node.js, aislada por empresa)
         const existingSale = await Sale.findByPk(clientTransactionId, { include: [{ model: SaleItem, as: 'SaleItems' }] });
         if (existingSale) {
+            if (existingSale.companyId && String(existingSale.companyId) !== String(companyId)) {
+                throw new Error(`TRANSACCION_DUPLICADA: El ID de transacción ${clientTransactionId} no pertenece a esta empresa.`);
+            }
             console.warn(`[Idempotency] Venta ya persistida en DB interceptada exitosamente: ${clientTransactionId}`);
             return existingSale;
         }
@@ -111,6 +114,9 @@ class SaleService {
                 await new Promise(resolve => setTimeout(resolve, 100));
                 const completed = await Sale.findByPk(clientTransactionId, { include: [{ model: SaleItem, as: 'SaleItems' }] });
                 if (completed) {
+                    if (completed.companyId && String(completed.companyId) !== String(companyId)) {
+                        throw new Error(`TRANSACCION_DUPLICADA: Conflicto de empresa en TX ${clientTransactionId}.`);
+                    }
                     console.log(`[Idempotency] Transacción concurrente ${clientTransactionId} resuelta y recuperada con éxito.`);
                     return completed;
                 }
@@ -142,31 +148,34 @@ class SaleService {
             userBranchId = String(reqUser.activeBranchId || '1')
         } = ctx;
 
-        // 1C. VERIFICACIÓN DE CAJA ABIERTA (Resiliente y Multi-Caja)
+        // 1C. VERIFICACIÓN DE CAJA ABIERTA (Resiliente, Multi-Caja y Aislada por Empresa)
+        const shiftCompanyFilter = (companyId === '2' || companyId === 'default')
+            ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }] }
+            : { companyId };
         let openShift = null;
         if (!options.bypassShiftCheck) {
             const currentRegisterId = String(saleData.registerId || '1');
             
             // 1. Buscar turno abierto por el usuario actual en esta caja física
             openShift = await CashShift.findOne({
-                where: { userId: String(userId), registerId: currentRegisterId, status: 'open' }
+                where: { userId: String(userId), registerId: currentRegisterId, status: 'open', ...shiftCompanyFilter }
             });
 
             // 2. Buscar turno abierto por la caja física en uso (ej: Caja 2 / Charcutería / DEV-...)
             if (!openShift && currentRegisterId && currentRegisterId !== '1') {
                 openShift = await CashShift.findOne({
-                    where: { registerId: currentRegisterId, status: 'open' }
+                    where: { registerId: currentRegisterId, status: 'open', ...shiftCompanyFilter }
                 });
             }
 
-            // 3. Fallback: Buscar turno abierto por el usuario actual en cualquier caja
+            // 3. Fallback: Buscar turno abierto por el usuario actual en cualquier caja de su empresa
             if (!openShift) {
                 openShift = await CashShift.findOne({
-                    where: { userId: String(userId), status: 'open' }
+                    where: { userId: String(userId), status: 'open', ...shiftCompanyFilter }
                 });
             }
 
-            // 4. Si el usuario logueado es admin, superadmin, supervisor o coincide por nombre
+            // 4. Si el usuario logueado es admin, superadmin, supervisor o coincide por nombre dentro de su empresa
             if (!openShift) {
                 const userRole = (reqUser.role || '').toLowerCase();
                 const userName = (reqUser.name || reqUser.username || '').toLowerCase().trim();
@@ -176,14 +185,15 @@ class SaleService {
                     openShift = await CashShift.findOne({
                         where: {
                             status: 'open',
+                            ...shiftCompanyFilter,
                             userName: { [likeOp]: `%${userName}%` }
                         }
                     });
                 }
 
-                if (!openShift && ['admin', 'superadmin', 'owner', 'supervisor'].includes(userRole)) {
+                if (!openShift && ['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'supervisor'].includes(userRole)) {
                     openShift = await CashShift.findOne({
-                        where: { status: 'open' },
+                        where: { status: 'open', ...shiftCompanyFilter },
                         order: [['openedAt', 'DESC']]
                     });
                 }
@@ -218,8 +228,8 @@ class SaleService {
                     .filter(Boolean)
             )];
             const { Product } = require('../database/models');
-            const dbProducts = await Product.findAll({
-                where: { id: { [Op.in]: cleanProductIds } },
+                    const dbProducts = await Product.findAll({
+                where: { id: { [Op.in]: cleanProductIds }, ...shiftCompanyFilter },
                 attributes: ['id', 'name', 'category']
             });
             const dbCategoryMap = new Map(dbProducts.map(p => [String(p.id), p.category]));
@@ -239,9 +249,7 @@ class SaleService {
                     isPermitted = allowedNorm.includes(itemCatNorm);
                     if (!isPermitted) {
                         const itemNameNorm = normalizeStationText(dbNameMap.get(pId) || item.name || item.description);
-                        isPermitted = allowedNorm.some(allowed => 
-                            itemNameNorm.includes(allowed) && !itemCatNorm.includes('golosina') && !itemNameNorm.includes('sorpresa')
-                        );
+                        isPermitted = allowedNorm.some(allowed => itemNameNorm.includes(allowed));
                     }
                 }
 
@@ -279,9 +287,6 @@ class SaleService {
             }
             if (!dbBranch) {
                 dbBranch = await sequelize.models.Branch.findOne({ where: { companyId }, order: [['createdAt', 'ASC']] });
-            }
-            if (!dbBranch) {
-                dbBranch = await sequelize.models.Branch.findOne({ where: { isMain: true }, order: [['createdAt', 'ASC']] }) || await sequelize.models.Branch.findOne({ order: [['createdAt', 'ASC']] });
             }
             if (!dbBranch) {
                 dbBranch = await sequelize.models.Branch.create({
@@ -481,9 +486,45 @@ class SaleService {
             }
         }
 
-        const hasAppliedPromotions = Array.isArray(saleData.appliedPromotions) && saleData.appliedPromotions.length > 0;
-        if (promoDiscountValue > (serverCalculatedSubtotal * 0.10) && !hasAppliedPromotions && !canApplyDiscounts && !saleData.supervisorApprovalId) {
-            throw new Error('AUTH_REQUIRED: Descuento promocional sin promoción activa válida requiere autorización de supervisor.');
+        // 🛡️ ZERO-TRUST PROMOCIONES: Verificar cualquier promoDiscount contra la tabla real de Promotions en BD
+        let verifiedPromoDiscount = 0;
+        let verifiedAppliedPromotions = [];
+        if (promoDiscountValue > 0 && !options.forceOverridePrice) {
+            try {
+                const PromotionService = require('./PromotionService');
+                const evalCartItems = items.map((it) => {
+                    const pid = resolveCleanProductId(it);
+                    const dbP = dbProductMap.get(pid);
+                    return {
+                        id: it.id || pid,
+                        productId: pid,
+                        name: dbP?.name || it.name || '',
+                        category: dbP?.category || it.category || '',
+                        price: Number(it.price) || 0,
+                        quantity: Number(it.quantity) || 0,
+                        factorConversion: Number(it.factorConversion) || 1
+                    };
+                });
+                const primaryPaymentMethod = (Array.isArray(saleData.paymentMethods) && saleData.paymentMethods[0]?.method)
+                    || saleData.paymentMethod
+                    || null;
+                const promoEval = await PromotionService.evaluateCart(evalCartItems, companyId, primaryPaymentMethod);
+                verifiedPromoDiscount = Math.max(0, Number(promoEval?.totalDiscount) || 0);
+                verifiedAppliedPromotions = Array.isArray(promoEval?.appliedPromotions) ? promoEval.appliedPromotions : [];
+            } catch (promoErr) {
+                console.warn('[SaleService] Aviso evaluando promociones Zero-Trust:', promoErr.message);
+                verifiedPromoDiscount = 0;
+            }
+
+            const unverifiedPromoExcess = precision.subtract(promoDiscountValue, verifiedPromoDiscount);
+            if (unverifiedPromoExcess > 0.05 && !canApplyDiscounts && !saleData.supervisorApprovalId) {
+                throw new Error(
+                    `AUTH_REQUIRED: Descuento promocional ($${promoDiscountValue.toFixed(2)}) excede las promociones activas verificadas ($${verifiedPromoDiscount.toFixed(2)}). Se requiere autorización de supervisor.`
+                );
+            }
+        }
+        if (verifiedAppliedPromotions.length > 0) {
+            saleData.appliedPromotions = verifiedAppliedPromotions;
         }
 
         if (discountValue > (serverCalculatedSubtotal * 0.10) && reqUser.role !== 'superadmin') {
@@ -674,6 +715,19 @@ class SaleService {
 
         // --- BEGIN TRANSACTION (POSTGRESQL READ COMMITTED + DETERMINISTIC FOR UPDATE LOCKS) ---
         const t = await sequelize.transaction();
+        const isPgDialect = typeof sequelize.getDialect === 'function' && sequelize.getDialect() === 'postgres';
+        const runInSavepoint = async (spName, fn) => {
+            if (!isPgDialect) return await fn();
+            await sequelize.query(`SAVEPOINT ${spName}`, { transaction: t });
+            try {
+                const res = await fn();
+                await sequelize.query(`RELEASE SAVEPOINT ${spName}`, { transaction: t });
+                return res;
+            } catch (spErr) {
+                await sequelize.query(`ROLLBACK TO SAVEPOINT ${spName}`, { transaction: t }).catch(() => {});
+                throw spErr;
+            }
+        };
 
         try {
             // Resolver caja activa de la venta para numeración correlativa independiente por caja física
@@ -696,7 +750,7 @@ class SaleService {
             let dailyTicketNumber = Number(saleData.dailyTicketNumber || saleData.taxInfo?.dailyTicketNumber) || 0;
 
             try {
-                const [regSeq] = await sequelize.query(`
+                const [regSeq] = await runInSavepoint('sp_daily_ticket_seq', () => sequelize.query(`
                     INSERT INTO "DailyRegisterSequences" ("companyId", "registerId", "dateKey", "currentNumber")
                     VALUES (:companyId, :registerId, :dateKey, 1)
                     ON CONFLICT ("companyId", "registerId", "dateKey")
@@ -706,7 +760,7 @@ class SaleService {
                     replacements: { companyId, registerId: resolvedRegisterId, dateKey },
                     type: sequelize.QueryTypes.SELECT,
                     transaction: t
-                });
+                }));
                 if (regSeq?.currentNumber) {
                     dailyTicketNumber = Number(regSeq.currentNumber);
                 }
@@ -715,14 +769,14 @@ class SaleService {
                 if (!dailyTicketNumber) {
                     const startOfDayIso = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 0, 0, 0, 0).toISOString();
                     const endOfDayIso = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 23, 59, 59, 999).toISOString();
-                    const todaySalesCount = await Sale.count({
+                    const todaySalesCount = await runInSavepoint('sp_daily_ticket_cnt', () => Sale.count({
                         where: {
                             ...companyCondition,
                             ...registerSequenceFilter,
                             date: { [Op.between]: [startOfDayIso, endOfDayIso] }
                         },
                         transaction: t
-                    }).catch(() => 0);
+                    })).catch(() => 0);
                     dailyTicketNumber = todaySalesCount + 1;
                 }
             }
@@ -799,13 +853,13 @@ class SaleService {
                 try {
                     const { BillOfMaterials } = require('../database/models');
                     // Consultas por lote secuenciales sobre la misma conexión de transacción t (evita pipelining en pg.Client)
-                    const lockedProds = await Product.findAll({
+                    const lockedProds = await runInSavepoint('sp_lock_prods', () => Product.findAll({
                         where: { id: { [Op.in]: uniqueCartProductIds }, ...companyCondition },
                         order: [['id', 'ASC']],
                         lock: sequelize.constructor.Transaction.LOCK.UPDATE,
                         transaction: t
-                    });
-                    const allActiveLots = await ProductLot.findAll({
+                    }));
+                    const allActiveLots = await runInSavepoint('sp_lock_lots', () => ProductLot.findAll({
                         where: {
                             productId: { [Op.in]: uniqueCartProductIds },
                             companyId,
@@ -819,14 +873,14 @@ class SaleService {
                         ],
                         transaction: t,
                         lock: sequelize.constructor.Transaction.LOCK.UPDATE
-                    }).catch(() => null);
+                    })).catch(() => null);
                     const kitBoms = (BillOfMaterials && typeof BillOfMaterials.findAll === 'function')
-                        ? await BillOfMaterials.findAll({
+                        ? await runInSavepoint('sp_kit_boms', () => BillOfMaterials.findAll({
                             where: { targetProductId: { [Op.in]: uniqueCartProductIds }, isKit: true, isActive: true, companyId },
                             attributes: ['targetProductId'],
                             transaction: t,
                             raw: true
-                        }).catch(() => null)
+                        })).catch(() => null)
                         : null;
 
                     if (Array.isArray(lockedProds)) {

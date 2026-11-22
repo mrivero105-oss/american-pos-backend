@@ -31,7 +31,7 @@ function runWindowsDpapiPs(psScript, inputStr = null) {
         {
             input: inputStr || undefined,
             encoding: 'utf8',
-            timeout: 12000,
+            timeout: 25000,
             windowsHide: true,
             stdio: ['pipe', 'pipe', 'pipe']
         }

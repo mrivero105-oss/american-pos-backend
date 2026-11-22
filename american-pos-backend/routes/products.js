@@ -1501,8 +1501,12 @@ router.post('/:id/lots', requirePermission(['canManageInventory', 'canAdjustStoc
         const { lotNumber, quantity, expirationDate, cost, branchId } = req.body;
         const lotQty = precision.round(Number(quantity) || 0, 3);
         const lotCost = precision.round(Number(cost) || 0);
+        if (!Number.isFinite(lotQty) || lotQty <= 0) {
+            await t.rollback();
+            return res.status(400).json({ error: 'La cantidad del lote debe ser mayor a 0.' });
+        }
 
-        const product = await Product.findOne({ where: { id: productId, companyId }, transaction: t });
+        const product = await Product.findOne({ where: { id: productId, companyId }, lock: t.LOCK.UPDATE, transaction: t });
         if (!product) {
             await t.rollback();
             return res.status(404).json({ error: 'Producto no encontrado' });
@@ -1520,17 +1524,18 @@ router.post('/:id/lots', requirePermission(['canManageInventory', 'canAdjustStoc
         }, { transaction: t });
 
         const currentStock = precision.round(Number(product.stockQuantity || product.stock || 0), 3);
-        const newTotalStock = precision.round(currentStock + lotQty, 3);
+        const newTotalStock = precision.round(precision.add([currentStock, lotQty]), 3);
 
         // Add stock to product branch stock if branchId is provided
         const targetBranchId = branchId || req.user.activeBranchId || null;
         if (targetBranchId) {
             let bs = await BranchStock.findOne({ 
                 where: { productId, branchId: targetBranchId, companyId },
+                lock: t.LOCK.UPDATE,
                 transaction: t 
             });
             if (bs) {
-                const newBranchQty = precision.round((Number(bs.quantity) || 0) + lotQty, 3);
+                const newBranchQty = precision.round(precision.add([Number(bs.quantity) || 0, lotQty]), 3);
                 await bs.update({ quantity: newBranchQty }, { transaction: t });
             } else {
                 await BranchStock.create({
@@ -1562,7 +1567,7 @@ router.post('/:id/lots', requirePermission(['canManageInventory', 'canAdjustStoc
         await t.commit();
         res.status(201).json(lot);
     } catch (error) {
-        if (t) await t.rollback();
+        if (t && !t.finished) await t.rollback();
         console.error('Create lot error:', error);
         res.status(500).json({ error: 'Error al crear lote: ' + error.message });
     }

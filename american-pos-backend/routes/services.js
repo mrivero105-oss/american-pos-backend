@@ -4,6 +4,24 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { ServiceOrder, Sale, SaleItem } = require('../database/models');
+const { requirePermission } = require('../middleware/auth');
+
+router.use(requirePermission('canAccessPOS'));
+
+const ALLOWED_SERVICE_ORDER_FIELDS = [
+  'orderNumber', 'customerId', 'customerName', 'customerPhone', 'customerEmail',
+  'deviceType', 'deviceBrand', 'deviceModel', 'serialNumber', 'imei', 'accessories',
+  'problemDescription', 'diagnosis', 'notes', 'technicianId', 'technicianName',
+  'estimatedCost', 'finalCost', 'balancePaid', 'estimatedDeliveryDate', 'priority',
+  'branchId', 'items', 'warrantyDays'
+];
+const pickAllowedServiceFields = (raw = {}) => {
+  const out = {};
+  for (const key of ALLOWED_SERVICE_ORDER_FIELDS) {
+    if (raw[key] !== undefined) out[key] = raw[key];
+  }
+  return out;
+};
 
 // Configure storage for service evidence photos
 const SERVICE_ALLOWED_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
@@ -82,7 +100,7 @@ router.post('/', upload.array('evidencia', 4), async (req, res) => {
       return res.status(400).json({ error: 'Formato JSON inválido en orderData' });
     }
     const { companyId } = getServiceTenantScope(req);
-    const { companyId: _ignoreComp, id: _ignoreId, status: _ignoreStatus, ...safeOrderData } = orderData || {};
+    const safeOrderData = pickAllowedServiceFields(orderData || {});
     
     // Process uploaded files to get URLs
     const photoUrls = (req.files || []).map(file => `/uploads/services/${file.filename}`);

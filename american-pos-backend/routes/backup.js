@@ -48,8 +48,11 @@ const getActivePgConnectionParams = () => {
     return { host, port, user, dbName, password };
 };
 
-// Configurar multer para subida manual de respaldos PostgreSQL
+// Configurar multer para subida manual de respaldos PostgreSQL (con límite DoS de 500 MB)
 const upload = multer({
+    limits: {
+        fileSize: 500 * 1024 * 1024
+    },
     storage: multer.diskStorage({
         destination: (req, file, cb) => {
             cb(null, backupDir);
@@ -73,6 +76,78 @@ const upload = multer({
         }
     }
 });
+
+// Lee solo los primeros N bytes sin cargar respaldos grandes completos en memoria (anti-OOM)
+const readFileHead = (targetPath, numBytes = 16) => {
+    const fd = fs.openSync(targetPath, 'r');
+    try {
+        const buf = Buffer.alloc(numBytes);
+        const bytesRead = fs.readSync(fd, buf, 0, numBytes, 0);
+        return buf.subarray(0, bytesRead);
+    } finally {
+        try { fs.closeSync(fd); } catch (_) {}
+    }
+};
+
+// Inspección anti-RCE para respaldos .sql antes de pasarlos a psql:
+// bloquea metacomandos psql (\!, \i, \o, \g |, \copy, etc.) y COPY ... PROGRAM fuera de bloques COPY FROM stdin
+const assertSafeSqlBackupFile = async (sqlPath) => {
+    const readline = require('readline');
+    const stream = fs.createReadStream(sqlPath, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    let inCopyStdin = false;
+    let lineNo = 0;
+
+    try {
+        for await (const rawLine of rl) {
+            lineNo += 1;
+            const trimmed = rawLine.trim();
+            if (inCopyStdin) {
+                if (trimmed === '\\.') {
+                    inCopyStdin = false;
+                }
+                continue;
+            }
+            if (!trimmed || trimmed.startsWith('--')) continue;
+
+            if (/^COPY\s+.+\s+FROM\s+stdin\s*;/i.test(trimmed)) {
+                inCopyStdin = true;
+                continue;
+            }
+            if (/\bCOPY\b[\s\S]*\bPROGRAM\b/i.test(trimmed)) {
+                throw new Error(`SECURITY_BLOCK: El archivo SQL contiene una sentencia COPY ... PROGRAM prohibida (línea ${lineNo}).`);
+            }
+            if (trimmed.startsWith('\\')) {
+                // Solo se permiten directivas seguras emitidas por pg_dump (\restrict, \unrestrict)
+                if (!/^\\(?:restrict|unrestrict)\b/i.test(trimmed)) {
+                    throw new Error(`SECURITY_BLOCK: El archivo SQL contiene un metacomando psql no permitido en la línea ${lineNo}.`);
+                }
+            }
+        }
+    } finally {
+        rl.close();
+        stream.destroy();
+    }
+};
+
+const runSafePsqlRestore = async (sqlPath) => {
+    await assertSafeSqlBackupFile(sqlPath);
+    const { host, port, user, dbName, password } = getActivePgConnectionParams();
+    const psql = getPsqlCommand();
+    await new Promise((resolve, reject) => {
+        execFile(
+            psql,
+            ['-X', '-v', 'ON_ERROR_STOP=1', '-h', String(host), '-p', String(port), '-U', String(user), '-d', String(dbName), '-f', sqlPath],
+            { env: { ...process.env, PGPASSWORD: password }, maxBuffer: 10 * 1024 * 1024 },
+            (err, _stdout, stderr) => {
+                if (err) {
+                    return reject(new Error(stderr ? `psql falló: ${String(stderr).slice(0, 400)}` : err.message));
+                }
+                resolve();
+            }
+        );
+    });
+};
 
 // Validación centralizada de nombres de archivo de respaldo soportados por la bóveda PostgreSQL
 const isValidBackupFilename = (filename) => {
@@ -158,22 +233,16 @@ const getPsqlCommand = () => {
     return 'psql';
 };
 
-// Helper to extract ZIP archive using tar with pure JS fallback
+// Helper seguro para extraer ZIP con blindaje anti Zip-Slip y anti Zip-Bomb (sin delegar ciegamente a tar)
 const performZipExtraction = (zipFilePath, targetDir, callback) => {
     const { extractZipArchive } = require('../utils/snapshotHelper');
-    execFile('tar', ['-xf', zipFilePath, '-C', targetDir], (unzipErr) => {
-        if (unzipErr) {
-            console.log(`[Backup System] tar extraction unavailable (${unzipErr.message}). Using Pure JS ZIP Extractor...`);
-            try {
-                extractZipArchive(zipFilePath, targetDir);
-                return callback(null);
-            } catch (jsErr) {
-                console.error(`[Backup System] Pure JS Zip Extractor error: ${jsErr.message}`);
-                return callback(jsErr);
-            }
-        }
+    try {
+        extractZipArchive(zipFilePath, targetDir);
         return callback(null);
-    });
+    } catch (jsErr) {
+        console.error(`[Backup System] Pure JS Zip Extractor error: ${jsErr.message}`);
+        return callback(jsErr);
+    }
 };
 
 // Restaura el contenido descomprimido de un Master Snapshot (.zip) en PostgreSQL + carpetas multimedia
@@ -189,18 +258,8 @@ const restoreExtractedSnapshotDir = async (tempExtractPath, mediaRootDir) => {
 
     if (sqlFile) {
         const sqlPath = path.join(tempExtractPath, sqlFile);
-        const { host, port, user, dbName, password } = getActivePgConnectionParams();
-        const psql = getPsqlCommand();
-        console.log(`[Backup System] Restoring SQL from ZIP: ${sqlFile}`);
-
-        await new Promise((resolve, reject) => {
-            execFile(
-                psql,
-                ['-h', host, '-p', port, '-U', user, '-d', dbName, '-f', sqlPath],
-                { env: { ...process.env, PGPASSWORD: password } },
-                (err) => (err ? reject(err) : resolve())
-            );
-        });
+        console.log(`[Backup System] Restoring SQL from ZIP (validated + ON_ERROR_STOP): ${sqlFile}`);
+        await runSafePsqlRestore(sqlPath);
     } else if (jsonFile) {
         const jsonPath = path.join(tempExtractPath, jsonFile);
         console.log(`[Backup System] Restoring JSON dump from ZIP: ${jsonFile}`);
@@ -333,7 +392,7 @@ router.put('/cloud-mirror/config', (req, res) => {
         });
     } catch (error) {
         console.error('Cloud mirror config save error:', error);
-        res.status(500).json({ error: `No se pudo configurar la carpeta seleccionada: ${error.message}` });
+        res.status(400).json({ error: `No se pudo configurar la carpeta seleccionada: ${error.message}` });
     }
 });
 
@@ -622,51 +681,25 @@ router.post('/encrypt', validate(encryptBackupSchema), async (req, res) => {
     }
 });
 
-// Ruta para restaurar una copia de seguridad desde una ruta absoluta (seleccionada manualmente)
-router.post('/restore-path', validate(restorePathSchema), async (req, res) => {
-    console.log('[Backup Route] POST /restore-path triggered');
+// Pipeline unificado y seguro de restauración (.enc, .json, .zip, .sql)
+const executeUnifiedRestore = async (resolvedSourcePath, password, res) => {
+    let effectivePath = resolvedSourcePath;
+    let tempDecryptedPath = null;
+    const backupEncryptionService = require('../services/BackupEncryptionService');
+
+    const cleanupTemp = () => {
+        if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
+            try { fs.unlinkSync(tempDecryptedPath); } catch (_e) { /* ignore */ }
+        }
+    };
+
     try {
-        const { filePath } = req.body;
-
-        if (!filePath || typeof filePath !== 'string' || filePath.includes('\0')) {
-            return res.status(400).json({ error: 'No se especificó una ruta válida de archivo.' });
-        }
-
-        const resolvedRestorePath = path.resolve(filePath);
-        const allowedRestoreExts = ['.sql', '.dump', '.zip', '.sqlite', '.db', '.backup', '.enc'];
-        if (
-            !isPathInsideRoots(resolvedRestorePath, getAllowedBackupRoots(), false) ||
-            (!isValidBackupFilename(path.basename(resolvedRestorePath)) &&
-             !allowedRestoreExts.includes(path.extname(resolvedRestorePath).toLowerCase()))
-        ) {
-            return res.status(403).json({ error: 'Ruta de restauración fuera de los directorios de respaldo autorizados.' });
-        }
-
-        if (!fs.existsSync(resolvedRestorePath)) {
-            return res.status(404).json({ error: 'El archivo de respaldo especificado no existe.' });
-        }
-
-        let effectivePath = resolvedRestorePath;
-        let tempDecryptedPath = null;
-        const backupEncryptionService = require('../services/BackupEncryptionService');
-
-        const cleanupTemp = () => {
-            if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
-                try {
-                    fs.unlinkSync(tempDecryptedPath);
-                } catch (_e) {
-                    // Ignore temp file cleanup error
-                }
-            }
-        };
-
-        // Soporte de descifrado automático si el archivo está cifrado con AES-256-GCM
-        if (path.extname(filePath).toLowerCase() === '.enc' || backupEncryptionService.isEncrypted(filePath)) {
+        if (path.extname(resolvedSourcePath).toLowerCase() === '.enc' || backupEncryptionService.isEncrypted(resolvedSourcePath)) {
             const os = require('os');
-            const rawDecrypted = path.join(os.tmpdir(), `isaac_restore_plain_${Date.now()}.bin`);
-            backupEncryptionService.decryptFile(filePath, rawDecrypted, req.body.password);
+            const rawDecrypted = path.join(os.tmpdir(), `isaac_restore_plain_${Date.now()}_${Math.random().toString(16).slice(2, 8)}.bin`);
+            backupEncryptionService.decryptFile(resolvedSourcePath, rawDecrypted, password);
 
-            const head = fs.readFileSync(rawDecrypted);
+            const head = readFileHead(rawDecrypted, 16);
             if (head.subarray(0, 15).toString() === 'SQLite format 3') {
                 try { fs.unlinkSync(rawDecrypted); } catch (_e) { /* ignore */ }
                 return res.status(400).json({
@@ -703,78 +736,88 @@ router.post('/restore-path', validate(restorePathSchema), async (req, res) => {
         const filename = path.basename(effectivePath);
 
         if (ext === '.json') {
-            try {
-                const count = await restoreSequelizeJsonBackup(effectivePath);
-                cleanupTemp();
-                return res.status(200).json({
-                    success: true,
-                    message: `Instantánea JSON restaurada exitosamente en PostgreSQL (${count} registros sincronizados).`
-                });
-            } catch (jsonErr) {
-                cleanupTemp();
-                console.error('[Backup System] JSON restore error:', jsonErr);
-                return res.status(500).json({ error: 'Error al restaurar el respaldo JSON: ' + jsonErr.message });
-            }
+            const count = await restoreSequelizeJsonBackup(effectivePath);
+            cleanupTemp();
+            return res.status(200).json({
+                success: true,
+                message: `Instantánea JSON restaurada exitosamente en PostgreSQL (${count} registros sincronizados).`
+            });
         }
 
         if (ext === '.zip') {
-            console.log('[Backup System] Restoring Master Snapshot (ZIP) from path...');
+            console.log('[Backup System] Restoring Master Snapshot (ZIP)...');
             const tempExtractPath = path.join(backupDir, 'temp_restore_' + Date.now());
             if (fs.existsSync(tempExtractPath)) fs.rmSync(tempExtractPath, { recursive: true, force: true });
             fs.mkdirSync(tempExtractPath, { recursive: true });
 
-            performZipExtraction(effectivePath, tempExtractPath, async (unzipErr) => {
-                cleanupTemp();
-                if (unzipErr) {
-                    console.error(`[Backup System] Unzip error: ${unzipErr.message}`);
-                    return res.status(500).json({ error: 'Error al descomprimir el snapshot maestro: ' + unzipErr.message });
-                }
-
-                try {
-                    const rootDir = process.env.USER_DATA_PATH || process.cwd();
-                    await restoreExtractedSnapshotDir(tempExtractPath, rootDir);
-                    fs.rmSync(tempExtractPath, { recursive: true, force: true });
-
-                    console.log('[Backup System] Master Snapshot restored successfully.');
-                    return res.status(200).json({
-                        success: true,
-                        message: 'Snapshot Maestro PostgreSQL restaurado exitosamente (Base de Datos + Imágenes).'
-                    });
-                } catch (innerErr) {
-                    try { fs.rmSync(tempExtractPath, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
-                    console.error('[Backup System] Restore processing error:', innerErr);
-                    return res.status(500).json({ error: 'Error procesando los archivos extraídos: ' + innerErr.message });
-                }
+            await new Promise((resolve, reject) => {
+                performZipExtraction(effectivePath, tempExtractPath, (unzipErr) => (unzipErr ? reject(unzipErr) : resolve()));
             });
-            return;
-        }
+            cleanupTemp();
 
-        // Restauración directa SQL en PostgreSQL via psql
-        const { host, port, user, dbName, password } = getActivePgConnectionParams();
-        const psql = getPsqlCommand();
-        console.log(`[Backup System] Executing SQL restore from path... File: ${filename}`);
-
-        execFile(
-            psql,
-            ['-h', host, '-p', port, '-U', user, '-d', dbName, '-f', effectivePath],
-            { env: { ...process.env, PGPASSWORD: password } },
-            (error) => {
-                cleanupTemp();
-                if (error) {
-                    console.error(`[Backup System] psql exec error: ${error.message}`);
-                    return res.status(500).json({ error: 'Error al ejecutar herramienta de restauración de PostgreSQL (psql).' });
-                }
-
-                console.log(`[Backup System] Restore completed successfully: ${filename}`);
+            try {
+                const rootDir = process.env.USER_DATA_PATH || process.cwd();
+                await restoreExtractedSnapshotDir(tempExtractPath, rootDir);
+                fs.rmSync(tempExtractPath, { recursive: true, force: true });
+                console.log('[Backup System] Master Snapshot restored successfully.');
                 return res.status(200).json({
                     success: true,
-                    message: 'Base de datos PostgreSQL restaurada exitosamente.'
+                    message: 'Snapshot Maestro PostgreSQL restaurado exitosamente (Base de Datos + Imágenes).'
                 });
+            } catch (innerErr) {
+                try { fs.rmSync(tempExtractPath, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
+                throw innerErr;
             }
-        );
+        }
+
+        console.log(`[Backup System] Executing validated SQL restore... File: ${filename}`);
+        await runSafePsqlRestore(effectivePath);
+        cleanupTemp();
+        console.log(`[Backup System] Restore completed successfully: ${filename}`);
+        return res.status(200).json({
+            success: true,
+            message: 'Base de datos PostgreSQL restaurada exitosamente.'
+        });
+    } catch (err) {
+        cleanupTemp();
+        const isSecurityBlock = String(err?.message || '').startsWith('SECURITY_BLOCK:');
+        console.error('[Backup System] Restore error:', err);
+        return res.status(isSecurityBlock ? 400 : 500).json({
+            error: isSecurityBlock
+                ? err.message.replace(/^SECURITY_BLOCK:\s*/, '')
+                : 'Error al restaurar el respaldo PostgreSQL.'
+        });
+    }
+};
+
+// Ruta para restaurar una copia de seguridad desde una ruta absoluta (seleccionada manualmente)
+router.post('/restore-path', validate(restorePathSchema), async (req, res) => {
+    console.log('[Backup Route] POST /restore-path triggered');
+    try {
+        const { filePath } = req.body;
+
+        if (!filePath || typeof filePath !== 'string' || filePath.includes('\0')) {
+            return res.status(400).json({ error: 'No se especificó una ruta válida de archivo.' });
+        }
+
+        const resolvedRestorePath = path.resolve(filePath);
+        const allowedRestoreExts = ['.sql', '.dump', '.zip', '.sqlite', '.db', '.backup', '.enc'];
+        if (
+            !isPathInsideRoots(resolvedRestorePath, getAllowedBackupRoots(), false) ||
+            (!isValidBackupFilename(path.basename(resolvedRestorePath)) &&
+             !allowedRestoreExts.includes(path.extname(resolvedRestorePath).toLowerCase()))
+        ) {
+            return res.status(403).json({ error: 'Ruta de restauración fuera de los directorios de respaldo autorizados.' });
+        }
+
+        if (!fs.existsSync(resolvedRestorePath)) {
+            return res.status(404).json({ error: 'El archivo de respaldo especificado no existe.' });
+        }
+
+        return await executeUnifiedRestore(resolvedRestorePath, req.body.password, res);
     } catch (error) {
         console.error('Restore error:', error);
-        res.status(500).json({ error: 'Fallo interno al preparar la restauración.' });
+        return res.status(500).json({ error: 'Fallo interno al preparar la restauración.' });
     }
 });
 
@@ -792,116 +835,10 @@ router.post('/restore/:filename', async (req, res) => {
             return res.status(404).json({ error: 'El archivo de respaldo no existe.' });
         }
 
-        const filePath = existingPaths[0];
-        let effectivePath = filePath;
-        let tempDecryptedPath = null;
-        const backupEncryptionService = require('../services/BackupEncryptionService');
-
-        const cleanupTemp = () => {
-            if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
-                try { fs.unlinkSync(tempDecryptedPath); } catch (_e) { /* ignore */ }
-            }
-        };
-
-        if (filename.endsWith('.enc') || backupEncryptionService.isEncrypted(filePath)) {
-            const os = require('os');
-            const rawDecrypted = path.join(os.tmpdir(), `isaac_restore_vault_${Date.now()}.bin`);
-            backupEncryptionService.decryptFile(filePath, rawDecrypted, req.body?.password);
-
-            const head = fs.readFileSync(rawDecrypted);
-            if (head.subarray(0, 15).toString() === 'SQLite format 3') {
-                try { fs.unlinkSync(rawDecrypted); } catch (_e) { /* ignore */ }
-                return res.status(400).json({
-                    error: 'El archivo cifrado corresponde a un respaldo SQLite legado retirado. Utilice respaldos PostgreSQL (.sql, .zip o .json).'
-                });
-            }
-
-            let finalDecrypted = rawDecrypted + '.sql';
-            if (head.subarray(0, 2).toString() === 'PK') {
-                finalDecrypted = rawDecrypted + '.zip';
-            } else if (head.subarray(0, 1).toString().trim() === '{') {
-                finalDecrypted = rawDecrypted + '.json';
-            }
-            fs.renameSync(rawDecrypted, finalDecrypted);
-            tempDecryptedPath = finalDecrypted;
-            effectivePath = finalDecrypted;
-        }
-
-        const effectiveExt = path.extname(effectivePath).toLowerCase();
-
-        if (effectiveExt === '.json') {
-            try {
-                const count = await restoreSequelizeJsonBackup(effectivePath);
-                cleanupTemp();
-                return res.status(200).json({
-                    success: true,
-                    message: `Instantánea JSON restaurada exitosamente en PostgreSQL (${count} registros sincronizados).`
-                });
-            } catch (jsonErr) {
-                cleanupTemp();
-                console.error('[Backup System] JSON restore error:', jsonErr);
-                return res.status(500).json({ error: 'Error al restaurar el respaldo JSON: ' + jsonErr.message });
-            }
-        }
-
-        if (effectiveExt === '.zip') {
-            console.log('[Backup System] Restoring Master Snapshot (ZIP)...');
-            const tempExtractPath = path.join(backupDir, 'temp_restore_' + Date.now());
-            if (fs.existsSync(tempExtractPath)) fs.rmSync(tempExtractPath, { recursive: true, force: true });
-            fs.mkdirSync(tempExtractPath, { recursive: true });
-
-            performZipExtraction(effectivePath, tempExtractPath, async (unzipErr) => {
-                cleanupTemp();
-                if (unzipErr) {
-                    console.error(`[Backup System] Unzip error: ${unzipErr.message}`);
-                    return res.status(500).json({ error: 'Error al descomprimir el snapshot maestro: ' + unzipErr.message });
-                }
-
-                try {
-                    const rootDir = process.env.USER_DATA_PATH || process.cwd();
-                    await restoreExtractedSnapshotDir(tempExtractPath, rootDir);
-                    fs.rmSync(tempExtractPath, { recursive: true, force: true });
-
-                    console.log('[Backup System] Master Snapshot restored successfully.');
-                    return res.status(200).json({
-                        success: true,
-                        message: 'Snapshot Maestro PostgreSQL restaurado exitosamente (Base de Datos + Imágenes).'
-                    });
-                } catch (innerErr) {
-                    try { fs.rmSync(tempExtractPath, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
-                    console.error('[Backup System] Restore processing error:', innerErr);
-                    return res.status(500).json({ error: 'Error procesando los archivos extraídos: ' + innerErr.message });
-                }
-            });
-            return;
-        }
-
-        // Restauración SQL directa
-        const { host, port, user, dbName, password } = getActivePgConnectionParams();
-        const psql = getPsqlCommand();
-        console.log(`[Backup System] Executing SQL restore... File: ${filename}`);
-
-        execFile(
-            psql,
-            ['-h', host, '-p', port, '-U', user, '-d', dbName, '-f', effectivePath],
-            { env: { ...process.env, PGPASSWORD: password } },
-            (error) => {
-                cleanupTemp();
-                if (error) {
-                    console.error(`[Backup System] psql exec error: ${error.message}`);
-                    return res.status(500).json({ error: 'Error al ejecutar herramienta de restauración de PostgreSQL (psql).' });
-                }
-
-                console.log(`[Backup System] Restore completed successfully: ${filename}`);
-                return res.status(200).json({
-                    success: true,
-                    message: 'Base de datos PostgreSQL restaurada exitosamente.'
-                });
-            }
-        );
+        return await executeUnifiedRestore(path.resolve(existingPaths[0]), req.body?.password, res);
     } catch (error) {
         console.error('Restore error:', error);
-        res.status(500).json({ error: 'Fallo interno al preparar la restauración.' });
+        return res.status(500).json({ error: 'Fallo interno al preparar la restauración.' });
     }
 });
 

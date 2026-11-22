@@ -831,13 +831,27 @@ router.post('/updater/trigger', requirePermission('canManageSettings'), async (r
         }
 
         if (mode === 'git') {
+            const role = String(req.user?.role || '').toLowerCase();
+            if (role !== 'superadmin') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Solo un Superadministrador puede ejecutar actualizaciones vía Git.'
+                });
+            }
             console.log('[GitHub Updater] Triggering git pull origin main...');
-            const { execSync } = require('child_process');
+            const { execFile } = require('child_process');
             const projectRoot = path.join(__dirname, '..');
-            
+
             try {
-                // Check if git is available and run pull
-                const pullOutput = execSync('git pull', { cwd: projectRoot, encoding: 'utf8', timeout: 30000 });
+                const pullOutput = await new Promise((resolve, reject) => {
+                    execFile('git', ['pull'], { cwd: projectRoot, encoding: 'utf8', timeout: 30000 }, (err, stdout, stderr) => {
+                        if (err) {
+                            err.stderr = stderr;
+                            return reject(err);
+                        }
+                        resolve(stdout);
+                    });
+                });
                 console.log('[GitHub Updater] Git pull output:', pullOutput);
 
                 return res.json({

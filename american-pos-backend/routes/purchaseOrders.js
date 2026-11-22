@@ -641,6 +641,7 @@ router.post('/:id/pay', async (req, res) => {
     try {
         const order = await PurchaseOrder.findOne({
             where: { id: req.params.id, companyId: req.user.companyId, paymentStatus: 'unpaid' },
+            lock: t.LOCK.UPDATE,
             transaction: t
         });
         
@@ -654,7 +655,8 @@ router.post('/:id/pay', async (req, res) => {
         // If received, it's on credit, so reduce supplier balance and log payment
         if (order.status === 'received') {
             const supplier = await require('../database/models').Supplier.findOne({ 
-                where: { id: order.supplierId, companyId: req.user.companyId }, 
+                where: { id: order.supplierId, companyId: req.user.companyId },
+                lock: t.LOCK.UPDATE,
                 transaction: t 
             });
             if (supplier) {
@@ -721,6 +723,7 @@ router.put('/:id/payment-status', verifyToken, async (req, res) => {
 
         const order = await PurchaseOrder.findOne({
             where: { id: req.params.id, companyId: req.user.companyId },
+            lock: t.LOCK.UPDATE,
             transaction: t
         });
 
@@ -741,6 +744,7 @@ router.put('/:id/payment-status', verifyToken, async (req, res) => {
         if (updateSupplierBalance && order.supplierId) {
             const supplier = await Supplier.findOne({
                 where: { id: order.supplierId, companyId: req.user.companyId },
+                lock: t.LOCK.UPDATE,
                 transaction: t
             });
 
@@ -789,7 +793,7 @@ router.put('/:id/payment-status', verifyToken, async (req, res) => {
             message: `Orden marcada como ${targetStatus === 'paid' ? 'PAGADA' : 'POR PAGAR'}` 
         });
     } catch (error) {
-        if (t) await t.rollback();
+        if (t && !t.finished) await t.rollback();
         console.error('Update payment status error:', error);
         res.status(500).json({ error: 'Error al actualizar estado de pago: ' + error.message });
     }

@@ -1,4 +1,4 @@
-const { DataTypes } = require('sequelize');
+const { DataTypes, Op } = require('sequelize');
 const { sequelize } = require('../connection');
 const crypto = require('crypto');
 
@@ -19,8 +19,9 @@ const AuditLog = sequelize.define('AuditLog', {
         beforeCreate: async (instance, options = {}) => {
             try {
                 const companyId = String(instance.companyId || 'default');
+                // Encadenar estrictamente contra el último bloque firmado (ignorar filas automáticas de triggers SQL)
                 const lastLog = await AuditLog.findOne({
-                    where: { companyId },
+                    where: { companyId, recordHash: { [Op.ne]: null } },
                     order: [['createdAt', 'DESC']],
                     attributes: ['recordHash'],
                     transaction: options.transaction || null,

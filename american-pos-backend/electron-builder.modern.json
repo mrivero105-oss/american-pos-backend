@@ -12,7 +12,11 @@
   "extraResources": [
     {
       "from": "scripts",
-      "to": "scripts"
+      "to": "scripts",
+      "filter": [
+        "instalar_postgresql.ps1",
+        "harden_windows_security.ps1"
+      ]
     }
   ],
   "publish": [
@@ -118,7 +122,7 @@
       }
     ],
     "icon": "build/icon.ico",
-    "requestedExecutionLevel": "highestAvailable",
+    "requestedExecutionLevel": "asInvoker",
     "artifactName": "4_IsaacPOS_Windows10_11_Modern_Setup.${ext}"
   },
   "nsis": {

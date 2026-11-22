@@ -540,7 +540,8 @@ router.get('/public-cashiers', verifyLicense, async (req, res) => {
         const { User } = require('../database/models');
         const { Op } = require('sequelize');
         
-        const targetCompanyId = String(req.user?.companyId || req.query.companyId || process.env.DEFAULT_COMPANY_ID || '2');
+        // Ignorar req.query.companyId para prevenir enumeración cross-tenant sin autenticar
+        const targetCompanyId = String(req.user?.companyId || process.env.DEFAULT_COMPANY_ID || '2');
         const whereClause = {
             status: 'active',
             role: { [Op.in]: ['cashier', 'seller', 'user', 'cajero', 'vendedor'] },

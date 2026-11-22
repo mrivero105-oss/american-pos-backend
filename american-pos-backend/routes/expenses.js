@@ -22,7 +22,7 @@ const emitExpensesChanged = (req, payload = {}) => {
 };
 
 // GET / - Search and list expenses
-router.get('/', async (req, res) => {
+router.get('/', requirePermission('canManageExpenses', 'canViewReports', 'canManageCashShift'), async (req, res) => {
     try {
         const expenses = await expenseService.getAllExpenses(req.user.companyId, req.query);
         res.json(expenses);
@@ -33,7 +33,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /summary - Get total expenses amount
-router.get('/summary', async (req, res) => {
+router.get('/summary', requirePermission('canManageExpenses', 'canViewReports', 'canManageCashShift'), async (req, res) => {
     try {
         const result = await expenseService.getSummary(req.user.companyId, req.query);
         res.json(result);
@@ -95,7 +95,7 @@ router.delete('/:id', requirePermission('canManageExpenses'), async (req, res) =
 /**
  * POST /public-sync - Sync local mobile expenses to server
  */
-router.post('/public-sync', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/public-sync', require('../middleware/auth').verifyToken, requirePermission('canManageExpenses'), async (req, res) => {
     try {
         const { expenses } = req.body;
         if (!expenses) return res.status(400).json({ error: 'Data required' });

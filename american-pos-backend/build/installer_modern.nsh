@@ -19,7 +19,7 @@
   CreateDirectory "$APPDATA\isaac-pos"
   IfFileExists "$APPDATA\isaac-pos\db-config.json" config_done 0
   FileOpen $0 "$APPDATA\isaac-pos\db-config.json" w
-  FileWrite $0 '{"mode":"client","dialect":"postgres","host":"","port":5432,"database":"americanpos","user":"postgres","password":"postgres"}'
+  FileWrite $0 '{"mode":"client","dialect":"postgres","host":"","port":5432,"database":"americanpos","user":"postgres","password":""}'
   FileClose $0
 
   config_done:

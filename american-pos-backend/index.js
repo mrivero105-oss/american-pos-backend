@@ -503,6 +503,7 @@ const startServer = (ports, userDataPath = null) => {
             app.use('/auth/login', authLimiter);
             app.use('/auth/register', authLimiter);
             app.use('/auth/quick-unlock', authLimiter);
+            app.use('/auth/biometrics/login', authLimiter);
             app.use('/auth/supervisor-authorize', authLimiter);
             app.use('/auth/supervisor_authorize', authLimiter);
 
@@ -563,6 +564,11 @@ const startServer = (ports, userDataPath = null) => {
 
             const safeStaticMimeTypes = (req, res, next) => {
                 if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+                const lowerPath = String(req.path || '').toLowerCase();
+                // Bloquear acceso público directo a herramientas administrativas de licenciamiento en /public
+                if (lowerPath.includes('generador-licencias') || lowerPath.includes('pocket-license')) {
+                    return res.status(403).json({ error: 'Acceso restringido. Utilice la ruta autenticada correspondiente.' });
+                }
                 const ext = path.extname(req.path).toLowerCase();
                 if (ext) {
                     const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.csv', '.xlsx', '.css', '.js', '.html', '.svg', '.woff', '.woff2', '.ttf', '.zip', '.json', '.ico', '.apk'];
@@ -1482,7 +1488,7 @@ const startServer = (ports, userDataPath = null) => {
             };
 
             // Resolve IMMEDIATELY so Launcher / Edge opens instantly!
-            resolve({ servers, mainPort: primaryPort, app, ioInstances, dbInitPromise, stopServer, isHttps, protocol: isHttps ? 'https' : 'http' });
+            resolve({ servers, mainPort: primaryPort, app, ioInstances, dbInitPromise, isDbReady: () => Boolean(dbReady), stopServer, isHttps, protocol: isHttps ? 'https' : 'http' });
 
             // 2. Levantar puertos secundarios, precalentar HWID y servicios en segundo plano sin bloquear el arranque
             setImmediate(async () => {

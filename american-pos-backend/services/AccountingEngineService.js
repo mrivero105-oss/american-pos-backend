@@ -934,11 +934,26 @@ class AccountingEngineService {
                     else cashUsd = precision.add(cashUsd, eqUsd);
                 }
                 const sumPms = precision.add([cashUsd, bankUsd, creditUsd]);
+                const hadCredit = creditUsd > 0;
+                const hadBank = bankUsd > 0;
                 if (sumPms > 0) {
                     const scale = precision.divide(totalRefund, sumPms);
                     cashUsd = round2(precision.multiply(cashUsd, scale));
                     bankUsd = round2(precision.multiply(bankUsd, scale));
-                    creditUsd = round2(precision.subtract(totalRefund, precision.add(cashUsd, bankUsd)));
+                    if (hadCredit) {
+                        creditUsd = Math.max(0, round2(precision.subtract(totalRefund, precision.add(cashUsd, bankUsd))));
+                    } else {
+                        creditUsd = 0;
+                        // Absorber cualquier centavo residual de redondeo en la cuenta efectivamente utilizada
+                        const residual = round2(precision.subtract(totalRefund, precision.add(cashUsd, bankUsd)));
+                        if (Math.abs(residual) > 0) {
+                            if (hadBank && bankUsd >= Math.abs(residual)) {
+                                bankUsd = round2(precision.add(bankUsd, residual));
+                            } else {
+                                cashUsd = round2(precision.add(cashUsd, residual));
+                            }
+                        }
+                    }
                 } else {
                     cashUsd = totalRefund;
                 }

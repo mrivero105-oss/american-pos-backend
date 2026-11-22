@@ -216,9 +216,9 @@ class CatalogPdfGenerator {
                 <div class="page">
                     <div class="header">
                         <div class="business-info">
-                            <h1>${businessInfo.name || 'Isaac POS'}</h1>
-                            <p>${businessInfo.address || 'Catálogo Digital'}</p>
-                            <p>${businessInfo.phone || ''}</p>
+                            <h1>${String(businessInfo.name || 'Isaac POS').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;')}</h1>
+                            <p>${String(businessInfo.address || 'Catálogo Digital').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;')}</p>
+                            <p>${String(businessInfo.phone || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;')}</p>
                         </div>
                         <div class="catalog-title">
                             <h2>CATÁLOGO DE PRODUCTOS</h2>
@@ -243,8 +243,10 @@ class CatalogPdfGenerator {
                     const safeName = escapeHtml(p.name);
                     const safeUnit = escapeHtml(p.stockUnit || 'UND');
 
-                    // Load image via network URL instead of Base64 for performance
-                    const imgUrl = p.imageUri ? `${baseUrl}${p.imageUri}` : null;
+                    // Solo cargar imágenes locales relativas del servidor POS
+                    const rawImg = String(p.imageUri || '').trim();
+                    const isSafeLocalImg = rawImg && !/^https?:\/\//i.test(rawImg) && !rawImg.startsWith('//') && !rawImg.includes('..');
+                    const imgUrl = isSafeLocalImg ? escapeHtml(`${baseUrl}${rawImg.startsWith('/') ? rawImg : '/' + rawImg}`) : null;
 
                     let primaryPrice = '';
                     let secondaryPrice = '';

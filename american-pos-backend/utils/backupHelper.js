@@ -69,7 +69,18 @@ async function createPostgresBackup() {
 
         logMsg(`Iniciando respaldo en ${backupDir}`);
 
-        const dumpArgs = ['-h', String(host), '-p', String(port), '-U', String(user), '-d', String(dbName), '-F', 'p', '-f', sqlFileName];
+        const dumpArgs = [
+            '-h', String(host),
+            '-p', String(port),
+            '-U', String(user),
+            '-d', String(dbName),
+            '--clean',
+            '--if-exists',
+            '--no-owner',
+            '--no-privileges',
+            '-F', 'p',
+            '-f', sqlFileName
+        ];
         const childEnv = { ...process.env, PGPASSWORD: password };
 
         execFile(PG_DUMP_PATH, dumpArgs, { cwd: backupDir, env: childEnv }, (error, stdout, stderr) => {

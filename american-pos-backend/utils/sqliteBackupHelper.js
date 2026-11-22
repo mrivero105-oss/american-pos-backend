@@ -75,7 +75,19 @@ async function performPostgresBackup(userDataPath) {
         const tmpBackupPath = `${backupPath}.tmp`;
         await new Promise((resolve, reject) => {
             const env = { ...process.env, PGPASSWORD: dbPassword };
-            const args = ['-h', String(dbHost), '-p', String(dbPort), '-U', String(dbUser), '-F', 'p', '-b', '-f', tmpBackupPath, String(dbName)];
+            const args = [
+                '-h', String(dbHost),
+                '-p', String(dbPort),
+                '-U', String(dbUser),
+                '--clean',
+                '--if-exists',
+                '--no-owner',
+                '--no-privileges',
+                '-F', 'p',
+                '-b',
+                '-f', tmpBackupPath,
+                String(dbName)
+            ];
             execFile(pgDumpBin, args, { env, timeout: 120000 }, (error) => {
                 if (error) {
                     logMsg(`pg_dump failed: ${error.message}. Falling back to Sequelize JSON export.`);

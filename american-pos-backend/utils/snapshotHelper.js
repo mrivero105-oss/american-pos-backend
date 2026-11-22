@@ -290,6 +290,10 @@ function extractZipArchive(zipPath, targetDir) {
             }
 
             if (method === 0) {
+                const MAX_ENTRY_BYTES = 250 * 1024 * 1024;
+                if (compressedSize > MAX_ENTRY_BYTES) {
+                    throw new Error(`Entrada ZIP excede el límite seguro de tamaño (${fileName}).`);
+                }
                 const outFd = fs.openSync(destPath, 'w');
                 try {
                     let remaining = compressedSize;
@@ -306,18 +310,23 @@ function extractZipArchive(zipPath, targetDir) {
                     try { fs.closeSync(outFd); } catch (_closeOutErr) { /* noop */ }
                 }
             } else if (method === 8) {
+                const MAX_ENTRY_BYTES = 250 * 1024 * 1024;
+                if (compressedSize > MAX_ENTRY_BYTES) {
+                    throw new Error(`Entrada ZIP comprimida excede el límite seguro (${fileName}).`);
+                }
                 const compressedData = Buffer.allocUnsafe(compressedSize);
                 if (compressedSize > 0) {
                     fs.readSync(inFd, compressedData, 0, compressedSize, dataOffset);
                 }
+                const inflateOpts = { maxOutputLength: MAX_ENTRY_BYTES };
                 let uncompressedData;
                 try {
-                    uncompressedData = zlib.inflateRawSync(compressedData);
+                    uncompressedData = zlib.inflateRawSync(compressedData, inflateOpts);
                 } catch (_e1) {
                     try {
-                        uncompressedData = zlib.unzipSync(compressedData);
+                        uncompressedData = zlib.unzipSync(compressedData, inflateOpts);
                     } catch (_e2) {
-                        uncompressedData = zlib.inflateSync(compressedData);
+                        uncompressedData = zlib.inflateSync(compressedData, inflateOpts);
                     }
                 }
                 if (uncompressedData) {

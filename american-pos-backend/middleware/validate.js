@@ -14,13 +14,23 @@ const validate = (schema) => (req, res, next) => {
         return next();
     } catch (error) {
         console.error('Validation error:', error);
-        
-        // Ensure error response is robust even if error.errors is missing
-        const details = (error && error.errors) ? error.errors : (error ? error.message : 'Error desconocido');
-        
+
+        // Compatibilidad plena con Zod v4 (.issues) y Zod v3 (.errors) sin exponer errores internos crudos
+        const rawIssues = (error && Array.isArray(error.issues))
+            ? error.issues
+            : (error && Array.isArray(error.errors) ? error.errors : null);
+
+        const details = rawIssues
+            ? rawIssues.map((issue) => ({
+                path: issue.path,
+                code: issue.code,
+                message: issue.message
+            }))
+            : [{ path: [], code: 'invalid_input', message: 'Datos de entrada inválidos' }];
+
         return res.status(400).json({
             error: 'Error de validación',
-            details: details
+            details
         });
     }
 };

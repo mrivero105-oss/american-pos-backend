@@ -363,20 +363,19 @@ try {
 
             const safeDeviceId = (deviceId && !deviceId.startsWith('DEFAULT') && !deviceId.startsWith('ESCL_'))
                 ? String(deviceId)
-                    .replace(/[`$"\\\r\n\0]/g, '')
-                    .replace(/'/g, "''")
+                    .replace(/[\r\n\0]/g, '')
                     .slice(0, 200)
                 : '';
             const safeDpi = Math.max(75, Math.min(Number(dpi) || 300, 1200));
             const safeIntent = [1, 2, 4].includes(wiaIntent) ? wiaIntent : 1;
-            const safeOutputPath = outputPath.replace(/'/g, "''");
 
+            // Script 100% estático: todos los parámetros viajan por variables de entorno (inmune a inyección ASCII/Unicode)
             const psScript = `
 Add-Type -AssemblyName System.Drawing
-$outPath = '${safeOutputPath}'
-$targetDeviceId = '${safeDeviceId}'
-$targetDpi = ${safeDpi}
-$targetIntent = ${safeIntent}
+$outPath = $env:ISAAC_SCAN_OUT
+$targetDeviceId = $env:ISAAC_SCAN_DEVICE
+$targetDpi = [int]$env:ISAAC_SCAN_DPI
+$targetIntent = [int]$env:ISAAC_SCAN_INTENT
 
 try {
     $dm = New-Object -ComObject WIA.DeviceManager
@@ -412,14 +411,14 @@ try {
     $image = $item.Transfer()
     
     $tempBmp = "$outPath.tmp.bmp"
-    if (Test-Path $tempBmp) { Remove-Item $tempBmp -Force }
+    if (Test-Path -LiteralPath $tempBmp) { Remove-Item -LiteralPath $tempBmp -Force }
     $image.SaveFile($tempBmp)
 
     $bmp = [System.Drawing.Bitmap]::FromFile($tempBmp)
-    if (Test-Path $outPath) { Remove-Item $outPath -Force }
+    if (Test-Path -LiteralPath $outPath) { Remove-Item -LiteralPath $outPath -Force }
     $bmp.Save($outPath, [System.Drawing.Imaging.ImageFormat]::Jpeg)
     $bmp.Dispose()
-    if (Test-Path $tempBmp) { Remove-Item $tempBmp -Force }
+    if (Test-Path -LiteralPath $tempBmp) { Remove-Item -LiteralPath $tempBmp -Force }
 
     Write-Output "SUCCESS:$outPath"
 } catch {
@@ -432,7 +431,16 @@ try {
 `;
 
             const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
-            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript]);
+            const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript], {
+                windowsHide: true,
+                env: {
+                    ...process.env,
+                    ISAAC_SCAN_OUT: outputPath,
+                    ISAAC_SCAN_DEVICE: safeDeviceId,
+                    ISAAC_SCAN_DPI: String(safeDpi),
+                    ISAAC_SCAN_INTENT: String(safeIntent)
+                }
+            });
             let stdout = '';
             let stderr = '';
             let isDone = false;

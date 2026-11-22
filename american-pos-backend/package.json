@@ -78,7 +78,11 @@
     "extraResources": [
       {
         "from": "scripts",
-        "to": "scripts"
+        "to": "scripts",
+        "filter": [
+          "instalar_postgresql.ps1",
+          "harden_windows_security.ps1"
+        ]
       }
     ],
     "directories": {
