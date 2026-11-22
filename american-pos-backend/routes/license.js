@@ -108,22 +108,13 @@ router.get(['/download-apk', '/Generador-Licencias.apk', '/apk'], verifyToken, i
  * Serves the official Isaac POS Mobile Android APK installer
  */
 router.get(['/isaac-pos-mobile-apk', '/Isaac-POS-Mobile.apk', '/isaac-pos-apk', '/Isaac-POS.apk', '/pos-apk', '/Isaac%20POS%20Mobile.apk'], (req, res) => {
-    const candidates = [
-        path.join(__dirname, '../public/Isaac-POS-Mobile.apk'),
-        path.join(__dirname, '../public/Isaac-POS.apk'),
-        path.join(__dirname, 'public/Isaac-POS-Mobile.apk'),
-        path.join(__dirname, 'public/Isaac-POS.apk'),
-        path.join(__dirname, '../../Isaac-POS-Mobile.apk'),
-        path.join(__dirname, '../../Isaac-POS.apk'),
-        path.join(process.cwd(), 'Isaac-POS-Mobile.apk'),
-        path.join(process.cwd(), 'Isaac-POS.apk'),
-        path.join(process.cwd(), 'dist_apk/Isaac-POS-Mobile.apk'),
-        path.join(process.cwd(), 'dist_apk/Isaac-POS.apk')
-    ];
-    for (const p of candidates) {
-        if (fs.existsSync(p)) {
-            return res.download(p, 'Isaac-POS-Mobile.apk');
-        }
+    const { resolveMobileDistributionFile } = require('../utils/mobileDistributionPaths');
+    const resolvedApk = resolveMobileDistributionFile(['Isaac-POS-Mobile.apk', 'Isaac-POS.apk'], {
+        baseDir: path.join(__dirname, '..')
+    });
+    if (resolvedApk) {
+        res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+        return res.download(resolvedApk, 'Isaac-POS-Mobile.apk');
     }
     res.status(404).send('APK no encontrado');
 });

@@ -483,4 +483,52 @@ test('Suite Integral de Hardening 10/10 (Seguridad, Finanzas, Licencias, Variant
         });
         assert.equal(localOriginRes.status, 200, 'Debe aceptar origen localhost por defecto en desarrollo');
     });
+
+    await t.test('12. Distribución LAN de OTA (/dist.zip, /version.json) y APK (/Isaac-POS-Mobile.apk) resuelve extraResources y overrides', async () => {
+        const { resolveMobileDistributionFile } = require('../utils/mobileDistributionPaths');
+        const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'isaac-ota-resolve-'));
+        const userOtaDir = path.join(tmpRoot, 'userdata', 'mobile-ota');
+        const resOtaDir = path.join(tmpRoot, 'resources', 'mobile-ota');
+        fs.mkdirSync(userOtaDir, { recursive: true });
+        fs.mkdirSync(resOtaDir, { recursive: true });
+
+        const resZip = path.join(resOtaDir, 'dist.zip');
+        const userZip = path.join(userOtaDir, 'dist.zip');
+        fs.writeFileSync(resZip, 'res-zip');
+        assert.equal(
+            resolveMobileDistributionFile('dist.zip', {
+                userDataPath: path.join(tmpRoot, 'userdata'),
+                appDataPath: '',
+                resourcesPath: path.join(tmpRoot, 'resources'),
+                staticPath: path.join(tmpRoot, 'missing'),
+                baseDir: path.join(tmpRoot, 'missing'),
+                execPath: path.join(tmpRoot, 'missing', 'app.exe')
+            }),
+            resZip,
+            'Debe resolver dist.zip desde resources/mobile-ota (extraResources) cuando no hay override en userData'
+        );
+
+        fs.writeFileSync(userZip, 'user-zip');
+        assert.equal(
+            resolveMobileDistributionFile('dist.zip', {
+                userDataPath: path.join(tmpRoot, 'userdata'),
+                appDataPath: '',
+                resourcesPath: path.join(tmpRoot, 'resources'),
+                staticPath: path.join(tmpRoot, 'missing'),
+                baseDir: path.join(tmpRoot, 'missing'),
+                execPath: path.join(tmpRoot, 'missing', 'app.exe')
+            }),
+            userZip,
+            'Override en USER_DATA_PATH/mobile-ota debe tener prioridad sobre resources/mobile-ota'
+        );
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+
+        const zipRes = await fetch(`${posUrl}/dist.zip`, { method: 'HEAD' });
+        assert.equal(zipRes.status, 200, 'GET/HEAD /dist.zip debe responder 200');
+        assert.match(zipRes.headers.get('content-type') || '', /zip/i);
+
+        const apkRes = await fetch(`${posUrl}/Isaac-POS-Mobile.apk`, { method: 'HEAD' });
+        assert.equal(apkRes.status, 200, 'GET/HEAD /Isaac-POS-Mobile.apk debe responder 200 y no caer al HTML SPA');
+        assert.match(apkRes.headers.get('content-type') || '', /vnd\.android\.package-archive/i);
+    });
 });

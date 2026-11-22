@@ -260,6 +260,78 @@ describe('Frontend Components & AuthProvider (RTL)', () => {
         expect(screen.getAllByText(/5\.000,00/).length).toBeGreaterThan(0);
     });
 
+    it('CheckoutModal permite seleccionar Punto de Venta, Efectivo $ y Monto Exacto con decimales largos a tasa alta (10.69031005 @ 1050)', async () => {
+        mockApiGet.mockImplementation((url) => {
+            if (url.startsWith('/customers')) return Promise.resolve({ data: [] });
+            if (url.startsWith('/cash/current')) return Promise.resolve({ data: { id: 'shift-1', status: 'open' } });
+            if (url.startsWith('/settings/payment-methods')) {
+                return Promise.resolve({
+                    data: [
+                        { id: 'cash_usd', name: 'Efectivo USD', currency: 'USD', isCash: true, active: true },
+                        { id: 'cash_bs', name: 'Efectivo Bs', currency: 'VES', isCash: true, active: true },
+                        { id: 'debit', name: 'Punto de Venta', currency: 'VES', isCash: false, active: true },
+                        { id: 'pago_movil', name: 'Pago Móvil', currency: 'VES', isCash: false, active: true },
+                        { id: 'biopago', name: 'Biopago', currency: 'VES', isCash: false, active: true }
+                    ]
+                });
+            }
+            return Promise.resolve({ data: {} });
+        });
+
+        const onConfirm = vi.fn().mockResolvedValue(undefined);
+        const onClose = vi.fn();
+
+        render(
+            <AuthContext.Provider value={{ user: { id: 'u1', name: 'Admin', role: 'superadmin' } }}>
+                <SocketContext.Provider value={{ socket: null }}>
+                    <PosContext.Provider value={{ activePromotions: [], cart: [] }}>
+                        <CheckoutModal
+                            isOpen={true}
+                            onClose={onClose}
+                            onConfirm={onConfirm}
+                            total={10.69031005}
+                            subtotal={10.69031005}
+                            taxAmount={1.06}
+                            taxableBase={6.59}
+                            exemptBase={3.04}
+                            ivaRate={16}
+                            igtfEnabled={false}
+                            igtfRate={3}
+                            exchangeRate={1050}
+                            currencyMode="BOTH"
+                            processing={false}
+                            businessSettings={{ country: 'Venezuela' }}
+                        />
+                    </PosContext.Provider>
+                </SocketContext.Provider>
+            </AuthContext.Provider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('PUNTO DE VENTA')).toBeInTheDocument();
+        });
+
+        // 1. Tocar Monto Exacto debe habilitar el botón Cobrar (sin quedar isInsufficient por redondeo Bs)
+        const exactBtn = screen.getByText('Exacto').closest('button');
+        fireEvent.click(exactBtn);
+        const submitBtn = screen.getByText(/COBRAR Y EMITIR COMPROBANTE/i).closest('button');
+        await waitFor(() => {
+            expect(submitBtn).not.toBeDisabled();
+        });
+
+        // 2. Tocar PUNTO DE VENTA en modo 1-Clic debe liquidar exactamente Bs 11.224,83 sin quedarse bloqueado
+        const debitBtn = screen.getByText('PUNTO DE VENTA').closest('button');
+        fireEvent.click(debitBtn);
+        await waitFor(() => {
+            expect(onConfirm).toHaveBeenCalledTimes(1);
+        });
+        expect(onConfirm.mock.calls[0][0].paymentMethods[0]).toMatchObject({
+            method: 'debit',
+            amount: 11224.83,
+            currency: 'VES'
+        });
+    });
+
     it('FiscalManager renderiza Libro de Ventas en Bs sin doble conversión', async () => {
         mockApiGet.mockImplementation((url) => {
             if (url === '/fiscal/sales-book') {

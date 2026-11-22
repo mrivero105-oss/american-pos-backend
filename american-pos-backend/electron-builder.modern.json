@@ -26,6 +26,15 @@
         "instalar_postgresql.ps1",
         "harden_windows_security.ps1"
       ]
+    },
+    {
+      "from": "public",
+      "to": "mobile-ota",
+      "filter": [
+        "dist.zip",
+        "version.json",
+        "Isaac-POS-Mobile.apk"
+      ]
     }
   ],
   "publish": [

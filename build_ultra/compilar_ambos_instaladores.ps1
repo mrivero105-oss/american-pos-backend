@@ -76,10 +76,13 @@ Get-ChildItem -Path $appFiles | Remove-Item -Recurse -Force -ErrorAction Silentl
 # Copiar todo el paquete Electron (ya incluye resources\scripts desde extraResources sin duplicar en app.asar)
 Copy-Item -Path "$unpackedDir\*" -Destination $appFiles -Recurse -Force
 
-# Seguridad: limpiar archivos sensibles o locales antes de empaquetar NSIS.
-foreach ($pat in @('.env', '.env.*', 'settings.json', 'db-config.json', '.dbcfg.key.dpapi', 'secrets.vault.json', '*.vault.json', '.secrets.key.dpapi', '.*.key.dpapi', 'cloud_mirror_config.json', 'cloud_license_config.json', 'cert.pfx', '*.pfx', '*.p12', '*.key', '*private*.pem', '*.apk', '*.sqlite*', 'audit_*.json')) {
+# Seguridad: limpiar archivos sensibles o locales antes de empaquetar NSIS (preservando resources\mobile-ota\Isaac-POS-Mobile.apk).
+foreach ($pat in @('.env', '.env.*', 'settings.json', 'db-config.json', '.dbcfg.key.dpapi', 'secrets.vault.json', '*.vault.json', '.secrets.key.dpapi', '.*.key.dpapi', 'cloud_mirror_config.json', 'cloud_license_config.json', 'cert.pfx', '*.pfx', '*.p12', '*.key', '*private*.pem', '*.sqlite*', 'audit_*.json')) {
     Get-ChildItem -Path $appFiles -Filter $pat -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
+Get-ChildItem -Path $appFiles -Filter '*.apk' -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+    $_.FullName -notlike '*\resources\mobile-ota\Isaac-POS-Mobile.apk'
+} | Remove-Item -Force -ErrorAction SilentlyContinue
 foreach ($dirName in @('.wwebjs_auth', '.wwebjs_cache', '.test_wwebjs_auth', 'auto-backups', 'invoices', 'product_images', 'scratch', 'private', 'tests')) {
     Get-ChildItem -Path $appFiles -Filter $dirName -Directory -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }

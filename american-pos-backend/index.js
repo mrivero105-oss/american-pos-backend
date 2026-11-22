@@ -540,6 +540,8 @@ const startServer = (ports, userDataPath = null) => {
                         req.path.startsWith('/sync') ||
                         req.path.startsWith('/messages') ||
                         req.path.startsWith('/dist.zip') ||
+                        req.path.startsWith('/Isaac-POS-Mobile.apk') ||
+                        req.path.startsWith('/Isaac-POS.apk') ||
                         req.path.startsWith('/version.json') ||
                         req.path.startsWith('/api/app-update-info')) {
                         return true;
@@ -607,6 +609,40 @@ const startServer = (ports, userDataPath = null) => {
                 res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
                 next();
             };
+
+            // Endpoints directos para OTA móvil (version.json, dist.zip) y descarga del APK en LAN.
+            // Se registran ANTES de express.static(staticPath) para respetar la prioridad:
+            // %APPDATA%/isaac-pos/mobile-ota -> resources/mobile-ota (extraResources) -> staticPath/public.
+            const { resolveMobileDistributionFile } = require('./utils/mobileDistributionPaths');
+
+            app.get('/version.json', (req, res) => {
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
+                const target = resolveMobileDistributionFile('version.json', { staticPath, baseDir: __dirname });
+                if (target) return res.sendFile(target);
+                res.status(404).json({ error: 'version.json no encontrado' });
+            });
+
+            app.get('/dist.zip', (req, res) => {
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                const target = resolveMobileDistributionFile('dist.zip', { staticPath, baseDir: __dirname });
+                if (target) {
+                    res.setHeader('Content-Type', 'application/zip');
+                    return res.sendFile(target);
+                }
+                res.status(404).json({ error: 'dist.zip no encontrado' });
+            });
+
+            app.get(['/Isaac-POS-Mobile.apk', '/Isaac-POS.apk', '/Isaac%20POS%20Mobile.apk'], (req, res) => {
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                const target = resolveMobileDistributionFile(['Isaac-POS-Mobile.apk', 'Isaac-POS.apk'], { staticPath, baseDir: __dirname });
+                if (target) {
+                    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+                    return res.download(target, 'Isaac-POS-Mobile.apk');
+                }
+                res.status(404).json({ error: 'Isaac-POS-Mobile.apk no encontrado' });
+            });
 
             app.use(safeStaticMimeTypes, express.static(staticPath, {
                 etag: true,
@@ -744,32 +780,11 @@ const startServer = (ports, userDataPath = null) => {
                 return res.sendFile(path.join(staticPath, 'index.html'));
             });
 
-            // Endpoint directo para version.json y dist.zip (OTA)
-            app.get('/version.json', (req, res) => {
-                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-                res.setHeader('Pragma', 'no-cache');
-                res.setHeader('Expires', '0');
-                const p = path.join(staticPath, 'version.json');
-                const fallback = path.join(__dirname, 'public', 'version.json');
-                const target = fs.existsSync(p) ? p : fallback;
-                if (fs.existsSync(target)) return res.sendFile(target);
-                res.status(404).json({ error: 'version.json no encontrado' });
-            });
-
-            app.get('/dist.zip', (req, res) => {
-                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-                const p = path.join(staticPath, 'dist.zip');
-                const fallback = path.join(__dirname, 'public', 'dist.zip');
-                const target = fs.existsSync(p) ? p : fallback;
-                if (fs.existsSync(target)) return res.sendFile(target);
-                res.status(404).json({ error: 'dist.zip no encontrado' });
-            });
-
             // Endpoint de Información para Actualizaciones OTA (Capacitor Updater)
             app.get('/api/app-update-info', (req, res) => {
                 try {
-                    const versionFile = path.join(staticPath, 'version.json');
-                    if (fs.existsSync(versionFile)) {
+                    const versionFile = resolveMobileDistributionFile('version.json', { staticPath, baseDir: __dirname });
+                    if (versionFile) {
                         const content = fs.readFileSync(versionFile, 'utf8');
                         const data = JSON.parse(content);
                         return res.json({

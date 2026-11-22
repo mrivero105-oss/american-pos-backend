@@ -283,8 +283,10 @@ export default function CheckoutModal({
     }, [methods, businessSettings?.binanceRate, activeExchangeRate]);
 
     const stats = useMemo(() => {
-        const totalUsdInt = toInt(total);
-        const totalVesInt = toInt(precisionRound(total * activeExchangeRate, 2));
+        const promoSavingsUsd = Number(activePaymentPromo?.savings) || 0;
+        const effectiveTotalUsd = Math.max(0, (Number(total) || 0) - promoSavingsUsd);
+        const totalUsdInt = toInt(effectiveTotalUsd);
+        const totalVesInt = toInt(precisionRound(effectiveTotalUsd * activeExchangeRate, 2));
 
         let usableUsdInt = 0;
         let usableVesInt = 0;
@@ -299,7 +301,7 @@ export default function CheckoutModal({
             if (isBinance) {
                 const binRate = getEffectiveBinanceRate(methodId, data.cryptoRate);
                 activeBinanceRateUsed = binRate;
-                const amountVesInt = Math.round(amountInt * binRate);
+                const amountVesInt = toInt(precisionRound(fromInt(amountInt) * binRate, 2));
                 const amountUsdInt = activeExchangeRate > 0 ? Math.round(amountVesInt / activeExchangeRate) : amountInt;
 
                 const isCryptoIgtfApplicable = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
@@ -312,7 +314,7 @@ export default function CheckoutModal({
 
                     igtfUsdInt += tax;
                     usableUsdInt += usable;
-                    usableVesInt += Math.round(usable * activeExchangeRate);
+                    usableVesInt += toInt(precisionRound(fromInt(usable) * activeExchangeRate, 2));
                 } else {
                     usableUsdInt += amountUsdInt;
                     usableVesInt += amountVesInt;
@@ -328,10 +330,10 @@ export default function CheckoutModal({
                     
                     igtfUsdInt += tax;
                     usableUsdInt += usable;
-                    usableVesInt += Math.round(usable * activeExchangeRate);
+                    usableVesInt += toInt(precisionRound(fromInt(usable) * activeExchangeRate, 2));
                 } else {
                     usableUsdInt += amountInt;
-                    usableVesInt += Math.round(amountInt * activeExchangeRate);
+                    usableVesInt += toInt(precisionRound(fromInt(amountInt) * activeExchangeRate, 2));
                 }
             } else {
                 usableVesInt += amountInt;
@@ -344,7 +346,8 @@ export default function CheckoutModal({
         const baseBinanceTolBs = Number(businessSettings?.binanceRoundingToleranceBs ?? 0.50);
         const effBinRate = activeBinanceRateUsed > 0 ? activeBinanceRateUsed : getEffectiveBinanceRate();
         const dynamicBinanceTolBs = Math.max(baseBinanceTolBs, effBinRate * 0.006, activeExchangeRate * 0.006);
-        const roundingToleranceBs = hasBinancePayment ? dynamicBinanceTolBs : 0.0005;
+        // En cobros estándar, tolerar hasta 0.01 Bs (1 céntimo) evita bloqueos por discrepancias de redondeo USD<->VES a tasas altas
+        const roundingToleranceBs = hasBinancePayment ? dynamicBinanceTolBs : 0.01;
         const toleranceInt = toInt(roundingToleranceBs);
 
         const isInsufficient = (totalVesInt - usableVesInt) > toleranceInt;
@@ -370,7 +373,7 @@ export default function CheckoutModal({
             remainingBs: fromInt(remainingBsInt),
             remainingUsd: fromInt(remainingUsdInt)
         };
-    }, [payments, total, activeExchangeRate, igtfEnabled, igtfRate, businessSettings, getEffectiveBinanceRate]);
+    }, [payments, total, activePaymentPromo?.savings, activeExchangeRate, igtfEnabled, igtfRate, businessSettings, getEffectiveBinanceRate]);
 
     const {
         isInsufficient,
@@ -543,17 +546,18 @@ export default function CheckoutModal({
         if (currency === 'USD') {
             const methodAppliesIgtf = igtfEnabled && methodId !== 'zelle' && methodId !== 'fiado';
             const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
-            let exactAmount = precisionRound(existingVal + (remUsd * igtfFactor), 4);
-            if (methodAppliesIgtf && remUsd > 0) {
-                const targetTotalUsable = toInt((existingVal / igtfFactor) + remUsd);
+            const effectiveRemUsd = activeExchangeRate > 0 ? Math.max(remUsd, remBs / activeExchangeRate) : remUsd;
+            let exactAmount = precisionRound(existingVal + (effectiveRemUsd * igtfFactor), 6);
+            if (methodAppliesIgtf && effectiveRemUsd > 0) {
+                const targetTotalUsable = toInt((existingVal / igtfFactor) + effectiveRemUsd);
                 if (Math.round(toInt(exactAmount) / igtfFactor) < targetTotalUsable) {
-                    exactAmount = precisionRound(exactAmount + 0.0001, 4);
+                    exactAmount = precisionRound(exactAmount + 0.0001, 6);
                 }
             }
             setPayments(prev => ({
                 ...prev,
                 [methodId]: {
-                    amount: exactAmount.toFixed(4).replace(/(\.\d{2})00$/, '$1'),
+                    amount: exactAmount.toFixed(6).replace(/(\.\d{2})0+$/, '$1').replace(/(\.\d{2,}?)0+$/, '$1'),
                     currency
                 }
             }));
@@ -568,7 +572,7 @@ export default function CheckoutModal({
                 currency
             }
         }));
-    }, [methods, isSingle, payments, igtfEnabled, igtfRate, businessSettings, getEffectiveBinanceRate]);
+    }, [methods, isSingle, payments, igtfEnabled, igtfRate, activeExchangeRate, businessSettings, getEffectiveBinanceRate]);
 
     // Bandera determinista para auto-enviar cuando React confirme stats.isInsufficient === false
     const pendingAutoSubmitRef = useRef(false);
@@ -591,9 +595,9 @@ export default function CheckoutModal({
         const promoSavings = promo ? promo.savings : 0;
         setActivePaymentPromo(promo || null);
 
-        // Calcular siempre sobre la base imponible neta del carrito (sin IGTF residual previo)
-        const netUsd = Math.max(0, precisionRound((Number(total) || 0) - promoSavings, 4));
-        const netVes = precisionRound(netUsd * activeExchangeRate, 2);
+        // Calcular siempre sobre el total exacto sin truncar antes de convertir a VES (evita faltantes de 0.01 Bs a tasas altas)
+        const rawNetUsd = Math.max(0, (Number(total) || 0) - promoSavings);
+        const netVes = precisionRound(rawNetUsd * activeExchangeRate, 2);
 
         const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
         const currency = isSingle ? 'USD' : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
@@ -601,13 +605,19 @@ export default function CheckoutModal({
         const methodAppliesIgtf = igtfEnabled && currency === 'USD' && targetMethod.id !== 'zelle' && targetMethod.id !== 'fiado';
         const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
         let exactAmount = currency === 'USD'
-            ? precisionRound(netUsd * igtfFactor, 4)
+            ? precisionRound(rawNetUsd * igtfFactor, 6)
             : netVes;
 
-        if (methodAppliesIgtf && netUsd > 0) {
-            const principalInt = toInt(netUsd);
-            if (Math.round(toInt(exactAmount) / igtfFactor) < principalInt) {
-                exactAmount = precisionRound(exactAmount + 0.0001, 4);
+        if (currency === 'USD' && rawNetUsd > 0) {
+            if (methodAppliesIgtf) {
+                const principalInt = toInt(rawNetUsd);
+                if (Math.round(toInt(exactAmount) / igtfFactor) < principalInt) {
+                    exactAmount = precisionRound(exactAmount + 0.0001, 6);
+                }
+            }
+            const usableUsdForVes = methodAppliesIgtf ? (exactAmount / igtfFactor) : exactAmount;
+            if (precisionRound(usableUsdForVes * activeExchangeRate, 2) < netVes) {
+                exactAmount = precisionRound(exactAmount + 0.0001, 6);
             }
         }
 
@@ -618,7 +628,9 @@ export default function CheckoutModal({
         // Limpiar otros métodos y dejar 100% en el seleccionado
         setPayments({
             [targetMethod.id]: {
-                amount: currency === 'USD' ? exactAmount.toFixed(4) : exactAmount.toFixed(2),
+                amount: currency === 'USD'
+                    ? exactAmount.toFixed(6).replace(/(\.\d{2})0+$/, '$1').replace(/(\.\d{2,}?)0+$/, '$1')
+                    : exactAmount.toFixed(2),
                 currency
             }
         });
@@ -707,13 +719,14 @@ export default function CheckoutModal({
         if (viewMode === 'express') {
             const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
             const currency = isSingle ? 'USD' : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-            const netUsd = Math.max(0, totalToPayUsd - promoSavings);
+            const netUsd = Math.max(0, (Number(total) || 0) - promoSavings);
             const netVes = precisionRound(netUsd * activeExchangeRate, 2);
-            const exactAmount = currency === 'USD' ? netUsd : netVes;
+            const exactAmount = currency === 'USD' ? precisionRound(netUsd, 6) : netVes;
 
+            pendingAutoSubmitRef.current = true;
             setPayments({
                 [targetMethod.id]: {
-                    amount: currency === 'USD' ? exactAmount.toFixed(4) : exactAmount.toFixed(2),
+                    amount: currency === 'USD' ? exactAmount.toFixed(6).replace(/(\.\d{2})0+$/, '$1').replace(/(\.\d{2,}?)0+$/, '$1') : exactAmount.toFixed(2),
                     currency,
                     reference: cleanRef
                 }
@@ -722,10 +735,6 @@ export default function CheckoutModal({
             setPaymentReferences(prev => ({ ...prev, [targetMethod.id]: cleanRef }));
 
             setQrModalMethod(null);
-            setTimeout(() => {
-                const form = document.getElementById('checkout-form');
-                if (form) form.requestSubmit();
-            }, 60);
         } else {
             // Modo Split
             const currency = targetMethod.currency || 'VES';
@@ -746,7 +755,9 @@ export default function CheckoutModal({
     };
 
     const handleQuickAmount = (amountInUsd) => {
-        const method = methods[selectedIndex] || findMethodKey('cash_usd');
+        const method = viewMode === 'express'
+            ? (findMethodKey('cash_usd') || methods[selectedIndex])
+            : (methods[selectedIndex] || findMethodKey('cash_usd'));
         if (!method) return;
         const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(method.id.toLowerCase()) || method.id.toLowerCase().includes('bs') || method.id.toLowerCase().includes('ves') || method.id.toLowerCase().includes('movil'));
         const currency = isSingle ? 'USD' : (method.currency || method.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
