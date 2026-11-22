@@ -328,7 +328,17 @@ async function createLicenseGatewayApp(options = {}) {
 
     app.use('/admin', cors((req, cb) => {
         const origin = req.headers.origin;
-        if (!origin || allowedAdminOrigins.length === 0 || allowedAdminOrigins.includes(origin)) {
+        if (!origin) {
+            return cb(null, { origin: false });
+        }
+        if (allowedAdminOrigins.length > 0) {
+            if (allowedAdminOrigins.includes(origin)) {
+                return cb(null, { origin: true, credentials: true });
+            }
+            return cb(new Error('CORS_ADMIN_ORIGIN_DENIED'));
+        }
+        // Fail-closed: si ADMIN_ALLOWED_ORIGINS no fue definido, aceptar solo loopback local (nunca cualquier origen de internet con credentials)
+        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
             return cb(null, { origin: true, credentials: true });
         }
         return cb(new Error('CORS_ADMIN_ORIGIN_DENIED'));
@@ -407,6 +417,11 @@ async function createLicenseGatewayApp(options = {}) {
 
                 let verifiedExpiresAt = null;
                 if (requireLicenseProofOnAutoRegister) {
+                    if (!publicKeyPem) {
+                        return res.status(503).json({
+                            error: 'Configuración incompleta del Gateway: se requiere clave pública RSA para auto-registro.'
+                        });
+                    }
                     const proof = verifyLicenseKeyProof(req.body?.licenseKey, rawMachineId, publicKeyPem);
                     if (!proof.valid) {
                         return res.status(403).json({
@@ -490,7 +505,8 @@ async function createLicenseGatewayApp(options = {}) {
                 leaseToken: signed.leaseToken
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            console.error('[LicenseGateway] Error interno:', err.message);
+            res.status(500).json({ error: 'Error interno en License Gateway.' });
         }
     });
 
@@ -531,7 +547,8 @@ async function createLicenseGatewayApp(options = {}) {
             });
             res.json({ success: true, licenses });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            console.error('[LicenseGateway] Error interno:', err.message);
+            res.status(500).json({ error: 'Error interno en License Gateway.' });
         }
     });
 
@@ -544,7 +561,8 @@ async function createLicenseGatewayApp(options = {}) {
             const events = await store.listEvents(rawMachineId, req.query.limit);
             res.json({ success: true, events });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            console.error('[LicenseGateway] Error interno:', err.message);
+            res.status(500).json({ error: 'Error interno en License Gateway.' });
         }
     });
 
@@ -579,7 +597,8 @@ async function createLicenseGatewayApp(options = {}) {
 
             res.json({ success: true, license: saved });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            console.error('[LicenseGateway] Error interno:', err.message);
+            res.status(500).json({ error: 'Error interno en License Gateway.' });
         }
     });
 
@@ -620,7 +639,8 @@ async function createLicenseGatewayApp(options = {}) {
 
             res.json({ success: true, license: updated });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            console.error('[LicenseGateway] Error interno:', err.message);
+            res.status(500).json({ error: 'Error interno en License Gateway.' });
         }
     });
 

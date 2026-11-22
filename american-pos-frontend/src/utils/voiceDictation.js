@@ -19,14 +19,18 @@ let activeWebRecognition = null;
 
 export function getApkDownloadUrl() {
   try {
-    const saved = localStorage.getItem('pos_server_url');
-    if (saved && saved.startsWith('http')) {
-      return `${saved.replace(/\/+$/, '').replace(/\/api$/, '')}/Isaac-POS-Mobile.apk`;
+    const saved = localStorage.getItem('pos_server_url') || localStorage.getItem('isaac_pos_server_ip');
+    if (saved && saved.trim()) {
+      const normalized = saved.trim().startsWith('http') ? saved.trim() : `http://${saved.trim()}`;
+      return `${normalized.replace(/\/+$/, '').replace(/\/api$/, '')}/Isaac-POS-Mobile.apk`;
+    }
+    if (typeof window !== 'undefined' && window.location?.origin?.startsWith('http')) {
+      return `${window.location.origin}/Isaac-POS-Mobile.apk`;
     }
   } catch (err) {
-    console.warn('[VoiceDictation] No se pudo leer pos_server_url:', err?.message);
+    console.warn('[VoiceDictation] No se pudo resolver la URL del servidor APK:', err?.message);
   }
-  return 'http://192.168.1.2:3005/Isaac-POS-Mobile.apk';
+  return '/Isaac-POS-Mobile.apk';
 }
 
 export function getAndroidIntentUrl(httpUrl) {

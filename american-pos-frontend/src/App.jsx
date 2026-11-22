@@ -218,6 +218,11 @@ function App() {
       }
     } else {
       setSetupLoading(false);
+      try {
+        lanSyncService.stop();
+      } catch (err) {
+        console.warn('[App] Error al detener lanSyncService:', err);
+      }
     }
   }, [user, checkSetup]);
 

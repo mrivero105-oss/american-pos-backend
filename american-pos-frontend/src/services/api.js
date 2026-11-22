@@ -11,15 +11,17 @@ export const PosNativeHardware = (typeof window !== 'undefined' && window.__posN
         return plugin;
     })();
 
-// Helper to ensure URL has port (defaults to 3005)
+// Helper to ensure URL has port (defaults to 3005) while preserving explicit https://
 export const formatServerUrl = (input) => {
     if (!input || !input.trim()) return '';
     let clean = input.trim().replace(/:517[34]/, '');
-    const hasProtocol = clean.startsWith('http://') || clean.startsWith('https://');
-    const urlWithoutProto = hasProtocol ? clean.replace(/^https?:\/\//, '') : clean;
+    const isHttps = clean.toLowerCase().startsWith('https://');
+    const protocol = isHttps ? 'https://' : 'http://';
+    const hasProtocol = clean.toLowerCase().startsWith('http://') || isHttps;
+    const urlWithoutProto = hasProtocol ? clean.replace(/^https?:\/\//i, '') : clean;
     const hasPort = urlWithoutProto.includes(':');
     const finalHost = hasPort ? urlWithoutProto : `${urlWithoutProto}:3005`;
-    return `http://${finalHost.replace(/\/$/, '')}`;
+    return `${protocol}${finalHost.replace(/\/$/, '')}`;
 };
 
 // Get base URL from localStorage (for mobile) or default to local/lan backend (for desktop/browser)
@@ -62,9 +64,9 @@ export const getBaseUrl = () => {
         if (host && host !== 'localhost' && host !== '127.0.0.1' && host !== '') {
             return `http://${host}:3005`;
         }
-        // Fallback default LAN host when running APK for the first time
+        // Sin IP guardada: no apuntar a una IP privada fija; esperar configuración o autoDiscoverServer()
         if (savedIp && !isExplicitlyCleared) return formatServerUrl(savedIp);
-        return 'http://192.168.1.2:3005';
+        return '';
     }
 
     // Auto-detect production vs development (Vite = 5173/5174, Backend = 3005)

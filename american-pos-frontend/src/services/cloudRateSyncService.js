@@ -47,26 +47,33 @@ class CloudRateSyncService {
     // 2. Consulta inmediata al arrancar
     this.checkRate();
 
-    // 3. Iniciar WebSocket Realtime con Supabase
-    this.connectRealtimeWs();
+    // 3. Si no hay Supabase configurado en el build, no iniciar WebSocket ni polling infinito
+    if (!getSupabaseRealtimeWsUrl()) {
+      console.log('[CloudRateSync] Sin configuración Supabase activa; polling en la nube desactivado.');
+      return;
+    }
 
-    // 4. Iniciar sondeo de respaldo cada 6 segundos
+    // 4. Iniciar WebSocket Realtime con Supabase y sondeo de respaldo
+    this.connectRealtimeWs();
     this.startPolling();
 
-    // 5. Escuchar cambios de visibilidad / foco de la app
+    // 5. Escuchar cambios de visibilidad / foco de la app (con referencias nombradas para cleanup limpio)
     if (typeof window !== 'undefined') {
-      window.addEventListener('focus', () => this.checkRate());
-      window.addEventListener('online', () => {
+      this._onFocus = () => this.checkRate();
+      this._onOnline = () => {
         this.checkRate();
         this.connectRealtimeWs();
-      });
+      };
+      this._onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          this.checkRate();
+          if (!this.isConnected) this.connectRealtimeWs();
+        }
+      };
+      window.addEventListener('focus', this._onFocus);
+      window.addEventListener('online', this._onOnline);
       if (typeof document !== 'undefined') {
-        document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') {
-            this.checkRate();
-            if (!this.isConnected) this.connectRealtimeWs();
-          }
-        });
+        document.addEventListener('visibilitychange', this._onVisibilityChange);
       }
     }
 
@@ -189,6 +196,16 @@ class CloudRateSyncService {
     this.stopPolling();
     clearInterval(this.heartbeatTimer);
     clearTimeout(this.reconnectTimer);
+    if (typeof window !== 'undefined') {
+      if (this._onFocus) window.removeEventListener('focus', this._onFocus);
+      if (this._onOnline) window.removeEventListener('online', this._onOnline);
+      if (typeof document !== 'undefined' && this._onVisibilityChange) {
+        document.removeEventListener('visibilitychange', this._onVisibilityChange);
+      }
+    }
+    this._onFocus = null;
+    this._onOnline = null;
+    this._onVisibilityChange = null;
     if (this.ws) {
       try {
         this.ws.onclose = null;
@@ -198,6 +215,7 @@ class CloudRateSyncService {
       this.ws = null;
     }
     this.isConnected = false;
+    this._initialized = false;
   }
 
   async checkRate() {

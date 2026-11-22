@@ -453,6 +453,37 @@ router.post('/activate', activateLimiter, async (req, res) => {
             return res.status(400).json({ error: validation.message });
         }
 
+        // Anti-bypass de suspensión remota: impedir re-activar pegando la misma llave (o una más antigua) cuando la terminal está suspendida/revocada
+        const latestTerminalLicense = await License.findOne({
+            where: {
+                machineId: terminalId,
+                status: { [Op.in]: ['active', 'suspended', 'revoked'] }
+            },
+            order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
+        });
+        if (latestTerminalLicense) {
+            const remoteStatus = String(latestTerminalLicense.meta?.onlineLease?.status || '').toLowerCase();
+            const isLockedStatus = latestTerminalLicense.status === 'suspended'
+                || latestTerminalLicense.status === 'revoked'
+                || remoteStatus === 'suspended'
+                || remoteStatus === 'revoked';
+            if (isLockedStatus) {
+                const sameKeyReuse = String(latestTerminalLicense.licenseKey || '').trim() === key.trim();
+                const suspendedAtMs = Number(latestTerminalLicense.meta?.onlineLease?.serverTime)
+                    || Date.parse(latestTerminalLicense.updatedAt || 0)
+                    || 0;
+                const incomingIatMs = Number(validation.claims?.iat || 0);
+                const isNewerAuthorizedKey = !sameKeyReuse && incomingIatMs > suspendedAtMs;
+                if (sameKeyReuse || !isNewerAuthorizedKey) {
+                    return res.status(403).json({
+                        error: 'La licencia de esta terminal fue suspendida o revocada. Solicite la reactivación remota al proveedor o ingrese una nueva llave emitida posteriormente.',
+                        suspended: true,
+                        code: 'licencia_suspendida_reuso'
+                    });
+                }
+            }
+        }
+
         // Deactivate previous active licenses for THIS specific terminal
         await License.update({ status: 'revoked' }, { 
             where: { 
@@ -677,6 +708,16 @@ router.get('/online-config', verifyToken, isMaster, async (req, res) => {
 router.post('/online-config', verifyToken, isMaster, async (req, res) => {
     try {
         const rawUrl = typeof req.body?.gatewayUrl === 'string' ? req.body.gatewayUrl.trim() : '';
+        const lockedGateway = String(process.env.LOCKED_LICENSE_GATEWAY_URL || '').trim();
+        if (lockedGateway && rawUrl !== lockedGateway) {
+            const vendorSecret = String(process.env.VENDOR_MASTER_KEY || process.env.OWNER_SECRET_KEY || '').trim();
+            const providedSecret = String(req.body?.vendorSecret || req.headers['x-vendor-secret'] || '').trim();
+            if (!vendorSecret || !providedSecret || !safeEqualSecret(providedSecret, vendorSecret)) {
+                return res.status(403).json({
+                    error: 'El Gateway de licencias en línea está fijado por política del proveedor y no puede modificarse ni desactivarse sin autorización del proveedor.'
+                });
+            }
+        }
         if (rawUrl) {
             let parsed;
             try {

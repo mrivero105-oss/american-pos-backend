@@ -51,6 +51,15 @@ import androidx.activity.result.ActivityResult;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import android.content.SharedPreferences;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 import java.util.ArrayList;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -1348,5 +1357,115 @@ public class PosNativeHardwarePlugin extends Plugin {
                 }
             }
         });
+    }
+
+    // ==================== ANDROID KEYSTORE SECURE VAULT (AES-256-GCM) ====================
+
+    private static final String KEYSTORE_PROVIDER = "AndroidKeyStore";
+    private static final String KEYSTORE_ALIAS = "isaac_pos_secure_vault_v1";
+    private static final String SECURE_PREFS_NAME = "isaac_pos_secure_vault_prefs";
+    private static final String AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding";
+    private static final int GCM_TAG_BITS = 128;
+
+    private synchronized SecretKey getOrCreateVaultSecretKey() throws Exception {
+        KeyStore ks = KeyStore.getInstance(KEYSTORE_PROVIDER);
+        ks.load(null);
+        if (ks.containsAlias(KEYSTORE_ALIAS)) {
+            KeyStore.Entry entry = ks.getEntry(KEYSTORE_ALIAS, null);
+            if (entry instanceof KeyStore.SecretKeyEntry) {
+                return ((KeyStore.SecretKeyEntry) entry).getSecretKey();
+            }
+        }
+        KeyGenerator keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER);
+        KeyGenParameterSpec spec = new KeyGenParameterSpec.Builder(
+            KEYSTORE_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .setRandomizedEncryptionRequired(true)
+            .build();
+        keyGenerator.init(spec);
+        return keyGenerator.generateKey();
+    }
+
+    @PluginMethod
+    public void saveSecureSecret(PluginCall call) {
+        final String key = call.getString("key");
+        final String value = call.getString("value");
+        if (key == null || key.trim().isEmpty() || value == null) {
+            call.reject("Parámetros key y value son obligatorios en saveSecureSecret");
+            return;
+        }
+        try {
+            SecretKey secretKey = getOrCreateVaultSecretKey();
+            Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+            byte[] iv = cipher.getIV();
+            byte[] cipherBytes = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
+            String payload = Base64.encodeToString(iv, Base64.NO_WRAP)
+                + ":"
+                + Base64.encodeToString(cipherBytes, Base64.NO_WRAP);
+
+            SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+            prefs.edit().putString(key.trim(), payload).apply();
+
+            JSObject res = new JSObject();
+            res.put("success", true);
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject("Error guardando secreto cifrado en Android Keystore: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void getSecureSecret(PluginCall call) {
+        final String key = call.getString("key");
+        if (key == null || key.trim().isEmpty()) {
+            call.reject("Parámetro key requerido en getSecureSecret");
+            return;
+        }
+        try {
+            SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+            String payload = prefs.getString(key.trim(), null);
+            JSObject res = new JSObject();
+            if (payload == null || !payload.contains(":")) {
+                res.put("value", JSObject.NULL);
+                call.resolve(res);
+                return;
+            }
+            String[] parts = payload.split(":", 2);
+            byte[] iv = Base64.decode(parts[0], Base64.NO_WRAP);
+            byte[] cipherBytes = Base64.decode(parts[1], Base64.NO_WRAP);
+
+            SecretKey secretKey = getOrCreateVaultSecretKey();
+            Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            byte[] plainBytes = cipher.doFinal(cipherBytes);
+
+            res.put("value", new String(plainBytes, StandardCharsets.UTF_8));
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject("Error descifrando secreto desde Android Keystore: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void removeSecureSecret(PluginCall call) {
+        final String key = call.getString("key");
+        if (key == null || key.trim().isEmpty()) {
+            call.reject("Parámetro key requerido en removeSecureSecret");
+            return;
+        }
+        try {
+            SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+            prefs.edit().remove(key.trim()).apply();
+            JSObject res = new JSObject();
+            res.put("success", true);
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject("Error eliminando secreto en Android Keystore: " + e.getMessage());
+        }
     }
 }

@@ -1,6 +1,5 @@
 import { io } from 'socket.io-client';
 import api from './api';
-import { db as primaryDb } from './db';
 import db from '../db/localDb';
 import { fetchGlobalSettings } from '../utils/format';
 import secureMobileStorage from '../utils/secureMobileStorage';
@@ -101,7 +100,11 @@ class LANSyncService {
       const targetLocalPort = (devPorts.includes(currentPort) || !currentPort) ? '3005' : currentPort;
       let baseUrl = isLocalLoopback
         ? `http://${localHost}:${targetLocalPort}`
-        : (api.defaults.baseURL || (isAndroidCap ? 'http://192.168.1.30:3005' : `${window.location.protocol}//${window.location.hostname}:${targetLocalPort}`));
+        : (api.defaults.baseURL || (isAndroidCap ? '' : `${window.location.protocol}//${window.location.hostname}:${targetLocalPort}`));
+      if (!baseUrl) {
+        this.isConnecting = false;
+        return;
+      }
       const authToken = typeof window !== 'undefined' ? secureMobileStorage.getToken() : null;
       const syncKey = typeof window !== 'undefined' ? localStorage.getItem('sync_secret_key') : null;
       if (!authToken && !syncKey) {
@@ -394,34 +397,14 @@ class LANSyncService {
             const currentStock = Number(prod.stockQuantity ?? prod.stock ?? 0);
             const updatedStock = Math.max(0, currentStock - qty);
             try {
+              // localDb delega a primaryDb (UnifiedDB); actualizar una sola vez para evitar doble descuento 2x
               await db.products.update(prodKey, {
                 stockQuantity: String(updatedStock),
                 stock: updatedStock
               });
             } catch (updErr) {
-              console.warn('[LAN_SYNC] Advertencia al actualizar producto en Dexie:', updErr?.message);
+              console.warn('[LAN_SYNC] Advertencia al actualizar producto en UnifiedDB:', updErr?.message);
             }
-          }
-        }
-
-        // 2. Actualizar Primary IndexedDB (IsaacPosDB - services/db) para sincronización con POS
-        if (primaryDb && typeof primaryDb.getById === 'function') {
-          try {
-            let primProd = await primaryDb.getById('products', strId);
-            if (!primProd && hasValidNumId) {
-              primProd = await primaryDb.getById('products', numId);
-            }
-            if (primProd) {
-              const curStock = Number(primProd.stockQuantity ?? primProd.stock ?? 0);
-              const nextStock = Math.max(0, curStock - qty);
-              await primaryDb.put('products', {
-                ...primProd,
-                stockQuantity: nextStock,
-                stock: nextStock
-              });
-            }
-          } catch (primErr) {
-            console.warn('[LAN_SYNC] Advertencia al actualizar en primaryDb:', primErr?.message);
           }
         }
       } catch (itemErr) {

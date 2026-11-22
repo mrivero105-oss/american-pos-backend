@@ -94,22 +94,39 @@ class HardwareIdentity {
         return res.uuid;
     }
 
-    computeSealSignature(hwid, hardwareUuid) {
+    computeSealSignature(hwid, hardwareUuid, machineGuid = '') {
+        const localSalt = String(process.env.HWID_SEAL_SECRET || '').trim();
+        const guidPart = String(machineGuid || '').trim().toUpperCase();
+        const sealKey = `ISAAC-HWID-SEAL-v2:${String(hardwareUuid || '').trim()}:${guidPart}:${os.platform()}:${localSalt}`;
+        return crypto.createHmac('sha256', sealKey).update(String(hwid || ''), 'utf8').digest('hex');
+    }
+
+    _computeLegacySealSignature(hwid, hardwareUuid) {
         const sealKey = `ISAAC-HWID-SEAL-v2:${String(hardwareUuid || '').trim()}:${os.platform()}`;
         return crypto.createHmac('sha256', sealKey).update(String(hwid || ''), 'utf8').digest('hex');
     }
 
-    verifySealSignature(hwid, hardwareUuid, storedSigHex) {
+    verifySealSignature(hwid, hardwareUuid, storedSigHex, machineGuid = '') {
         if (!hwid || !hardwareUuid || !storedSigHex) return false;
-        const expected = this.computeSealSignature(hwid, hardwareUuid);
-        const bufA = Buffer.from(String(storedSigHex).trim(), 'utf8');
-        const bufB = Buffer.from(expected, 'utf8');
-        if (bufA.length !== bufB.length) return false;
-        return crypto.timingSafeEqual(bufA, bufB);
+        const cleanSig = String(storedSigHex).trim();
+        const candidates = [this.computeSealSignature(hwid, hardwareUuid, machineGuid)];
+        // Compatibilidad de migración solo cuando no hay secreto externo forzado y la firma legacy coincide con la placa base real
+        if (!process.env.HWID_SEAL_SECRET) {
+            candidates.push(this._computeLegacySealSignature(hwid, hardwareUuid));
+        }
+        const bufA = Buffer.from(cleanSig, 'utf8');
+        for (const expected of candidates) {
+            const bufB = Buffer.from(expected, 'utf8');
+            if (bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     computeFastSealSignature(hwid, machineGuid) {
-        const sealKey = `ISAAC-HWID-FAST-v1:${String(machineGuid || '').trim()}:${os.platform()}`;
+        const localSalt = String(process.env.HWID_SEAL_SECRET || '').trim();
+        const sealKey = `ISAAC-HWID-FAST-v1:${String(machineGuid || '').trim()}:${os.platform()}:${localSalt}`;
         return crypto.createHmac('sha256', sealKey).update(String(hwid || ''), 'utf8').digest('hex');
     }
 
@@ -139,14 +156,17 @@ class HardwareIdentity {
                 // 0. Fast-path sin PowerShell/WMI: verificar sello ligado al MachineGuid del registro de Windows
                 let existingHwid = '';
                 let hasSigFile = false;
+                let hasFastSigFile = false;
+                let fastSigHex = '';
                 try {
                     if (fsSync.existsSync(this.hwidPath)) {
                         existingHwid = fsSync.readFileSync(this.hwidPath, 'utf8').trim();
                         hasSigFile = fsSync.existsSync(this.sigPath);
-                        if (existingHwid && existingHwid.startsWith('POS-') && hasSigFile && fsSync.existsSync(this.fastSigPath)) {
+                        hasFastSigFile = fsSync.existsSync(this.fastSigPath);
+                        if (existingHwid && existingHwid.startsWith('POS-') && hasSigFile && hasFastSigFile) {
                             const machineGuid = await this.getFastMachineGuid();
                             if (machineGuid) {
-                                const fastSigHex = fsSync.readFileSync(this.fastSigPath, 'utf8').trim();
+                                fastSigHex = fsSync.readFileSync(this.fastSigPath, 'utf8').trim();
                                 if (this.verifyFastSealSignature(existingHwid, machineGuid, fastSigHex)) {
                                     this.cachedHwid = existingHwid;
                                     return existingHwid;
@@ -157,30 +177,40 @@ class HardwareIdentity {
                 } catch (_fastErr) {}
 
                 // 1. Verificación completa por hardware UUID (solo primer arranque o ante ausencia/desajuste del sello rápido)
-                const [{ uuid: baseUUID, isReliable, timedOut }, machineGuid] = await Promise.all([
+                const [detailedUuid, machineGuid] = await Promise.all([
                     this._getMachineUUIDDetailed(),
                     this.getFastMachineGuid()
                 ]);
-                const canonicalHwid = `POS-${baseUUID}`;
+                // Si WMI/PowerShell fallaron o hicieron timeout, usar MachineGuid del registro Windows como ancla criptográfica confiable (nunca fail-open)
+                const effectiveUuid = (!detailedUuid.isReliable && machineGuid)
+                    ? machineGuid.toUpperCase()
+                    : detailedUuid.uuid;
+                const isHardwareReliable = detailedUuid.isReliable || Boolean(machineGuid);
+                const canonicalHwid = `POS-${effectiveUuid}`;
 
                 try {
                     if (existingHwid && existingHwid.startsWith('POS-')) {
                         if (hasSigFile) {
                             const sigHex = fsSync.readFileSync(this.sigPath, 'utf8').trim();
-                            if (this.verifySealSignature(existingHwid, baseUUID, sigHex)) {
+                            if (this.verifySealSignature(existingHwid, effectiveUuid, sigHex, machineGuid)) {
+                                // Re-sellar al formato v2 con machineGuid si venía del formato legacy
+                                try {
+                                    fsSync.writeFileSync(this.sigPath, this.computeSealSignature(existingHwid, effectiveUuid, machineGuid), 'utf8');
+                                } catch (_) {}
                                 this._writeFastSealSafe(existingHwid, machineGuid);
                                 this.cachedHwid = existingHwid;
                                 return existingHwid;
                             }
-                            if (!isReliable && timedOut) {
-                                console.warn('[HWID] Timeout consultando WMI/CIM; conservando .hwid_sticky existente para evitar falso positivo.');
+                            // Fail-closed estricto: incluso ante timeout de WMI/CIM, solo conservar si existe un fast-seal criptográficamente válido para esta máquina
+                            if (!isHardwareReliable && detailedUuid.timedOut && machineGuid && hasFastSigFile && this.verifyFastSealSignature(existingHwid, machineGuid, fastSigHex)) {
+                                console.warn('[HWID] Timeout consultando WMI/CIM; fast-seal de MachineGuid válido, conservando .hwid_sticky.');
                                 this.cachedHwid = existingHwid;
                                 return existingHwid;
                             }
-                            console.warn('[HWID] Firma HMAC de .hwid_sticky no coincide con la placa base actual (posible clonación). Regenerando HWID físico.');
+                            console.warn('[HWID] Firma HMAC de .hwid_sticky no coincide con el hardware actual (posible clonación). Regenerando HWID físico.');
                         } else if (existingHwid === canonicalHwid || process.env.ALLOW_UNSIGNED_LEGACY_HWID === 'true') {
                             try {
-                                fsSync.writeFileSync(this.sigPath, this.computeSealSignature(existingHwid, baseUUID), 'utf8');
+                                fsSync.writeFileSync(this.sigPath, this.computeSealSignature(existingHwid, effectiveUuid, machineGuid), 'utf8');
                                 this._writeFastSealSafe(existingHwid, machineGuid);
                             } catch (_) {}
                             this.cachedHwid = existingHwid;
@@ -194,7 +224,7 @@ class HardwareIdentity {
                 try {
                     fsSync.mkdirSync(this.dirPath, { recursive: true });
                     fsSync.writeFileSync(this.hwidPath, canonicalHwid, 'utf8');
-                    fsSync.writeFileSync(this.sigPath, this.computeSealSignature(canonicalHwid, baseUUID), 'utf8');
+                    fsSync.writeFileSync(this.sigPath, this.computeSealSignature(canonicalHwid, effectiveUuid, machineGuid), 'utf8');
                     this._writeFastSealSafe(canonicalHwid, machineGuid);
                     this.cachedHwid = canonicalHwid;
                 } catch (writeErr) {

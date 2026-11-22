@@ -34,7 +34,7 @@ async function getPendingOfflineStockDeductions() {
                 ? sale.items
                 : (Array.isArray(sale.SaleItems) ? sale.SaleItems : []);
             for (const item of items) {
-                const rawProdId = item?.productId ?? item?.producto_id ?? item?.id;
+                const rawProdId = item?.productId ?? item?.producto_id ?? item?.product?.id ?? item?.id;
                 const qty = Number(item?.quantity ?? item?.qty ?? 0);
                 if (!rawProdId || !Number.isFinite(qty) || qty <= 0) continue;
                 const key = String(rawProdId).trim();
@@ -63,10 +63,33 @@ async function getPendingOfflineStockDeductions() {
 }
 
 /**
- * Persiste una colección de forma atómica en el motor unificado (SQLite Nativo Android WAL / UnifiedDB).
+ * Persiste una colección de forma atómica en el motor unificado (SQLite Nativo Android WAL / UnifiedDB),
+ * preservando siempre registros creados offline pendientes de sincronización (off_prod_*, cust_off_*, pending_sync).
  */
 async function persistCollectionAtomically(storeName, items = [], keyPath = 'id') {
-    const safeItems = Array.isArray(items) ? items : [];
+    const safeItems = Array.isArray(items) ? [...items] : [];
+    if (storeName === 'products' || storeName === 'customers') {
+        try {
+            const existing = await db.getAll(storeName).catch(() => []);
+            const incomingIds = new Set(safeItems.map((it) => String(it?.[keyPath] ?? '')).filter(Boolean));
+            const preservedOffline = (Array.isArray(existing) ? existing : []).filter((row) => {
+                if (!row) return false;
+                const idStr = String(row?.[keyPath] ?? '');
+                if (!idStr || incomingIds.has(idStr)) return false;
+                return (
+                    row.status === 'pending_sync' ||
+                    row.isOffline === true ||
+                    idStr.startsWith('off_prod_') ||
+                    idStr.startsWith('cust_off_')
+                );
+            });
+            if (preservedOffline.length > 0) {
+                safeItems.push(...preservedOffline);
+            }
+        } catch (_preserveErr) {
+            // Continuar con safeItems si la lectura previa no está disponible
+        }
+    }
     await db.replaceAllAtomic(storeName, safeItems, keyPath);
 }
 

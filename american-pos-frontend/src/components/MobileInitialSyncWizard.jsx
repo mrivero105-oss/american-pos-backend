@@ -26,7 +26,7 @@ export default function MobileInitialSyncWizard({ onComplete }) {
     const [serverIp, setServerIp] = useState(() => 
         localStorage.getItem('isaac_pos_server_ip') || 
         localStorage.getItem('american_pos_server_ip') || 
-        '192.168.1.30:3005'
+        ''
     );
     const [isTesting, setIsTesting] = useState(false);
     const [isAutoDetecting, setIsAutoDetecting] = useState(false);

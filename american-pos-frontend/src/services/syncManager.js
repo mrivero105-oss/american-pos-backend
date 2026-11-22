@@ -343,7 +343,14 @@ class SyncManager {
               const status = itemErr.response?.status;
               const retries = (Number(item.retryCount) || 0) + 1;
               if (status === 409) {
-                // Conflicto / duplicado ya procesado en el servidor
+                // Conflicto / duplicado: intentar reconciliar si el servidor devolvió el registro existente y notificar
+                const existingEntity = itemErr.response?.data?.product || itemErr.response?.data?.customer || itemErr.response?.data?.existing;
+                if (item.endpoint === '/products' && existingEntity?.id && item.tempLocalId) {
+                  await this.reconcileOfflineProduct(item.payload, existingEntity, item.tempLocalId);
+                }
+                window.dispatchEvent(new CustomEvent('sync-queue-conflict', {
+                  detail: { itemId: item.id, endpoint: item.endpoint, tempLocalId: item.tempLocalId, error: itemErr.response?.data?.error || itemErr.message }
+                }));
                 await primaryDb.delete('syncQueue', item.id);
               } else if (status && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status)) {
                 const errDetail = itemErr.response?.data?.error || itemErr.message;
@@ -481,17 +488,36 @@ class SyncManager {
             }
           }
 
-          // Desvío a cuarentena ante errores numéricos o fallos de integridad HMAC
+          // Desvío a cuarentena ante errores de integridad/HMAC inmediatos o tras 3 rechazos repetidos de negocio (evita saturar cola de 50)
           for (const errItem of errorItems) {
-            if (errItem.id && (errItem.quarantined || errItem.error?.includes('INTEGRITY_ERROR') || errItem.error?.includes('HMAC'))) {
-              console.warn(`[OutboxDaemon] Venta ${errItem.id} desviada a cuarentena local en IndexedDB: ${errItem.error}`);
+            if (!errItem?.id) continue;
+            const isImmediateQuarantine = Boolean(
+              errItem.quarantined ||
+              errItem.error?.includes('INTEGRITY_ERROR') ||
+              errItem.error?.includes('HMAC') ||
+              errItem.error?.includes('FRAUDE_')
+            );
+            const currentSaleRec = await primaryDb.getById('sales', errItem.id).catch(() => null);
+            const nextRetries = (Number(currentSaleRec?.syncRetryCount) || 0) + 1;
+
+            if (isImmediateQuarantine || nextRetries >= 3) {
+              console.warn(`[OutboxDaemon] Venta ${errItem.id} desviada a cuarentena local en IndexedDB (${nextRetries} intento(s)): ${errItem.error}`);
               await db.sales
                 .where('id')
                 .equals(errItem.id)
                 .modify({
                   status: 'quarantined',
-                  quarantineReason: errItem.error || 'Integrity check failure',
+                  syncRetryCount: nextRetries,
+                  quarantineReason: errItem.error || 'Error permanente al sincronizar venta',
                   quarantinedAt: new Date().toISOString()
+                });
+            } else {
+              await db.sales
+                .where('id')
+                .equals(errItem.id)
+                .modify({
+                  syncRetryCount: nextRetries,
+                  lastSyncError: errItem.error || 'Error temporal al sincronizar venta'
                 });
             }
           }

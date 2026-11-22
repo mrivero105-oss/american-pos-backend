@@ -315,6 +315,7 @@ export const AuthProvider = ({ children }) => {
             }
 
             // 1. Intentar desbloqueo ultrarrápido vía /auth/quick-unlock (soporta quickPin, supervisorPin y contraseña)
+            let isNetworkFailure = false;
             try {
                 const quickRes = await api.post('/auth/quick-unlock', { pinOrPassword: password });
                 if (quickRes.data?.success) {
@@ -326,22 +327,46 @@ export const AuthProvider = ({ children }) => {
                 if (quickErr.response?.status === 429) {
                     return { success: false, message: quickErr.response.data?.error || 'Cuenta bloqueada temporalmente' };
                 }
+                if (!quickErr.response) {
+                    isNetworkFailure = true;
+                }
             }
 
-            // 2. Fallback estándar a /auth/login
-            const username = user?.username || user?.email;
-            const response = await api.post('/auth/login', { username, password });
-            if (response.data?.success && response.data?.user) {
-                if (response.data.token) {
-                    secureMobileStorage.setToken(response.data.token);
+            // 2. Fallback estándar a /auth/login (si hay red) o verificación PBKDF2 local (si la PC/red está caída)
+            if (!isNetworkFailure) {
+                const username = user?.username || user?.email;
+                const response = await api.post('/auth/login', { username, password });
+                if (response.data?.success && response.data?.user) {
+                    if (response.data.token) {
+                        secureMobileStorage.setToken(response.data.token);
+                    }
+                    secureMobileStorage.setSessionActive(true);
+                    setUser(response.data.user);
+                    setIsLocked(false);
+                    return { success: true };
                 }
-                secureMobileStorage.setSessionActive(true);
-                setUser(response.data.user);
-                setIsLocked(false);
-                return { success: true };
+                return { success: false, message: 'PIN o contraseña incorrectos' };
             }
-            return { success: false, message: 'PIN o contraseña incorrectos' };
+
+            // 3. Fallback offline verificado por PBKDF2 local (evita atrapar al cajero en LockScreen sin red)
+            if (user) {
+                const isOfflineValid = await verifyOfflinePassword(user, password);
+                if (isOfflineValid) {
+                    setIsLocked(false);
+                    sessionStorage.setItem('isaac_pos_session_active', 'true');
+                    return { success: true, isOffline: true };
+                }
+            }
+            return { success: false, message: 'Sin conexión: PIN o contraseña no coinciden con la credencial local verificada.' };
         } catch (e) {
+            if (!e?.response && user) {
+                const isOfflineValid = await verifyOfflinePassword(user, password);
+                if (isOfflineValid) {
+                    setIsLocked(false);
+                    sessionStorage.setItem('isaac_pos_session_active', 'true');
+                    return { success: true, isOffline: true };
+                }
+            }
             console.error('Unlock error:', e);
             const errorMsg = e.response?.data?.error || 'PIN o contraseña incorrectos';
             return { success: false, message: errorMsg };
@@ -527,15 +552,16 @@ export const AuthProvider = ({ children }) => {
             const hasOfflineProfile = Boolean(secureMobileStorage.getUserProfile() || localStorage.getItem('isaac_pos_cached_cashiers'));
             const hasInheritedServerActivation = Boolean(savedActivated && latestStoredInfo?.isInherited);
 
-            if (savedActivated || savedKey || (isNativeMobile && hasOfflineProfile)) {
-                let isLocallyValid = savedActivated || (isNativeMobile && hasOfflineProfile);
+            if (savedKey || hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile)) {
+                // Exigir prueba verificable offline (llave RSA válida, herencia registrada del servidor o perfil móvil ya sincronizado);
+                // nunca confiar en el booleano `isaac_pos_license_activated=true` desnudo en localStorage
+                let isLocallyValid = Boolean(hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile));
                 if (savedKey) {
                     try {
                         const localCheck = await validateLicenseKeyLocally(savedKey, currentTerminalId);
                         if (localCheck.valid) {
                             isLocallyValid = true;
-                        } else if (localCheck.requiresServerValidation && savedActivated) {
-                            // Llave v1 activada previamente contra el servidor: mantener validez offline si no está expirada ni asignada a otro equipo
+                        } else if (localCheck.requiresServerValidation && savedActivated && latestStoredInfo?.activated) {
                             isLocallyValid = true;
                         } else if (hasInheritedServerActivation) {
                             // Terminal autorizada por herencia de la licencia del servidor PC: una llave local antigua no debe bloquear el modo offline
@@ -546,6 +572,7 @@ export const AuthProvider = ({ children }) => {
                         }
                     } catch (err) {
                         console.warn('[Auth] Error validando clave local durante check offline:', err?.message);
+                        if (!hasInheritedServerActivation) isLocallyValid = false;
                     }
                 }
                 if (isLocallyValid) {

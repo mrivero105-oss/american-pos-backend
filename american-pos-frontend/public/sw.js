@@ -20,12 +20,14 @@ self.addEventListener('install', (event) => {
   );
 });
 
+const PRESERVED_CACHES = new Set([CACHE_NAME, 'isaac-pos-img-v1']);
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME)
+          .filter((name) => !PRESERVED_CACHES.has(name))
           .map((name) => caches.delete(name))
       );
     })

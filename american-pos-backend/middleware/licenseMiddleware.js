@@ -41,7 +41,8 @@ const verifyLicense = async (req, res, next) => {
         const serverMachineId = await licenseUtils.getMachineId();
         const rawIp = req.ip || req.connection?.remoteAddress || '';
         const clientIp = rawIp.replace('::ffff:', '');
-        const isLocalHost = clientIp === '127.0.0.1' || clientIp === '::1' || req.hostname === 'localhost';
+        // Nunca confiar en req.hostname (cabecera Host spoofeable desde la LAN); solo IP loopback real
+        const isLocalHost = clientIp === '127.0.0.1' || clientIp === '::1';
 
         let terminalId = req.headers['x-terminal-id'] || req.query.terminalId;
         if (!terminalId) {
@@ -79,8 +80,37 @@ const verifyLicense = async (req, res, next) => {
             order: [['createdAt', 'DESC']]
         });
 
+        // 1b. Antes de permitir herencia del servidor, verificar si ESTA terminal fue suspendida o revocada explícitamente
+        if (!activeLicense && !isServerHost) {
+            const ownBlockedLicense = await License.findOne({
+                where: {
+                    machineId: terminalId,
+                    status: { [Op.in]: ['suspended', 'revoked'] }
+                },
+                order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
+            });
+            if (ownBlockedLicense) {
+                const suspEval = getOnlineLicenseService().evaluateLocalLicenseWithOnlinePolicy(
+                    ownBlockedLicense,
+                    ownBlockedLicense.machineId,
+                    now
+                );
+                terminalLicenseCache.delete(terminalId);
+                return res.status(403).json({
+                    error: 'licencia_suspendida',
+                    suspended: true,
+                    status: ownBlockedLicense.status,
+                    reason: suspEval.reason,
+                    message: suspEval.reason,
+                    machineId: terminalId,
+                    serverMachineId
+                });
+            }
+        }
+
         // 2. Si la terminal no tiene licencia individual, verificar si el Servidor Principal tiene licencia activa válida
         let isInheritedFromServer = false;
+        let validatedClaims = null;
         if (!activeLicense) {
             const serverLicense = await License.findOne({
                 where: {
@@ -95,6 +125,7 @@ const verifyLicense = async (req, res, next) => {
                 if (serverValidation.valid) {
                     activeLicense = serverLicense;
                     isInheritedFromServer = true;
+                    validatedClaims = serverValidation.claims || null;
                 }
             }
         }
@@ -149,6 +180,22 @@ const verifyLicense = async (req, res, next) => {
                     message: validation.message || 'La licencia actual no es válida para este equipo.',
                     machineId: terminalId,
                     serverMachineId: serverMachineId
+                });
+            }
+            validatedClaims = validation.claims || null;
+        }
+
+        // 3b. Enforcement real de plan/tier firmado en la licencia RSA v2 (si la llave define restricciones)
+        if (!isServerHost && validatedClaims) {
+            const planStr = String(validatedClaims.plan || '').toLowerCase();
+            if (validatedClaims.allowMobile === false || planStr === 'pc_only' || planStr === 'single_pc') {
+                terminalLicenseCache.delete(terminalId);
+                return res.status(403).json({
+                    error: 'plan_no_permite_terminales',
+                    message: 'Tu plan de licencia actual solo autoriza la caja principal PC. Actualiza tu plan para conectar terminales móviles o cajas LAN.',
+                    plan: validatedClaims.plan || 'pc_only',
+                    machineId: terminalId,
+                    serverMachineId
                 });
             }
         }

@@ -320,8 +320,8 @@ export function PosProvider({ children }) {
                     }
                 }
                 
-                // Resiliencia ante Apagones: Si no hay carrito local activo y existe sesión iniciada, consultar borrador persistente en PostgreSQL
-                const currentRegId = localStorage.getItem('isaac_pos_register_id') || localStorage.getItem('pos_register_id') || 'Caja_1';
+                // Resiliencia ante Apagones: Consultar borrador persistente usando el mismo registerId (pos_device_id) que usa el autoguardado
+                const currentRegId = localStorage.getItem('pos_device_id') || localStorage.getItem('isaac_pos_register_id') || localStorage.getItem('pos_register_id') || 'Caja_1';
                 const hasAuthToken = Boolean(secureMobileStorage.getToken());
                 if (hasAuthToken && (!sessionDoc?.value?.cart || sessionDoc.value.cart.length === 0) && currentRegId) {
                     draftCheckedKeyRef.current = `session:${currentRegId}`;

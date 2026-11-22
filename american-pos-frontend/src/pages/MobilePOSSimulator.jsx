@@ -164,11 +164,14 @@ export default function MobilePOSSimulator() {
       }
     };
     if (socketContext?.socket) {
+      const handleUsersChanged = () => {
+        if (refreshUser) refreshUser();
+      };
       socketContext.socket.on('user_updated', handleUserUpdate);
-      socketContext.socket.on('users_changed', () => refreshUser && refreshUser());
+      socketContext.socket.on('users_changed', handleUsersChanged);
       return () => {
         socketContext.socket.off('user_updated', handleUserUpdate);
-        socketContext.socket.off('users_changed');
+        socketContext.socket.off('users_changed', handleUsersChanged);
       };
     }
   }, [socketContext?.socket, user?.id, refreshUser]);
@@ -339,7 +342,7 @@ export default function MobilePOSSimulator() {
   const [mobileServerIp, setMobileServerIp] = useState(() => 
     localStorage.getItem('isaac_pos_server_ip') || 
     localStorage.getItem('american_pos_server_ip') || 
-    '192.168.1.2:3005'
+    ''
   );
   const [serverHealth, setServerHealth] = useState(null);
   const [showServerModal, setShowServerModal] = useState(false);
@@ -3657,6 +3660,14 @@ export default function MobilePOSSimulator() {
       showToast(`¡Venta #${invoiceNum} registrada en servidor PC!`);
     } catch (err) {
       console.warn('[MobilePOSSimulator] Error capturado en operación:', err?.message || err);
+      const httpStatus = err?.response?.status;
+      // Si el servidor PC respondió explícitamente con 4xx (ej. stock insuficiente, caja cerrada, 401/403), NO convertir en venta offline
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        const serverErrMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Venta rechazada por el servidor';
+        showToast(serverErrMsg, 'error');
+        return;
+      }
+
       console.warn('[OFFLINE-ENGINE] Servidor PC no disponible o timeout de red. Persistiendo con ID inmutable:', persistentTransactionId);
 
       const offlineId = persistentTransactionId;
@@ -3682,7 +3693,9 @@ export default function MobilePOSSimulator() {
         cryptographicSignature: cryptoSig,
         date: nowOfflineIso,
         displayTime: nowOffline.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        items: [...enrichedCart],
+        // Mantener items planos con productId real para sincronización, protección de stock y P2P; conservar enrichedCart para recibo visual
+        items: Array.isArray(salePayload.items) ? [...salePayload.items] : [],
+        displayItems: [...enrichedCart],
         subtotalUSD,
         taxUSD,
         igtfUSD: currentIgtfUSD,

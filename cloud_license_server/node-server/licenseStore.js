@@ -98,7 +98,7 @@ class LicenseStore {
 
     _persistJsonSync() {
         const tmpPath = `${this.jsonPath}.${process.pid}.tmp`;
-        fs.writeFileSync(tmpPath, JSON.stringify(this._memoryState, null, 2), 'utf8');
+        fs.writeFileSync(tmpPath, JSON.stringify(this._memoryState, null, 2), { encoding: 'utf8', mode: 0o600 });
         fs.renameSync(tmpPath, this.jsonPath);
     }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { SocketContext } from '../hooks/SocketContext';
 import { useAuth } from '../hooks/AuthContext';
@@ -32,7 +32,7 @@ export const SocketProvider = ({ children }) => {
             ((window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform()) ||
                 window.location.protocol === 'capacitor:')
         ) {
-            socketUrl = api.defaults.baseURL || 'http://192.168.1.30:3005';
+            socketUrl = api.defaults.baseURL || '';
         } else if (isLocalDev) {
             const localHost =
                 typeof window !== 'undefined' && window.location.hostname === 'localhost'
@@ -53,6 +53,7 @@ export const SocketProvider = ({ children }) => {
             socketUrl = `${protocol}//${window.location.hostname}:${targetPort}`;
         }
 
+        if (!socketUrl) return;
         const authToken = secureMobileStorage.getToken();
         const newSocket = io(socketUrl, {
             auth: { token: authToken },
@@ -131,12 +132,15 @@ export const SocketProvider = ({ children }) => {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
             window.removeEventListener('online', handleOnline);
             newSocket.disconnect();
+            setSocket(null);
             setIsConnected(false);
         };
     }, [userId, companyId]);
 
+    const contextValue = useMemo(() => ({ socket, isConnected }), [socket, isConnected]);
+
     return (
-        <SocketContext.Provider value={{ socket, isConnected }}>
+        <SocketContext.Provider value={contextValue}>
             {children}
         </SocketContext.Provider>
     );

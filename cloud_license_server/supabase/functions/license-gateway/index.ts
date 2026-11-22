@@ -39,9 +39,15 @@ function buildCorsHeaders(req: Request, isAdminRoute: boolean): Record<string, s
     const origin = req.headers.get('origin') || '';
     const allowedRaw = (Deno.env.get('ADMIN_ALLOWED_ORIGINS') || '').trim();
     let allowOrigin = '*';
-    if (isAdminRoute && allowedRaw) {
-        const allowed = new Set(allowedRaw.split(',').map((o) => o.trim()).filter(Boolean));
-        allowOrigin = origin && allowed.has(origin) ? origin : 'null';
+    if (isAdminRoute) {
+        if (allowedRaw) {
+            const allowed = new Set(allowedRaw.split(',').map((o) => o.trim()).filter(Boolean));
+            allowOrigin = origin && allowed.has(origin) ? origin : 'null';
+        } else {
+            // Fail-closed para /admin/* si ADMIN_ALLOWED_ORIGINS no fue definido: solo loopback local
+            const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+            allowOrigin = isLocalOrigin ? origin : 'null';
+        }
     }
     return {
         'Access-Control-Allow-Origin': allowOrigin,
@@ -51,7 +57,7 @@ function buildCorsHeaders(req: Request, isAdminRoute: boolean): Record<string, s
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'DENY',
         'Referrer-Policy': 'no-referrer',
-        ...(isAdminRoute ? { 'Cache-Control': 'no-store' } : {})
+        ...(isAdminRoute ? { 'Cache-Control': 'no-store', 'Vary': 'Origin' } : {})
     };
 }
 
@@ -421,7 +427,12 @@ Deno.serve(async (req: Request) => {
                 }
 
                 let verifiedExpiresAt: string | null = null;
-                if (requireProof && (Deno.env.get('LICENSE_PUBLIC_KEY_PEM') || '').trim()) {
+                if (requireProof) {
+                    if (!(Deno.env.get('LICENSE_PUBLIC_KEY_PEM') || '').trim()) {
+                        return jsonResponse({
+                            error: 'Configuración incompleta del Gateway: LICENSE_PUBLIC_KEY_PEM es obligatorio cuando REQUIRE_LICENSE_PROOF_ON_AUTOREGISTER está habilitado.'
+                        }, 503, corsHeaders);
+                    }
                     const proof = await verifyLicenseKeyProof(body?.licenseKey, rawMachineId);
                     if (!proof.valid) {
                         return jsonResponse({

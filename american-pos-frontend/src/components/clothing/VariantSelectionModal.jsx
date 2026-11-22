@@ -19,17 +19,10 @@ export default function VariantSelectionModal({ product, onClose, onAddToCart, e
   const variants = useMemo(() => {
     if (Array.isArray(product?.Variantes) && product.Variantes.length > 0) return product.Variantes;
     if (Array.isArray(product?.variants) && product.variants.length > 0) return product.variants;
-    // Fallback mock variants if none loaded
-    return [
-      { id: 1, talla: 'S', color: 'Negro', stock: 12, precio_adicional: 0, sku_variante: `${product?.codigo_barras || 'CLOTH'}-S-BLK` },
-      { id: 2, talla: 'M', color: 'Negro', stock: 8, precio_adicional: 0, sku_variante: `${product?.codigo_barras || 'CLOTH'}-M-BLK` },
-      { id: 3, talla: 'L', color: 'Negro', stock: 5, precio_adicional: 2.00, sku_variante: `${product?.codigo_barras || 'CLOTH'}-L-BLK` },
-      { id: 4, talla: 'S', color: 'Blanco', stock: 15, precio_adicional: 0, sku_variante: `${product?.codigo_barras || 'CLOTH'}-S-WHT` },
-      { id: 5, talla: 'M', color: 'Blanco', stock: 0, precio_adicional: 0, sku_variante: `${product?.codigo_barras || 'CLOTH'}-M-WHT` },
-      { id: 6, talla: 'L', color: 'Azul', stock: 4, precio_adicional: 3.50, sku_variante: `${product?.codigo_barras || 'CLOTH'}-L-BLU` },
-    ];
+    return [];
   }, [product]);
 
+  const hasConfiguredVariants = variants.length > 0;
   const tallas = useMemo(() => Array.from(new Set(variants.map(v => v.talla).filter(Boolean))), [variants]);
   const colores = useMemo(() => Array.from(new Set(variants.map(v => v.color).filter(Boolean))), [variants]);
 
@@ -41,28 +34,47 @@ export default function VariantSelectionModal({ product, onClose, onAddToCart, e
   const [quantity, setQuantity] = useState(1);
 
   const selectedVariant = useMemo(() => {
+    if (!hasConfiguredVariants) return null;
     return variants.find(v => v.talla === selectedTalla && v.color === selectedColor) || null;
-  }, [variants, selectedTalla, selectedColor]);
+  }, [variants, hasConfiguredVariants, selectedTalla, selectedColor]);
 
   const basePrice = Number(product?.precio ?? product?.price ?? 0);
   const extraPrice = Number(selectedVariant?.precio_adicional || 0);
   const finalUnitPrice = basePrice + extraPrice;
-  const currentStock = selectedVariant ? Number(selectedVariant.stock) : 0;
+  const currentStock = hasConfiguredVariants
+    ? (selectedVariant ? Number(selectedVariant.stock) : 0)
+    : Number(product?.stockQuantity ?? product?.stock ?? 0);
 
   const handleAdd = () => {
-    if (!selectedVariant || currentStock <= 0) return;
-    onAddToCart({
-      ...product,
-      id: `${product.id || 'p'}-${selectedVariant.id}`,
-      producto_id: product.id,
-      variante_id: selectedVariant.id,
-      nombre: `${product.nombre || product.name || 'Artículo'} (${selectedVariant.talla} / ${selectedVariant.color})`,
-      precio: finalUnitPrice,
-      price: finalUnitPrice,
-      stock: currentStock,
-      sku: selectedVariant.sku_variante || product.codigo_barras,
-      quantity
-    });
+    if (currentStock <= 0) return;
+    if (hasConfiguredVariants) {
+      if (!selectedVariant) return;
+      onAddToCart({
+        ...product,
+        id: `${product.id || 'p'}-${selectedVariant.id}`,
+        producto_id: product.id,
+        variante_id: selectedVariant.id,
+        nombre: `${product.nombre || product.name || 'Artículo'} (${selectedVariant.talla} / ${selectedVariant.color})`,
+        precio: finalUnitPrice,
+        price: finalUnitPrice,
+        stock: currentStock,
+        sku: selectedVariant.sku_variante || product.codigo_barras,
+        quantity
+      });
+    } else {
+      onAddToCart({
+        ...product,
+        id: product.id,
+        producto_id: product.id,
+        variante_id: null,
+        nombre: product.nombre || product.name || 'Artículo',
+        precio: basePrice,
+        price: basePrice,
+        stock: currentStock,
+        sku: product.codigo_barras || product.barcode,
+        quantity
+      });
+    }
     onClose();
   };
 
@@ -86,6 +98,12 @@ export default function VariantSelectionModal({ product, onClose, onAddToCart, e
             </button>
           </div>
 
+          {!hasConfiguredVariants ? (
+            <div className="mb-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm">
+              Este producto aún no tiene variantes de talla/color registradas en el inventario. Puedes agregarlo usando su stock general ({currentStock} uds) o crear sus variantes en Gestión de Inventario.
+            </div>
+          ) : (
+            <>
           {/* Tallas Selection */}
           <div className="mb-6">
             <label className="block text-xs font-black uppercase tracking-wider text-slate-400 mb-3">
@@ -152,12 +170,14 @@ export default function VariantSelectionModal({ product, onClose, onAddToCart, e
               })}
             </div>
           </div>
+            </>
+          )}
 
           {/* Stock & Price Summary Panel */}
           <div className="p-4 mb-5 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Disponibilidad</span>
-              {selectedVariant ? (
+              {(selectedVariant || !hasConfiguredVariants) ? (
                 currentStock > 0 ? (
                   <span className="text-lg font-black text-emerald-400 flex items-center gap-1.5 mt-0.5">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -207,7 +227,7 @@ export default function VariantSelectionModal({ product, onClose, onAddToCart, e
 
             <button
               onClick={handleAdd}
-              disabled={!selectedVariant || currentStock <= 0}
+              disabled={(hasConfiguredVariants && !selectedVariant) || currentStock <= 0}
               className="flex-1 h-11 px-6 rounded-lg font-semibold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed bg-pink-600 hover:bg-pink-700 text-white shadow-sm"
             >
               <ShoppingBag size={18} /> Añadir al Carrito

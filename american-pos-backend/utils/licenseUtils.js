@@ -181,12 +181,18 @@ class LicenseManager {
                 return { valid: false, message: `Llave asignada a terminal ${requiredHwid}, no coincide con ${expectedHwid}` };
             }
 
-            // 5. Retorno Exitoso
+            // 5. Retorno Exitoso (incluyendo claims de plan/emisión firmados en RSA v2 si existen)
             return { 
                 valid: true, 
                 version,
                 requiresUpgrade: cryptoCheck.requiresUpgrade,
-                expiresAt: data.exp === 'never' ? null : new Date(Number(data.exp)).toISOString()
+                expiresAt: data.exp === 'never' ? null : new Date(Number(data.exp)).toISOString(),
+                claims: {
+                    plan: data.plan || null,
+                    allowMobile: data.allowMobile !== undefined ? Boolean(data.allowMobile) : null,
+                    maxRegisters: Number.isFinite(Number(data.maxRegisters)) ? Number(data.maxRegisters) : null,
+                    iat: Number.isFinite(Number(data.iat)) ? Number(data.iat) : null
+                }
             };
 
         } catch (error) {

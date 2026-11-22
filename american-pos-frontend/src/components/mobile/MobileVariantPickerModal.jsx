@@ -27,15 +27,10 @@ export default function MobileVariantPickerModal({
   const variants = useMemo(() => {
     if (Array.isArray(product?.Variantes) && product.Variantes.length > 0) return product.Variantes;
     if (Array.isArray(product?.variants) && product.variants.length > 0) return product.variants;
-    // Variantes por defecto si el producto es de moda pero no tiene variantes desglosadas
-    return [
-      { id: 'v1', talla: 'S', color: 'Único', stock: product?.stockQuantity || product?.stock || 10, precio_adicional: 0 },
-      { id: 'v2', talla: 'M', color: 'Único', stock: product?.stockQuantity || product?.stock || 10, precio_adicional: 0 },
-      { id: 'v3', talla: 'L', color: 'Único', stock: product?.stockQuantity || product?.stock || 10, precio_adicional: 0 },
-      { id: 'v4', talla: 'XL', color: 'Único', stock: product?.stockQuantity || product?.stock || 5, precio_adicional: 0 },
-    ];
+    return [];
   }, [product]);
 
+  const hasConfiguredVariants = variants.length > 0;
   const tallas = useMemo(() => Array.from(new Set(variants.map(v => v.talla).filter(Boolean))), [variants]);
   const colores = useMemo(() => Array.from(new Set(variants.map(v => v.color).filter(Boolean))), [variants]);
 
@@ -47,36 +42,53 @@ export default function MobileVariantPickerModal({
   const [quantity, setQuantity] = useState(1);
 
   const selectedVariant = useMemo(() => {
+    if (!hasConfiguredVariants) return null;
     return variants.find(v => v.talla === selectedTalla && v.color === selectedColor) || null;
-  }, [variants, selectedTalla, selectedColor]);
+  }, [variants, hasConfiguredVariants, selectedTalla, selectedColor]);
 
   if (!isOpen || !product) return null;
 
   const basePrice = Number(product?.precio ?? product?.price ?? product?.priceUSD ?? 0);
   const extraPrice = Number(selectedVariant?.precio_adicional || 0);
   const finalUnitPrice = basePrice + extraPrice;
-  const currentStock = selectedVariant ? Number(selectedVariant.stock ?? 0) : 0;
+  const currentStock = hasConfiguredVariants
+    ? (selectedVariant ? Number(selectedVariant.stock ?? 0) : 0)
+    : Number(product?.stockQuantity ?? product?.stock ?? 0);
 
   const handleConfirm = () => {
-    if (!selectedVariant || currentStock <= 0) return;
-    onAddToCart({
-      ...product,
-      id: `${product.id}-${selectedVariant.id}`,
-      originalProductId: product.id,
-      varianteId: selectedVariant.id,
-      nombre: `${product.nombre || product.name || 'Artículo'} (${selectedVariant.talla} / ${selectedVariant.color})`,
-      name: `${product.name || product.nombre || 'Artículo'} (${selectedVariant.talla} / ${selectedVariant.color})`,
-      precio: finalUnitPrice,
-      price: finalUnitPrice,
-      priceUSD: finalUnitPrice,
-      stockQuantity: currentStock,
-      stock: currentStock,
-      selectedVariant: {
-        talla: selectedVariant.talla,
-        color: selectedVariant.color,
-        sku: selectedVariant.sku_variante || selectedVariant.sku || ''
-      }
-    }, quantity);
+    if (currentStock <= 0) return;
+    if (hasConfiguredVariants) {
+      if (!selectedVariant) return;
+      onAddToCart({
+        ...product,
+        id: `${product.id}-${selectedVariant.id}`,
+        originalProductId: product.id,
+        varianteId: selectedVariant.id,
+        nombre: `${product.nombre || product.name || 'Artículo'} (${selectedVariant.talla} / ${selectedVariant.color})`,
+        name: `${product.name || product.nombre || 'Artículo'} (${selectedVariant.talla} / ${selectedVariant.color})`,
+        precio: finalUnitPrice,
+        price: finalUnitPrice,
+        priceUSD: finalUnitPrice,
+        stockQuantity: currentStock,
+        stock: currentStock,
+        selectedVariant: {
+          talla: selectedVariant.talla,
+          color: selectedVariant.color,
+          sku: selectedVariant.sku_variante || selectedVariant.sku || ''
+        }
+      }, quantity);
+    } else {
+      onAddToCart({
+        ...product,
+        originalProductId: product.id,
+        varianteId: null,
+        precio: basePrice,
+        price: basePrice,
+        priceUSD: basePrice,
+        stockQuantity: currentStock,
+        stock: currentStock
+      }, quantity);
+    }
     onClose();
   };
 
@@ -245,10 +257,16 @@ export default function MobileVariantPickerModal({
           </div>
         </div>
 
+        {!hasConfiguredVariants && (
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
+            Este artículo no tiene variantes de talla/color registradas. Se agregará usando su stock general disponible.
+          </div>
+        )}
+
         {/* Botón de Confirmación */}
         <button
           onClick={handleConfirm}
-          disabled={!selectedVariant || currentStock <= 0}
+          disabled={(hasConfiguredVariants && !selectedVariant) || currentStock <= 0}
           className="w-full py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm cursor-pointer active:scale-95 transition-colors"
         >
           <ShoppingBag size={16} />

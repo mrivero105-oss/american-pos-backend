@@ -58,6 +58,25 @@ export const secureMobileStorage = {
     }
   },
 
+  restoreTokenFromNative: async () => {
+    if (memoryToken) return memoryToken;
+    try {
+      if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.getSecureSecret) {
+        const res = await window.Capacitor.Plugins.PosNativeHardware.getSecureSecret({ key: TOKEN_KEY });
+        if (res?.value) {
+          memoryToken = String(res.value);
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(TOKEN_KEY, memoryToken);
+          }
+          return memoryToken;
+        }
+      }
+    } catch (err) {
+      console.warn('[SecureStorage] Error restaurando token desde Android Keystore:', err?.message);
+    }
+    return null;
+  },
+
   setToken: (token) => {
     const normalized = token ? String(token) : null;
     memoryToken = normalized;

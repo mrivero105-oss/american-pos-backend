@@ -273,27 +273,16 @@ export const usePOSHandlers = ({
                                 return pObj.stockUnits;
                             };
 
-                            // A. Primary db store
-                            const prod = await db.getById('products', cleanProdId);
+                            // Actualizar stock en almacenamiento unificado (localDb delega a db, evitar doble descuento 2x)
+                            let prod = await db.getById('products', cleanProdId);
+                            if (!prod && !isNaN(Number(cleanProdId)) && Number(cleanProdId) > 0) {
+                                prod = await db.getById('products', Number(cleanProdId));
+                            }
                             if (prod) {
                                 const currentStock = Number(prod.stockQuantity) || 0;
                                 const newStock = Math.max(0, currentStock - unitsToDeduct);
                                 const newUnits = computeNextUnits(prod, currentStock, newStock);
                                 await db.put('products', { ...prod, stockQuantity: newStock, stockUnits: newUnits });
-                            }
-
-                            // B. Dexie localDb store
-                            if (localDb && localDb.products) {
-                                let dexProd = await localDb.products.get(cleanProdId);
-                                if (!dexProd && !isNaN(Number(cleanProdId)) && Number(cleanProdId) > 0) {
-                                    dexProd = await localDb.products.get(Number(cleanProdId));
-                                }
-                                if (dexProd) {
-                                    const curDexStock = Number(dexProd.stockQuantity) || 0;
-                                    const newDexStock = Math.max(0, curDexStock - unitsToDeduct);
-                                    const newDexUnits = computeNextUnits(dexProd, curDexStock, newDexStock);
-                                    await localDb.products.update(dexProd.id, { stockQuantity: newDexStock, stockUnits: newDexUnits });
-                                }
                             }
                         }
                     }
