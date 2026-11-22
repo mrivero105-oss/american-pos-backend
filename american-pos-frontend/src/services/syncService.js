@@ -937,4 +937,5 @@ export const syncService = {
     }
 };
 
+export { persistCollectionAtomically, getPendingOfflineStockDeductions };
 export default syncService;

@@ -174,6 +174,12 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  if (uiProductId && adminToken && testPort) {
+    await fetch(`http://localhost:${testPort}/products/${uiProductId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }).catch(() => {});
+  }
   if (srvHandle && typeof srvHandle.stopServer === 'function') {
     await srvHandle.stopServer({ closeDb: false });
   }
@@ -275,8 +281,12 @@ async function loginViaUi(page, baseUrl, username, password, { preLoginHttpError
   await page.waitForURL(/#\/pos/, { timeout: 20_000 });
 
   if (dismissCash) {
-    await expect(page.getByText(uiProductName)).toBeVisible({ timeout: 20_000 });
     await dismissCashModalIfNeeded(page);
+    const searchInput = page.locator('input[data-pos-search="true"]');
+    await expect(searchInput).toBeVisible({ timeout: 20_000 });
+    await searchInput.fill(uiProductName);
+    await expect(page.getByText(uiProductName)).toBeVisible({ timeout: 20_000 });
+    await searchInput.fill('');
   }
 }
 

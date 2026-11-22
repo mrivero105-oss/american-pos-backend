@@ -90,6 +90,10 @@ cloud_license_config.json
 cloud_license_server/node-server/data/
 *.pfx
 *.p12
+*.jks
+*.keystore
+keystore.properties
+**/keystore.properties
 *.key
 *private*.pem
 

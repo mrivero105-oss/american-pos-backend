@@ -207,14 +207,9 @@ Responde ÚNICAMENTE con un objeto JSON válido con esta estructura exacta (usa 
 
         let result;
         const modelsToTry = [
-            'gemini-3.1-flash-lite',
-            'gemini-3.5-flash-lite',
-            'gemini-3-flash-preview',
-            'gemini-3.6-flash',
-            'gemini-flash-lite-latest',
-            'gemini-3.7-flash',
-            'gemini-3.5-flash',
-            'gemini-3.8-flash'
+            process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',
+            'gemini-2.0-flash'
         ];
         let lastErr = null;
 
@@ -439,14 +434,9 @@ Responde ÚNICAMENTE con un objeto JSON válido con este formato:
         ];
 
         const modelsToTry = [
-            'gemini-3.1-flash-lite',
-            'gemini-3.5-flash-lite',
-            'gemini-3-flash-preview',
-            'gemini-3.6-flash',
-            'gemini-flash-lite-latest',
-            'gemini-3.7-flash',
-            'gemini-3.5-flash',
-            'gemini-3.8-flash'
+            process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',
+            'gemini-2.0-flash'
         ];
         let rawText = '';
         for (const modelName of modelsToTry) {
@@ -649,14 +639,9 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
         ];
 
         const modelsToTry = [
-            'gemini-3.1-flash-lite',
-            'gemini-3.5-flash-lite',
-            'gemini-3-flash-preview',
-            'gemini-3.6-flash',
-            'gemini-flash-lite-latest',
-            'gemini-3.7-flash',
-            'gemini-3.5-flash',
-            'gemini-3.8-flash'
+            process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',
+            'gemini-2.0-flash'
         ];
         let rawText = '';
         for (const modelName of modelsToTry) {

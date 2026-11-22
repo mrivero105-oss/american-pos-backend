@@ -186,7 +186,7 @@ class AIService {
 
         try {
             this.genAI = new GoogleGenerativeAI(apiKey);
-            this.modelName = "gemini-3.1-flash-lite"; 
+            this.modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
             this.model = this.genAI.getGenerativeModel({ model: this.modelName });
             this.initialized = true;
             console.log(`[ISAAC AI] Cerebro Master configurado: ${this.modelName}`);
@@ -211,23 +211,38 @@ class AIService {
 
         let systemPrompt = 'Eres Isaac AI 2.0, asistente estrella del comercio.';
         try {
-            // RECOPILAR CONTEXTO EXPANDIDO CON CACHÉ
-            const [dashboard, inventory, allProducts] = await Promise.all([
+            // RECOPILAR CONTEXTO ACOTADO CON CACHÉ (nunca volcar catálogos masivos sin límite al prompt)
+            const queryTokens = String(userQuery || '')
+                .toLowerCase()
+                .split(/\s+/)
+                .map((w) => w.replace(/[^a-z0-9áéíóúñ]/gi, ''))
+                .filter((w) => w.length >= 3)
+                .slice(0, 6);
+
+            const [dashboard, inventory, relevantProducts] = await Promise.all([
                 ReportService.getDashboardSummary(reqUser, { range: 'today' }),
                 this._getCachedCatalog(companyId, 'stock_limit_200', {
                     where: { companyId, stockQuantity: { [Op.gt]: 0 } },
                     attributes: ['name', 'price', 'barcode', 'category'],
                     limit: 200
                 }),
-                this._getCachedCatalog(companyId, 'names_only', {
-                    where: { companyId },
-                    attributes: ['name'],
-                    raw: true
-                })
+                queryTokens.length > 0
+                    ? Product.findAll({
+                        where: {
+                            companyId,
+                            [Op.or]: queryTokens.map((tok) => ({ name: { [Op.iLike]: `%${tok}%` } }))
+                        },
+                        attributes: ['name', 'price'],
+                        limit: 100,
+                        raw: true
+                    })
+                    : Promise.resolve([])
             ]);
 
-            const productList = inventory.map(p => `${p.name} ($${p.price})`).join('\n');
-            const allNames = allProducts.map(p => p.name).join('\n');
+            const uniqueNames = new Set();
+            relevantProducts.forEach((p) => { if (p?.name) uniqueNames.add(`${p.name} ($${Number(p.price || 0).toFixed(2)})`); });
+            inventory.forEach((p) => { if (p?.name && uniqueNames.size < 250) uniqueNames.add(`${p.name} ($${Number(p.price || 0).toFixed(2)})`); });
+            const allNames = Array.from(uniqueNames).join('\n');
             const cartItems = cartContext.items ? cartContext.items.map(i => `${i.name} (x${i.qty})`).join(', ') : 'Vacío';
             const cartTotal = cartContext.total || 0;
             const now = new Date().toLocaleString('es-VE');
@@ -307,7 +322,7 @@ SINTAXIS TÉCNICA:
             console.error("[ISAAC AI] Error en consulta:", error.message);
 
             // EMERGENCY FALLBACK TO ENSURE CONTINUITY WITH FULL CONTEXT
-            const fallbackModels = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3-flash-preview", "gemini-flash-lite-latest", "gemini-3.5-flash", "gemini-3.8-flash"];
+            const fallbackModels = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"];
             for (const fbModel of fallbackModels) {
                 if (this.modelName === fbModel) continue;
                 console.log(`[ISAAC AI] Intentando rescate con modelo ${fbModel} manteniendo contexto...`);
@@ -1581,7 +1596,7 @@ ${matchedCatalogText || 'Ningún producto filtrado por texto previo.'}
 `;
 
                 const specificModel = this.genAI.getGenerativeModel({
-                    model: "gemini-3.5-flash-lite",
+                    model: this.modelName || process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
                     systemInstruction: systemPrompt
                 });
 

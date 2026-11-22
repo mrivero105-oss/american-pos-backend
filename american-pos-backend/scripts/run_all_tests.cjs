@@ -98,6 +98,12 @@ const steps = [
     cmd: 'node',
     args: ['--test', 'tests/test_online_licensing.test.mjs'],
   },
+  {
+    name: '[BE+GW] Hardening 10/10 Suite (RCE, SSRF, Zod v4, Zero-Trust, Arqueo, Audit HMAC, Variantes, Licencias)',
+    cwd: backendDir,
+    cmd: 'node',
+    args: ['--test', 'tests/test_hardening_10_of_10.test.mjs'],
+  },
 ];
 
 if (!skipSlowE2E) {

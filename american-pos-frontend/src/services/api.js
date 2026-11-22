@@ -11,17 +11,17 @@ export const PosNativeHardware = (typeof window !== 'undefined' && window.__posN
         return plugin;
     })();
 
-// Helper to ensure URL has port (defaults to 3005) while preserving explicit https://
+// Helper to ensure URL has port (defaults to 3005 for plain http/IP) while preserving explicit https:// (default 443)
 export const formatServerUrl = (input) => {
     if (!input || !input.trim()) return '';
-    let clean = input.trim().replace(/:517[34]/, '');
+    let clean = input.trim().replace(/:517[34]/, '').replace(/\/+$/, '');
     const isHttps = clean.toLowerCase().startsWith('https://');
     const protocol = isHttps ? 'https://' : 'http://';
     const hasProtocol = clean.toLowerCase().startsWith('http://') || isHttps;
     const urlWithoutProto = hasProtocol ? clean.replace(/^https?:\/\//i, '') : clean;
     const hasPort = urlWithoutProto.includes(':');
-    const finalHost = hasPort ? urlWithoutProto : `${urlWithoutProto}:3005`;
-    return `${protocol}${finalHost.replace(/\/$/, '')}`;
+    const finalHost = (hasPort || isHttps) ? urlWithoutProto : `${urlWithoutProto}:3005`;
+    return `${protocol}${finalHost.replace(/\/+$/, '')}`;
 };
 
 // Get base URL from localStorage (for mobile) or default to local/lan backend (for desktop/browser)

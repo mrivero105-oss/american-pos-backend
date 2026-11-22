@@ -442,7 +442,7 @@ const AuditPanel = () => {
             const link = document.createElement('a');
             link.setAttribute('href', encodedUri);
             const dateSuffix = new Date().toISOString().split('T')[0];
-            link.setAttribute('download', `Auditoria_American_POS_${dateSuffix}.csv`);
+            link.setAttribute('download', `Auditoria_Isaac_POS_${dateSuffix}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);

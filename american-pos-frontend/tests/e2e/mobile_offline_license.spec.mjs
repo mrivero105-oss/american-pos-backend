@@ -203,6 +203,12 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  if (uiProductId && adminToken && testPort) {
+    await fetch(`http://localhost:${testPort}/products/${uiProductId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }).catch(() => {});
+  }
   if (srvHandle && typeof srvHandle.stopServer === 'function') {
     await srvHandle.stopServer({ closeDb: false });
   }

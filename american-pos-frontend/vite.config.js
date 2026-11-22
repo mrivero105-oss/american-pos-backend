@@ -190,7 +190,7 @@ export default defineConfig(({ command }) => ({
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom', 'react-window']
+    include: ['react', 'react-dom', 'react-router-dom']
   },
   base: './'
 }));

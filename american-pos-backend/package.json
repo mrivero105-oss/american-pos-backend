@@ -33,7 +33,6 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "duck-duck-scrape": "^2.2.7",
     "electron-squirrel-startup": "^1.0.1",
     "electron-updater": "^6.8.11",
     "exceljs": "^4.4.0",

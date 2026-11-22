@@ -3,7 +3,7 @@
  * Strategy: Cache-First for App Shell & Static Assets, Network-First for APIs
  */
 
-const CACHE_NAME = 'isaac-pos-24.4.0.1795274638';
+const CACHE_NAME = 'isaac-pos-24.4.0.1795325914';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -20,12 +20,14 @@ self.addEventListener('install', (event) => {
   );
 });
 
+const PRESERVED_CACHES = new Set([CACHE_NAME, 'isaac-pos-img-v1']);
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME)
+          .filter((name) => !PRESERVED_CACHES.has(name))
           .map((name) => caches.delete(name))
       );
     })

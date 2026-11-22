@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, Suspense, lazy } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import { Routes, Route } from 'react-router-dom';
 import toast, { Toaster, ToastBar } from 'react-hot-toast';
@@ -11,7 +11,7 @@ import { useTheme } from './hooks/ThemeContext';
 import { otaUpdateService } from './services/otaUpdateService';
 import lanSyncService from './services/lanSyncService';
 
-import MobilePOSSimulator from './pages/MobilePOSSimulator';
+const MobilePOSSimulator = lazy(() => import('./pages/MobilePOSSimulator'));
 
 function AutoDismissToast({ toast: t }) {
   useEffect(() => {
@@ -109,6 +109,12 @@ export default function MobileApp() {
         lanSyncService.init();
       } catch (err) {
         console.warn('[MobileApp] Error al inicializar lanSyncService:', err);
+      }
+    } else {
+      try {
+        lanSyncService.stop();
+      } catch (err) {
+        console.warn('[MobileApp] Error al detener lanSyncService:', err);
       }
     }
   }, [user]);

@@ -47,9 +47,11 @@ jobs:
         run: node tests/test_unified_db.cjs
 
       - name: Build production web & mobile bundles (Chromium 108+)
-        run: npm run build
+        run: |
+          npm run build
+          npm run build:mobile
 
-      - name: Verify built entry chunk budget (< 350 KB)
+      - name: Verify built entry chunk budgets (< 350 KB desktop, < 400 KB mobile)
         run: |
           node -e "
             const fs = require('fs');
@@ -58,8 +60,15 @@ jobs:
             const entry = fs.readdirSync(assetsDir).find(f => /^index-.*\.js$/.test(f));
             if (!entry) throw new Error('Missing built index entry bundle');
             const sizeKb = fs.statSync(path.join(assetsDir, entry)).size / 1024;
-            console.log('Entry chunk:', entry, sizeKb.toFixed(2), 'KB');
-            if (sizeKb >= 350) throw new Error('Entry chunk exceeded 350 KB limit: ' + sizeKb.toFixed(2));
+            console.log('Desktop entry chunk:', entry, sizeKb.toFixed(2), 'KB');
+            if (sizeKb >= 350) throw new Error('Desktop entry chunk exceeded 350 KB limit: ' + sizeKb.toFixed(2));
+
+            const mobileAssets = path.resolve('dist-mobile/assets');
+            const mobileEntry = fs.readdirSync(mobileAssets).find(f => /^index-.*\.js$/.test(f));
+            if (!mobileEntry) throw new Error('Missing built mobile index entry bundle');
+            const mobileKb = fs.statSync(path.join(mobileAssets, mobileEntry)).size / 1024;
+            console.log('Mobile entry chunk:', mobileEntry, mobileKb.toFixed(2), 'KB');
+            if (mobileKb >= 400) throw new Error('Mobile entry chunk exceeded 400 KB limit: ' + mobileKb.toFixed(2));
           "
 
       - name: Upload built frontend dist artifact
@@ -141,12 +150,19 @@ jobs:
             tests/test_block4_offline_sync_and_resilience.test.mjs \
             tests/pos-integrity.test.mjs
 
-      - name: Run Real Express + PG16 + Socket.IO & Block 2 Security Hardening E2E
+      - name: Run Real Express + PG16 + Socket.IO, Security Hardening, Regressions & Online Licensing E2E
         working-directory: american-pos-backend
         run: |
+          node --check ../cloud_license_server/node-server/server.js
+          node --check ../cloud_license_server/node-server/licenseStore.js
           node --test \
             tests/test_e2e_api_and_socket.test.mjs \
-            tests/test_block2_security_hardening.test.mjs
+            tests/test_block2_security_hardening.test.mjs \
+            tests/test_audit_remediation_regressions.test.mjs \
+            tests/test_phase1_security_and_integrity.test.mjs \
+            tests/test_performance_999_pillars.test.mjs \
+            tests/test_online_licensing.test.mjs \
+            tests/test_hardening_10_of_10.test.mjs
 
   e2e-playwright:
     name: Full-Stack Real Browser E2E (Playwright + PG16)

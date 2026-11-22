@@ -767,7 +767,7 @@ module.exports = {
             const rawTolerance = userSettings.cashDifferenceToleranceUsd;
             const tolerance = (rawTolerance !== undefined && rawTolerance !== null && !isNaN(Number(rawTolerance))) ? Number(rawTolerance) : 1.0;
 
-            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
+            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'master', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
 
             if (Math.abs(diff) > tolerance && !isUserAdminOrSupervisor) {
                 const approvalIdToVerify = closingData.supervisorApprovalId || closingData.supervisorAuthToken;
@@ -1264,7 +1264,7 @@ module.exports = {
             const rawTolerance = userSettings.cashDifferenceToleranceUsd;
             const tolerance = (rawTolerance !== undefined && rawTolerance !== null && !isNaN(Number(rawTolerance))) ? Number(rawTolerance) : 1.0;
 
-            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
+            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'master', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
 
             // Normalizar todas las diferencias (efectivo y digitales) a USD para auditoría estricta
             const rateAtClosure = exchangeRate > 0 ? exchangeRate : 1.0;

@@ -35,6 +35,73 @@ function mobileEntrypointHtmlPlugin() {
   };
 }
 
+// Patch Tailwind v4 color-mix on custom CSS variables for older Android WebViews (Chromium 108+)
+function patchTailwindPrimaryOpacity(css) {
+  const regex = /@supports\s*\(color:color-mix\(in lab,red,red\)\)\{([^{}]+)\{([^{}]+)\}\}/g;
+  const items = [];
+  let m;
+  while ((m = regex.exec(css)) !== null) {
+    const fullBlock = m[0];
+    const sel = m[1].trim();
+    const decls = m[2].trim();
+    const primaryMatch = decls.match(/var\(--color-primary-(\d+)\)\s*(\d+)%/);
+    if (primaryMatch) {
+      const shade = primaryMatch[1];
+      const pct = parseInt(primaryMatch[2], 10);
+      const alpha = (pct / 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+      const propMatch = decls.match(/([a-z-]+)\s*:/);
+      if (propMatch) {
+        items.push({ fullBlock, sel, prop: propMatch[1], shade, alpha });
+      }
+    }
+  }
+
+  items.forEach((item) => {
+    const escapedSel = item.sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const ruleRegex = new RegExp('([^{}]*?' + escapedSel + '[^{}]*?)\\{([^{}]*?' + item.prop + '\\s*:\\s*var\\(--color-primary-' + item.shade + '\\)[^{}]*?)\\}');
+    const match = ruleRegex.exec(css);
+    if (match) {
+      const fullRule = match[0];
+      const selList = match[1];
+      const body = match[2];
+      const selectors = selList.split(',').map((s) => s.trim());
+      if (selectors.includes(item.sel)) {
+        const remaining = selectors.filter((s) => s !== item.sel);
+        const newRules = [];
+        if (remaining.length > 0) {
+          newRules.push(remaining.join(',') + '{' + body + '}');
+        }
+        const newBody = body.replace(
+          new RegExp(item.prop + '\\s*:\\s*var\\(--color-primary-' + item.shade + '\\)'),
+          item.prop + ':rgba(var(--app-primary-' + item.shade + '-rgb),' + item.alpha + ')'
+        );
+        newRules.push(item.sel + '{' + newBody + '}');
+        css = css.replace(fullRule, newRules.join(''));
+      }
+    }
+    css = css.replace(item.fullBlock, '');
+  });
+
+  return css;
+}
+
+function webViewColorFixPlugin() {
+  return {
+    name: 'mobile-webview-chromium-108-color-fix',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      for (const fileName in bundle) {
+        if (fileName.endsWith('.css')) {
+          const chunk = bundle[fileName];
+          if (chunk && chunk.source) {
+            chunk.source = patchTailwindPrimaryOpacity(chunk.source.toString());
+          }
+        }
+      }
+    }
+  };
+}
+
 export default defineConfig(({ command }) => ({
   ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
     ? {
@@ -47,7 +114,8 @@ export default defineConfig(({ command }) => ({
   plugins: [
     mobileEntrypointHtmlPlugin(),
     react(),
-    tailwindcss()
+    tailwindcss(),
+    webViewColorFixPlugin()
   ],
   resolve: {
     dedupe: ['react', 'react-dom'],
@@ -114,8 +182,13 @@ export default defineConfig(({ command }) => ({
           const rules = [
             ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/', '/node_modules/zustand/']],
             ['vendor-icons', ['/node_modules/lucide-react/']],
+            ['vendor-docs', ['/node_modules/jspdf/', '/node_modules/html2canvas-pro/']],
+            ['vendor-charts', ['/node_modules/recharts/']],
             ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
             ['vendor-zxing', ['/node_modules/@zxing/library/']],
+            ['vendor-realtime', ['/node_modules/socket.io-client/', '/node_modules/engine.io-client/', '/node_modules/socket.io-parser/']],
+            ['vendor-capacitor', ['/node_modules/@capacitor/core/', '/node_modules/@capacitor/clipboard/', '/node_modules/@capgo/capacitor-updater/']],
+            ['vendor-qr', ['/node_modules/qrcode/', '/node_modules/jsbarcode/']],
             ['vendor-utils', ['/node_modules/axios/', '/node_modules/date-fns/', '/node_modules/uuid/']]
           ];
           for (const [chunkName, patterns] of rules) {

@@ -385,9 +385,25 @@ const startServer = (ports, userDataPath = null) => {
                 next();
             });
 
-            // Middleware - Security Headers
+            // Middleware - Security Headers (CSP compatible con React/Vite/Tailwind/Socket.IO/Electron/LAN)
             app.use(helmet({
-                contentSecurityPolicy: false, // Disabled for Electron app compatibility
+                contentSecurityPolicy: {
+                    directives: {
+                        defaultSrc: ["'self'"],
+                        scriptSrc: ["'self'", "'unsafe-inline'"],
+                        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+                        fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+                        imgSrc: ["'self'", "data:", "blob:", "http:", "https:"],
+                        connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+                        mediaSrc: ["'self'", "data:", "blob:"],
+                        workerSrc: ["'self'", "blob:"],
+                        objectSrc: ["'none'"],
+                        baseUri: ["'self'"],
+                        formAction: ["'self'"],
+                        frameAncestors: ["'none'"],
+                        upgradeInsecureRequests: null
+                    }
+                },
                 crossOriginResourcePolicy: { policy: "cross-origin" },
                 crossOriginOpenerPolicy: false,
                 originAgentCluster: false,

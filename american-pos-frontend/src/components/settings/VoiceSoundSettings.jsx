@@ -9,12 +9,12 @@ export default function VoiceSoundSettings() {
     const { voiceEnabled, setVoiceEnabled } = useTheme();
 
     const [volume, setVolume] = useState(() => {
-        const saved = localStorage.getItem('american_pos_ai_volume') || localStorage.getItem('isaac_pos_ai_volume');
+        const saved = localStorage.getItem('isaac_pos_ai_volume') || localStorage.getItem('american_pos_ai_volume');
         return saved !== null ? Math.round(parseFloat(saved) * 100) : 100;
     });
 
     const [gender, setGender] = useState(() => {
-        return localStorage.getItem('american_pos_ai_gender') || localStorage.getItem('isaac_pos_ai_gender') || 'female';
+        return localStorage.getItem('isaac_pos_ai_gender') || localStorage.getItem('american_pos_ai_gender') || 'female';
     });
 
     const [soundsActive, setSoundsActive] = useState(() => !isSoundMuted());
@@ -34,14 +34,14 @@ export default function VoiceSoundSettings() {
         const val = parseInt(e.target.value, 10);
         setVolume(val);
         const floatVal = (val / 100).toFixed(2);
-        localStorage.setItem('american_pos_ai_volume', floatVal);
         localStorage.setItem('isaac_pos_ai_volume', floatVal);
+        localStorage.removeItem('american_pos_ai_volume');
     };
 
     const handleGenderChange = (newGender) => {
         setGender(newGender);
-        localStorage.setItem('american_pos_ai_gender', newGender);
         localStorage.setItem('isaac_pos_ai_gender', newGender);
+        localStorage.removeItem('american_pos_ai_gender');
         toast.success(`Tono de voz: ${newGender === 'female' ? 'Femenino' : 'Masculino'}`);
     };
 
