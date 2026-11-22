@@ -47,12 +47,105 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/**
+ * Normaliza un ítem de carrito o venta en espera (formato móvil `{ product, quantity }`
+ * o formato plano Desktop/servidor `{ id, productId, name, price, quantity }`)
+ * al contrato canónico `{ product: { id, name, price, ... }, quantity }` que espera Mobile POS.
+ */
+export const normalizeMobileCartItem = (rawItem, catalogLookup = null) => {
+  if (!rawItem || typeof rawItem !== 'object') return null;
+
+  const hasNestedProduct = rawItem.product && typeof rawItem.product === 'object';
+  const baseProd = hasNestedProduct ? rawItem.product : rawItem;
+
+  const rawId =
+    baseProd.id ??
+    baseProd.productId ??
+    baseProd.producto_id ??
+    rawItem.productId ??
+    rawItem.producto_id ??
+    rawItem.id;
+
+  if (rawId === undefined || rawId === null || String(rawId).trim() === '') {
+    return null;
+  }
+
+  const itemId = String(rawId).trim();
+  const cleanLookupId = itemId.replace(/__bulk$|__mid$|__pres_.*$/, '');
+  let catalogProd = null;
+  if (catalogLookup instanceof Map) {
+    catalogProd = catalogLookup.get(itemId) || catalogLookup.get(cleanLookupId) || null;
+  } else if (Array.isArray(catalogLookup)) {
+    catalogProd = catalogLookup.find((p) => p && (String(p.id) === itemId || String(p.id) === cleanLookupId)) || null;
+  }
+
+  const resolvedName =
+    baseProd.name ||
+    baseProd.nombre ||
+    rawItem.name ||
+    rawItem.nombre ||
+    rawItem.productName ||
+    catalogProd?.name ||
+    catalogProd?.nombre ||
+    'Artículo';
+
+  const resolvedPrice = Number(
+    baseProd.price ??
+    baseProd.precio ??
+    rawItem.price ??
+    rawItem.precio ??
+    rawItem.unitPrice ??
+    catalogProd?.price ??
+    catalogProd?.precio ??
+    0
+  );
+
+  const normalizedProduct = {
+    ...(catalogProd || {}),
+    ...baseProd,
+    id: itemId,
+    productId: String(baseProd.productId || rawItem.productId || catalogProd?.id || cleanLookupId),
+    name: resolvedName,
+    nombre: resolvedName,
+    price: Number.isFinite(resolvedPrice) ? resolvedPrice : 0
+  };
+
+  const qtyRaw = Number(rawItem.quantity ?? rawItem.qty ?? 1);
+  const quantity = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+
+  return {
+    ...(hasNestedProduct ? rawItem : {}),
+    product: normalizedProduct,
+    quantity
+  };
+};
+
+export const normalizeMobileCartItems = (items, catalogLookup = null) => {
+  if (!Array.isArray(items)) return [];
+  const normalized = [];
+  for (const item of items) {
+    const clean = normalizeMobileCartItem(item, catalogLookup);
+    if (clean) normalized.push(clean);
+  }
+  return normalized;
+};
+
+const normalizeHeldSalesList = (list) => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((s) => s && typeof s === 'object' && s.id)
+    .map((s) => ({
+      ...s,
+      items: normalizeMobileCartItems(s.items)
+    }));
+};
+
 const loadInitialCart = () => {
   try {
     const raw = localStorage.getItem(ACTIVE_CART_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeMobileCartItems(parsed);
   } catch {
     return [];
   }
@@ -63,7 +156,7 @@ const loadInitialHeldSales = () => {
     const raw = localStorage.getItem(HELD_SALES_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeHeldSalesList(parsed);
   } catch {
     return [];
   }
@@ -122,7 +215,7 @@ export const useMobilePosStore = create((set) => ({
   setCart: (updater) =>
     set((state) => {
       const nextCart = typeof updater === 'function' ? updater(state.cart) : updater;
-      const validCart = Array.isArray(nextCart) ? nextCart : [];
+      const validCart = normalizeMobileCartItems(nextCart);
       persistCartSafe(validCart);
       return { cart: validCart };
     }),
@@ -145,7 +238,7 @@ export const useMobilePosStore = create((set) => ({
   setHeldSales: (updater) =>
     set((state) => {
       const nextHeld = typeof updater === 'function' ? updater(state.heldSales) : updater;
-      const validHeld = Array.isArray(nextHeld) ? nextHeld : [];
+      const validHeld = normalizeHeldSalesList(nextHeld);
       persistHeldSalesSafe(validHeld);
       return { heldSales: validHeld };
     }),

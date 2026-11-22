@@ -43,7 +43,7 @@ import { getTerminalId } from '../utils/terminalIdentity';
 
 import biometricService from '../services/biometricService';
 import mobilePrinterService from '../services/mobilePrinterService';
-import { useMobilePosStore } from '../store/useMobilePosStore';
+import { useMobilePosStore, normalizeMobileCartItems } from '../store/useMobilePosStore';
 import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
 import ErrorBoundary from '../components/ErrorBoundary';
 
@@ -1908,7 +1908,8 @@ export default function MobilePOSSimulator() {
       updatedHeld = [currentSnapshot, ...updatedHeld];
     }
 
-    setCart(sale.items);
+    const normalizedRestoredItems = normalizeMobileCartItems(sale.items, productsMap);
+    setCart(normalizedRestoredItems);
     if (sale.customerName) setCustomerName(sale.customerName);
     if (sale.customerDoc) setCustomerDoc(sale.customerDoc);
     if (sale.customer) setSelectedCustomer(sale.customer);
@@ -2483,6 +2484,10 @@ export default function MobilePOSSimulator() {
       if (prev.length === 0) return prev;
       let changed = false;
       const next = prev.map(item => {
+        if (!item?.product?.id) {
+          changed = true;
+          return null;
+        }
         if (isUnlimitedStockProduct(item.product)) return item;
         const cleanId = getCleanProductId(item.product.productId || item.product.id);
         const latest = products.find(p => String(p.id) === cleanId);
@@ -3062,7 +3067,8 @@ export default function MobilePOSSimulator() {
 
   // Cálculos financieros con promociones
   const promoResult = useMemo(() => {
-    const flattenedItems = cart.map(item => ({
+    const safeCart = normalizeMobileCartItems(cart);
+    const flattenedItems = safeCart.map(item => ({
       ...item.product,
       id: item.product.id,
       name: item.product.name || item.product.nombre,
@@ -3083,13 +3089,14 @@ export default function MobilePOSSimulator() {
     totalBS,
     totalItemsCount
   } = useMemo(() => {
-    const rawSub = cart.reduce((acc, item) => acc + ((item.product.price || item.product.precio || 0) * item.quantity), 0);
+    const safeCart = normalizeMobileCartItems(cart);
+    const rawSub = safeCart.reduce((acc, item) => acc + ((item.product.price || item.product.precio || 0) * item.quantity), 0);
     const promoSavings = promoResult.totalPromoSavings || 0;
     const subBeforeDisc = promoResult.finalCartSubtotal ?? rawSub;
     const cartDisc = Number((subBeforeDisc * (cartDiscountPercent / 100)).toFixed(2));
     const subUSD = Math.max(0, subBeforeDisc - cartDisc);
 
-    const enriched = cart.map(item => {
+    const enriched = safeCart.map(item => {
       const promoItem = (promoResult.itemsWithPromotions || []).find(p => String(p.id) === String(item.product.id));
       return {
         ...item,

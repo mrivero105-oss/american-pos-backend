@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { formatServerUrl } from '../../src/services/api';
 import { persistCollectionAtomically, getPendingOfflineStockDeductions } from '../../src/services/syncService';
+import { useMobilePosStore, normalizeMobileCartItems } from '../../src/store/useMobilePosStore';
 import unifiedDb from '../../src/services/db';
 
 describe('Hardening 10/10 Frontend Regressions', () => {
@@ -72,5 +73,34 @@ describe('Hardening 10/10 Frontend Regressions', () => {
         });
         const deductions = await getPendingOfflineStockDeductions();
         expect(deductions.get('prod-X')).toBe(4);
+    });
+
+    it('normalizeMobileCartItems y useMobilePosStore normalizan ventas en espera planas del PC sin crashear leyendo product.id', () => {
+        const catalogMap = new Map([
+            ['p-100', { id: 'p-100', name: 'Harina PAN 1Kg', price: 1.5, stockQuantity: 40 }]
+        ]);
+        const mixedHeldItems = [
+            // Ítem plano (formato Desktop / remote-held-sales sin .product)
+            { id: 'p-100', name: 'Harina PAN 1Kg', price: 1.5, quantity: 3 },
+            // Ítem móvil ya anidado
+            { product: { id: 'p-200', name: 'Arroz Mary', price: 2.0 }, quantity: 2 },
+            // Basura corrupta / nula que no debe romper el render
+            null,
+            { quantity: 1 }
+        ];
+
+        const normalized = normalizeMobileCartItems(mixedHeldItems, catalogMap);
+        expect(normalized).toHaveLength(2);
+        expect(normalized[0].product.id).toBe('p-100');
+        expect(normalized[0].product.stockQuantity).toBe(40);
+        expect(normalized[0].quantity).toBe(3);
+        expect(normalized[1].product.id).toBe('p-200');
+        expect(normalized[1].quantity).toBe(2);
+
+        // setCart y setHeldSales en el store también deben sanitizar automáticamente
+        useMobilePosStore.getState().setCart(mixedHeldItems);
+        const stateCart = useMobilePosStore.getState().cart;
+        expect(stateCart).toHaveLength(2);
+        expect(stateCart.every((it) => it.product && it.product.id)).toBe(true);
     });
 });

@@ -84,17 +84,19 @@ export default function MobileTabletCartPanel({
                   </p>
                 </div>
               ) : (
-                enrichedCart.map(item => {
-                  const unlimited = isUnlimitedStockProduct(item.product);
+                enrichedCart.map((item, idx) => {
+                  const prod = item?.product;
+                  if (!prod || !prod.id) return null;
+                  const unlimited = isUnlimitedStockProduct(prod);
                   const latestProd = (!unlimited && Array.isArray(products))
-                    ? (products.find(p => String(p.id) === String(item.product.id)) || item.product)
-                    : item.product;
+                    ? (products.find(p => String(p.id) === String(prod.id)) || prod)
+                    : prod;
                   const itemMaxStock = unlimited ? Infinity : Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
                   const atMaxStock = !unlimited && item.quantity >= itemMaxStock;
 
                   return (
                     <div
-                      key={item.product.id}
+                      key={`${prod.id}-${idx}`}
                       className={`pos-ticket-item ${T.ticketItemBg} rounded-[6px] p-2.5 flex items-center justify-between gap-2 select-none`}
                     >
                       <div className="flex-1 min-w-0">

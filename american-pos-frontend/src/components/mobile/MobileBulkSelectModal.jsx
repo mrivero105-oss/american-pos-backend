@@ -31,8 +31,9 @@ export default function MobileBulkSelectModal({
   T = {}
 }) {
   const [selectedType, setSelectedType] = useState(() => {
-    if (Array.isArray(product?.Presentations) && product.Presentations.length > 0) {
-      return `pres_${product.Presentations[0].id}`;
+    const firstPres = Array.isArray(product?.Presentations) ? product.Presentations.find((p) => p && p.id) : null;
+    if (firstPres) {
+      return `pres_${firstPres.id}`;
     }
     if (Number(product?.unitsPerBulk) > 1) return 'bulk';
     if (Number(product?.unitsPerMidBulk) > 0) return 'mid';
@@ -42,8 +43,9 @@ export default function MobileBulkSelectModal({
 
   useEffect(() => {
     if (product) {
-      if (Array.isArray(product.Presentations) && product.Presentations.length > 0) {
-        setSelectedType(`pres_${product.Presentations[0].id}`);
+      const firstPres = Array.isArray(product.Presentations) ? product.Presentations.find((p) => p && p.id) : null;
+      if (firstPres) {
+        setSelectedType(`pres_${firstPres.id}`);
       } else if (Number(product.unitsPerBulk) > 1) {
         setSelectedType('bulk');
       } else if (Number(product.unitsPerMidBulk) > 0) {

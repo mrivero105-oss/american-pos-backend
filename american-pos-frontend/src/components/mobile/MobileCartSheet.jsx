@@ -229,16 +229,18 @@ export default function MobileCartSheet({
                     </div>
                   </div>
                 ) : (
-                  enrichedCart.map(item => {
-                    const unlimited = isUnlimitedStockProduct(item.product);
+                  enrichedCart.map((item, idx) => {
+                    const prod = item?.product;
+                    if (!prod || !prod.id) return null;
+                    const unlimited = isUnlimitedStockProduct(prod);
                     const latestProd = (!unlimited)
-                      ? (productsMap ? (productsMap.get(String(item.product.id)) || item.product) : (Array.isArray(products) ? (products.find(p => String(p.id) === String(item.product.id)) || item.product) : item.product))
-                      : item.product;
+                      ? (productsMap ? (productsMap.get(String(prod.id)) || prod) : (Array.isArray(products) ? (products.find(p => String(p.id) === String(prod.id)) || prod) : prod))
+                      : prod;
                     const itemMaxStock = unlimited ? Infinity : Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
                     const atMaxStock = !unlimited && item.quantity >= itemMaxStock;
 
                     return (
-                    <div key={item.product.id} className="relative overflow-hidden rounded-[7px] group select-none">
+                    <div key={`${prod.id}-${idx}`} className="relative overflow-hidden rounded-[7px] group select-none">
                       {/* Fondo de Acción Roja que se revela al deslizar a la izquierda */}
                       <div 
                         className="absolute inset-y-0 right-0 w-24 bg-rose-600 flex items-center justify-center text-white cursor-pointer transition-colors active:bg-rose-700 select-none z-0"

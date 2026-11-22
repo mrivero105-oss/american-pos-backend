@@ -7,6 +7,7 @@ class ErrorBoundary extends React.Component {
         this.state = {
             hasError: false,
             error: null,
+            componentStack: '',
             prevResetKey: props.resetKey
         };
     }
@@ -16,6 +17,7 @@ class ErrorBoundary extends React.Component {
             return {
                 hasError: false,
                 error: null,
+                componentStack: '',
                 prevResetKey: nextProps.resetKey
             };
         }
@@ -28,6 +30,15 @@ class ErrorBoundary extends React.Component {
 
     componentDidCatch(error, errorInfo) {
         console.error(`UI Error captured by ErrorBoundary${this.props.moduleName ? ` [${this.props.moduleName}]` : ''}:`, error, errorInfo);
+        if (errorInfo?.componentStack) {
+            const shortStack = String(errorInfo.componentStack)
+                .split('\n')
+                .map((l) => l.trim())
+                .filter(Boolean)
+                .slice(0, 4)
+                .join('\n');
+            this.setState({ componentStack: shortStack });
+        }
 
         const errMsg = error?.message || '';
         const isChunkError = Boolean(
@@ -126,6 +137,7 @@ class ErrorBoundary extends React.Component {
                                 </summary>
                                 <p className="text-[10px] font-mono text-rose-600 dark:text-rose-400 break-all mt-2 font-bold whitespace-pre-wrap">
                                     {this.state.error?.toString()}
+                                    {this.state.componentStack ? `\n${this.state.componentStack}` : ''}
                                 </p>
                             </details>
                         )}
