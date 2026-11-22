@@ -4,6 +4,12 @@ const { Branch, User, BranchStock, Product, Sale, CashShift } = require('../data
 const { isAdmin, invalidateUserAuthCache } = require('../middleware/auth');
 const { generateRobustId } = require('../utils/helpers');
 const { Op } = require('sequelize');
+const validate = require('../middleware/validate');
+const {
+    createBranchSchema,
+    updateBranchSchema,
+    switchBranchSchema
+} = require('../schemas/branchesSchema');
 
 // Fetch all branches enriched with operational stats
 router.get('/', async (req, res) => {
@@ -83,7 +89,7 @@ router.get('/', async (req, res) => {
 });
 
 // Create new branch
-router.post('/', isAdmin, async (req, res) => {
+router.post('/', isAdmin, validate(createBranchSchema), async (req, res) => {
     try {
         const companyId = req.user.companyId || 'default';
         const { isMain, name, address, phone, email, code, type, managerName, color, invoicePrefix, isActive } = req.body;
@@ -118,7 +124,7 @@ router.post('/', isAdmin, async (req, res) => {
 });
 
 // Update user active branch
-router.post('/switch', isAdmin, async (req, res) => {
+router.post('/switch', isAdmin, validate(switchBranchSchema), async (req, res) => {
     try {
         const { branchId } = req.body;
         const compId = req.user.companyId || '2';
@@ -143,7 +149,7 @@ router.post('/switch', isAdmin, async (req, res) => {
 });
 
 // Update branch
-router.put('/:id', isAdmin, async (req, res) => {
+router.put('/:id', isAdmin, validate(updateBranchSchema), async (req, res) => {
     try {
         const { id } = req.params;
         const compId = req.user.companyId || '2';

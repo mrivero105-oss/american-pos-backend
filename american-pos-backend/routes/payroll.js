@@ -4,6 +4,12 @@ const PayrollService = require('../services/PayrollService');
 const { Employee, PayrollPeriod, PayrollReceipt } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createEmployeeSchema,
+    updateEmployeeSchema,
+    createPeriodSchema
+} = require('../schemas/payrollSchema');
 
 router.use(requirePermission('canManagePayroll'));
 
@@ -22,7 +28,7 @@ router.get('/employees', async (req, res) => {
 });
 
 // Registrar nuevo empleado
-router.post('/employees', async (req, res) => {
+router.post('/employees', validate(createEmployeeSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const {
@@ -65,7 +71,7 @@ router.post('/employees', async (req, res) => {
 });
 
 // Actualizar empleado
-router.put('/employees/:id', async (req, res) => {
+router.put('/employees/:id', validate(updateEmployeeSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const { id } = req.params;
@@ -94,7 +100,7 @@ router.get('/periods', async (req, res) => {
 });
 
 // Crear nuevo período de nómina
-router.post('/periods', async (req, res) => {
+router.post('/periods', validate(createPeriodSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const { periodName, frequency, startDate, endDate, paymentDate, exchangeRate } = req.body;

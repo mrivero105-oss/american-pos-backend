@@ -4,6 +4,13 @@ const fiscalService = require('../services/FiscalService');
 const { FiscalBookRecord, TaxRetention, CreditNote } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createFiscalRecordSchema,
+    createRetentionSchema,
+    issueCreditNoteSchema,
+    fiscalActionSchema
+} = require('../schemas/fiscalSchema');
 
 router.use(requirePermission('canManageFiscal'));
 
@@ -53,7 +60,7 @@ router.get('/tax-summary', async (req, res) => {
 });
 
 // POST /records - Agregar registro manual al libro fiscal
-router.post('/records', async (req, res) => {
+router.post('/records', validate(createFiscalRecordSchema), async (req, res) => {
     try {
         const {
             bookType,
@@ -137,7 +144,7 @@ router.get('/retentions', async (req, res) => {
 });
 
 // POST /retentions - Emitir comprobante de retención
-router.post('/retentions', async (req, res) => {
+router.post('/retentions', validate(createRetentionSchema), async (req, res) => {
     try {
         const retention = await fiscalService.createTaxRetention(req.user.companyId, req.user.id, req.body);
         res.status(201).json(retention);
@@ -163,7 +170,7 @@ router.get('/credit-notes', async (req, res) => {
 });
 
 // POST /credit-notes - Emitir nueva Nota de Crédito (afecta inventario, deuda y libros fiscales)
-router.post('/credit-notes', async (req, res) => {
+router.post('/credit-notes', validate(issueCreditNoteSchema), async (req, res) => {
     try {
         const creditNote = await fiscalService.issueCreditNote(req.user.companyId, req.user.id, req.body);
         res.status(201).json(creditNote);
@@ -186,7 +193,7 @@ router.get('/devices', async (req, res) => {
 });
 
 // POST /action - Despachar comando fiscal (Reporte X, Reporte Z, Factura Fiscal, Cancelar)
-router.post('/action', async (req, res) => {
+router.post('/action', validate(fiscalActionSchema), async (req, res) => {
     try {
         const FiscalSpoolerService = require('../services/FiscalSpoolerService');
         const {

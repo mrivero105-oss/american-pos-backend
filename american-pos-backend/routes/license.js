@@ -8,6 +8,13 @@ const licenseUtils = require('../utils/licenseUtils');
 const { verifyToken, verifyJwtResilient, isMaster } = require('../middleware/auth');
 const { clearLicenseCache } = require('../middleware/licenseMiddleware');
 const OnlineLicenseService = require('../services/OnlineLicenseService');
+const validate = require('../middleware/validate');
+const {
+    activateLicenseSchema,
+    generateLicenseSchema,
+    syncOnlineLicenseSchema,
+    onlineConfigSchema
+} = require('../schemas/licenseSchema');
 const path = require('path');
 const fs = require('fs');
 
@@ -358,7 +365,7 @@ router.get('/status', async (req, res) => {
  * POST /license/activate
  * Activates a specific terminal with a key
  */
-router.post('/activate', activateLimiter, async (req, res) => {
+router.post('/activate', activateLimiter, validate(activateLicenseSchema), async (req, res) => {
     try {
         const { key } = req.body;
         if (!key || typeof key !== 'string' || !key.trim() || key.length > 4096) {
@@ -528,7 +535,7 @@ router.post('/activate', activateLimiter, async (req, res) => {
  * POST /license/generate
  * Generates a key (Master only)
  */
-router.post('/generate', verifyToken, isMaster, async (req, res) => {
+router.post('/generate', verifyToken, isMaster, validate(generateLicenseSchema), async (req, res) => {
     try {
         const { machineId, days, duration, unit = 'days' } = req.body;
         if (!machineId) return res.status(400).json({ error: 'Machine ID requerido' });
@@ -568,7 +575,7 @@ router.post('/generate', verifyToken, isMaster, async (req, res) => {
  * POST /license/test-generate
  * Master-only key generation (same protection as /generate)
  */
-router.post('/test-generate', verifyToken, isMaster, async (req, res) => {
+router.post('/test-generate', verifyToken, isMaster, validate(generateLicenseSchema), async (req, res) => {
     if (process.env.NODE_ENV === 'production') {
         return res.status(404).json({ error: 'Ruta no disponible en producción' });
     }
@@ -639,7 +646,7 @@ router.delete('/cleanup', verifyToken, isMaster, async (req, res) => {
  * POST /license/sync-online
  * Forces an immediate heartbeat check against the configured remote License Gateway.
  */
-router.post('/sync-online', activateLimiter, async (req, res) => {
+router.post('/sync-online', activateLimiter, validate(syncOnlineLicenseSchema), async (req, res) => {
     try {
         const serverMachineId = await licenseUtils.getMachineId();
         const rawTerminalId = req.body?.machineId || req.query?.terminalId || req.headers['x-terminal-id'] || serverMachineId;
@@ -709,7 +716,7 @@ router.get('/online-config', verifyToken, isMaster, async (req, res) => {
  * POST /license/online-config
  * Saves remote License Gateway URL in local config (Master only)
  */
-router.post('/online-config', verifyToken, isMaster, async (req, res) => {
+router.post('/online-config', verifyToken, isMaster, validate(onlineConfigSchema), async (req, res) => {
     try {
         const rawUrl = typeof req.body?.gatewayUrl === 'string' ? req.body.gatewayUrl.trim() : '';
         const lockedGateway = String(process.env.LOCKED_LICENSE_GATEWAY_URL || '').trim();

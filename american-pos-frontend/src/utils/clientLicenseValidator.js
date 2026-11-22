@@ -43,8 +43,8 @@ function base64ToUint8Array(base64Str) {
     return bytes;
 }
 
-function getSpkiBytes() {
-    const pemBody = String(PUBLIC_RSA_KEY_PEM || '')
+function getSpkiBytes(publicKeyPem = PUBLIC_RSA_KEY_PEM) {
+    const pemBody = String(publicKeyPem || '')
         .replace(/-----BEGIN PUBLIC KEY-----/g, '')
         .replace(/-----END PUBLIC KEY-----/g, '')
         .replace(/\s+/g, '');
@@ -199,9 +199,10 @@ function sha256Bytes(bytes) {
     return digest;
 }
 
-function getParsedRsaPublicKey() {
-    if (cachedParsedRsaKey) return cachedParsedRsaKey;
-    const spki = getSpkiBytes();
+function parseRsaPublicKey(publicKeyPem = PUBLIC_RSA_KEY_PEM) {
+    const isDefaultKey = publicKeyPem === PUBLIC_RSA_KEY_PEM;
+    if (isDefaultKey && cachedParsedRsaKey) return cachedParsedRsaKey;
+    const spki = getSpkiBytes(publicKeyPem);
     const outerSeq = readDerTlv(spki, 0);
     if (outerSeq.tag !== 0x30) throw new Error('SPKI raíz no es SEQUENCE.');
 
@@ -234,13 +235,49 @@ function getParsedRsaPublicKey() {
         throw new Error('Parámetros de clave pública RSA inválidos.');
     }
 
-    cachedParsedRsaKey = { n, e, k: modulusByteLength };
-    return cachedParsedRsaKey;
+    const parsed = { n, e, k: modulusByteLength };
+    if (isDefaultKey) {
+        cachedParsedRsaKey = parsed;
+    }
+    return parsed;
 }
 
-function verifyRsaSha256PureJs(payload, base64Signature) {
+function toUint8Array(input) {
+    if (input instanceof Uint8Array) return input;
+    if (input instanceof ArrayBuffer) return new Uint8Array(input);
+    if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    if (typeof input === 'string') return new TextEncoder().encode(input);
+    throw new Error('Entrada binaria inválida.');
+}
+
+function bytesToHex(bytes) {
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+        hex += bytes[i].toString(16).padStart(2, '0');
+    }
+    return hex;
+}
+
+/**
+ * Calcula SHA-256 en hexadecimal minúscula usando WebCrypto cuando está disponible
+ * o el motor JS puro determinista como fallback (HTTP LAN / WebView).
+ */
+export async function computeSha256Hex(input) {
+    const bytes = toUint8Array(input);
+    if (typeof window !== 'undefined' && window.crypto?.subtle) {
+        try {
+            const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+            return bytesToHex(new Uint8Array(digest));
+        } catch (_) {
+            // Fallback JS puro
+        }
+    }
+    return bytesToHex(sha256Bytes(bytes));
+}
+
+function verifyRsaSha256BytesPureJs(bytes, base64Signature, publicKeyPem = PUBLIC_RSA_KEY_PEM) {
     try {
-        const { n, e, k } = getParsedRsaPublicKey();
+        const { n, e, k } = parseRsaPublicKey(publicKeyPem);
         const sigBytes = base64ToUint8Array(base64Signature);
         if (sigBytes.length !== k) return false;
 
@@ -251,7 +288,7 @@ function verifyRsaSha256PureJs(payload, base64Signature) {
         const em = bigIntToFixedBytes(m, k);
         if (!em) return false;
 
-        const hash = sha256Bytes(new TextEncoder().encode(payload));
+        const hash = sha256Bytes(bytes);
         const tLen = SHA256_DIGEST_INFO_PREFIX.length + hash.length;
         const psLen = k - tLen - 3;
         if (psLen < 8) return false;
@@ -274,34 +311,44 @@ function verifyRsaSha256PureJs(payload, base64Signature) {
     }
 }
 
-async function getRsaPublicKey() {
-    if (cachedRsaPublicKey) return cachedRsaPublicKey;
+async function getRsaPublicKey(publicKeyPem = PUBLIC_RSA_KEY_PEM) {
+    const isDefaultKey = publicKeyPem === PUBLIC_RSA_KEY_PEM;
+    if (isDefaultKey && cachedRsaPublicKey) return cachedRsaPublicKey;
     if (typeof window === 'undefined' || !window.crypto?.subtle) {
         throw new Error('WebCrypto API no disponible en este entorno.');
     }
-    const spkiBytes = getSpkiBytes();
-    cachedRsaPublicKey = await window.crypto.subtle.importKey(
+    const spkiBytes = getSpkiBytes(publicKeyPem);
+    const imported = await window.crypto.subtle.importKey(
         'spki',
         spkiBytes.buffer,
         { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
         false,
         ['verify']
     );
-    return cachedRsaPublicKey;
+    if (isDefaultKey) {
+        cachedRsaPublicKey = imported;
+    }
+    return imported;
 }
 
 /**
- * Verifica firma digital RSA-SHA256 (licencias v2) usando únicamente clave pública SPKI.
+ * Verifica firma digital RSA-SHA256 sobre bytes arbitrarios (licencias v2 o paquetes OTA dist.zip).
  * Usa WebCrypto nativo cuando está disponible y cae automáticamente a BigInt JS puro
  * en contextos HTTP no seguros (LAN) o WebViews Android sin crypto.subtle.
  */
-async function verifyRsaSha256Signature(payload, base64Signature) {
+export async function verifyRsaSha256Bytes(inputBytes, base64Signature, publicKeyPem = PUBLIC_RSA_KEY_PEM) {
     if (!base64Signature || typeof base64Signature !== 'string') return false;
+    let payloadBytes;
+    try {
+        payloadBytes = toUint8Array(inputBytes);
+    } catch (_) {
+        return false;
+    }
+
     if (typeof window !== 'undefined' && window.crypto?.subtle) {
         try {
-            const publicKey = await getRsaPublicKey();
+            const publicKey = await getRsaPublicKey(publicKeyPem);
             const sigBytes = base64ToUint8Array(base64Signature);
-            const payloadBytes = new TextEncoder().encode(payload);
             return await window.crypto.subtle.verify(
                 { name: 'RSASSA-PKCS1-v1_5' },
                 publicKey,
@@ -312,7 +359,11 @@ async function verifyRsaSha256Signature(payload, base64Signature) {
             // Fallback determinista en JS puro si WebCrypto falla o está restringido
         }
     }
-    return verifyRsaSha256PureJs(payload, base64Signature);
+    return verifyRsaSha256BytesPureJs(payloadBytes, base64Signature, publicKeyPem);
+}
+
+async function verifyRsaSha256Signature(payload, base64Signature) {
+    return verifyRsaSha256Bytes(new TextEncoder().encode(payload), base64Signature, PUBLIC_RSA_KEY_PEM);
 }
 
 /**

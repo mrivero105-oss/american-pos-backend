@@ -2,6 +2,12 @@ const express = require('express');
 const router = express.Router();
 const expenseService = require('../services/ExpenseService');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createExpenseSchema,
+    updateExpenseSchema,
+    syncExpensesSchema
+} = require('../schemas/expensesSchema');
 
 const emitExpensesChanged = (req, payload = {}) => {
     try {
@@ -44,7 +50,7 @@ router.get('/summary', requirePermission('canManageExpenses', 'canViewReports', 
 });
 
 // POST / - Create a new expense
-router.post('/', requirePermission('canManageExpenses'), async (req, res) => {
+router.post('/', requirePermission('canManageExpenses'), validate(createExpenseSchema), async (req, res) => {
     try {
         const { description, amount } = req.body;
         if (!description || !amount) {
@@ -61,7 +67,7 @@ router.post('/', requirePermission('canManageExpenses'), async (req, res) => {
 });
 
 // PUT /:id - Update an existing expense
-router.put('/:id', requirePermission('canManageExpenses'), async (req, res) => {
+router.put('/:id', requirePermission('canManageExpenses'), validate(updateExpenseSchema), async (req, res) => {
     try {
         const updated = await expenseService.updateExpense(req.user, req.params.id, req.body);
         if (updated) {
@@ -95,7 +101,7 @@ router.delete('/:id', requirePermission('canManageExpenses'), async (req, res) =
 /**
  * POST /public-sync - Sync local mobile expenses to server
  */
-router.post('/public-sync', require('../middleware/auth').verifyToken, requirePermission('canManageExpenses'), async (req, res) => {
+router.post('/public-sync', require('../middleware/auth').verifyToken, requirePermission('canManageExpenses'), validate(syncExpensesSchema), async (req, res) => {
     try {
         const { expenses } = req.body;
         if (!expenses) return res.status(400).json({ error: 'Data required' });

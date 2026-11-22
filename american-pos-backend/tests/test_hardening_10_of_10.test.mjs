@@ -578,4 +578,163 @@ test('Suite Integral de Hardening 10/10 (Seguridad, Finanzas, Licencias, Variant
         const pcAfterAllLogout = await fetch(`${posUrl}/products`, { headers: { Authorization: `Bearer ${pcData.token}` } });
         assert.equal(pcAfterAllLogout.status, 401, 'Logout allDevices debe revocar todos los equipos');
     });
+
+    await t.test('14. Validación Zod con .passthrough() en las 10 rutas financieras, fiscales y administrativas críticas', async () => {
+        // Reactivar una licencia limpia tras la prueba de suspensión del paso 10
+        const freshKey = licenseUtils.generateKeyV2(serverMachineId, 365, 'days', null, {
+            plan: 'ultra',
+            allowMobile: true
+        });
+        await License.update({ status: 'revoked' }, { where: { machineId: serverMachineId, status: { [require('sequelize').Op.in]: ['active', 'suspended'] } } });
+        const freshLic = await License.create({
+            id: `h10-zod-lic-${Date.now()}`,
+            machineId: serverMachineId,
+            licenseKey: freshKey,
+            activatedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+            status: 'active',
+            meta: { source: 'test_zod_14' }
+        });
+        cleanupIds.licenses.push(freshLic.id);
+        clearLicenseCache();
+
+        const loginRes = await fetch(`${posUrl}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: adminUser.username, password: pwd })
+        });
+        assert.equal(loginRes.status, 200);
+        const { token: zodToken } = await loginRes.json();
+        const headers = {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${zodToken}`
+        };
+
+        // 1) Rechazos 400 obligatorios en las 10 rutas ante payloads inválidos
+        const invalidCases = [
+            { path: '/accounting/accounts', body: { code: '', name: '' } },
+            { path: '/accounting/entries', body: { description: 'Solo 1 linea', lines: [{ accountCode: '1101', debit: 10 }] } },
+            { path: '/fiscal/records', body: { bookType: 'VENTAS', recordDate: '', documentNumber: '' } },
+            { path: '/fiscal/credit-notes', body: { totalAmount: -10 } },
+            { path: '/expenses', body: { description: 'Gasto invalido', amount: -50 } },
+            { path: '/payroll/employees', body: { idCard: '', firstName: 'SinCedula', lastName: '' } },
+            { path: '/branches', body: { name: '' } },
+            { path: '/license/activate', body: { key: '' } },
+            { path: '/lots', body: { productId: 'p1', lotNumber: 'L1', quantity: -5 } },
+            { path: '/collections/log', body: { customerId: '', promisedAmount: -1 } },
+            { path: '/delivery-notes', body: { items: [], total: 0 } },
+            { path: '/assets', body: { name: 'Equipo', purchaseDate: '2026-01-01', purchaseCost: 0 } },
+            { path: '/assets/depreciate', body: { period: '2026/11' } }
+        ];
+
+        for (const c of invalidCases) {
+            const res = await fetch(`${posUrl}${c.path}`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(c.body)
+            });
+            assert.equal(res.status, 400, `POST ${c.path} debía rechazar payload inválido con 400 (recibió ${res.status})`);
+            const data = await res.json();
+            assert.equal(data.error, 'Error de validación', `POST ${c.path} debía retornar error Zod`);
+        }
+
+        // 2) Aceptación 200/201 con campos extra (.passthrough()) para no romper apps móviles previas
+        const models = require('../database/models');
+        const createdIds = { expenses: [], branches: [], accounts: [], employees: [], assets: [], fiscalRecords: [] };
+        const suffix = Date.now().toString(36);
+        try {
+            const expRes = await fetch(`${posUrl}/expenses`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    description: `Gasto Zod Test ${suffix}`,
+                    amount: 12.5,
+                    currency: 'USD',
+                    legacyMobileExtraField: 'v24.3-compat'
+                })
+            });
+            assert.equal(expRes.status, 201, 'POST /expenses válido con campo extra debe aceptar 201');
+            const expJson = await expRes.json();
+            if (expJson?.id) createdIds.expenses.push(expJson.id);
+
+            const branchRes = await fetch(`${posUrl}/branches`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    name: `Sucursal Zod ${suffix}`,
+                    legacyAppFlag: true
+                })
+            });
+            assert.equal(branchRes.status, 201, 'POST /branches válido con campo extra debe aceptar 201');
+            const branchJson = await branchRes.json();
+            if (branchJson?.id) createdIds.branches.push(branchJson.id);
+
+            const accRes = await fetch(`${posUrl}/accounting/accounts`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    code: `9.9.${suffix.slice(-4)}`,
+                    name: `Cuenta Zod ${suffix}`,
+                    accountType: 'ASSET',
+                    legacyAppMeta: { origin: 'mobile' }
+                })
+            });
+            assert.equal(accRes.status, 200, 'POST /accounting/accounts válido con campo extra debe aceptar 200');
+            const accJson = await accRes.json();
+            if (accJson?.account?.id) createdIds.accounts.push(accJson.account.id);
+
+            const empRes = await fetch(`${posUrl}/payroll/employees`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    idCard: `V-99${suffix.slice(-5)}`,
+                    firstName: 'Ana',
+                    lastName: 'Prueba',
+                    baseSalary: 350,
+                    extraLegacyField: 'ok'
+                })
+            });
+            assert.equal(empRes.status, 200, 'POST /payroll/employees válido con campo extra debe aceptar 200');
+            const empJson = await empRes.json();
+            if (empJson?.employee?.id) createdIds.employees.push(empJson.employee.id);
+
+            const assetRes = await fetch(`${posUrl}/assets`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    name: `Impresora Fiscal Zod ${suffix}`,
+                    purchaseDate: '2026-11-22',
+                    purchaseCost: 420,
+                    legacyDeviceTag: 'caja-1'
+                })
+            });
+            assert.equal(assetRes.status, 200, 'POST /assets válido con campo extra debe aceptar 200');
+            const assetJson = await assetRes.json();
+            if (assetJson?.asset?.id) createdIds.assets.push(assetJson.asset.id);
+
+            const fiscalRes = await fetch(`${posUrl}/fiscal/records`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    bookType: 'VENTAS',
+                    recordDate: '2026-11-22',
+                    documentNumber: `FAC-${suffix}`,
+                    totalAmount: 116,
+                    taxableBase: 100,
+                    taxAmount: 16,
+                    legacyTerminalVersion: '24.3.0'
+                })
+            });
+            assert.equal(fiscalRes.status, 201, 'POST /fiscal/records válido con campo extra debe aceptar 201');
+            const fiscalJson = await fiscalRes.json();
+            if (fiscalJson?.id) createdIds.fiscalRecords.push(fiscalJson.id);
+        } finally {
+            if (createdIds.expenses.length && models.Expense) await models.Expense.destroy({ where: { id: createdIds.expenses } }).catch(() => {});
+            if (createdIds.branches.length && models.Branch) await models.Branch.destroy({ where: { id: createdIds.branches } }).catch(() => {});
+            if (createdIds.accounts.length && models.AccountCatalog) await models.AccountCatalog.destroy({ where: { id: createdIds.accounts } }).catch(() => {});
+            if (createdIds.employees.length && models.Employee) await models.Employee.destroy({ where: { id: createdIds.employees } }).catch(() => {});
+            if (createdIds.assets.length && models.FixedAsset) await models.FixedAsset.destroy({ where: { id: createdIds.assets } }).catch(() => {});
+            if (createdIds.fiscalRecords.length && models.FiscalBookRecord) await models.FiscalBookRecord.destroy({ where: { id: createdIds.fiscalRecords } }).catch(() => {});
+        }
+    });
 });

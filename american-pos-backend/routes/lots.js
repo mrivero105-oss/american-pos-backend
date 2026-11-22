@@ -2,6 +2,13 @@ const express = require('express');
 const router = express.Router();
 const BatchTraceabilityService = require('../services/BatchTraceabilityService');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createLotSchema,
+    updateLotSchema,
+    writeOffLotSchema,
+    lotPromoSchema
+} = require('../schemas/lotsSchema');
 
 router.use(requirePermission('canManageInventory'));
 
@@ -32,7 +39,7 @@ router.get('/:id/traceability', async (req, res) => {
 });
 
 // POST /lots - Crear un nuevo lote
-router.post('/', async (req, res) => {
+router.post('/', validate(createLotSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const lot = await BatchTraceabilityService.createOrUpdateLot(req.body, companyId);
@@ -44,7 +51,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /lots/:id - Actualizar un lote existente
-router.put('/:id', async (req, res) => {
+router.put('/:id', validate(updateLotSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const lot = await BatchTraceabilityService.createOrUpdateLot({ ...req.body, id: req.params.id }, companyId);
@@ -56,7 +63,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // POST /lots/:id/write-off - Dar de baja un lote por caducidad (Merma Sanitaria)
-router.post('/:id/write-off', async (req, res) => {
+router.post('/:id/write-off', validate(writeOffLotSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const userId = req.user?.id || null;
@@ -80,7 +87,7 @@ router.post('/:id/write-off', async (req, res) => {
 });
 
 // POST /lots/:id/send-to-promo - Liquidar lote próximo a vencer en Oferta
-router.post('/:id/send-to-promo', async (req, res) => {
+router.post('/:id/send-to-promo', validate(lotPromoSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const { discountPercentage = 20, promoDays = 15, customName = null } = req.body || {};

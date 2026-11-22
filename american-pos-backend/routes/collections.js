@@ -2,6 +2,11 @@ const express = require('express');
 const router = express.Router();
 const CollectionIntelligenceService = require('../services/CollectionIntelligenceService');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    toggleBlockSchema,
+    logCollectionActionSchema
+} = require('../schemas/collectionsSchema');
 
 router.use(requirePermission('canAccessCollections'));
 
@@ -18,7 +23,7 @@ router.get('/aging', async (req, res) => {
 });
 
 // Bloquear o rehabilitar línea de crédito de un cliente en el POS
-router.post('/toggle-block/:customerId', async (req, res) => {
+router.post('/toggle-block/:customerId', validate(toggleBlockSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const userId = req.user?.id || null;
@@ -67,7 +72,7 @@ router.get('/whatsapp-message/:customerId', async (req, res) => {
 });
 
 // Registrar gestión de cobranza o promesa de pago
-router.post('/log', async (req, res) => {
+router.post('/log', validate(logCollectionActionSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const userId = req.user?.id || null;
