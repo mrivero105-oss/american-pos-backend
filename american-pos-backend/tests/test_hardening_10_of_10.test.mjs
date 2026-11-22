@@ -531,4 +531,51 @@ test('Suite Integral de Hardening 10/10 (Seguridad, Finanzas, Licencias, Variant
         assert.equal(apkRes.status, 200, 'GET/HEAD /Isaac-POS-Mobile.apk debe responder 200 y no caer al HTML SPA');
         assert.match(apkRes.headers.get('content-type') || '', /vnd\.android\.package-archive/i);
     });
+
+    await t.test('13. Sesiones simultáneas PC + móvil para el mismo usuario con revocación individual por dispositivo', async () => {
+        const loginPc = await fetch(`${posUrl}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: adminUser.username, password: pwd })
+        });
+        assert.equal(loginPc.status, 200);
+        const pcData = await loginPc.json();
+
+        const loginMob = await fetch(`${posUrl}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: adminUser.username, password: pwd })
+        });
+        assert.equal(loginMob.status, 200);
+        const mobData = await loginMob.json();
+
+        // Ambos dispositivos deben seguir autenticados simultáneamente
+        const pcMe = await fetch(`${posUrl}/auth/me`, { headers: { Authorization: `Bearer ${pcData.token}` } });
+        const mobMe = await fetch(`${posUrl}/auth/me`, { headers: { Authorization: `Bearer ${mobData.token}` } });
+        assert.equal((await pcMe.json()).authenticated, true, 'PC debe seguir autenticado tras login del teléfono');
+        assert.equal((await mobMe.json()).authenticated, true, 'Teléfono debe estar autenticado simultáneamente');
+
+        // Cerrar sesión solo en el teléfono revoca al teléfono pero mantiene viva la sesión de la PC
+        const logoutMob = await fetch(`${posUrl}/auth/logout`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${mobData.token}` }
+        });
+        assert.equal(logoutMob.status, 200);
+
+        const mobAfterLogout = await fetch(`${posUrl}/products`, { headers: { Authorization: `Bearer ${mobData.token}` } });
+        assert.equal(mobAfterLogout.status, 401, 'Token del teléfono tras logout debe quedar revocado');
+
+        const pcAfterMobLogout = await fetch(`${posUrl}/auth/me`, { headers: { Authorization: `Bearer ${pcData.token}` } });
+        assert.equal((await pcAfterMobLogout.json()).authenticated, true, 'La PC debe seguir activa tras logout del teléfono');
+
+        // Cerrar en todos los dispositivos revoca también la PC
+        const logoutAll = await fetch(`${posUrl}/auth/logout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pcData.token}` },
+            body: JSON.stringify({ allDevices: true })
+        });
+        assert.equal(logoutAll.status, 200);
+        const pcAfterAllLogout = await fetch(`${posUrl}/products`, { headers: { Authorization: `Bearer ${pcData.token}` } });
+        assert.equal(pcAfterAllLogout.status, 401, 'Logout allDevices debe revocar todos los equipos');
+    });
 });

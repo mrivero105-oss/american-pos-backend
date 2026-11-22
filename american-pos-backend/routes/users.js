@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
         try {
             users = await User.findAll({
                 where: whereCondition,
-                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash'] }
+                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash', 'currentSessionId'] }
             });
         } catch (attrErr) {
             console.warn('[Get users] Full attributes query failed, falling back to core attributes:', attrErr.message);
@@ -268,6 +268,11 @@ router.put('/:id', validate(updateUserSchema), async (req, res) => {
             }
         }
 
+        if (allowedUpdates.password || (allowedUpdates.status && allowedUpdates.status !== 'active')) {
+            const { revokeSession } = require('../utils/sessionRegistry');
+            allowedUpdates.currentSessionId = revokeSession(null, null, { allDevices: true });
+        }
+
         const [updated] = await User.update(allowedUpdates, {
             where: { 
                 id, 
@@ -280,7 +285,7 @@ router.put('/:id', validate(updateUserSchema), async (req, res) => {
             invalidateUserAuthCache(id);
             const freshUser = await User.findOne({
                 where: { id, companyId: companyCondition },
-                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash'] }
+                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash', 'currentSessionId'] }
             });
             let userPermissions = freshUser?.permissions || {};
             if (typeof userPermissions === 'string') {

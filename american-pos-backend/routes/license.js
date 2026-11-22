@@ -54,7 +54,8 @@ async function resolveOptionalLicenseOperator(req) {
             attributes: ['id', 'role', 'status', 'companyId', 'currentSessionId', 'email']
         });
         if (!dbUser || dbUser.status !== 'active') return null;
-        if (dbUser.currentSessionId && (!decoded.sessionId || dbUser.currentSessionId !== decoded.sessionId)) {
+        const { isSessionValid } = require('../utils/sessionRegistry');
+        if (!isSessionValid(dbUser.currentSessionId, decoded.sessionId)) {
             return null;
         }
 

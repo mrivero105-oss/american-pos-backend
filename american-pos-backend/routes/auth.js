@@ -9,6 +9,7 @@ const { generateRobustId, safeSecretEqual } = require('../utils/helpers');
 const auditController = require('../controllers/audit');
 const { verifyLicense } = require('../middleware/licenseMiddleware');
 const { invalidateUserAuthCache } = require('../middleware/auth');
+const { generateSessionId, addSession, revokeSession, isSessionValid } = require('../utils/sessionRegistry');
 const validate = require('../middleware/validate');
 const {
     loginSchema,
@@ -195,14 +196,15 @@ router.post('/login', validate(loginSchema), async (req, res) => {
             }
 
             if (isMatch) {
-                // Reset failed attempts & generate new session ID
+                // Reset failed attempts & register concurrent session ID (permite PC + móvil simultáneos)
                 if (!isLoopback) ipFailedAttempts.delete(clientIp);
-                const sessionId = `SESS-${require('crypto').randomUUID()}`;
+                const sessionId = generateSessionId();
+                const updatedSessions = addSession(authenticatedUser.currentSessionId, sessionId);
                 try {
                     await authenticatedUser.update({
                         failedLoginAttempts: 0,
                         lockUntil: null,
-                        currentSessionId: sessionId
+                        currentSessionId: updatedSessions
                     });
                     invalidateUserAuthCache(authenticatedUser.id);
                 } catch (resetErr) {
@@ -372,8 +374,11 @@ router.post('/logout', async (req, res) => {
             }
             if (decoded && decoded.id) {
                 invalidateUserAuthCache(decoded.id);
+                const dbUser = await User.findByPk(decoded.id, { attributes: ['id', 'currentSessionId'] }).catch(() => null);
+                const allDevices = Boolean(req.body && req.body.allDevices);
+                const nextSessionState = revokeSession(dbUser?.currentSessionId, decoded.sessionId, { allDevices });
                 await User.update(
-                    { currentSessionId: `REVOKED_${crypto.randomUUID()}` },
+                    { currentSessionId: nextSessionState },
                     { where: { id: decoded.id } }
                 ).catch(() => {});
             }
@@ -420,11 +425,7 @@ router.get('/me', (req, res, next) => {
         }
         const dbSession = user.currentSessionId ? String(user.currentSessionId) : '';
         const tokenSession = req.user.sessionId ? String(req.user.sessionId) : '';
-        if (dbSession) {
-            if (dbSession.startsWith('REVOKED_') || tokenSession !== dbSession) {
-                return res.json({ authenticated: false, user: null });
-            }
-        } else if (tokenSession) {
+        if (!isSessionValid(dbSession, tokenSession)) {
             return res.json({ authenticated: false, user: null });
         }
 
@@ -863,14 +864,15 @@ router.post('/biometrics/login', async (req, res) => {
             return res.status(401).json({ error: errorMsg });
         }
 
-        // Éxito: Resetear intentos fallidos y crear sesión legítima
+        // Éxito: Resetear intentos fallidos y agregar sesión legítima concurrente
         if (!isLoopback) ipFailedAttempts.delete(clientIp);
-        const sessionId = `SESS-${crypto.randomUUID()}`;
+        const sessionId = generateSessionId();
+        const updatedSessions = addSession(user.currentSessionId, sessionId);
 
         await user.update({
             failedLoginAttempts: 0,
             lockUntil: null,
-            currentSessionId: sessionId
+            currentSessionId: updatedSessions
         }).catch(() => {});
         invalidateUserAuthCache(user.id);
 

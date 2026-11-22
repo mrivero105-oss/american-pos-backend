@@ -7,6 +7,7 @@ const {
     isCompanyOwnerRole,
     isCompanyAdminRole
 } = require('../constants/roles');
+const { isSessionValid } = require('../utils/sessionRegistry');
 
 // 🔒 SECURITY: Strict JWT_SECRET validation
 const FINAL_SECRET = process.env.JWT_SECRET;
@@ -115,14 +116,15 @@ const applyUserAuthContext = async (req, decoded) => {
         }
         const dbSession = cachedUser.currentSessionId ? String(cachedUser.currentSessionId) : '';
         const tokenSession = decoded.sessionId ? String(decoded.sessionId) : '';
-        if (dbSession) {
-            if (dbSession.startsWith('REVOKED_') || tokenSession !== dbSession) {
-                invalidateUserAuthCache(decoded.id);
-                return { ok: false, status: 401, error: 'Sesión revocada o expirada. Inicia sesión nuevamente.' };
-            }
-        } else if (tokenSession) {
+        if (!isSessionValid(dbSession, tokenSession)) {
             invalidateUserAuthCache(decoded.id);
-            return { ok: false, status: 401, error: 'Sesión inválida. Inicia sesión nuevamente.' };
+            return {
+                ok: false,
+                status: 401,
+                error: dbSession
+                    ? 'Sesión revocada o expirada. Inicia sesión nuevamente.'
+                    : 'Sesión inválida. Inicia sesión nuevamente.'
+            };
         }
         req.user.permissions = cachedUser.permissions;
         req.user.role = cachedUser.role;
@@ -766,14 +768,14 @@ const verifySocketJwtUser = async (decoded) => {
     }
     const dbSession = cachedUser.currentSessionId ? String(cachedUser.currentSessionId) : '';
     const tokenSession = decoded.sessionId ? String(decoded.sessionId) : '';
-    if (dbSession) {
-        if (dbSession.startsWith('REVOKED_') || tokenSession !== dbSession) {
-            invalidateUserAuthCache(decoded.id);
-            return { ok: false, error: 'Sesión WebSocket revocada o expirada' };
-        }
-    } else if (tokenSession) {
+    if (!isSessionValid(dbSession, tokenSession)) {
         invalidateUserAuthCache(decoded.id);
-        return { ok: false, error: 'Sesión WebSocket inválida' };
+        return {
+            ok: false,
+            error: dbSession
+                ? 'Sesión WebSocket revocada o expirada'
+                : 'Sesión WebSocket inválida'
+        };
     }
     return {
         ok: true,
