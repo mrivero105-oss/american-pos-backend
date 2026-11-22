@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Github, RefreshCw, Download, CheckCircle2, ArrowUpRight, Loader2, GitBranch, ShieldCheck, Terminal } from 'lucide-react';
+import { RefreshCw, Download, CheckCircle2, ArrowUpRight, Loader2, GitBranch, ShieldCheck, Terminal } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 
@@ -138,7 +138,7 @@ export default function GithubUpdaterSettings() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div className="flex items-center gap-3.5">
                     <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 border border-purple-100 dark:border-purple-900/30">
-                        <Github size={20} />
+                        <GitBranch size={20} />
                     </div>
                     <div>
                         <div className="flex items-center gap-2">

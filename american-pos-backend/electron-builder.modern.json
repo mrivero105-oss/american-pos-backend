@@ -3,7 +3,7 @@
   "productName": "Isaac POS",
   "electronVersion": "45.4.1",
   "electronFuses": {
-    "runAsNode": true,
+    "runAsNode": false,
     "enableCookieEncryption": true,
     "enableNodeOptionsEnvironmentVariable": false,
     "enableNodeCliInspectArguments": false,

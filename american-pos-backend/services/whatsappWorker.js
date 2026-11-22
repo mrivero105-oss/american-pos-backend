@@ -34,6 +34,12 @@ class WhatsappWorkerRuntime {
     }
 
     _sendIpc(payload) {
+        if (process.parentPort && typeof process.parentPort.postMessage === 'function') {
+            try {
+                process.parentPort.postMessage(payload);
+            } catch (_e) {}
+            return;
+        }
         if (typeof process.send === 'function' && process.connected !== false) {
             try {
                 process.send(payload);
@@ -734,7 +740,7 @@ class WhatsappWorkerRuntime {
 if (require.main === module) {
     const runtime = new WhatsappWorkerRuntime();
 
-    process.on('message', async (msg) => {
+    const handleParentMessage = async (msg) => {
         if (!msg || typeof msg !== 'object') return;
         const reply = (ok, data, error) => {
             if (msg.reqId !== undefined) {
@@ -788,12 +794,23 @@ if (require.main === module) {
         } catch (err) {
             reply(false, null, err?.message || String(err));
         }
-    });
+    };
 
-    process.on('disconnect', async () => {
+    const handleParentDisconnect = async () => {
         try { await runtime.shutdown(); } catch (_e) {}
         process.exit(0);
-    });
+    };
+
+    if (process.parentPort && typeof process.parentPort.on === 'function') {
+        process.parentPort.on('message', (event) => {
+            const payload = event && typeof event === 'object' && 'data' in event ? event.data : event;
+            handleParentMessage(payload);
+        });
+        process.parentPort.on('close', handleParentDisconnect);
+    } else {
+        process.on('message', handleParentMessage);
+        process.on('disconnect', handleParentDisconnect);
+    }
 
     runtime._sendIpc({ type: 'worker_ready' });
 }

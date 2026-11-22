@@ -43,15 +43,7 @@ app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication,Au
 app.commandLine.appendSwitch('disable-save-password-bubble');
 app.commandLine.appendSwitch('disable-single-click-autofill');
 
-// Handle Squirrel events for Windows only when Squirrel CLI flags are present (NSIS installers don't use them)
-if (process.platform === 'win32' && process.argv.some((arg) => /^--squirrel/i.test(String(arg)))) {
-    try {
-        if (require('electron-squirrel-startup')) {
-            app.quit();
-            process.exit(0);
-        }
-    } catch (e) { }
-}
+// Los instaladores Windows de Isaac POS usan NSIS (no Squirrel), por lo que no requiere electron-squirrel-startup.
 
 let mainWindow = null;
 let isQuittingAfterBackup = false;

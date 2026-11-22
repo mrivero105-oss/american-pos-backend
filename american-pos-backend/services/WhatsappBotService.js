@@ -374,14 +374,68 @@ class WhatsappBotService {
 
     async _spawnWorker(workerScriptPath) {
         this._activeWorkerScript = workerScriptPath;
-        const worker = fork(workerScriptPath, [], {
-            env: {
-                ...process.env,
-                ELECTRON_RUN_AS_NODE: '1'
-            },
-            execArgv: [],
-            stdio: ['ignore', 'inherit', 'inherit', 'ipc']
-        });
+        let worker = null;
+
+        if (process.versions && process.versions.electron) {
+            try {
+                const { utilityProcess } = require('electron');
+                if (utilityProcess && typeof utilityProcess.fork === 'function') {
+                    const rawUtility = utilityProcess.fork(workerScriptPath, [], {
+                        env: { ...process.env },
+                        stdio: 'inherit',
+                        serviceName: 'IsaacPOS-WhatsAppWorker'
+                    });
+                    let connected = true;
+                    let killed = false;
+                    let exitCode = null;
+                    rawUtility.once('exit', (code) => {
+                        connected = false;
+                        exitCode = typeof code === 'number' ? code : 0;
+                    });
+                    worker = {
+                        get connected() { return connected; },
+                        get killed() { return killed; },
+                        get exitCode() { return exitCode; },
+                        get pid() { return rawUtility.pid; },
+                        send(payload) {
+                            if (!connected) throw new Error('Canal IPC de utilityProcess cerrado');
+                            rawUtility.postMessage(payload);
+                        },
+                        kill() {
+                            killed = true;
+                            connected = false;
+                            return rawUtility.kill();
+                        },
+                        on(eventName, listener) {
+                            if (eventName === 'message') {
+                                rawUtility.on('message', listener);
+                            } else if (eventName === 'exit') {
+                                rawUtility.on('exit', (code) => listener(code, null));
+                            }
+                            return this;
+                        },
+                        once(eventName, listener) {
+                            if (eventName === 'exit') {
+                                rawUtility.once('exit', (code) => listener(code, null));
+                            } else if (eventName === 'error') {
+                                // Electron utilityProcess reporta fallos mediante 'exit'
+                            } else {
+                                rawUtility.once(eventName, listener);
+                            }
+                            return this;
+                        }
+                    };
+                }
+            } catch (_utilErr) {}
+        }
+
+        if (!worker) {
+            worker = fork(workerScriptPath, [], {
+                env: { ...process.env },
+                execArgv: [],
+                stdio: ['ignore', 'inherit', 'inherit', 'ipc']
+            });
+        }
         this._worker = worker;
 
         let readyResolved = false;

@@ -308,6 +308,7 @@ jobs:
               const wire = await fusesMod.getCurrentFuseWire(path.resolve('dist_modern/win-unpacked/Isaac POS.exe'));
               const { FuseV1Options, FuseState } = fusesMod;
               const checks = [
+                ['RunAsNode', FuseState.DISABLE],
                 ['EnableCookieEncryption', FuseState.ENABLE],
                 ['EnableNodeOptionsEnvironmentVariable', FuseState.DISABLE],
                 ['EnableNodeCliInspectArguments', FuseState.DISABLE],
