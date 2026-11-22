@@ -38,7 +38,7 @@ import MobilePOSBottomDock from '../components/mobile/MobilePOSBottomDock';
 import MobileTabletCartPanel from '../components/mobile/MobileTabletCartPanel';
 import MobileCartSheet from '../components/mobile/MobileCartSheet';
 import MobileSimulatorModals from '../components/mobile/MobileSimulatorModals';
-import { useVirtualCatalogGrid } from '../hooks/useVirtualCatalogGrid';
+import { useFuzzySearch } from '../hooks/useFuzzySearch';
 import { getTerminalId } from '../utils/terminalIdentity';
 
 import biometricService from '../services/biometricService';
@@ -2371,61 +2371,28 @@ export default function MobilePOSSimulator() {
     return out;
   }, [normalizedCategories, productFormData.category]);
 
-  // Índice en memoria pre-normalizado (sin acentos y en minúsculas) para búsqueda multi-token instantánea (< 1ms)
-  const searchableProductsIndex = useMemo(() => {
-    return products.map(p => {
-      const rawName = p.name || p.nombre || '';
-      const rawCat = (p.category || p.categoria || 'General').trim();
-      const rawBarcode = String(p.barcode || p.codigo_barras || '');
-      const rawSku = String(p.sku || p.code || '');
-      return {
-        product: p,
-        catLower: rawCat.toLowerCase(),
-        searchBlob: `${stripAccents(rawName)} ${rawBarcode.toLowerCase()} ${rawSku.toLowerCase()} ${stripAccents(rawCat)}`
-      };
-    });
-  }, [products]);
+  // Búsqueda off-main-thread con pre-indexado O(1) por categoría/barcode para 5.000+ SKUs
+  const isNoStockSelected = selectedCategory === '🚫 Productos sin stock' || selectedCategory.toLowerCase().includes('sin stock');
+  const workerCategory = (selectedCategory === 'Todos' || isNoStockSelected) ? '' : selectedCategory;
 
-  // Filtrado de Alto Rendimiento: insensible a acentos, multi-token y ordenado con fast-path
+  const fuzzyMobileProducts = useFuzzySearch(products, deferredSearchQuery, {
+    category: workerCategory,
+    maxResults: 1000,
+    enableSemantic: false
+  });
+
+  // Ordenar siempre priorizando disponibilidad: productos con stock primero y agotados al final
   const filteredProducts = useMemo(() => {
-    const qClean = stripAccents(deferredSearchQuery || '').trim();
-    const tokens = qClean ? qClean.split(/\s+/).filter(Boolean) : [];
-    const isAll = selectedCategory === 'Todos';
-    const isNoStockCat = selectedCategory === '🚫 Productos sin stock' || selectedCategory.toLowerCase().includes('sin stock');
-    const selectedClean = (isAll || isNoStockCat) ? '' : selectedCategory.trim().toLowerCase();
-
-    let list;
-    if (isAll && tokens.length === 0) {
-      list = products;
-    } else {
-      const matched = [];
-      for (let i = 0; i < searchableProductsIndex.length; i++) {
-        const entry = searchableProductsIndex[i];
-        const p = entry.product;
-        if (isNoStockCat) {
+    const baseList = isNoStockSelected
+      ? fuzzyMobileProducts.filter(p => {
           const st = Number(p.stockQuantity ?? p.stock ?? 0);
-          const isService = Boolean(p.isService || entry.catLower === 'servicios');
-          if (isService || st > 0) continue;
-        } else if (!isAll && entry.catLower !== selectedClean) {
-          continue;
-        }
-        if (tokens.length > 0) {
-          let allMatch = true;
-          for (let t = 0; t < tokens.length; t++) {
-            if (!entry.searchBlob.includes(tokens[t])) {
-              allMatch = false;
-              break;
-            }
-          }
-          if (!allMatch) continue;
-        }
-        matched.push(p);
-      }
-      list = matched;
-    }
+          const isService = Boolean(p.isService || String(p.category || p.categoria || '').trim().toLowerCase() === 'servicios');
+          return !isService && st <= 0;
+        })
+      : fuzzyMobileProducts;
 
-    // Ordenar siempre priorizando disponibilidad: productos con stock primero y agotados al final
-    return [...list].sort((a, b) => {
+    const hasQuery = Boolean(deferredSearchQuery && deferredSearchQuery.trim());
+    return [...baseList].sort((a, b) => {
       const isServiceA = Boolean(a.isService || String(a.category || a.categoria || '').trim().toLowerCase() === 'servicios');
       const isServiceB = Boolean(b.isService || String(b.category || b.categoria || '').trim().toLowerCase() === 'servicios');
       const stockA = Number(a.stockQuantity ?? a.stock ?? 0);
@@ -2436,11 +2403,12 @@ export default function MobilePOSSimulator() {
       if (outOfStockA !== outOfStockB) {
         return outOfStockA - outOfStockB;
       }
+      if (hasQuery) return 0;
       const nameA = (a.name || a.nombre || '').toLowerCase();
       const nameB = (b.name || b.nombre || '').toLowerCase();
       return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
     });
-  }, [products, searchableProductsIndex, selectedCategory, deferredSearchQuery]);
+  }, [fuzzyMobileProducts, isNoStockSelected, deferredSearchQuery]);
 
   // Reset de scroll al cambiar búsqueda o categoría
   useEffect(() => {
@@ -2448,21 +2416,6 @@ export default function MobilePOSSimulator() {
       catalogScrollRef.current.scrollTop = 0;
     }
   }, [selectedCategory, deferredSearchQuery]);
-
-  // Renderizado Progresivo Fluido: carga bloques automáticamente en scroll sin recortar productos
-  const {
-    visibleItems: virtualProducts,
-    columns: catalogColumns,
-    hasMore: catalogHasMore,
-    remainingCount: catalogRemainingCount,
-    handleScroll: handleCatalogScroll,
-    loadMore: loadMoreCatalogItems,
-    showAll: showAllCatalogItems
-  } = useVirtualCatalogGrid(filteredProducts, {
-    containerRef: catalogScrollRef,
-    initialBatchSize: 24,
-    batchIncrement: 20
-  });
 
   const cartRef = useRef(cart);
   cartRef.current = cart;
@@ -4329,7 +4282,6 @@ export default function MobilePOSSimulator() {
               toggleCatalogLayout={toggleCatalogLayout}
               catalogLayout={catalogLayout}
               catalogScrollRef={catalogScrollRef}
-              handleCatalogScroll={handleCatalogScroll}
               handleCatalogTouchStart={handleCatalogTouchStart}
               handleCatalogTouchMove={handleCatalogTouchMove}
               handleCatalogTouchEnd={handleCatalogTouchEnd}
@@ -4339,7 +4291,6 @@ export default function MobilePOSSimulator() {
               products={products}
               openCreateProduct={openCreateProduct}
               setIsManualItemModalOpen={setIsManualItemModalOpen}
-              virtualProducts={virtualProducts}
               cartCommittedUnitsMap={cartCommittedUnitsMap}
               exchangeRate={exchangeRate}
               businessMode={businessMode}
@@ -4350,11 +4301,6 @@ export default function MobilePOSSimulator() {
               handlePriceCheck={handlePriceCheck}
               openEditProduct={openEditProduct}
               handlePreviewImage={handlePreviewImage}
-              catalogColumns={catalogColumns}
-              catalogHasMore={catalogHasMore}
-              loadMoreCatalogItems={loadMoreCatalogItems}
-              catalogRemainingCount={catalogRemainingCount}
-              showAllCatalogItems={showAllCatalogItems}
             />
 
             <MobilePOSBottomDock

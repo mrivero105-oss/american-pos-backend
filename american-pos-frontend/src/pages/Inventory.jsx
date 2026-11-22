@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, memo, lazy, Suspense } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { db } from '../services/db';
@@ -38,9 +38,13 @@ import LabelModal from '../components/LabelModal';
 import BulkEditModal from '../components/BulkEditModal';
 import QuickStockAdjustModal from '../components/QuickStockAdjustModal';
 import WasteManagementModal from '../components/WasteManagementModal';
+import VirtualProductList, { VirtualProductTableBody } from '../components/common/VirtualProductList';
+import { useFuzzySearch } from '../hooks/useFuzzySearch';
 import { getImageUrl } from '../utils/imageUtils';
 import { formatMoney, fetchGlobalSettings, formatStock, isSingleCurrencyMode, isVesOnlyMode } from '../utils/format';
 import useScanner from '../hooks/useScanner';
+
+const INVENTORY_GRID_COLUMNS = { default: 2, sm: 3, md: 4, xl: 5 };
 
 // Custom debounce hook for search optimization
 function useDebounce(value, delay) {
@@ -57,10 +61,10 @@ function useDebounce(value, delay) {
 }
 
 // Componente de fila memoizado para la vista de tabla
-const ProductRow = memo(function ProductRow({ product, user, isSelected, onToggleSelect, onEdit, onDelete, onKardex, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl }) {
+const ProductRow = memo(function ProductRow({ product, user, isSelected, onToggleSelect, onEdit, onDelete, onKardex, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl, rowRef, dataIndex }) {
     const canEditProducts = ['superadmin', 'admin', 'supervisor', 'owner', 'dueño', 'master'].includes((user?.role || '').toLowerCase()) || user?.permissions?.canCreateProducts || user?.permissions?.canManageInventory;
     return (
-    <tr key={product.id} className="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors relative">
+    <tr ref={rowRef} data-index={dataIndex} className="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors relative">
         <td className="px-4 py-4 w-10">
             <input
                 type="checkbox"
@@ -515,6 +519,7 @@ export function InventoryList() {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const deferredSearchTerm = useDeferredValue(searchTerm);
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
     const [suppliers, setSuppliers] = useState([]);
     const [supplierFilter, setSupplierFilter] = useState('');
@@ -529,6 +534,7 @@ export function InventoryList() {
         return localStorage.getItem('inventory_view_mode') || 'list';
     });
     const tableSectionRef = useRef(null);
+    const desktopTableScrollRef = useRef(null);
 
     // Executive Valuation KPIs
     const [valuationLoaded, setValuationLoaded] = useState(false);
@@ -1321,6 +1327,33 @@ export function InventoryList() {
         }
     };
 
+    // Búsqueda instantánea off-main-thread sobre productos en memoria mientras llega la respuesta paginada del servidor
+    const fuzzyLoadedProducts = useFuzzySearch(products, deferredSearchTerm, {
+        category: categoryFilter,
+        maxResults: 1000,
+        enableSemantic: false
+    });
+
+    const displayedProducts = useMemo(() => {
+        const activeTerm = (searchTerm || '').trim();
+        const syncedTerm = (debouncedSearchTerm || '').trim();
+        if (activeTerm && activeTerm !== syncedTerm) {
+            return fuzzyLoadedProducts;
+        }
+        return products;
+    }, [searchTerm, debouncedSearchTerm, fuzzyLoadedProducts, products]);
+
+    const selectedIdsSet = useMemo(
+        () => new Set(selectedProducts.map(p => p.id)),
+        [selectedProducts]
+    );
+
+    const handleLoadMoreProducts = useCallback(() => {
+        if (!loading && hasMore) {
+            setPage(prev => prev + 1);
+        }
+    }, [loading, hasMore]);
+
     // Infinite scroll observer
     const sentinelRef = useRef(null);
     useEffect(() => {
@@ -1786,22 +1819,22 @@ export function InventoryList() {
                 </div>
             </div>
 
-            {/* Product List / Grid */}
+            {/* Product List / Grid (Virtualizado con @tanstack/react-virtual) */}
             <div ref={tableSectionRef} className="px-1 sm:px-2">
                 {viewMode === 'list' ? (
                     <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xs">
                         {/* Desktop Table View */}
-                        <div className="hidden md:block overflow-x-auto custom-scrollbar">
+                        <div ref={desktopTableScrollRef} className="hidden md:block max-h-[72vh] overflow-y-auto overflow-x-auto custom-scrollbar">
                             <table className="w-full text-left border-collapse">
-                                <thead>
-                                    <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-slate-50 dark:bg-slate-950/60">
+                                <thead className="sticky top-0 z-10">
+                                    <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-slate-50 dark:bg-slate-950/95">
                                         <th className="px-4 py-3.5 w-10">
                                             <input
                                                 type="checkbox"
-                                                checked={selectedProducts.length > 0 && selectedProducts.length === products.length}
+                                                checked={displayedProducts.length > 0 && selectedProducts.length === displayedProducts.length}
                                                 onChange={(e) => {
                                                     if (e.target.checked) {
-                                                        setSelectedProducts([...products]);
+                                                        setSelectedProducts([...displayedProducts]);
                                                     } else {
                                                         setSelectedProducts([]);
                                                     }
@@ -1817,8 +1850,8 @@ export function InventoryList() {
                                         <th className="px-6 py-3.5 text-center">Acciones</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                    {loading && products.length === 0 ? (
+                                {loading && displayedProducts.length === 0 ? (
+                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                                         <tr>
                                             <td colSpan="7" className="py-24 text-center">
                                                 <div className="inline-flex items-center gap-3 text-primary-500 font-black text-xs uppercase tracking-widest animate-pulse">
@@ -1827,7 +1860,9 @@ export function InventoryList() {
                                                 </div>
                                             </td>
                                         </tr>
-                                    ) : products.length === 0 ? (
+                                    </tbody>
+                                ) : displayedProducts.length === 0 ? (
+                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                                         <tr>
                                             <td colSpan="7" className="py-24 text-center">
                                                 <Package size={48} className="text-slate-300 dark:text-slate-700 mx-auto mb-3" />
@@ -1835,13 +1870,24 @@ export function InventoryList() {
                                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Intente modificando los filtros de búsqueda</p>
                                             </td>
                                         </tr>
-                                    ) : (
-                                        products.map((product) => (
+                                    </tbody>
+                                ) : (
+                                    <VirtualProductTableBody
+                                        items={displayedProducts}
+                                        colSpan={7}
+                                        scrollElementRef={desktopTableScrollRef}
+                                        estimateSize={78}
+                                        overscan={4}
+                                        onEndReached={handleLoadMoreProducts}
+                                        className="divide-y divide-slate-100 dark:divide-slate-800"
+                                        renderRow={(product, idx, measureRef) => (
                                             <ProductRow
                                                 key={product.id}
+                                                rowRef={measureRef}
+                                                dataIndex={idx}
                                                 product={product}
                                                 user={user}
-                                                isSelected={selectedProducts.some(p => p.id === product.id)}
+                                                isSelected={selectedIdsSet.has(product.id)}
                                                 onToggleSelect={handleToggleSelect}
                                                 onEdit={handleEditProduct}
                                                 onDelete={handleDeleteProduct}
@@ -1855,58 +1901,74 @@ export function InventoryList() {
                                                 getImageUrl={stableGetImageUrl}
                                                 currencyMode={settings.currencyMode}
                                             />
-                                        ))
-                                    )}
-                                </tbody>
+                                        )}
+                                    />
+                                )}
                             </table>
                         </div>
 
                         {/* Mobile Card List View */}
-                        <div className="md:hidden divide-y divide-slate-100 dark:divide-white/5 p-2 space-y-2.5">
-                            {loading && products.length === 0 ? (
+                        <div className="md:hidden p-2">
+                            {loading && displayedProducts.length === 0 ? (
                                 <div className="py-20 text-center">
                                     <div className="inline-flex items-center gap-2.5 text-primary-500 font-black text-xs uppercase tracking-widest animate-pulse">
                                         <div className="w-2 h-2 bg-primary-500 rounded-full animate-ping"></div>
                                         Indexando Inventario...
                                     </div>
                                 </div>
-                            ) : products.length === 0 ? (
+                            ) : displayedProducts.length === 0 ? (
                                 <div className="py-16 text-center">
                                     <Package size={40} className="text-slate-400 dark:text-slate-600 mx-auto mb-2" />
                                     <p className="text-xs font-black uppercase text-slate-700 dark:text-white">Sin productos</p>
                                 </div>
                             ) : (
-                                products.map((product) => (
-                                    <MobileProductCard
-                                        key={product.id}
-                                        product={product}
-                                        user={user}
-                                        isSelected={selectedProducts.some(p => p.id === product.id)}
-                                        onToggleSelect={handleToggleSelect}
-                                        onEdit={handleEditProduct}
-                                        onDelete={handleDeleteProduct}
-                                        onKardex={handleKardex}
-                                        onQuickAdjust={handleOpenQuickAdjust}
-                                        onGenerateIA={handleGenerateIAImage}
-                                        onPrintLabel={handlePrintSingleLabel}
-                                        isGeneratingIA={generatingIAId === product.id}
-                                        renderFormatMoney={stableRenderFormatMoney}
-                                        formatStock={stableFormatStock}
-                                        getImageUrl={stableGetImageUrl}
-                                        currencyMode={settings.currencyMode}
-                                    />
-                                ))
+                                <VirtualProductList
+                                    items={displayedProducts}
+                                    columns={1}
+                                    estimateSize={164}
+                                    gap={10}
+                                    overscan={4}
+                                    onEndReached={handleLoadMoreProducts}
+                                    className="max-h-[72vh] overflow-y-auto custom-scrollbar"
+                                    renderItem={(product) => (
+                                        <MobileProductCard
+                                            product={product}
+                                            user={user}
+                                            isSelected={selectedIdsSet.has(product.id)}
+                                            onToggleSelect={handleToggleSelect}
+                                            onEdit={handleEditProduct}
+                                            onDelete={handleDeleteProduct}
+                                            onKardex={handleKardex}
+                                            onQuickAdjust={handleOpenQuickAdjust}
+                                            onGenerateIA={handleGenerateIAImage}
+                                            onPrintLabel={handlePrintSingleLabel}
+                                            isGeneratingIA={generatingIAId === product.id}
+                                            renderFormatMoney={stableRenderFormatMoney}
+                                            formatStock={stableFormatStock}
+                                            getImageUrl={stableGetImageUrl}
+                                            currencyMode={settings.currencyMode}
+                                        />
+                                    )}
+                                />
                             )}
                         </div>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-5">
-                        {products.map((product) => (
+                    <VirtualProductList
+                        items={displayedProducts}
+                        columns={INVENTORY_GRID_COLUMNS}
+                        breakpointSource="window"
+                        estimateSize={340}
+                        gap={18}
+                        overscan={4}
+                        onEndReached={handleLoadMoreProducts}
+                        className="max-h-[74vh] overflow-y-auto pr-1 custom-scrollbar"
+                        itemWrapperClassName="h-full flex flex-col"
+                        renderItem={(product) => (
                             <ProductCard
-                                key={product.id}
                                 product={product}
                                 user={user}
-                                isSelected={selectedProducts.some(p => p.id === product.id)}
+                                isSelected={selectedIdsSet.has(product.id)}
                                 onToggleSelect={handleToggleSelect}
                                 onEdit={handleEditProduct}
                                 onQuickAdjust={handleOpenQuickAdjust}
@@ -1918,8 +1980,8 @@ export function InventoryList() {
                                 getImageUrl={stableGetImageUrl}
                                 currencyMode={settings.currencyMode}
                             />
-                        ))}
-                    </div>
+                        )}
+                    />
                 )}
 
                 {/* Infinite Scroll Sentinel */}

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import ProductItem from './ProductItem';
 import StationProductView from './StationProductView';
+import VirtualProductList from './common/VirtualProductList';
 const MobileBarcodeScannerModal = lazy(() => import('./MobileBarcodeScannerModal'));
 import { usePos } from '../hooks/PosContext';
 import useHorizontalScroll from '../hooks/useHorizontalScroll';
@@ -246,19 +247,12 @@ const ProductGrid = memo(function ProductGrid({
 }) {
     const categoryRef = useHorizontalScroll();
     const gridContainerRef = useRef(null);
-    const firstVirtualItemRef = useRef(null);
     const customerDropdownRef = useRef(null);
     const customerSearchInputRef = useRef(null);
     const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
     const [customerSearchTerm, setCustomerSearchTerm] = useState('');
     const [highlightedCustomerIndex, setHighlightedCustomerIndex] = useState(-1);
     const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
-    const [viewportMetrics, setViewportMetrics] = useState(() => ({
-        width: typeof window !== 'undefined' ? Math.max(320, window.innerWidth - 380) : 960,
-        height: typeof window !== 'undefined' ? Math.max(400, window.innerHeight - 200) : 640
-    }));
-    const [scrollTop, setScrollTop] = useState(0);
-    const [measuredRowHeights, setMeasuredRowHeights] = useState({ grid: 256, grid_round: 260, list: 74 });
 
     // Filtrar clientes para el selector de cabecera
     const filteredCustomersList = useMemo(() => {
@@ -372,139 +366,23 @@ const ProductGrid = memo(function ProductGrid({
     }, [hasStationLimit, unifiedProducts, viewLayout]);
 
 
-    // Medir viewport del contenedor de productos con ResizeObserver para virtualización real O(1) en DOM
-    useEffect(() => {
-        const el = gridContainerRef.current;
-        if (!el) return;
-        const updateMetrics = () => {
-            const w = el.clientWidth || 0;
-            const h = el.clientHeight || 0;
-            if (w > 0 && h > 0) {
-                setViewportMetrics(prev => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
-            }
-        };
-        updateMetrics();
-        if (typeof ResizeObserver !== 'undefined') {
-            const ro = new ResizeObserver(updateMetrics);
-            ro.observe(el);
-            return () => ro.disconnect();
-        }
-        window.addEventListener('resize', updateMetrics);
-        return () => window.removeEventListener('resize', updateMetrics);
-    }, []);
+    const gridGap = viewLayout === 'list' ? 8 : (viewLayout === 'grid_round' ? 14 : 12);
+    const virtualColumnsConfig = useMemo(() => (
+        viewLayout === 'list'
+            ? 1
+            : { minItemWidth: 215, gap: gridGap, padX: 28 }
+    ), [viewLayout, gridGap]);
 
-    // Cálculo determinista de ventana virtual (mantiene ~24-56 nodos DOM sin importar si hay 1,500 o 50,000 productos)
-    const VIRTUAL_THRESHOLD = 60;
-    const shouldVirtualize = !isStationSingleProduct && unifiedProducts.length > VIRTUAL_THRESHOLD;
-    const isSmallViewport = viewportMetrics.width < 640;
-    const padX = isSmallViewport ? 20 : 28;
-    const contentWidth = Math.max(215, viewportMetrics.width - padX);
-    const gapPx = viewLayout === 'list'
-        ? 8
-        : (viewLayout === 'grid_round' ? (isSmallViewport ? 12 : 14) : (isSmallViewport ? 10 : 12));
-    const gridCols = viewLayout === 'list'
-        ? 1
-        : Math.max(1, Math.floor((contentWidth + gapPx) / (215 + gapPx)));
-    const defaultRowHeight = viewLayout === 'list'
-        ? 74
-        : (viewLayout === 'grid_round'
-            ? Math.min(350, Math.max(215, Math.floor((contentWidth - (gridCols - 1) * gapPx) / gridCols)))
-            : 256);
-    const activeRowHeight = measuredRowHeights[viewLayout] || defaultRowHeight;
-    const rowStride = activeRowHeight + gapPx;
-    const totalRows = Math.ceil(unifiedProducts.length / gridCols);
-    const OVERSCAN_ROWS = 3;
-
-    const { visibleProducts, startIndex, topSpacerPx, bottomSpacerPx } = useMemo(() => {
-        if (!shouldVirtualize) {
-            return {
-                visibleProducts: unifiedProducts,
-                startIndex: 0,
-                topSpacerPx: 0,
-                bottomSpacerPx: 0
-            };
-        }
-        const safeScrollTop = Math.max(0, scrollTop);
-        const startRow = Math.max(0, Math.floor(safeScrollTop / rowStride) - OVERSCAN_ROWS);
-        const endRow = Math.min(totalRows, Math.ceil((safeScrollTop + viewportMetrics.height) / rowStride) + OVERSCAN_ROWS);
-        const sIdx = startRow * gridCols;
-        const eIdx = Math.min(unifiedProducts.length, endRow * gridCols);
-        return {
-            visibleProducts: unifiedProducts.slice(sIdx, eIdx),
-            startIndex: sIdx,
-            topSpacerPx: startRow * rowStride,
-            bottomSpacerPx: Math.max(0, (totalRows - endRow) * rowStride)
-        };
-    }, [shouldVirtualize, unifiedProducts, scrollTop, rowStride, totalRows, viewportMetrics.height, gridCols]);
-
-    // Medir altura real de la primera tarjeta montada para que la barra de scroll sea exacta
-    useEffect(() => {
-        if (!shouldVirtualize) return;
-        const itemEl = firstVirtualItemRef.current;
-        if (!itemEl) return;
-        const measure = () => {
-            const h = Math.round(itemEl.getBoundingClientRect().height);
-            if (h >= 48 && h <= 600) {
-                setMeasuredRowHeights(prev => (Math.abs((prev[viewLayout] || 0) - h) <= 3 ? prev : { ...prev, [viewLayout]: h }));
-            }
-        };
-        measure();
-        if (typeof ResizeObserver !== 'undefined') {
-            const ro = new ResizeObserver(measure);
-            ro.observe(itemEl);
-            return () => ro.disconnect();
-        }
-    }, [shouldVirtualize, viewLayout, gridCols, visibleProducts.length]);
+    const estimateRowHeight = useMemo(() => (
+        viewLayout === 'list' ? 74 : (viewLayout === 'grid_round' ? 260 : 256)
+    ), [viewLayout]);
 
     // Resetear scroll al cambiar búsqueda, categoría o vista
     useEffect(() => {
-        setScrollTop(0);
         if (gridContainerRef.current) {
             gridContainerRef.current.scrollTop = 0;
         }
     }, [searchTerm, category, viewLayout]);
-
-    // Auto-scroll hacia el elemento seleccionado con teclado (incluso fuera de la ventana virtual montada)
-    useEffect(() => {
-        if (selectedIndex < 0 || !gridContainerRef.current) return;
-        const container = gridContainerRef.current;
-        if (shouldVirtualize) {
-            const targetRow = Math.floor(selectedIndex / gridCols);
-            const rowTop = targetRow * rowStride;
-            const rowBottom = rowTop + rowStride;
-            const viewTop = container.scrollTop;
-            const viewBottom = viewTop + container.clientHeight;
-            if (rowTop < viewTop) {
-                container.scrollTop = rowTop;
-                setScrollTop(rowTop);
-            } else if (rowBottom > viewBottom) {
-                const nextTop = Math.max(0, rowBottom - container.clientHeight + 24);
-                container.scrollTop = nextTop;
-                setScrollTop(nextTop);
-            }
-            return;
-        }
-        const selectedEl = document.getElementById(`product-${unifiedProducts[selectedIndex]?.id}`);
-        if (selectedEl) {
-            selectedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-    }, [selectedIndex, unifiedProducts, shouldVirtualize, gridCols, rowStride]);
-
-    const scrollTickingRef = useRef(false);
-
-    const handleGridScroll = (e) => {
-        if (!shouldVirtualize) return;
-        if (!scrollTickingRef.current) {
-            scrollTickingRef.current = true;
-            const target = e.currentTarget;
-            requestAnimationFrame(() => {
-                if (target) {
-                    setScrollTop(target.scrollTop);
-                }
-                scrollTickingRef.current = false;
-            });
-        }
-    };
 
     return (
         <div className="pos-catalog-shell flex-1 flex flex-col min-h-0 bg-[#e4e9f0] dark:bg-slate-900 relative overflow-hidden">
@@ -906,10 +784,9 @@ const ProductGrid = memo(function ProductGrid({
                 </div>
             </div>
 
-            {/* Standard Robust Grid with Native Scrolling */}
+            {/* Virtualized Grid & List powered by @tanstack/react-virtual */}
             <div 
                 ref={gridContainerRef}
-                onScroll={handleGridScroll}
                 className="pos-catalog-canvas flex-1 min-h-0 overflow-y-auto p-2.5 sm:p-3.5 pb-[calc(9rem+env(safe-area-inset-bottom,0px))] lg:pb-8 overscroll-contain no-scrollbar bg-[#e4e9f0] dark:bg-slate-950/70"
             >
                 {loading && allProducts.length === 0 ? (
@@ -967,50 +844,37 @@ const ProductGrid = memo(function ProductGrid({
                         ))}
                     </div>
                 ) : (
-                    <div
-                        style={shouldVirtualize ? { paddingTop: `${topSpacerPx}px`, paddingBottom: `${bottomSpacerPx}px` } : undefined}
-                    >
-                        <div
-                            className={
-                                viewLayout === 'list' 
-                                    ? 'flex flex-col gap-2' 
-                                    : viewLayout === 'grid_round'
-                                        ? 'grid gap-3 sm:gap-3.5 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
-                                        : 'grid gap-2.5 sm:gap-3 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
-                            }
-                            style={shouldVirtualize && viewLayout !== 'list'
-                                ? { gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }
-                                : undefined}
-                        >
-                            {visibleProducts.map((product, localIdx) => {
-                                const absIndex = startIndex + localIdx;
-                                return (
-                                    <div
-                                        key={product.id}
-                                        ref={localIdx === 0 ? firstVirtualItemRef : undefined}
-                                        className={
-                                            (viewLayout === 'list' ? 'min-h-[68px] h-auto' : 
-                                            viewLayout === 'grid_round' ? 'aspect-square w-full max-w-[350px] mx-auto' : 
-                                            'h-full flex flex-col')
-                                        }
-                                    >
-                                        <ProductItem
-                                            product={product}
-                                            onAdd={handleAddToCart}
-                                            onEdit={handleQuickEdit}
-                                            isAdmin={isAdmin}
-                                            currencyMode={currencyMode}
-                                            exchangeRate={exchangeRate}
-                                            isSelected={absIndex === selectedIndex}
-                                            viewMode="NORMAL"
-                                            viewLayout={viewLayout}
-                                            intelligence={stockIntelligence[product.id]}
-                                        />
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
+                    <VirtualProductList
+                        items={unifiedProducts}
+                        scrollElementRef={gridContainerRef}
+                        columns={virtualColumnsConfig}
+                        gap={gridGap}
+                        estimateSize={estimateRowHeight}
+                        overscan={4}
+                        scrollToIndex={selectedIndex}
+                        layoutKey={viewLayout}
+                        itemWrapperClassName={
+                            viewLayout === 'list'
+                                ? 'min-h-[68px] h-auto'
+                                : viewLayout === 'grid_round'
+                                    ? 'aspect-square w-full max-w-[350px] mx-auto'
+                                    : 'h-full flex flex-col'
+                        }
+                        renderItem={(product, absIndex) => (
+                            <ProductItem
+                                product={product}
+                                onAdd={handleAddToCart}
+                                onEdit={handleQuickEdit}
+                                isAdmin={isAdmin}
+                                currencyMode={currencyMode}
+                                exchangeRate={exchangeRate}
+                                isSelected={absIndex === selectedIndex}
+                                viewMode="NORMAL"
+                                viewLayout={viewLayout}
+                                intelligence={stockIntelligence[product.id]}
+                            />
+                        )}
+                    />
                 )}
             </div>
 

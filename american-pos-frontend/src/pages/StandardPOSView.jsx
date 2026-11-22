@@ -265,8 +265,17 @@ export default function POS() {
         return categories;
     }, [categories, hasStationRestriction, hasCategoryRestriction, hasProductRestriction, normalizedAllowed, allowedCategories, allProducts, isProductAllowedInStation, normalizeStationText]);
 
-    // Fuzzy Search Integration with instant real-time responsiveness
-    const fuzzyProducts = useFuzzySearch(allProducts, deferredSearchTerm);
+    // Fuzzy Search Integration off-main-thread con pre-indexado O(1) por categoría para 5.000+ SKUs
+    const workerCategory = useMemo(() => {
+        if (hasStationRestriction) return '';
+        if (!category || category === 'Todas' || category.toLowerCase().includes('sin stock')) return '';
+        return category;
+    }, [category, hasStationRestriction]);
+
+    const fuzzyProducts = useFuzzySearch(allProducts, deferredSearchTerm, {
+        category: workerCategory,
+        maxResults: 500
+    });
     
     const filteredProducts = useMemo(() => {
         const isNoStockFilter = category && (category === '🚫 Productos sin stock' || category.toLowerCase().includes('sin stock'));

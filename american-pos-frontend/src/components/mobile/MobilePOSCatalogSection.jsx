@@ -8,6 +8,15 @@ import {
 } from 'lucide-react';
 import { triggerHaptic } from '../../utils/haptics';
 import MobileProductCard from './MobileProductCard';
+import VirtualProductList from '../common/VirtualProductList';
+
+const computeMobileCatalogColumns = (width) => {
+    if (width >= 1220) return 6;
+    if (width >= 960) return 5;
+    if (width >= 720) return 4;
+    if (width >= 480) return 3;
+    return 2;
+};
 
 export default function MobilePOSCatalogSection({
     T,
@@ -19,7 +28,6 @@ export default function MobilePOSCatalogSection({
     toggleCatalogLayout,
     catalogLayout,
     catalogScrollRef,
-    handleCatalogScroll,
     handleCatalogTouchStart,
     handleCatalogTouchMove,
     handleCatalogTouchEnd,
@@ -29,7 +37,6 @@ export default function MobilePOSCatalogSection({
     products,
     openCreateProduct,
     setIsManualItemModalOpen,
-    virtualProducts,
     cartCommittedUnitsMap,
     exchangeRate,
     businessMode,
@@ -39,13 +46,10 @@ export default function MobilePOSCatalogSection({
     handleOpenBulkPicker,
     handlePriceCheck,
     openEditProduct,
-    handlePreviewImage,
-    catalogColumns,
-    catalogHasMore,
-    loadMoreCatalogItems,
-    catalogRemainingCount,
-    showAllCatalogItems
+    handlePreviewImage
 }) {
+    const isList = catalogLayout === 'list';
+
     return (
         <>
             {/* Riel de Categorías tipo Cápsula + Conmutador Rápido Lista / Fotos */}
@@ -103,9 +107,9 @@ export default function MobilePOSCatalogSection({
                             ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
                             : 'bg-[#131924] hover:bg-[#1a2230] text-slate-200 border-[#232d3f]'
                     }`}
-                    title={catalogLayout === 'list' ? 'Cambiar a cuadrícula con fotos' : 'Cambiar a lista táctica rápida'}
+                    title={isList ? 'Cambiar a cuadrícula con fotos' : 'Cambiar a lista táctica rápida'}
                 >
-                    {catalogLayout === 'list' ? (
+                    {isList ? (
                         <>
                             <LayoutGrid size={13} className="text-emerald-400" />
                             <span className="text-[10.5px] font-extrabold hidden xs:inline">Fotos</span>
@@ -119,11 +123,10 @@ export default function MobilePOSCatalogSection({
                 </button>
             </div>
 
-            {/* Grid de Productos con Paginación Fluida Automática en Scroll */}
+            {/* Grid/Lista de Productos Virtualizada O(1) con @tanstack/react-virtual */}
             <div
                 id="mobile-product-catalog"
                 ref={catalogScrollRef}
-                onScroll={handleCatalogScroll}
                 onTouchStart={handleCatalogTouchStart}
                 onTouchMove={handleCatalogTouchMove}
                 onTouchEnd={handleCatalogTouchEnd}
@@ -176,75 +179,33 @@ export default function MobilePOSCatalogSection({
                         )}
                     </div>
                 ) : (
-                    <div>
-                        {catalogLayout === 'list' ? (
-                            <div className="flex flex-col gap-2">
-                                {virtualProducts.map(product => (
-                                    <MobileProductCard
-                                        key={product.id}
-                                        product={product}
-                                        layout="list"
-                                        cartQuantity={cartCommittedUnitsMap.get(String(product.id)) || 0}
-                                        exchangeRate={exchangeRate}
-                                        businessMode={businessMode}
-                                        posMode={posMode}
-                                        isLight={isLight}
-                                        T={T}
-                                        onAddToCart={addToCart}
-                                        onDecrementFromCart={decrementFromCard}
-                                        onOpenBulkPicker={handleOpenBulkPicker}
-                                        onPriceCheck={handlePriceCheck}
-                                        onEditProduct={openEditProduct}
-                                        onPreviewImage={handlePreviewImage}
-                                    />
-                                ))}
-                            </div>
-                        ) : (
-                            <div
-                                className="grid gap-2.5 sm:gap-3"
-                                style={{ gridTemplateColumns: `repeat(${catalogColumns || 2}, minmax(0, 1fr))` }}
-                            >
-                                {virtualProducts.map(product => (
-                                    <MobileProductCard
-                                        key={product.id}
-                                        product={product}
-                                        layout="grid"
-                                        cartQuantity={cartCommittedUnitsMap.get(String(product.id)) || 0}
-                                        exchangeRate={exchangeRate}
-                                        businessMode={businessMode}
-                                        posMode={posMode}
-                                        isLight={isLight}
-                                        T={T}
-                                        onAddToCart={addToCart}
-                                        onDecrementFromCart={decrementFromCard}
-                                        onOpenBulkPicker={handleOpenBulkPicker}
-                                        onPriceCheck={handlePriceCheck}
-                                        onEditProduct={openEditProduct}
-                                        onPreviewImage={handlePreviewImage}
-                                    />
-                                ))}
-                            </div>
+                    <VirtualProductList
+                        items={filteredProducts}
+                        scrollElementRef={catalogScrollRef}
+                        columns={isList ? 1 : computeMobileCatalogColumns}
+                        gap={isList ? 8 : 11}
+                        estimateSize={isList ? 92 : 216}
+                        overscan={4}
+                        layoutKey={catalogLayout}
+                        renderItem={(product) => (
+                            <MobileProductCard
+                                product={product}
+                                layout={isList ? 'list' : 'grid'}
+                                cartQuantity={cartCommittedUnitsMap.get(String(product.id)) || 0}
+                                exchangeRate={exchangeRate}
+                                businessMode={businessMode}
+                                posMode={posMode}
+                                isLight={isLight}
+                                T={T}
+                                onAddToCart={addToCart}
+                                onDecrementFromCart={decrementFromCard}
+                                onOpenBulkPicker={handleOpenBulkPicker}
+                                onPriceCheck={handlePriceCheck}
+                                onEditProduct={openEditProduct}
+                                onPreviewImage={handlePreviewImage}
+                            />
                         )}
-
-                        {catalogHasMore && (
-                            <div className="py-4 flex flex-col sm:flex-row items-center justify-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={loadMoreCatalogItems}
-                                    className={`px-4 py-2 rounded-xl border text-xs font-extrabold cursor-pointer active:scale-95 transition-transform ${T.btnGhost}`}
-                                >
-                                    Cargar más ({catalogRemainingCount} restantes de {filteredProducts.length})
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={showAllCatalogItems}
-                                    className="px-4 py-2 rounded-xl bg-[#0a0d12] text-white border border-[#1e242e] text-xs font-extrabold cursor-pointer active:scale-95 transition-transform"
-                                >
-                                    Mostrar todos ({filteredProducts.length})
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                    />
                 )}
             </div>
         </>

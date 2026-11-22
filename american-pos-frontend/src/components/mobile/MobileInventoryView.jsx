@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
 import {
   Search, 
   ArrowLeft, 
@@ -24,8 +24,10 @@ import CachedImage from '../CachedImage';
 import MobileImageSearchModal from './MobileImageSearchModal';
 import { triggerHaptic } from '../../utils/haptics';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { useFuzzySearch } from '../../hooks/useFuzzySearch';
+import VirtualProductList from '../common/VirtualProductList';
 
-const stripAccents = (str = '') => String(str).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const MOBILE_INVENTORY_COLUMNS = { default: 1, md: 2, xl: 3 };
 
 export default function MobileInventoryView({
   products = [],
@@ -90,21 +92,20 @@ export default function MobileInventoryView({
     return arr;
   }, [categories, products]);
 
-  // Filtrado reactivo de alta velocidad (disponibles primero, agotados al final)
-  const filteredProducts = useMemo(() => {
-    const qClean = stripAccents(searchQuery).trim();
-    const tokens = qClean ? qClean.split(/\s+/).filter(Boolean) : [];
-    const selCat = selectedCat.trim().toLowerCase();
-    const filtered = products.filter(p => {
-      const rawCat = (p.category || p.categoria || 'General').trim().toLowerCase();
-      const matchCat = selectedCat === 'Todos' || rawCat === selCat;
-      if (!matchCat) return false;
-      if (tokens.length === 0) return true;
-      const blob = `${stripAccents(p.name || p.nombre || '')} ${String(p.barcode || p.codigo_barras || '').toLowerCase()} ${stripAccents(rawCat)}`;
-      return tokens.every(t => blob.includes(t));
-    });
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const inventoryScrollRef = useRef(null);
 
-    return filtered.sort((a, b) => {
+  // Búsqueda off-main-thread con pre-indexado O(1) por categoría/barcode para 5.000+ SKUs
+  const fuzzyInventoryProducts = useFuzzySearch(products, deferredSearchQuery, {
+    category: selectedCat === 'Todos' ? '' : selectedCat,
+    maxResults: 1000,
+    enableSemantic: false
+  });
+
+  // Orden reactivo (disponibles primero, agotados al final)
+  const filteredProducts = useMemo(() => {
+    const hasQuery = Boolean(deferredSearchQuery && deferredSearchQuery.trim());
+    return [...fuzzyInventoryProducts].sort((a, b) => {
       const isServiceA = Boolean(a.isService || String(a.category || a.categoria || '').trim().toLowerCase() === 'servicios');
       const isServiceB = Boolean(b.isService || String(b.category || b.categoria || '').trim().toLowerCase() === 'servicios');
       const stockA = Number(a.stockQuantity ?? a.stock ?? 0);
@@ -112,34 +113,18 @@ export default function MobileInventoryView({
       const outA = (!isServiceA && stockA <= 0) ? 1 : 0;
       const outB = (!isServiceB && stockB <= 0) ? 1 : 0;
       if (outA !== outB) return outA - outB;
+      if (hasQuery) return 0;
       const nameA = (a.name || a.nombre || '').toLowerCase();
       const nameB = (b.name || b.nombre || '').toLowerCase();
       return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
     });
-  }, [products, searchQuery, selectedCat]);
-
-  const [displayLimit, setDisplayLimit] = useState(60);
-  const invScrollTickingRef = useRef(false);
+  }, [fuzzyInventoryProducts, deferredSearchQuery]);
 
   useEffect(() => {
-    setDisplayLimit(60);
-  }, [searchQuery, selectedCat]);
-
-  const handleInventoryScroll = (e) => {
-    const el = e.currentTarget;
-    if (!el || invScrollTickingRef.current) return;
-    invScrollTickingRef.current = true;
-    requestAnimationFrame(() => {
-      invScrollTickingRef.current = false;
-      if (el.scrollHeight - el.scrollTop - el.clientHeight < 650) {
-        setDisplayLimit(prev => (prev < filteredProducts.length ? Math.min(prev + 60, filteredProducts.length) : prev));
-      }
-    });
-  };
-
-  const visibleProducts = useMemo(() => {
-    return filteredProducts.slice(0, displayLimit);
-  }, [filteredProducts, displayLimit]);
+    if (inventoryScrollRef.current) {
+      inventoryScrollRef.current.scrollTop = 0;
+    }
+  }, [deferredSearchQuery, selectedCat]);
 
   // Métricas rápidas de inventario
   const stats = useMemo(() => {
@@ -777,9 +762,9 @@ export default function MobileInventoryView({
         </div>
       </div>
 
-      {/* 4. LISTADO DE PRODUCTOS */}
+      {/* 4. LISTADO VIRTUALIZADO DE PRODUCTOS */}
       <div
-        onScroll={handleInventoryScroll}
+        ref={inventoryScrollRef}
         className="flex-1 overflow-y-auto p-2.5 sm:p-3 custom-scrollbar"
       >
         {filteredProducts.length === 0 ? (
@@ -789,8 +774,17 @@ export default function MobileInventoryView({
             <p className={`text-[11px] ${T.textMuted}`}>Usa el botón &ldquo;+ Nuevo&rdquo; para agregar un producto</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {visibleProducts.map((p) => {
+          <VirtualProductList
+            items={filteredProducts}
+            scrollElementRef={inventoryScrollRef}
+            columns={MOBILE_INVENTORY_COLUMNS}
+            breakpointSource="window"
+            gap={10}
+            estimateSize={isAuditMode ? 156 : 148}
+            overscan={4}
+            layoutKey={isAuditMode ? 'audit' : 'normal'}
+            itemWrapperClassName="h-full flex flex-col"
+            renderItem={(p) => {
               const prodId = String(p.id);
               const theoreticalStock = Number(p.stockQuantity ?? p.stock ?? 0);
               const priceUSD = Number(p.price ?? p.precio ?? 0);
@@ -808,8 +802,7 @@ export default function MobileInventoryView({
 
               return (
                 <div 
-                  key={p.id}
-                  className={`${T.ticketItemBg} p-3 rounded-2xl flex flex-col justify-between gap-2.5 border ${
+                  className={`${T.ticketItemBg} h-full p-3 rounded-2xl flex flex-col justify-between gap-2.5 border ${
                     isAuditMode && isAudited 
                       ? difference === 0 
                         ? 'border-emerald-500/40 bg-emerald-500/5' 
@@ -944,26 +937,8 @@ export default function MobileInventoryView({
                   )}
                 </div>
               );
-            })}
-            {visibleProducts.length < filteredProducts.length && (
-              <div className="py-4 col-span-full flex flex-wrap justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDisplayLimit(prev => prev + 60)}
-                  className={`px-5 py-2.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-2 active:scale-95 transition-all shadow-xs cursor-pointer`}
-                >
-                  <span>Cargar más ({filteredProducts.length - visibleProducts.length} restantes)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDisplayLimit(filteredProducts.length)}
-                  className="px-5 py-2.5 rounded-xl bg-[#0a0d12] text-white border border-[#1e242e] text-xs font-bold flex items-center gap-2 active:scale-95 transition-all shadow-xs cursor-pointer"
-                >
-                  <span>Mostrar todos ({filteredProducts.length})</span>
-                </button>
-              </div>
-            )}
-          </div>
+            }}
+          />
         )}
       </div>
 

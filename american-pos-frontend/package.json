@@ -21,6 +21,7 @@
     "@capacitor/core": "^8.6.2",
     "@capgo/capacitor-updater": "^8.54.2",
     "@emotion/is-prop-valid": "^1.4.0",
+    "@tanstack/react-virtual": "^3.14.27",
     "@zxing/library": "^0.23.0",
     "axios": "^1.21.1",
     "date-fns": "^4.4.0",
