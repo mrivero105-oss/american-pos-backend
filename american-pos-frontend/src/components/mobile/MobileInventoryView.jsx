@@ -908,7 +908,7 @@ export default function MobileInventoryView({
                         <button
                           type="button"
                           onClick={() => handleSetAuditCount(prodId, physicalStock - 1)}
-                          className="w-6 h-6 rounded-lg bg-slate-800 text-white font-black text-xs flex items-center justify-center hover:bg-slate-700 cursor-pointer"
+                          className="w-11 h-11 rounded-lg bg-slate-800 text-white font-black text-sm flex items-center justify-center hover:bg-slate-700 cursor-pointer active:scale-95"
                         >
                           -
                         </button>
@@ -916,12 +916,12 @@ export default function MobileInventoryView({
                           type="number"
                           value={physicalStock}
                           onChange={(e) => handleSetAuditCount(prodId, e.target.value)}
-                          className="w-12 h-6 text-center text-xs font-black bg-slate-900 border border-slate-700 rounded-lg text-white"
+                          className="w-14 h-11 text-center text-xs font-black bg-slate-900 border border-slate-700 rounded-lg text-white"
                         />
                         <button
                           type="button"
                           onClick={() => handleSetAuditCount(prodId, physicalStock + 1)}
-                          className="w-6 h-6 rounded-lg bg-slate-800 text-white font-black text-xs flex items-center justify-center hover:bg-slate-700 cursor-pointer"
+                          className="w-11 h-11 rounded-lg bg-slate-800 text-white font-black text-sm flex items-center justify-center hover:bg-slate-700 cursor-pointer active:scale-95"
                         >
                           +
                         </button>

@@ -152,7 +152,7 @@ export default function MobilePOSHeader({
                                         setSearchQuery('');
                                         searchInputRef.current?.focus();
                                     }}
-                                    className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}
+                                    className={`${T.textMuted} hover:opacity-100 p-1.5 cursor-pointer`}
                                     title="Limpiar búsqueda"
                                 >
                                     <X size={13} />

@@ -108,7 +108,7 @@ export default function MobileVariantPickerModal({
         exit={{ y: '100%' }}
         transition={{ type: 'spring', damping: 28, stiffness: 320 }}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-md ${T?.modalCard || 'bg-slate-900'} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-2xl relative z-10 border-t sm:border border-slate-700/60 max-h-[90vh] overflow-y-auto space-y-4`}
+        className={`w-full max-w-md ${T?.modalCard || 'bg-slate-900'} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-2xl relative z-10 border-t sm:border border-slate-700/60 max-h-[90dvh] overflow-y-auto space-y-4`}
       >
         {/* Handle bar móvil */}
         <div className="w-full flex justify-center pb-1 sm:hidden">

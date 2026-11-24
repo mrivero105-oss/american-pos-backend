@@ -13,15 +13,17 @@ export default function MobileControlledMedModal({
   const [patientDoc, setPatientDoc] = useState('');
   const [recipeNumber, setRecipeNumber] = useState('');
   const [recipeDate, setRecipeDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [validationError, setValidationError] = useState('');
 
   if (!isOpen || !product) return null;
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!doctorName.trim() || !patientDoc.trim() || !recipeNumber.trim()) {
-      alert('Por favor complete todos los datos requeridos del récipe médico');
+      setValidationError('Por favor complete todos los datos requeridos del récipe médico.');
       return;
     }
+    setValidationError('');
 
     onConfirm({
       doctorName: doctorName.trim(),
@@ -48,7 +50,7 @@ export default function MobileControlledMedModal({
         exit={{ y: '100%' }}
         transition={{ type: 'spring', damping: 28, stiffness: 320 }}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-md ${T?.modalCard || 'bg-slate-900'} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-2xl relative z-10 border-t sm:border border-amber-500/40 max-h-[90vh] overflow-y-auto space-y-4`}
+        className={`w-full max-w-md ${T?.modalCard || 'bg-slate-900'} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-2xl relative z-10 border-t sm:border border-amber-500/40 max-h-[90dvh] overflow-y-auto space-y-4`}
       >
         <div className="w-full flex justify-center pb-1 sm:hidden">
           <div className="w-12 h-1 rounded-full bg-slate-600" />
@@ -91,6 +93,11 @@ export default function MobileControlledMedModal({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">
+          {validationError && (
+            <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-300 text-xs font-bold">
+              {validationError}
+            </div>
+          )}
           <div>
             <label className="text-[10px] font-bold uppercase tracking-wider text-slate-300 block mb-1">
               Médico Tratante / Especialista *

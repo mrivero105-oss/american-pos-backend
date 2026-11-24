@@ -21,6 +21,7 @@ import api from '../../services/api';
 import localDb from '../../db/localDb';
 import { db as primaryDb } from '../../services/db';
 import mobilePrinterService from '../../services/mobilePrinterService';
+import { encodeEscPosCp858, ESC_INIT_CP858 } from '../../utils/escposFormatter';
 import SupervisorAuthModal from './SupervisorAuthModal';
 
 // Helper para normalizar el nombre del método de pago proveniente de la base de datos
@@ -635,16 +636,15 @@ export default function MobileCashView({
     try {
       const isZ = type === 'Z';
       const rMetrics = getReportMetrics(type);
-      const cleanStr = (s = '') => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]/g, '');
       const ESC = '\x1B';
       const GS = '\x1D';
       const divider = '--------------------------------\n';
       let receipt = '';
-      receipt += `${ESC}@`; // Init
+      receipt += ESC_INIT_CP858; // Init + CP858 Español real (ñ, Ñ, tildes)
       receipt += `${ESC}a\x01`; // Center
       receipt += `${ESC}!\x30${isZ ? 'CORTE Z (CIERRE)' : 'CORTE X (ARQUEO)'}${ESC}!\x00\n`;
-      receipt += `Terminal: Caja Movil\n`;
-      receipt += `Cajero: ${cleanStr(user?.name || user?.username || 'Cajero Movil')}\n`;
+      receipt += `Terminal: Caja Móvil\n`;
+      receipt += `Cajero: ${String(user?.name || user?.username || 'Cajero Móvil')}\n`;
       receipt += `${new Date().toLocaleDateString('es-VE')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n`;
       receipt += `Tasa BCV: Bs. ${exchangeRate.toFixed(2)}\n`;
       receipt += `${ESC}a\x00`; // Left
@@ -662,7 +662,7 @@ export default function MobileCashView({
       Object.entries(rMetrics.methods)
         .filter(([_, data]) => data.count > 0)
         .forEach(([name, data]) => {
-          receipt += `${cleanStr(name)} (${data.count}): $${data.usd.toFixed(2)}\n`;
+          receipt += `${String(name)} (${data.count}): $${data.usd.toFixed(2)}\n`;
         });
       receipt += divider;
       receipt += `${ESC}E\x01EFECTIVO ESPERADO EN CAJA:${ESC}E\x00\n`;
@@ -670,22 +670,17 @@ export default function MobileCashView({
       receipt += `Bs Esperado:  Bs. ${rMetrics.theoreticalCashBs.toFixed(2)}\n`;
       if (isZ && lastZReportData) {
         receipt += divider;
-        receipt += `${ESC}E\x01CONTEO FISICO ARQUEADO:${ESC}E\x00\n`;
+        receipt += `${ESC}E\x01CONTEO FÍSICO ARQUEADO:${ESC}E\x00\n`;
         receipt += `Conteo USD: $${Number(lastZReportData.countedUSD || 0).toFixed(2)}\n`;
         receipt += `Conteo Bs:  Bs. ${Number(lastZReportData.countedBS || 0).toFixed(2)}\n`;
         receipt += `Dif. USD:   $${Number(lastZReportData.differenceUsd || 0).toFixed(2)}\n`;
         receipt += `Dif. Bs:    Bs. ${Number(lastZReportData.differenceBs || 0).toFixed(2)}\n`;
       }
       receipt += divider;
-      receipt += `${ESC}a\x01Isaac POS Ultra Movil\n\n\n\n${GS}V\x41\x00`;
+      receipt += `${ESC}a\x01Isaac POS Ultra Móvil\n\n\n\n${GS}V\x41\x00`;
 
-      const encoder = new TextEncoder();
-      const escposData = encoder.encode(receipt);
-      let binary = '';
-      for (let i = 0; i < escposData.length; i++) {
-        binary += String.fromCharCode(escposData[i]);
-      }
-      const base64 = btoa(binary);
+      const escposData = encodeEscPosCp858(receipt);
+      const base64 = mobilePrinterService.toBase64(escposData);
 
       let printerCfg = {};
       try {
@@ -699,8 +694,12 @@ export default function MobileCashView({
       }
 
       if (window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware) {
+        const btAddress = printerCfg.btAddress ||
+          printerCfg.address ||
+          localStorage.getItem('pos_mobile_bt_printer') ||
+          localStorage.getItem('pos_mobile_bt_printer_last') || '';
         await window.Capacitor.Plugins.PosNativeHardware.printBluetooth({
-          address: printerCfg.btAddress || printerCfg.address || '',
+          address: btAddress,
           data: base64
         });
         showToast('🖨️ Reporte impreso en impresora térmica Bluetooth');
@@ -978,7 +977,7 @@ export default function MobileCashView({
                 <Unlock size={18} className="text-emerald-500" />
                 <h3 className={`font-black text-sm ${T.textPrimary}`}>Apertura de Turno de Caja</h3>
               </div>
-              <button onClick={() => setIsOpenShiftModalOpen(false)} className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}>
+              <button onClick={() => setIsOpenShiftModalOpen(false)} className={`${T.textMuted} hover:opacity-100 p-2 cursor-pointer`}>
                 <X size={18} />
               </button>
             </div>
@@ -1052,7 +1051,7 @@ export default function MobileCashView({
                 <Coins size={18} className="text-amber-500" />
                 <h3 className={`font-black text-sm ${T.textPrimary}`}>Movimiento de Caja Chica</h3>
               </div>
-              <button onClick={() => setIsMovementModalOpen(false)} className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}>
+              <button onClick={() => setIsMovementModalOpen(false)} className={`${T.textMuted} hover:opacity-100 p-2 cursor-pointer`}>
                 <X size={18} />
               </button>
             </div>
@@ -1140,13 +1139,13 @@ export default function MobileCashView({
       {/* MODAL: CIERRE DE TURNO (CORTE Z) */}
       {isCloseShiftModalOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border border-rose-500/30 space-y-4 max-h-[92vh] overflow-y-auto`}>
+          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border border-rose-500/30 space-y-4 max-h-[92dvh] overflow-y-auto`}>
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
                 <Lock size={18} className="text-rose-500" />
                 <h3 className={`font-black text-sm ${T.textPrimary}`}>Cierre de Turno (Corte Z)</h3>
               </div>
-              <button onClick={() => setIsCloseShiftModalOpen(false)} className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}>
+              <button onClick={() => setIsCloseShiftModalOpen(false)} className={`${T.textMuted} hover:opacity-100 p-2 cursor-pointer`}>
                 <X size={18} />
               </button>
             </div>
@@ -1254,7 +1253,7 @@ export default function MobileCashView({
       {/* MODAL: VISOR DE REPORTE TÉRMICO (CORTE X o CORTE Z) */}
       {isReportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/85">
-          <div className="w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-xl shadow-xl space-y-3 border border-slate-200 max-h-[92vh] overflow-y-auto">
+          <div className="w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-xl shadow-xl space-y-3 border border-slate-200 max-h-[92dvh] overflow-y-auto">
             <div className="text-center border-b border-dashed pb-2.5">
               <h2 className="font-black text-base tracking-tight">ISAAC POS ULTRA</h2>
               <p className="text-[10px] font-sans font-bold text-slate-700">

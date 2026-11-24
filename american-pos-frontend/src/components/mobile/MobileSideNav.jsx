@@ -175,7 +175,7 @@ export default function MobileSideNav({
                   <h3 className={`font-black text-sm truncate leading-tight ${
                     isCarbonSidebar ? 'text-white' : 'text-[#0f172a]'
                   }`}>
-                    {businessInfo.name || 'Bodega Sigfrido y Familia'}
+                    {businessInfo.name || 'Isaac POS'}
                   </h3>
                 </div>
 

@@ -6,6 +6,8 @@ const ESC = '\x1b';
 const FS = '\x1c';
 const GS = '\x1d';
 
+// ESC @ (Init) + FS . (Desactiva modo chino/Kanji de fábrica) + ESC t 19 (CP858 / PC858 Español + Euro)
+export const ESC_INIT_CP858 = ESC + '@' + FS + '.' + ESC + 't\x13';
 // ESC @ (Init) + FS . (Desactiva modo chino/Kanji de fábrica) + ESC t 0 (Selecciona tabla PC437 estándar)
 export const ESC_INIT = ESC + '@' + FS + '.' + ESC + 't\x00';
 export const ESC_ALIGN_LEFT = ESC + 'a\x00';
@@ -16,6 +18,61 @@ export const ESC_BOLD_OFF = ESC + 'E\x00';
 export const GS_TEXT_DOUBLE = GS + '!\x11'; // Double height + Double width
 export const GS_TEXT_NORMAL = GS + '!\x00'; // Normal size
 export const GS_CUT = GS + 'V\x01';         // Partial cut
+
+// Mapa de caracteres hispanos/europeos a bytes CP858 (Code Page 19 en Epson/Xprinter/Rongta/Pos58/80)
+const CP858_CHAR_MAP = {
+    'Ç': 0x80, 'ü': 0x81, 'é': 0x82, 'â': 0x83, 'ä': 0x84, 'à': 0x85, 'å': 0x86, 'ç': 0x87,
+    'ê': 0x88, 'ë': 0x89, 'è': 0x8A, 'ï': 0x8B, 'î': 0x8C, 'ì': 0x8D, 'Ä': 0x8E, 'Å': 0x8F,
+    'É': 0x90, 'æ': 0x91, 'Æ': 0x92, 'ô': 0x93, 'ö': 0x94, 'ò': 0x95, 'û': 0x96, 'ù': 0x97,
+    'ÿ': 0x98, 'Ö': 0x99, 'Ü': 0x9A, '£': 0x9C, '×': 0x9E,
+    'á': 0xA0, 'í': 0xA1, 'ó': 0xA2, 'ú': 0xA3, 'ñ': 0xA4, 'Ñ': 0xA5, 'ª': 0xA6, 'º': 0xA7,
+    '¿': 0xA8, '¡': 0xAD, '«': 0xAE, '»': 0xAF,
+    'Á': 0xB5, 'Â': 0xB6, 'À': 0xB7, '©': 0xB8, '¢': 0xBD, '¥': 0xBE,
+    'ã': 0xC6, 'Ã': 0xC7, '€': 0xD5, 'Í': 0xD6, 'Î': 0xD7, 'Ï': 0xD8,
+    'Ó': 0xE0, 'ß': 0xE1, 'Ô': 0xE2, 'Ò': 0xE3, 'õ': 0xE4, 'Õ': 0xE5,
+    'Ú': 0xE9, 'Û': 0xEA, 'Ù': 0xEB, 'ý': 0xEC, 'Ý': 0xED, '°': 0xF8, '·': 0xFA, '²': 0xFD
+};
+
+/**
+ * Codifica texto + secuencias de control ESC/POS en bytes CP858 reales (preservando ñ, Ñ, tildes y ¿¡).
+ * Evita el mojibake de enviar UTF-8 a impresoras térmicas de 58mm/80mm.
+ */
+export function encodeEscPosCp858(input) {
+    if (input instanceof Uint8Array) return input;
+    const str = String(input ?? '');
+    const bytes = [];
+    for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        const code = str.charCodeAt(i);
+        // Preservar bytes de control ESC/POS y ASCII imprimible 0x00..0x7F intactos
+        if (code <= 0x7F) {
+            bytes.push(code);
+            continue;
+        }
+        // Espacios Unicode no separables -> espacio ASCII estándar
+        if (/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/.test(ch)) {
+            bytes.push(0x20);
+            continue;
+        }
+        // Tipografía común
+        if (ch === '“' || ch === '”') { bytes.push(0x22); continue; }
+        if (ch === '‘' || ch === '’') { bytes.push(0x27); continue; }
+        if (ch === '—' || ch === '–') { bytes.push(0x2D); continue; }
+        if (ch === '•') { bytes.push(0x2A); continue; }
+
+        if (CP858_CHAR_MAP[ch] !== undefined) {
+            bytes.push(CP858_CHAR_MAP[ch]);
+            continue;
+        }
+        // Fallback seguro: remover diacrítico si no existe en CP858
+        const stripped = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        for (let j = 0; j < stripped.length; j++) {
+            const c2 = stripped.charCodeAt(j);
+            if (c2 <= 0x7F) bytes.push(c2);
+        }
+    }
+    return new Uint8Array(bytes);
+}
 
 /**
  * Cleans a string to contain only basic, print-safe ASCII characters.

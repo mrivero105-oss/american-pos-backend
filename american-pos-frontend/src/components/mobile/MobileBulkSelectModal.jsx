@@ -154,7 +154,7 @@ export default function MobileBulkSelectModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-xs animate-fadeIn">
       <div 
-        className={`w-full max-w-lg rounded-t-xl sm:rounded-xl ${T.modalCard || 'bg-slate-900'} border-t sm:border ${T.border || 'border-slate-800'} shadow-2xl flex flex-col max-h-[92vh] overflow-hidden`}
+        className={`w-full max-w-lg rounded-t-xl sm:rounded-xl ${T.modalCard || 'bg-slate-900'} border-t sm:border ${T.border || 'border-slate-800'} shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden`}
       >
         {/* Encabezado del Modal */}
         <div className={`p-4 border-b ${T.border || 'border-slate-800'} flex items-center justify-between shrink-0 ${T.subPanelBg || 'bg-slate-950/50'}`}>

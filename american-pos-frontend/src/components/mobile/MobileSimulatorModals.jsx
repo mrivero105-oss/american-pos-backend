@@ -1,6 +1,6 @@
 import { Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, CheckCircle, Copy, Plus, Printer, X, Zap } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Check, CheckCircle, Copy, Plus, Printer, RefreshCw, Wifi, X, Zap } from 'lucide-react';
 import BiometricEnrollModal from '../BiometricEnrollModal';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import MobileCheckoutModal from './MobileCheckoutModal';
@@ -181,7 +181,15 @@ export default function MobileSimulatorModals(props) {
     handleAddManualItem,
     isHeldSalesModalOpen,
     setIsHeldSalesModalOpen,
-    // Navegación / Biometría / Alertas / Mesas / Clientes
+    // Navegación / Biometría / Alertas / Mesas / Clientes / Servidor PC
+    showServerModal = false,
+    setShowServerModal = () => {},
+    mobileServerIp = '',
+    setMobileServerIp = () => {},
+    serverFeedback = null,
+    isTestingServer = false,
+    handleAutoDiscoverServer = () => {},
+    handleTestAndSaveServer = () => {},
     isSideNavOpen,
     setIsSideNavOpen,
     socketConnected,
@@ -756,6 +764,74 @@ export default function MobileSimulatorModals(props) {
           isSavingCustomer={isSavingCustomer}
           triggerHaptic={triggerHaptic}
         />
+      )}
+
+      {/* Modal Global de Configuración de IP de Servidor PC (accesible tanto desde Login como desde Sincronización PC) */}
+      {showServerModal && (
+        <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 animate-fadeIn">
+          <div className={`w-full max-w-xs ${T.modalCard} rounded-2xl p-5 border ${T.border} shadow-2xl space-y-4 max-h-[90dvh] overflow-y-auto`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Wifi className="text-blue-500" size={18} />
+                <h3 className={`text-xs font-black uppercase tracking-wider ${T.textPrimary}`}>IP de la Computadora</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowServerModal(false)}
+                className={`p-2 rounded-lg ${T.btnGhost} text-slate-400 cursor-pointer`}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className={`text-[11px] ${T.textSecondary} leading-relaxed`}>
+              Dirección IP de tu PC principal donde corre el sistema Isaac POS (o dominio HTTPS en la nube):
+            </p>
+
+            <div>
+              <label className={`text-[10px] font-bold uppercase tracking-wider ${T.textMuted} block mb-1`}>IP / Puerto</label>
+              <input
+                type="text"
+                value={mobileServerIp}
+                onChange={(e) => setMobileServerIp(e.target.value)}
+                placeholder="192.168.1.30:3005"
+                className={`w-full ${T.inputBg} border rounded-xl px-3 py-2.5 text-xs font-mono font-bold outline-none`}
+              />
+            </div>
+
+            {serverFeedback && (
+              <div
+                className={`p-2 rounded-xl text-[11px] font-bold flex items-center gap-1.5 ${
+                  serverFeedback.ok ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                }`}
+              >
+                {serverFeedback.ok ? <Check size={14} className="shrink-0" /> : <AlertCircle size={14} className="shrink-0" />}
+                <span>{serverFeedback.msg}</span>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isTestingServer}
+                onClick={handleAutoDiscoverServer}
+                className={`flex-1 min-h-[44px] py-2.5 rounded-xl border ${T.border} ${T.btnGhost} text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer`}
+              >
+                {isTestingServer ? <RefreshCw size={13} className="animate-spin" /> : <Zap size={13} />}
+                <span>Auto-Buscar</span>
+              </button>
+              <button
+                type="button"
+                disabled={isTestingServer}
+                onClick={() => handleTestAndSaveServer(mobileServerIp)}
+                className="flex-1 min-h-[44px] py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase flex items-center justify-center gap-1 shadow-md shadow-blue-600/30 cursor-pointer"
+              >
+                {isTestingServer ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
+                <span>Guardar</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

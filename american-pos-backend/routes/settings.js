@@ -1124,6 +1124,41 @@ router.post('/print-raw', verifyToken, requirePermission(['canAccessPOS', 'canMa
 });
 
 /**
+ * POST /settings/print-network-raw
+ * Envía comandos ESC/POS en Base64 a una impresora térmica LAN (TCP 9100) con protección anti-SSRF.
+ */
+router.post('/print-network-raw', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
+    try {
+        const { ip, host, port = 9100, dataBase64, content } = req.body || {};
+        const targetHost = String(ip || host || '').trim();
+        const targetPort = Number(port) || 9100;
+        if (!targetHost || !isSafeLanPrinterHost(targetHost)) {
+            return res.status(400).json({ success: false, error: 'IP de impresora inválida o fuera de red local permitida.' });
+        }
+        if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+            return res.status(400).json({ success: false, error: 'Puerto TCP de impresora inválido.' });
+        }
+        let payloadBuf;
+        if (dataBase64 && typeof dataBase64 === 'string') {
+            payloadBuf = Buffer.from(dataBase64, 'base64');
+        } else if (content && typeof content === 'string') {
+            payloadBuf = Buffer.from(content, 'latin1');
+        } else {
+            return res.status(400).json({ success: false, error: 'Faltan datos ESC/POS para imprimir.' });
+        }
+        if (payloadBuf.length === 0 || payloadBuf.length > 262144) {
+            return res.status(400).json({ success: false, error: 'Tamaño de trabajo ESC/POS fuera de rango (1B - 256KB).' });
+        }
+        const NetworkPrinterService = require('../services/NetworkPrinterService');
+        const result = await NetworkPrinterService.printNetwork(targetHost, targetPort, payloadBuf);
+        return res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('Error in print-network-raw:', error);
+        return res.status(500).json({ success: false, error: error.message || 'Error imprimiendo por red TCP/IP' });
+    }
+});
+
+/**
  * POST /settings/open-drawer
  * Envía comando de apertura de gaveta a una impresora local de Windows vía backend
  */

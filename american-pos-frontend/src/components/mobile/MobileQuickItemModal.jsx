@@ -26,7 +26,7 @@ export default function MobileQuickItemModal({
               </div>
               <button 
                 onClick={() => onClose()}
-                className={`${T.textMuted} hover:${T.textPrimary} p-1 rounded-lg cursor-pointer`}
+                className={`${T.textMuted} hover:opacity-100 p-2 rounded-lg cursor-pointer`}
               >
                 <X size={16} />
               </button>

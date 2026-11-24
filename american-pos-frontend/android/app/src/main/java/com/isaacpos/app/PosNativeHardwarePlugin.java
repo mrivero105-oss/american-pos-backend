@@ -3,7 +3,13 @@ package com.isaacpos.app;
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothSocket;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.util.Base64;
 import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
@@ -62,11 +68,18 @@ import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
+import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -84,8 +97,7 @@ import org.json.JSONObject;
         @Permission(
             alias = "bluetooth",
             strings = {
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_SCAN
+                Manifest.permission.BLUETOOTH_CONNECT
             }
         )
     }
@@ -94,9 +106,28 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     // UUID estándar para perfil serie Bluetooth SPP (Serial Port Profile)
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
-    private final java.util.concurrent.ExecutorService bluetoothExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final int BT_CONNECT_TIMEOUT_MS = 5000;
+    private static final int BT_CHUNK_BYTES = 512;
+    private static final long BT_CHUNK_DELAY_MS = 10L;
+
+    private final ExecutorService bluetoothExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService ioExecutor = Executors.newFixedThreadPool(2);
+    private final Object btLock = new Object();
     private BluetoothSocket cachedBtSocket = null;
     private String cachedBtAddress = null;
+
+    private BluetoothAdapter getBluetoothAdapter() {
+        try {
+            BluetoothManager bm = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+            return bm != null ? bm.getAdapter() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isActivityAlive(Activity act) {
+        return act != null && !act.isFinishing() && !act.isDestroyed();
+    }
 
     private boolean hasBluetoothConnectPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -105,35 +136,81 @@ public class PosNativeHardwarePlugin extends Plugin {
         return true;
     }
 
+    private void connectSocketWithTimeout(BluetoothSocket sock) throws Exception {
+        Future<?> connectFuture = ioExecutor.submit(() -> {
+            try {
+                sock.connect();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        try {
+            connectFuture.get(BT_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException te) {
+            connectFuture.cancel(true);
+            try { sock.close(); } catch (Exception ignored) {}
+            throw new Exception("Tiempo de espera agotado al conectar impresora Bluetooth (5s)");
+        } catch (Exception ex) {
+            try { sock.close(); } catch (Exception ignored) {}
+            throw ex;
+        }
+    }
+
     @SuppressLint("MissingPermission")
-    private BluetoothSocket openRfcommSocket(BluetoothDevice device) throws Exception {
+    private BluetoothSocket openRfcommSocket(BluetoothAdapter adapter, BluetoothDevice device) throws Exception {
+        try {
+            if (adapter != null && adapter.isDiscovering()) {
+                adapter.cancelDiscovery();
+            }
+        } catch (Exception ignored) {}
+
         BluetoothSocket sock = null;
         try {
             sock = device.createRfcommSocketToServiceRecord(SPP_UUID);
-            sock.connect();
+            connectSocketWithTimeout(sock);
             return sock;
         } catch (Exception sppErr) {
             try {
                 if (sock != null) sock.close();
             } catch (Exception ignored) {}
+            BluetoothSocket fallbackSock = null;
             try {
                 java.lang.reflect.Method m = device.getClass().getMethod("createRfcommSocket", new Class[] { int.class });
-                sock = (BluetoothSocket) m.invoke(device, 1);
-                sock.connect();
-                return sock;
+                fallbackSock = (BluetoothSocket) m.invoke(device, 1);
+                if (fallbackSock == null) throw sppErr;
+                connectSocketWithTimeout(fallbackSock);
+                return fallbackSock;
             } catch (Exception reflectionErr) {
+                try {
+                    if (fallbackSock != null) fallbackSock.close();
+                } catch (Exception ignored) {}
                 throw sppErr;
             }
         }
     }
 
+    private void writeChunkedToPrinter(OutputStream out, byte[] bytes) throws Exception {
+        int offset = 0;
+        while (offset < bytes.length) {
+            int len = Math.min(BT_CHUNK_BYTES, bytes.length - offset);
+            out.write(bytes, offset, len);
+            out.flush();
+            offset += len;
+            if (offset < bytes.length) {
+                Thread.sleep(BT_CHUNK_DELAY_MS);
+            }
+        }
+    }
+
     private void closeCachedBtSocket() {
-        if (cachedBtSocket != null) {
-            try {
-                cachedBtSocket.close();
-            } catch (Exception ignored) {}
-            cachedBtSocket = null;
-            cachedBtAddress = null;
+        synchronized (btLock) {
+            if (cachedBtSocket != null) {
+                try {
+                    cachedBtSocket.close();
+                } catch (Exception ignored) {}
+                cachedBtSocket = null;
+                cachedBtAddress = null;
+            }
         }
     }
 
@@ -232,7 +309,7 @@ public class PosNativeHardwarePlugin extends Plugin {
     @SuppressLint("MissingPermission")
     private void executeGetPairedPrinters(PluginCall call) {
         try {
-            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            BluetoothAdapter adapter = getBluetoothAdapter();
             if (adapter == null || !adapter.isEnabled()) {
                 JSObject res = new JSObject();
                 res.put("printers", new JSArray());
@@ -287,112 +364,124 @@ public class PosNativeHardwarePlugin extends Plugin {
             return;
         }
 
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        if (address == null || address.trim().isEmpty()) {
+            call.reject("Debes seleccionar una impresora Bluetooth específica antes de imprimir.");
+            return;
+        }
+
+        BluetoothAdapter adapter = getBluetoothAdapter();
         if (adapter == null || !adapter.isEnabled()) {
             call.reject("Bluetooth no disponible o apagado");
             return;
         }
 
-        // Si no se proporcionó dirección, buscar la primera impresora vinculada
-        if (address == null || address.isEmpty()) {
-            Set<BluetoothDevice> bonded = adapter.getBondedDevices();
-            if (bonded != null && !bonded.isEmpty()) {
-                for (BluetoothDevice d : bonded) {
-                    address = d.getAddress();
-                    break;
-                }
-            }
-        }
-
-        if (address == null || address.isEmpty()) {
-            call.reject("No hay ninguna impresora Bluetooth vinculada en el teléfono");
-            return;
-        }
-
-        final String targetAddress = address;
+        final String targetAddress = address.trim();
         bluetoothExecutor.execute(() -> {
-            try {
-                byte[] bytes = Base64.decode(base64Data, Base64.DEFAULT);
-                BluetoothDevice device = adapter.getRemoteDevice(targetAddress);
+            synchronized (btLock) {
+                try {
+                    byte[] bytes = Base64.decode(base64Data, Base64.DEFAULT);
+                    BluetoothDevice device = adapter.getRemoteDevice(targetAddress);
 
-                boolean written = false;
+                    boolean written = false;
 
-                // 1. Intentar reutilizar el socket RFCOMM persistente para impresión en < 30 ms
-                if (cachedBtSocket != null && cachedBtSocket.isConnected() && targetAddress.equalsIgnoreCase(cachedBtAddress)) {
-                    try {
-                        OutputStream out = cachedBtSocket.getOutputStream();
-                        out.write(bytes);
-                        out.flush();
-                        written = true;
-                    } catch (Exception staleErr) {
+                    // 1. Reutilizar el socket RFCOMM persistente solo si corresponde a la misma MAC
+                    if (cachedBtSocket != null && cachedBtSocket.isConnected() && targetAddress.equalsIgnoreCase(cachedBtAddress)) {
+                        try {
+                            OutputStream out = cachedBtSocket.getOutputStream();
+                            writeChunkedToPrinter(out, bytes);
+                            written = true;
+                        } catch (Exception staleErr) {
+                            closeCachedBtSocket();
+                        }
+                    } else if (cachedBtSocket != null) {
                         closeCachedBtSocket();
                     }
-                } else if (cachedBtSocket != null) {
+
+                    // 2. Si no había socket activo o se desconectó, abrir con timeout y chunking seguro
+                    if (!written) {
+                        cachedBtSocket = openRfcommSocket(adapter, device);
+                        cachedBtAddress = targetAddress;
+                        OutputStream out = cachedBtSocket.getOutputStream();
+                        writeChunkedToPrinter(out, bytes);
+                    }
+
+                    JSObject res = new JSObject();
+                    res.put("success", true);
+                    res.put("printedBytes", bytes.length);
+                    call.resolve(res);
+                } catch (Exception e) {
                     closeCachedBtSocket();
+                    call.reject("Fallo al imprimir por Bluetooth: " + e.getMessage());
                 }
-
-                // 2. Si no había socket activo o se desconectó, abrir y almacenar en el pool persistente
-                if (!written) {
-                    cachedBtSocket = openRfcommSocket(device);
-                    cachedBtAddress = targetAddress;
-                    OutputStream out = cachedBtSocket.getOutputStream();
-                    out.write(bytes);
-                    out.flush();
-                }
-
-                JSObject res = new JSObject();
-                res.put("success", true);
-                res.put("printedBytes", bytes.length);
-                call.resolve(res);
-            } catch (Exception e) {
-                closeCachedBtSocket();
-                call.reject("Fallo al imprimir por Bluetooth: " + e.getMessage());
             }
         });
     }
 
     @PluginMethod
     public void getNetworkInfo(PluginCall call) {
-        try {
+        ioExecutor.execute(() -> {
             String ipAddress = "";
             String gateway = "";
             String subnet = "";
-
-            java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
-            while (interfaces.hasMoreElements()) {
-                java.net.NetworkInterface iface = interfaces.nextElement();
-                if (iface.isLoopback() || !iface.isUp()) continue;
-                java.util.Enumeration<java.net.InetAddress> addresses = iface.getInetAddresses();
-                while (addresses.hasMoreElements()) {
-                    java.net.InetAddress addr = addresses.nextElement();
-                    if (!addr.isLoopbackAddress() && addr instanceof java.net.Inet4Address) {
-                        String candidate = addr.getHostAddress();
-                        if (candidate != null && !candidate.startsWith("127.")) {
-                            ipAddress = candidate;
-                            int lastDot = ipAddress.lastIndexOf('.');
-                            if (lastDot > 0) {
-                                subnet = ipAddress.substring(0, lastDot + 1);
-                                gateway = subnet + "1";
+            try {
+                // 1. Priorizar red Wi-Fi activa mediante ConnectivityManager + LinkProperties (API 23+)
+                ConnectivityManager cm = (ConnectivityManager) getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Network activeNet = cm.getActiveNetwork();
+                    NetworkCapabilities caps = activeNet != null ? cm.getNetworkCapabilities(activeNet) : null;
+                    if (caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+                        LinkProperties lp = cm.getLinkProperties(activeNet);
+                        if (lp != null) {
+                            for (LinkAddress linkAddr : lp.getLinkAddresses()) {
+                                java.net.InetAddress addr = linkAddr.getAddress();
+                                if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
+                                    String candidate = addr.getHostAddress();
+                                    if (candidate != null && NativeHardwareUtils.isPrivateLanOrLocalHost(candidate) && !candidate.startsWith("127.")) {
+                                        ipAddress = candidate;
+                                        break;
+                                    }
+                                }
                             }
-                            break;
                         }
                     }
                 }
-                if (!ipAddress.isEmpty()) break;
-            }
+
+                // 2. Fallback a NetworkInterface (filtrando solo RFC1918 LAN)
+                if (ipAddress.isEmpty()) {
+                    java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
+                    while (interfaces != null && interfaces.hasMoreElements()) {
+                        java.net.NetworkInterface iface = interfaces.nextElement();
+                        if (iface.isLoopback() || !iface.isUp()) continue;
+                        java.util.Enumeration<java.net.InetAddress> addresses = iface.getInetAddresses();
+                        while (addresses.hasMoreElements()) {
+                            java.net.InetAddress addr = addresses.nextElement();
+                            if (!addr.isLoopbackAddress() && addr instanceof java.net.Inet4Address) {
+                                String candidate = addr.getHostAddress();
+                                if (candidate != null && NativeHardwareUtils.isPrivateLanOrLocalHost(candidate) && !candidate.startsWith("127.")) {
+                                    ipAddress = candidate;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!ipAddress.isEmpty()) break;
+                    }
+                }
+
+                if (!ipAddress.isEmpty()) {
+                    int lastDot = ipAddress.lastIndexOf('.');
+                    if (lastDot > 0) {
+                        subnet = ipAddress.substring(0, lastDot + 1);
+                        gateway = subnet + "1";
+                    }
+                }
+            } catch (Exception ignored) {}
 
             JSObject res = new JSObject();
             res.put("ip", ipAddress);
             res.put("gateway", gateway);
             res.put("subnet", subnet);
             call.resolve(res);
-        } catch (Exception e) {
-            JSObject res = new JSObject();
-            res.put("ip", "");
-            res.put("gateway", "");
-            res.put("subnet", "");
-            call.resolve(res);
-        }
+        });
     }
 
     private static final String DEFAULT_BIOMETRIC_KEY_ALIAS = "isaac_pos_bio_ecdsa_v2";
@@ -707,114 +796,119 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @PluginMethod
     public void shareImageToWhatsApp(PluginCall call) {
-        String base64Image = call.getString("imageBase64");
-        String text = call.getString("text", "");
-        String phone = call.getString("phone", "");
-        String title = call.getString("title", "Factura Digital");
+        final String rawBase64 = call.getString("imageBase64");
+        final String text = call.getString("text", "");
+        final String phone = call.getString("phone", "");
+        final String title = call.getString("title", "Factura Digital");
 
-        if (base64Image == null || base64Image.isEmpty()) {
+        if (rawBase64 == null || rawBase64.isEmpty()) {
             call.reject("No se proporcionó la imagen en base64");
             return;
         }
 
-        // Limpiar prefijo data:image/...;base64, si existe
-        if (base64Image.contains(",")) {
-            base64Image = base64Image.substring(base64Image.indexOf(",") + 1);
-        }
+        final String base64Image = rawBase64.contains(",")
+            ? rawBase64.substring(rawBase64.indexOf(",") + 1)
+            : rawBase64;
 
-        try {
-            byte[] imageBytes = Base64.decode(base64Image, Base64.DEFAULT);
+        ioExecutor.execute(() -> {
+            try {
+                byte[] imageBytes = Base64.decode(base64Image, Base64.DEFAULT);
 
-            // Guardar imagen en el directorio de caché de la app
-            File cacheDir = new File(getContext().getCacheDir(), "shared_receipts");
-            if (!cacheDir.exists()) {
-                cacheDir.mkdirs();
-            } else {
-                // Limpieza preventiva de recibos en caché (> 1 hora) para no saturar almacenamiento
-                try {
-                    File[] oldFiles = cacheDir.listFiles();
-                    if (oldFiles != null) {
-                        long oneHourAgo = System.currentTimeMillis() - (60 * 60 * 1000);
-                        for (File f : oldFiles) {
-                            if (f.lastModified() < oneHourAgo) {
-                                f.delete();
+                File cacheDir = new File(getContext().getCacheDir(), "shared_receipts");
+                if (!cacheDir.exists()) {
+                    cacheDir.mkdirs();
+                } else {
+                    try {
+                        File[] oldFiles = cacheDir.listFiles();
+                        if (oldFiles != null) {
+                            long oneHourAgo = System.currentTimeMillis() - (60 * 60 * 1000);
+                            for (File f : oldFiles) {
+                                if (f.lastModified() < oneHourAgo) {
+                                    f.delete();
+                                }
                             }
                         }
-                    }
-                } catch (Exception ignored) {}
-            }
-
-            File imageFile = new File(cacheDir, "factura_" + System.currentTimeMillis() + ".png");
-            FileOutputStream fos = new FileOutputStream(imageFile);
-            fos.write(imageBytes);
-            fos.flush();
-            fos.close();
-
-            // Obtener URI segura mediante FileProvider
-            String authority = getContext().getPackageName() + ".fileprovider";
-            Uri contentUri = FileProvider.getUriForFile(getContext(), authority, imageFile);
-
-            Intent intent = new Intent(Intent.ACTION_SEND);
-            intent.setType("image/png");
-            intent.putExtra(Intent.EXTRA_STREAM, contentUri);
-            intent.setClipData(ClipData.newRawUri("", contentUri));
-            if (text != null && !text.isEmpty()) {
-                intent.putExtra(Intent.EXTRA_TEXT, text);
-            }
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-
-            // Comprobar si WhatsApp o WhatsApp Business están instalados
-            PackageManager pm = getContext().getPackageManager();
-            boolean hasWhatsApp = false;
-            boolean hasWhatsAppBusiness = false;
-            try {
-                pm.getPackageInfo("com.whatsapp", PackageManager.GET_ACTIVITIES);
-                hasWhatsApp = true;
-            } catch (Exception ignored) {}
-            try {
-                pm.getPackageInfo("com.whatsapp.w4b", PackageManager.GET_ACTIVITIES);
-                hasWhatsAppBusiness = true;
-            } catch (Exception ignored) {}
-
-            String targetPackage = null;
-            if (hasWhatsApp) {
-                targetPackage = "com.whatsapp";
-            } else if (hasWhatsAppBusiness) {
-                targetPackage = "com.whatsapp.w4b";
-            }
-
-            if (targetPackage != null) {
-                intent.setPackage(targetPackage);
-                if (phone != null && !phone.trim().isEmpty()) {
-                    String cleanPhone = phone.replaceAll("[^0-9]", "");
-                    intent.putExtra("jid", cleanPhone + "@s.whatsapp.net");
+                    } catch (Exception ignored) {}
                 }
-            }
 
-            getActivity().runOnUiThread(() -> {
+                File imageFile = new File(cacheDir, "factura_" + System.currentTimeMillis() + ".png");
+                try (FileOutputStream fos = new FileOutputStream(imageFile)) {
+                    fos.write(imageBytes);
+                    fos.flush();
+                }
+
+                String authority = getContext().getPackageName() + ".fileprovider";
+                Uri contentUri = FileProvider.getUriForFile(getContext(), authority, imageFile);
+
+                Intent intent = new Intent(Intent.ACTION_SEND);
+                intent.setType("image/png");
+                intent.putExtra(Intent.EXTRA_STREAM, contentUri);
+                intent.setClipData(ClipData.newRawUri("", contentUri));
+                if (text != null && !text.isEmpty()) {
+                    intent.putExtra(Intent.EXTRA_TEXT, text);
+                }
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+                PackageManager pm = getContext().getPackageManager();
+                boolean hasWhatsApp = false;
+                boolean hasWhatsAppBusiness = false;
                 try {
-                    getActivity().startActivity(intent);
-                    JSObject res = new JSObject();
-                    res.put("success", true);
-                    call.resolve(res);
-                } catch (Exception launchErr) {
+                    pm.getPackageInfo("com.whatsapp", PackageManager.GET_ACTIVITIES);
+                    hasWhatsApp = true;
+                } catch (Exception ignored) {}
+                try {
+                    pm.getPackageInfo("com.whatsapp.w4b", PackageManager.GET_ACTIVITIES);
+                    hasWhatsAppBusiness = true;
+                } catch (Exception ignored) {}
+
+                String targetPackage = null;
+                if (hasWhatsApp) {
+                    targetPackage = "com.whatsapp";
+                } else if (hasWhatsAppBusiness) {
+                    targetPackage = "com.whatsapp.w4b";
+                }
+
+                if (targetPackage != null) {
+                    intent.setPackage(targetPackage);
+                    if (phone != null && !phone.trim().isEmpty()) {
+                        String cleanPhone = phone.replaceAll("[^0-9]", "");
+                        intent.putExtra("jid", cleanPhone + "@s.whatsapp.net");
+                    }
+                }
+
+                Activity act = getActivity();
+                if (!isActivityAlive(act)) {
+                    call.reject("Actividad cerrada antes de compartir la imagen");
+                    return;
+                }
+                act.runOnUiThread(() -> {
+                    if (!isActivityAlive(act)) {
+                        call.reject("Actividad no disponible al compartir imagen");
+                        return;
+                    }
                     try {
-                        // Fallback: abrir selector nativo de compartir de Android si el intent directo falla
-                        intent.setPackage(null);
-                        Intent chooser = Intent.createChooser(intent, title);
-                        chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        getActivity().startActivity(chooser);
+                        act.startActivity(intent);
                         JSObject res = new JSObject();
                         res.put("success", true);
                         call.resolve(res);
-                    } catch (Exception chooserErr) {
-                        call.reject("Error al compartir la imagen: " + chooserErr.getMessage());
+                    } catch (Exception launchErr) {
+                        try {
+                            intent.setPackage(null);
+                            Intent chooser = Intent.createChooser(intent, title);
+                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            act.startActivity(chooser);
+                            JSObject res = new JSObject();
+                            res.put("success", true);
+                            call.resolve(res);
+                        } catch (Exception chooserErr) {
+                            call.reject("Error al compartir la imagen: " + chooserErr.getMessage());
+                        }
                     }
-                }
-            });
-        } catch (Exception e) {
-            call.reject("Error procesando imagen para compartir: " + e.getMessage());
-        }
+                });
+            } catch (Exception e) {
+                call.reject("Error procesando imagen para compartir: " + e.getMessage());
+            }
+        });
     }
 
     private TextRecognizer textRecognizer = null;
@@ -850,103 +944,141 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @PluginMethod
     public void scanBarcode(PluginCall call) {
-        String base64Image = call.getString("imageBase64");
-        if (base64Image == null || base64Image.isEmpty()) {
+        final String rawBase64 = call.getString("imageBase64");
+        if (rawBase64 == null || rawBase64.isEmpty()) {
             call.reject("No se proporcionó imagen");
             return;
         }
+        final String base64Image = rawBase64.contains(",")
+            ? rawBase64.substring(rawBase64.indexOf(",") + 1)
+            : rawBase64;
 
-        if (base64Image.contains(",")) {
-            base64Image = base64Image.substring(base64Image.indexOf(",") + 1);
-        }
+        ioExecutor.execute(() -> {
+            Bitmap bitmap = null;
+            final AtomicBoolean recycled = new AtomicBoolean(false);
+            try {
+                byte[] bytes = Base64.decode(base64Image, Base64.DEFAULT);
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inPreferredConfig = Bitmap.Config.RGB_565;
+                bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+                if (bitmap == null) {
+                    call.reject("No se pudo decodificar el bitmap");
+                    return;
+                }
 
-        try {
-            byte[] bytes = Base64.decode(base64Image, Base64.DEFAULT);
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inPreferredConfig = Bitmap.Config.RGB_565;
-            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
-            if (bitmap == null) {
-                call.reject("No se pudo decodificar el bitmap");
-                return;
-            }
+                final Bitmap finalBitmap = bitmap;
+                Runnable safeRecycle = () -> {
+                    if (recycled.compareAndSet(false, true)) {
+                        try {
+                            if (!finalBitmap.isRecycled()) finalBitmap.recycle();
+                        } catch (Exception ignored) {}
+                    }
+                };
 
-            InputImage image = InputImage.fromBitmap(bitmap, 0);
-            getBarcodeScanner().process(image)
-                .addOnSuccessListener(barcodes -> {
-                    try { bitmap.recycle(); } catch (Exception ignored) {}
-                    JSObject result = new JSObject();
-                    result.put("success", true);
-                    if (barcodes != null && !barcodes.isEmpty()) {
-                        for (Barcode barcode : barcodes) {
-                            String rawVal = barcode.getRawValue();
-                            if (rawVal != null && !rawVal.trim().isEmpty()) {
-                                result.put("found", true);
-                                result.put("rawValue", rawVal.trim());
-                                result.put("format", barcode.getFormat());
-                                call.resolve(result);
-                                return;
+                InputImage image = InputImage.fromBitmap(finalBitmap, 0);
+                getBarcodeScanner().process(image)
+                    .addOnSuccessListener(barcodes -> {
+                        safeRecycle.run();
+                        JSObject result = new JSObject();
+                        result.put("success", true);
+                        if (barcodes != null && !barcodes.isEmpty()) {
+                            for (Barcode barcode : barcodes) {
+                                String rawVal = barcode.getRawValue();
+                                if (rawVal != null && !rawVal.trim().isEmpty()) {
+                                    result.put("found", true);
+                                    result.put("rawValue", rawVal.trim());
+                                    result.put("format", barcode.getFormat());
+                                    call.resolve(result);
+                                    return;
+                                }
                             }
                         }
-                    }
-                    result.put("found", false);
-                    call.resolve(result);
-                })
-                .addOnFailureListener(e -> {
-                    try { bitmap.recycle(); } catch (Exception ignored) {}
-                    call.reject("Error en ML Kit Barcode: " + e.getMessage());
-                });
-        } catch (Exception e) {
-            call.reject("Error procesando imagen para código de barras: " + e.getMessage());
-        }
+                        result.put("found", false);
+                        call.resolve(result);
+                    })
+                    .addOnFailureListener(e -> {
+                        safeRecycle.run();
+                        call.reject("Error en ML Kit Barcode: " + e.getMessage());
+                    })
+                    .addOnCanceledListener(() -> {
+                        safeRecycle.run();
+                        call.reject("Escaneo de código de barras cancelado");
+                    });
+            } catch (Exception e) {
+                if (bitmap != null && recycled.compareAndSet(false, true)) {
+                    try { if (!bitmap.isRecycled()) bitmap.recycle(); } catch (Exception ignored) {}
+                }
+                call.reject("Error procesando imagen para código de barras: " + e.getMessage());
+            }
+        });
     }
 
     @PluginMethod
     public void recognizeText(PluginCall call) {
-        String base64Image = call.getString("imageBase64");
-        if (base64Image == null || base64Image.isEmpty()) {
+        final String rawBase64 = call.getString("imageBase64");
+        if (rawBase64 == null || rawBase64.isEmpty()) {
             call.reject("No se proporcionó imagen");
             return;
         }
+        final String base64Image = rawBase64.contains(",")
+            ? rawBase64.substring(rawBase64.indexOf(",") + 1)
+            : rawBase64;
 
-        if (base64Image.contains(",")) {
-            base64Image = base64Image.substring(base64Image.indexOf(",") + 1);
-        }
+        ioExecutor.execute(() -> {
+            Bitmap bitmap = null;
+            final AtomicBoolean recycled = new AtomicBoolean(false);
+            try {
+                byte[] bytes = Base64.decode(base64Image, Base64.DEFAULT);
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inPreferredConfig = Bitmap.Config.RGB_565;
+                bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+                if (bitmap == null) {
+                    call.reject("No se pudo decodificar el bitmap");
+                    return;
+                }
 
-        try {
-            byte[] bytes = Base64.decode(base64Image, Base64.DEFAULT);
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inPreferredConfig = Bitmap.Config.RGB_565;
-            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
-            if (bitmap == null) {
-                call.reject("No se pudo decodificar el bitmap");
-                return;
-            }
-
-            InputImage image = InputImage.fromBitmap(bitmap, 0);
-            getTextRecognizer().process(image)
-                .addOnSuccessListener(visionText -> {
-                    try { bitmap.recycle(); } catch (Exception ignored) {}
-                    String fullText = visionText.getText();
-                    JSArray blocksArray = new JSArray();
-                    for (Text.TextBlock block : visionText.getTextBlocks()) {
-                        JSObject blockObj = new JSObject();
-                        blockObj.put("text", block.getText());
-                        blocksArray.put(blockObj);
+                final Bitmap finalBitmap = bitmap;
+                Runnable safeRecycle = () -> {
+                    if (recycled.compareAndSet(false, true)) {
+                        try {
+                            if (!finalBitmap.isRecycled()) finalBitmap.recycle();
+                        } catch (Exception ignored) {}
                     }
+                };
 
-                    JSObject result = new JSObject();
-                    result.put("success", true);
-                    result.put("text", fullText);
-                    result.put("blocks", blocksArray);
-                    call.resolve(result);
-                })
-                .addOnFailureListener(e -> {
-                    try { bitmap.recycle(); } catch (Exception ignored) {}
-                    call.reject("Error en OCR ML Kit: " + e.getMessage());
-                });
-        } catch (Exception e) {
-            call.reject("Error procesando imagen para OCR: " + e.getMessage());
-        }
+                InputImage image = InputImage.fromBitmap(finalBitmap, 0);
+                getTextRecognizer().process(image)
+                    .addOnSuccessListener(visionText -> {
+                        safeRecycle.run();
+                        String fullText = visionText.getText();
+                        JSArray blocksArray = new JSArray();
+                        for (Text.TextBlock block : visionText.getTextBlocks()) {
+                            JSObject blockObj = new JSObject();
+                            blockObj.put("text", block.getText());
+                            blocksArray.put(blockObj);
+                        }
+
+                        JSObject result = new JSObject();
+                        result.put("success", true);
+                        result.put("text", fullText);
+                        result.put("blocks", blocksArray);
+                        call.resolve(result);
+                    })
+                    .addOnFailureListener(e -> {
+                        safeRecycle.run();
+                        call.reject("Error en OCR ML Kit: " + e.getMessage());
+                    })
+                    .addOnCanceledListener(() -> {
+                        safeRecycle.run();
+                        call.reject("Reconocimiento de texto OCR cancelado");
+                    });
+            } catch (Exception e) {
+                if (bitmap != null && recycled.compareAndSet(false, true)) {
+                    try { if (!bitmap.isRecycled()) bitmap.recycle(); } catch (Exception ignored) {}
+                }
+                call.reject("Error procesando imagen para OCR: " + e.getMessage());
+            }
+        });
     }
 
     @PluginMethod
@@ -954,7 +1086,16 @@ public class PosNativeHardwarePlugin extends Plugin {
         String text = call.getString("text");
         if (text == null) text = "";
         final String textToCopy = text;
-        getActivity().runOnUiThread(() -> {
+        Activity act = getActivity();
+        if (!isActivityAlive(act)) {
+            call.reject("Actividad no disponible para portapapeles");
+            return;
+        }
+        act.runOnUiThread(() -> {
+            if (!isActivityAlive(act)) {
+                call.reject("Actividad cerrada antes de copiar al portapapeles");
+                return;
+            }
             try {
                 android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
                 if (clipboard != null) {
@@ -973,9 +1114,18 @@ public class PosNativeHardwarePlugin extends Plugin {
     @PluginMethod
     public void triggerHaptic(PluginCall call) {
         String type = call.getString("type", "medium");
-        getActivity().runOnUiThread(() -> {
+        Activity act = getActivity();
+        if (!isActivityAlive(act)) {
+            call.resolve();
+            return;
+        }
+        act.runOnUiThread(() -> {
+            if (!isActivityAlive(act)) {
+                call.resolve();
+                return;
+            }
             try {
-                android.view.View rootView = getActivity().getWindow().getDecorView();
+                android.view.View rootView = act.getWindow().getDecorView();
                 if (rootView != null) {
                     if ("heavy".equalsIgnoreCase(type)) {
                         rootView.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
@@ -997,12 +1147,21 @@ public class PosNativeHardwarePlugin extends Plugin {
     @PluginMethod
     public void setScreenSecure(PluginCall call) {
         boolean secure = call.getBoolean("secure", true);
-        getActivity().runOnUiThread(() -> {
+        Activity act = getActivity();
+        if (!isActivityAlive(act)) {
+            call.reject("Actividad no disponible para FLAG_SECURE");
+            return;
+        }
+        act.runOnUiThread(() -> {
+            if (!isActivityAlive(act)) {
+                call.reject("Actividad cerrada antes de aplicar FLAG_SECURE");
+                return;
+            }
             try {
                 if (secure) {
-                    getActivity().getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+                    act.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
                 } else {
-                    getActivity().getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+                    act.getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
                 }
                 JSObject ret = new JSObject();
                 ret.put("success", true);
@@ -1054,7 +1213,16 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @PluginMethod
     public void readClipboard(PluginCall call) {
-        getActivity().runOnUiThread(() -> {
+        Activity act = getActivity();
+        if (!isActivityAlive(act)) {
+            call.reject("Actividad no disponible para leer portapapeles");
+            return;
+        }
+        act.runOnUiThread(() -> {
+            if (!isActivityAlive(act)) {
+                call.reject("Actividad cerrada antes de leer portapapeles");
+                return;
+            }
             try {
                 android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
                 if (clipboard != null && clipboard.hasPrimaryClip() && clipboard.getPrimaryClip().getItemCount() > 0) {
@@ -1076,7 +1244,16 @@ public class PosNativeHardwarePlugin extends Plugin {
     @PluginMethod
     public void writeClipboard(PluginCall call) {
         String text = call.getString("text", "");
-        getActivity().runOnUiThread(() -> {
+        Activity act = getActivity();
+        if (!isActivityAlive(act)) {
+            call.reject("Actividad no disponible para escribir portapapeles");
+            return;
+        }
+        act.runOnUiThread(() -> {
+            if (!isActivityAlive(act)) {
+                call.reject("Actividad cerrada antes de escribir portapapeles");
+                return;
+            }
             try {
                 android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
                 if (clipboard != null) {
@@ -1174,6 +1351,9 @@ public class PosNativeHardwarePlugin extends Plugin {
             bluetoothExecutor.shutdownNow();
         } catch (Exception ignored) {}
         try {
+            ioExecutor.shutdownNow();
+        } catch (Exception ignored) {}
+        try {
             sqliteExecutor.shutdownNow();
         } catch (Exception ignored) {}
         super.handleOnDestroy();
@@ -1251,19 +1431,19 @@ public class PosNativeHardwarePlugin extends Plugin {
         }
 
         sqliteExecutor.execute(() -> {
+            SQLiteStatement stmt = null;
             try {
                 SQLiteDatabase db = getSqliteHelper(getContext()).getWritableDatabase();
-                SQLiteStatement stmt = db.compileStatement(
+                stmt = db.compileStatement(
                     "INSERT OR REPLACE INTO kv_records (store_name, record_id, json_payload, status, search_text, updated_at) VALUES (?, ?, ?, ?, ?, ?);"
                 );
                 stmt.bindString(1, storeName);
                 stmt.bindString(2, recordId);
                 stmt.bindString(3, jsonPayload);
                 stmt.bindString(4, status != null ? status : "");
-                stmt.bindString(5, searchText != null ? searchText.toLowerCase() : "");
+                stmt.bindString(5, searchText != null ? searchText.toLowerCase(java.util.Locale.ROOT) : "");
                 stmt.bindLong(6, System.currentTimeMillis());
                 stmt.executeInsert();
-                stmt.close();
 
                 JSObject res = new JSObject();
                 res.put("success", true);
@@ -1271,6 +1451,10 @@ public class PosNativeHardwarePlugin extends Plugin {
                 call.resolve(res);
             } catch (Exception e) {
                 call.reject("Error en sqlitePut: " + e.getMessage());
+            } finally {
+                if (stmt != null) {
+                    try { stmt.close(); } catch (Exception ignored) {}
+                }
             }
         });
     }
@@ -1310,7 +1494,7 @@ public class PosNativeHardwarePlugin extends Plugin {
                     stmt.bindString(2, id);
                     stmt.bindString(3, payload);
                     stmt.bindString(4, status);
-                    stmt.bindString(5, search.toLowerCase());
+                    stmt.bindString(5, search.toLowerCase(java.util.Locale.ROOT));
                     stmt.bindLong(6, now);
                     stmt.executeInsert();
                 }
@@ -1373,7 +1557,7 @@ public class PosNativeHardwarePlugin extends Plugin {
                     insStmt.bindString(2, id);
                     insStmt.bindString(3, payload);
                     insStmt.bindString(4, status);
-                    insStmt.bindString(5, search.toLowerCase());
+                    insStmt.bindString(5, search.toLowerCase(java.util.Locale.ROOT));
                     insStmt.bindLong(6, now);
                     insStmt.executeInsert();
                 }
@@ -1528,15 +1712,15 @@ public class PosNativeHardwarePlugin extends Plugin {
         }
 
         sqliteExecutor.execute(() -> {
+            SQLiteStatement stmt = null;
             try {
                 SQLiteDatabase db = getSqliteHelper(getContext()).getWritableDatabase();
-                SQLiteStatement stmt = db.compileStatement(
+                stmt = db.compileStatement(
                     "DELETE FROM kv_records WHERE store_name = ? AND record_id = ?;"
                 );
                 stmt.bindString(1, storeName);
                 stmt.bindString(2, recordId);
                 int deleted = stmt.executeUpdateDelete();
-                stmt.close();
 
                 JSObject res = new JSObject();
                 res.put("success", true);
@@ -1544,6 +1728,10 @@ public class PosNativeHardwarePlugin extends Plugin {
                 call.resolve(res);
             } catch (Exception e) {
                 call.reject("Error en sqliteDelete: " + e.getMessage());
+            } finally {
+                if (stmt != null) {
+                    try { stmt.close(); } catch (Exception ignored) {}
+                }
             }
         });
     }
@@ -1557,12 +1745,12 @@ public class PosNativeHardwarePlugin extends Plugin {
         }
 
         sqliteExecutor.execute(() -> {
+            SQLiteStatement stmt = null;
             try {
                 SQLiteDatabase db = getSqliteHelper(getContext()).getWritableDatabase();
-                SQLiteStatement stmt = db.compileStatement("DELETE FROM kv_records WHERE store_name = ?;");
+                stmt = db.compileStatement("DELETE FROM kv_records WHERE store_name = ?;");
                 stmt.bindString(1, storeName);
                 int deleted = stmt.executeUpdateDelete();
-                stmt.close();
 
                 JSObject res = new JSObject();
                 res.put("success", true);
@@ -1570,6 +1758,10 @@ public class PosNativeHardwarePlugin extends Plugin {
                 call.resolve(res);
             } catch (Exception e) {
                 call.reject("Error en sqliteClear: " + e.getMessage());
+            } finally {
+                if (stmt != null) {
+                    try { stmt.close(); } catch (Exception ignored) {}
+                }
             }
         });
     }
@@ -1647,25 +1839,27 @@ public class PosNativeHardwarePlugin extends Plugin {
             call.reject("Parámetros key y value son obligatorios en saveSecureSecret");
             return;
         }
-        try {
-            SecretKey secretKey = getOrCreateVaultSecretKey();
-            Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-            byte[] iv = cipher.getIV();
-            byte[] cipherBytes = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
-            String payload = Base64.encodeToString(iv, Base64.NO_WRAP)
-                + ":"
-                + Base64.encodeToString(cipherBytes, Base64.NO_WRAP);
+        ioExecutor.execute(() -> {
+            try {
+                SecretKey secretKey = getOrCreateVaultSecretKey();
+                Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+                byte[] iv = cipher.getIV();
+                byte[] cipherBytes = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
+                String payload = Base64.encodeToString(iv, Base64.NO_WRAP)
+                    + ":"
+                    + Base64.encodeToString(cipherBytes, Base64.NO_WRAP);
 
-            SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
-            prefs.edit().putString(key.trim(), payload).apply();
+                SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit().putString(key.trim(), payload).apply();
 
-            JSObject res = new JSObject();
-            res.put("success", true);
-            call.resolve(res);
-        } catch (Exception e) {
-            call.reject("Error guardando secreto cifrado en Android Keystore: " + e.getMessage());
-        }
+                JSObject res = new JSObject();
+                res.put("success", true);
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject("Error guardando secreto cifrado en Android Keystore: " + e.getMessage());
+            }
+        });
     }
 
     @PluginMethod
@@ -1675,29 +1869,37 @@ public class PosNativeHardwarePlugin extends Plugin {
             call.reject("Parámetro key requerido en getSecureSecret");
             return;
         }
-        try {
+        ioExecutor.execute(() -> {
             SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
-            String payload = prefs.getString(key.trim(), null);
-            JSObject res = new JSObject();
-            if (payload == null || !payload.contains(":")) {
-                res.put("value", JSObject.NULL);
+            try {
+                String payload = prefs.getString(key.trim(), null);
+                JSObject res = new JSObject();
+                if (payload == null || !payload.contains(":")) {
+                    res.put("value", JSObject.NULL);
+                    call.resolve(res);
+                    return;
+                }
+                String[] parts = payload.split(":", 2);
+                byte[] iv = Base64.decode(parts[0], Base64.NO_WRAP);
+                byte[] cipherBytes = Base64.decode(parts[1], Base64.NO_WRAP);
+
+                SecretKey secretKey = getOrCreateVaultSecretKey();
+                Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_BITS, iv));
+                byte[] plainBytes = cipher.doFinal(cipherBytes);
+
+                res.put("value", new String(plainBytes, StandardCharsets.UTF_8));
                 call.resolve(res);
-                return;
+            } catch (KeyPermanentlyInvalidatedException | AEADBadTagException invErr) {
+                prefs.edit().remove(key.trim()).apply();
+                JSObject res = new JSObject();
+                res.put("value", JSObject.NULL);
+                res.put("invalidated", true);
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject("Error descifrando secreto desde Android Keystore: " + e.getMessage());
             }
-            String[] parts = payload.split(":", 2);
-            byte[] iv = Base64.decode(parts[0], Base64.NO_WRAP);
-            byte[] cipherBytes = Base64.decode(parts[1], Base64.NO_WRAP);
-
-            SecretKey secretKey = getOrCreateVaultSecretKey();
-            Cipher cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION);
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_BITS, iv));
-            byte[] plainBytes = cipher.doFinal(cipherBytes);
-
-            res.put("value", new String(plainBytes, StandardCharsets.UTF_8));
-            call.resolve(res);
-        } catch (Exception e) {
-            call.reject("Error descifrando secreto desde Android Keystore: " + e.getMessage());
-        }
+        });
     }
 
     @PluginMethod
@@ -1707,14 +1909,16 @@ public class PosNativeHardwarePlugin extends Plugin {
             call.reject("Parámetro key requerido en removeSecureSecret");
             return;
         }
-        try {
-            SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
-            prefs.edit().remove(key.trim()).apply();
-            JSObject res = new JSObject();
-            res.put("success", true);
-            call.resolve(res);
-        } catch (Exception e) {
-            call.reject("Error eliminando secreto en Android Keystore: " + e.getMessage());
-        }
+        ioExecutor.execute(() -> {
+            try {
+                SharedPreferences prefs = getContext().getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit().remove(key.trim()).apply();
+                JSObject res = new JSObject();
+                res.put("success", true);
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject("Error eliminando secreto en Android Keystore: " + e.getMessage());
+            }
+        });
     }
 }

@@ -38,6 +38,7 @@ import MobileTabletCartPanel from '../components/mobile/MobileTabletCartPanel';
 import MobileCartSheet from '../components/mobile/MobileCartSheet';
 import MobileSimulatorModals from '../components/mobile/MobileSimulatorModals';
 import { useFuzzySearch } from '../hooks/useFuzzySearch';
+import useScanner from '../hooks/useScanner';
 
 import biometricService from '../services/biometricService';
 import mobilePrinterService from '../services/mobilePrinterService';
@@ -763,6 +764,9 @@ export default function MobilePOSSimulator() {
     return 'unhandled';
   };
 
+  const isAnyOverlayActiveRef = useRef(false);
+  isAnyOverlayActiveRef.current = isAnyOverlayActive;
+
   // Barrera reactiva en el historial para atrapar el gesto 'Atrás' en Android y PWA
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -794,14 +798,13 @@ export default function MobilePOSSimulator() {
       } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
     }
 
-    // Listener de navegación en PWA / Web Mobile
+    // Listener de navegación en PWA / Web Mobile (solo re-empuja barrera si aún queda otro modal/overlay abierto)
     const onPopState = () => {
       pushedHistoryCountRef.current = 0;
       const res = invokeBackNavigation();
       if (res === 'handled') {
-        // Si aún queda otro modal abierto en la pila, reactivamos la barrera de retroceso
         setTimeout(() => {
-          if (backNavigationHandlerRef.current && pushedHistoryCountRef.current === 0) {
+          if (isAnyOverlayActiveRef.current && pushedHistoryCountRef.current === 0) {
             window.history.pushState({ isaacModalBarrier: true }, '');
             pushedHistoryCountRef.current = 1;
           }
@@ -2719,78 +2722,29 @@ export default function MobilePOSSimulator() {
     handleBarcodeScannedRef.current = handleBarcodeScanned;
   }, [handleBarcodeScanned]);
 
-  // 🔫 Listener Global de Escáner Físico de Código de Barras (Pistolas Bluetooth / USB OTG / Lector Inalámbrico)
+  // 🔫 Listener Global Unificado de Escáner Físico HID (Pistolas Bluetooth / USB OTG / Lector Inalámbrico) vía useScanner
+  const hardwareScanHudTimerRef = useRef(null);
+  const handleHardwareScannerBurst = useCallback((scannedCode) => {
+    if (!scannedCode) return;
+    if (handleBarcodeScannedRef.current) {
+      handleBarcodeScannedRef.current(scannedCode);
+      setLastHardwareScan({ code: scannedCode, time: Date.now() });
+      if (hardwareScanHudTimerRef.current) clearTimeout(hardwareScanHudTimerRef.current);
+      hardwareScanHudTimerRef.current = setTimeout(() => setLastHardwareScan(null), 2500);
+    }
+  }, []);
+
   useEffect(() => {
-    let barcodeBuffer = '';
-    let lastKeyTime = 0;
-    let scanTimeout = null;
-    let hudTimeout = null;
-
-    const handleKeyDown = (e) => {
-      const activeTag = document.activeElement?.tagName?.toLowerCase();
-      const isInputFocused = activeTag === 'input' || activeTag === 'textarea';
-
-      const now = Date.now();
-      const timeDiff = now - lastKeyTime;
-      lastKeyTime = now;
-
-      // 1. Detección de Final de Código (Enter o Tab enviado por el lector)
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        // Un lector Bluetooth envía los caracteres a < 50ms entre teclas.
-        // Si el buffer tiene 3+ caracteres y el flujo fue ultra-rápido (< 65ms) o no había input enfocado:
-        if (barcodeBuffer.length >= 3 && (timeDiff < 65 || !isInputFocused)) {
-          e.preventDefault();
-          e.stopPropagation();
-          const scannedCode = barcodeBuffer.trim();
-          barcodeBuffer = '';
-          
-          if (isInputFocused) {
-            try { document.activeElement?.blur?.(); } catch { /* El navegador impidió quitar el foco programáticamente */ }
-          }
-
-          if (handleBarcodeScannedRef.current) {
-            handleBarcodeScannedRef.current(scannedCode);
-            // Mostrar HUD flotante de escaneo físico de pistola
-            setLastHardwareScan({ code: scannedCode, time: Date.now() });
-            if (hudTimeout) clearTimeout(hudTimeout);
-            hudTimeout = setTimeout(() => setLastHardwareScan(null), 2500);
-          }
-        } else {
-          barcodeBuffer = '';
-        }
-        return;
-      }
-
-      // 2. Si el usuario está tecleando manualmente despacio en un input (> 75ms), es escritura humana
-      if (timeDiff > 75 && isInputFocused) {
-        barcodeBuffer = '';
-        return;
-      }
-
-      // 3. Reiniciar buffer si pasaron más de 140ms sin teclear
-      if (timeDiff > 140) {
-        barcodeBuffer = '';
-      }
-
-      // 4. Acumular caracteres alfanuméricos
-      if (e.key && e.key.length === 1) {
-        barcodeBuffer += e.key;
-
-        // Auto-limpieza de seguridad si el escáner se trabó
-        if (scanTimeout) clearTimeout(scanTimeout);
-        scanTimeout = setTimeout(() => {
-          barcodeBuffer = '';
-        }, 300);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      if (scanTimeout) clearTimeout(scanTimeout);
-      if (hudTimeout) clearTimeout(hudTimeout);
+      if (hardwareScanHudTimerRef.current) clearTimeout(hardwareScanHudTimerRef.current);
     };
   }, []);
+
+  useScanner(handleHardwareScannerBurst, {
+    enabled: Boolean(user),
+    allowInInputs: false,
+    minLength: 3
+  });
 
   // Helpers unificados para IDs de producto limpio y multiplicador de unidades (Caja/Bulto/Presentaciones dinámicas)
   const getCleanProductId = (rawId) => String(rawId || '').replace(/__bulk$|__mid$|__pres_.*$|__wpres_.*$|__srv_.*$/, '');
@@ -3700,6 +3654,14 @@ export default function MobilePOSSimulator() {
         T={T}
         isLight={isLight}
         isOledMode={isOledMode}
+        showServerModal={showServerModal}
+        setShowServerModal={setShowServerModal}
+        mobileServerIp={mobileServerIp}
+        setMobileServerIp={setMobileServerIp}
+        serverFeedback={serverFeedback}
+        isTestingServer={isTestingServer}
+        handleAutoDiscoverServer={handleAutoDiscoverServer}
+        handleTestAndSaveServer={handleTestAndSaveServer}
         exchangeRate={checkoutEffectiveRate}
         businessInfo={businessInfo}
         user={user}

@@ -1,14 +1,16 @@
 /**
  * Universal Mobile Printer Service
  * Supports:
- *  1. Web Bluetooth API (Direct wireless printing to 58mm/80mm Bluetooth thermal printers)
- *  2. Android RawBT Intent Protocol (Silent background thermal printing on Android)
- *  3. Silent Iframe Web Print (Standard browser fallback without blank popup windows)
+ *  1. Direct Native Android Bluetooth RFCOMM SPP (via PosNativeHardware)
+ *  2. LAN / Wi-Fi Thermal Network Printers (TCP 9100 via /settings/print-network-raw)
+ *  3. Web Bluetooth API (BLE GATT with proper writeWithoutResponse capability check)
+ *  4. Android RawBT Intent Protocol (CP858 Base64)
+ *  5. Silent Iframe Web Print (fallback without blank popup windows)
  */
 
 import { Capacitor } from '@capacitor/core';
-import { formatSaleToEscPos } from '../utils/escposFormatter';
-import { PosNativeHardware } from './api';
+import { formatSaleToEscPos, encodeEscPosCp858, ESC_INIT_CP858, GS_CUT } from '../utils/escposFormatter';
+import api, { PosNativeHardware } from './api';
 
 class MobilePrinterService {
     constructor() {
@@ -28,7 +30,20 @@ class MobilePrinterService {
     }
 
     /**
-     * Connect to a Bluetooth ESC/POS printer
+     * Convert string or Uint8Array to raw CP858 Uint8Array bytes
+     */
+    toEscPosBytes(escPosData) {
+        if (escPosData instanceof Uint8Array) {
+            return escPosData;
+        }
+        if (typeof escPosData === 'string') {
+            return encodeEscPosCp858(escPosData);
+        }
+        return new Uint8Array(escPosData || []);
+    }
+
+    /**
+     * Connect to a Bluetooth ESC/POS printer (requires direct user gesture in browser)
      */
     async connectBluetooth() {
         if (!this.isBluetoothSupported()) {
@@ -37,7 +52,6 @@ class MobilePrinterService {
 
         this.isBluetoothConnecting = true;
         try {
-            // Common Bluetooth Printer Service UUIDs
             const optionalServices = [
                 '000018f0-0000-1000-8000-00805f9b34fb', // Standard Printer Service
                 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // Pos-58/80
@@ -61,7 +75,6 @@ class MobilePrinterService {
 
             const server = await device.gatt.connect();
 
-            // Find valid writable characteristic across services
             for (const serviceUuid of optionalServices) {
                 try {
                     const service = await server.getPrimaryService(serviceUuid);
@@ -77,7 +90,6 @@ class MobilePrinterService {
             }
 
             if (!this.characteristic) {
-                // Fallback: try all discovered services
                 const services = await server.getPrimaryServices().catch(() => []);
                 for (const service of services) {
                     const characteristics = await service.getCharacteristics().catch(() => []);
@@ -106,10 +118,15 @@ class MobilePrinterService {
     }
 
     /**
-     * Print binary ESC/POS data directly over Web Bluetooth
+     * Print binary ESC/POS data directly over Web Bluetooth (BLE)
+     * Checks characteristic.properties.writeWithoutResponse before choosing write method.
+     * Avoids calling requestDevice() without user gesture when invoked from background spooler.
      */
-    async printBluetooth(escPosData) {
+    async printBluetooth(escPosData, { allowConnectPrompt = true } = {}) {
         if (!this.characteristic || !this.bluetoothDevice?.gatt?.connected) {
+            if (!allowConnectPrompt) {
+                throw new Error('Impresora Web Bluetooth desconectada. Conéctala manualmente desde Configuración de Impresora.');
+            }
             await this.connectBluetooth();
         }
 
@@ -117,27 +134,23 @@ class MobilePrinterService {
             throw new Error('Impresora Bluetooth no conectada');
         }
 
-        // Convert string to Uint8Array if needed
-        let bytes;
-        if (typeof escPosData === 'string') {
-            const encoder = new TextEncoder();
-            bytes = encoder.encode(escPosData);
-        } else if (escPosData instanceof Uint8Array) {
-            bytes = escPosData;
-        } else {
-            bytes = new Uint8Array(escPosData);
-        }
+        const bytes = this.toEscPosBytes(escPosData);
+        const supportsWriteWithoutResponse = Boolean(
+            this.characteristic.properties?.writeWithoutResponse &&
+            typeof this.characteristic.writeValueWithoutResponse === 'function'
+        );
+        const supportsWriteWithResponse = typeof this.characteristic.writeValueWithResponse === 'function';
 
-        // Bluetooth MTU chunks (typically 100-512 bytes per packet)
         const CHUNK_SIZE = 120;
         for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
             const chunk = bytes.slice(i, i + CHUNK_SIZE);
-            if (this.characteristic.writeValueWithoutResponse) {
+            if (supportsWriteWithoutResponse) {
                 await this.characteristic.writeValueWithoutResponse(chunk);
+            } else if (supportsWriteWithResponse) {
+                await this.characteristic.writeValueWithResponse(chunk);
             } else {
                 await this.characteristic.writeValue(chunk);
             }
-            // Minimal pause to prevent buffer overrun on budget thermal printers
             await new Promise(resolve => setTimeout(resolve, 20));
         }
 
@@ -145,23 +158,97 @@ class MobilePrinterService {
     }
 
     /**
-     * Print via Android RawBT intent
+     * Print binary ESC/POS data to a LAN/Wi-Fi thermal printer (TCP 9100) via PC backend relay
+     */
+    async printNetwork(ip, port = 9100, escPosData) {
+        const cleanIp = String(ip || '').trim();
+        if (!cleanIp) {
+            throw new Error('IP de impresora de red no configurada.');
+        }
+        const bytes = this.toEscPosBytes(escPosData);
+        const dataBase64 = this.toBase64(bytes);
+        const res = await api.post('/settings/print-network-raw', {
+            ip: cleanIp,
+            port: Number(port) || 9100,
+            dataBase64
+        }, { timeout: 6000 });
+        if (!res.data?.success) {
+            throw new Error(res.data?.error || 'La impresora de red no confirmó el trabajo.');
+        }
+        return true;
+    }
+
+    /**
+     * Print via Android RawBT intent (CP858 Base64, no deprecated unescape())
      */
     printRawBT(escPosData) {
-        let base64;
-        if (typeof escPosData === 'string') {
-            base64 = btoa(unescape(encodeURIComponent(escPosData)));
-        } else if (escPosData instanceof Uint8Array) {
-            let binary = '';
-            for (let i = 0; i < escPosData.byteLength; i++) {
-                binary += String.fromCharCode(escPosData[i]);
-            }
-            base64 = btoa(binary);
-        }
-
+        const bytes = this.toEscPosBytes(escPosData);
+        const base64 = this.toBase64(bytes);
         const rawbtUrl = `rawbt:data:base64,${base64}`;
         window.location.href = rawbtUrl;
         return true;
+    }
+
+    /**
+     * Print plain formatted report/ticket text (e.g. X/Z report) using CP858 ESC/POS
+     */
+    async printRawEscPosText(plainText, options = {}) {
+        const text = String(plainText || '');
+        if (!text.trim()) {
+            throw new Error('No hay contenido para imprimir.');
+        }
+
+        const escPosPayload = `${ESC_INIT_CP858}${text}\n\n\n${GS_CUT}`;
+        const bytes = encodeEscPosCp858(escPosPayload);
+
+        // 1. Verificar configuración de impresora de red local
+        let printerCfg = {};
+        try {
+            printerCfg = JSON.parse(localStorage.getItem('pos_printer_config') || '{}');
+        } catch { /* Sin config JSON previa */ }
+
+        if (printerCfg.type === 'network' && printerCfg.ip) {
+            return await this.printNetwork(printerCfg.ip, printerCfg.port || 9100, bytes);
+        }
+
+        // 2. Nativo Capacitor Android RFCOMM SPP
+        if (this.isNativePlatform()) {
+            const targetMac = options.address ||
+                printerCfg.btAddress ||
+                printerCfg.address ||
+                localStorage.getItem('pos_mobile_bt_printer') ||
+                localStorage.getItem('pos_mobile_bt_printer_last') || '';
+
+            if (targetMac) {
+                const res = await PosNativeHardware.printBluetooth({
+                    address: targetMac,
+                    data: this.toBase64(bytes)
+                });
+                if (res?.success) return true;
+            }
+        }
+
+        // 3. Web Bluetooth si ya está emparejado o con permiso interactivo
+        if (this.isBluetoothSupported() && (this.characteristic || options.allowConnectPrompt !== false)) {
+            try {
+                return await this.printBluetooth(bytes, { allowConnectPrompt: options.allowConnectPrompt !== false });
+            } catch (btErr) {
+                console.warn('[MobilePrinter] Error Web Bluetooth en printRawEscPosText:', btErr?.message);
+            }
+        }
+
+        // 4. Android RawBT
+        if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)) {
+            return this.printRawBT(bytes);
+        }
+
+        // 5. Fallback silencioso por Iframe con texto monoespaciado
+        const escapedHtml = text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;}</style></head><body>${escapedHtml}</body></html>`;
+        return await this.printIframe(html);
     }
 
     /**
@@ -230,21 +317,19 @@ class MobilePrinterService {
     }
 
     /**
-     * Convert string or Uint8Array to base64 preserving raw ESC/POS byte values
+     * Convert string (CP858-encoded) or Uint8Array to base64 preserving raw ESC/POS byte values
      */
     toBase64(data) {
-        if (typeof data === 'string') {
-            let binary = '';
-            for (let i = 0; i < data.length; i++) {
-                binary += String.fromCharCode(data.charCodeAt(i) & 0xff);
-            }
+        const bytes = this.toEscPosBytes(data);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        if (typeof window !== 'undefined' && typeof window.btoa === 'function') {
             return window.btoa(binary);
-        } else if (data instanceof Uint8Array) {
-            let binary = '';
-            for (let i = 0; i < data.length; i++) {
-                binary += String.fromCharCode(data[i]);
-            }
-            return window.btoa(binary);
+        }
+        if (typeof btoa === 'function') {
+            return btoa(binary);
         }
         return '';
     }
@@ -252,7 +337,7 @@ class MobilePrinterService {
     /**
      * Complete Universal Print Dispatcher for Mobile
      */
-    async printSaleMobile({ sale, businessSettings, exchangeRate, currencyMode, paymentMethods, htmlContent }) {
+    async printSaleMobile({ sale, businessSettings, exchangeRate, currencyMode, paymentMethods, htmlContent, _fromSpooler = false }) {
         // 1. If Electron environment, let Electron handle it
         if (window.electronAPI && businessSettings?.printerName) {
             return false; // Hand off to desktop driver
@@ -267,35 +352,32 @@ class MobilePrinterService {
             paymentMethods
         );
 
-        // 3. Ultra-Fast Direct Native Capacitor Android Hardware Plugin
-        // Direct RFCOMM SPP socket (<80ms, no RawBT redirect, no chunk delays)
+        // 2.5. Si hay impresora de red TCP configurada en móvil, despachar por LAN
+        try {
+            const printerCfg = JSON.parse(localStorage.getItem('pos_printer_config') || '{}');
+            if (printerCfg.type === 'network' && printerCfg.ip) {
+                return await this.printNetwork(printerCfg.ip, printerCfg.port || 9100, escPosContent);
+            }
+        } catch { /* Continuar a Bluetooth/Fallback */ }
+
+        // 3. Direct Native Capacitor Android Hardware Plugin (RFCOMM SPP)
         if (this.isNativePlatform()) {
             try {
-                let targetMac = businessSettings?.printerMac || localStorage.getItem('pos_mobile_bt_printer') || localStorage.getItem('pos_mobile_bt_printer_last') || '';
+                const targetMac = businessSettings?.printerMac ||
+                    localStorage.getItem('pos_mobile_bt_printer') ||
+                    localStorage.getItem('pos_mobile_bt_printer_last') || '';
 
-                // Si no hay MAC configurada, auto-seleccionar la primera impresora emparejada en el dispositivo
-                if (!targetMac) {
-                    try {
-                        const paired = await this.getPairedPrinters();
-                        if (Array.isArray(paired) && paired.length > 0) {
-                            targetMac = paired[0].address;
-                            localStorage.setItem('pos_mobile_bt_printer_last', targetMac);
-                            console.log('[NativePrinter] Auto-detectada impresora vinculada:', paired[0].name, targetMac);
-                        }
-                    } catch (pErr) {
-                        console.warn('[NativePrinter] No se pudo consultar impresoras vinculadas:', pErr?.message);
+                if (targetMac) {
+                    const base64Data = this.toBase64(escPosContent);
+                    console.log('[NativePrinter] Direct SPP socket print to:', targetMac);
+                    const result = await PosNativeHardware.printBluetooth({
+                        address: targetMac,
+                        data: base64Data
+                    });
+                    if (result?.success) {
+                        localStorage.setItem('pos_mobile_bt_printer_last', targetMac);
+                        return true;
                     }
-                }
-
-                const base64Data = this.toBase64(escPosContent);
-                console.log('[NativePrinter] Direct SPP socket print to:', targetMac || 'Default Bonded');
-                const result = await PosNativeHardware.printBluetooth({
-                    address: targetMac,
-                    data: base64Data
-                });
-                if (result?.success) {
-                    if (targetMac) localStorage.setItem('pos_mobile_bt_printer_last', targetMac);
-                    return true;
                 }
             } catch (nativeErr) {
                 console.warn('[NativePrinter] Native socket printing failed, falling back to Web BT/RawBT:', nativeErr);
@@ -311,7 +393,7 @@ class MobilePrinterService {
 
         if (mobileMode === 'BLUETOOTH' && this.isBluetoothSupported()) {
             try {
-                return await this.printBluetooth(escPosContent);
+                return await this.printBluetooth(escPosContent, { allowConnectPrompt: !_fromSpooler });
             } catch (err) {
                 console.warn('[MobilePrinter] Bluetooth print error, falling back to RawBT/Iframe:', err);
                 if (/Android/i.test(navigator.userAgent)) {
@@ -321,20 +403,22 @@ class MobilePrinterService {
         }
 
         // 5. Default Fallback: Silent Iframe
+        if (!htmlContent) {
+            return false;
+        }
         return await this.printIframe(htmlContent);
     }
 
     /**
      * Asynchronous Background Spooler: Enqueue a sale to print in background without blocking UI
-     * Returns instantly ({ queued: true, jobId }) so cashier can ring up the next customer immediately.
      */
     enqueueSalePrint(printJobOptions) {
         const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         const job = {
             id: jobId,
-            options: printJobOptions,
+            options: { ...printJobOptions, _fromSpooler: true },
             invoiceNumber: printJobOptions?.sale?.invoiceNumber || 'Ticket',
-            status: 'queued', // 'queued' | 'printing' | 'completed' | 'failed'
+            status: 'queued',
             retries: 0,
             maxRetries: 2,
             createdAt: Date.now(),
@@ -344,7 +428,6 @@ class MobilePrinterService {
         this.printQueue.push(job);
         this.notifyQueueChange();
 
-        // Launch consumer in background non-blocking promise
         setTimeout(() => {
             this.processQueue().catch(err => {
                 console.warn('[PrintSpooler] Error en hilo de fondo:', err);
@@ -374,12 +457,12 @@ class MobilePrinterService {
                     console.log(`[PrintSpooler] Imprimiendo en segundo plano ticket #${job.invoiceNumber}...`);
                     const result = await this.printSaleMobile(job.options);
                     job.status = result !== false ? 'completed' : 'failed';
-                    job.error = null;
+                    job.error = result === false ? 'No hay impresora conectada o configurada' : null;
                 } catch (printErr) {
                     job.retries += 1;
                     console.warn(`[PrintSpooler] Reintento ${job.retries}/${job.maxRetries} para ticket #${job.invoiceNumber}:`, printErr.message);
                     if (job.retries <= job.maxRetries) {
-                        job.status = 'queued'; // volver a encolar
+                        job.status = 'queued';
                         await new Promise(r => setTimeout(r, 350));
                     } else {
                         job.status = 'failed';
@@ -390,7 +473,6 @@ class MobilePrinterService {
             }
         } finally {
             this.isProcessingQueue = false;
-            // Mantener solo los últimos 8 trabajos en memoria para evitar crecimiento del heap
             if (this.printQueue.length > 8) {
                 this.printQueue = this.printQueue.slice(-8);
             }
@@ -398,9 +480,6 @@ class MobilePrinterService {
         }
     }
 
-    /**
-     * Inspect current background spooler state
-     */
     getQueueStatus() {
         const pendingCount = this.printQueue.filter(j => j.status === 'queued' || j.status === 'printing').length;
         const activeJob = this.printQueue.find(j => j.status === 'printing') || null;
@@ -413,9 +492,6 @@ class MobilePrinterService {
         };
     }
 
-    /**
-     * Subscribe to spooler status changes
-     */
     subscribeQueue(callback) {
         if (typeof callback !== 'function') return () => {};
         this.queueListeners.add(callback);

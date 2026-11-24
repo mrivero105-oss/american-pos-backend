@@ -44,7 +44,7 @@ export default function MobileReceiptModal({
           exit={{ scale: 0.92, opacity: 0, y: 15 }}
           transition={{ type: 'spring', damping: 25, stiffness: 320 }}
           onClick={(e) => e.stopPropagation()}
-          className="relative w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-2xl shadow-2xl space-y-2.5 border-dashed border-2 border-slate-300 max-h-[92vh] overflow-y-auto custom-scrollbar select-none z-10"
+          className="relative w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-2xl shadow-2xl space-y-2.5 border-dashed border-2 border-slate-300 max-h-[92dvh] overflow-y-auto custom-scrollbar select-none z-10"
         >
           {/* Botón flotante para cerrar */}
           <button

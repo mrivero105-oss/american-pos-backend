@@ -147,7 +147,7 @@ export default function MobileSyncCenterView({
         <button
           onClick={handleTestPing}
           disabled={isTestingPing}
-          className={`px-3 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-1.5 ${T.textSecondary} hover:${T.textPrimary}`}
+          className={`px-3 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-1.5 ${T.textSecondary} hover:opacity-100`}
         >
           <Activity size={13} className={isTestingPing ? 'animate-pulse text-blue-500' : ''} />
           <span>{isTestingPing ? 'Probando...' : 'Test Ping'}</span>
@@ -296,7 +296,7 @@ export default function MobileSyncCenterView({
           <button
             onClick={handleRefreshCloudRate}
             disabled={isUpdatingRate}
-            className={`w-full min-h-[40px] rounded-lg ${T.btnGhost} border ${T.border} font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-2 ${T.textMuted} hover:${T.textPrimary} hover:border-emerald-500/40 active:scale-95 transition-colors cursor-pointer`}
+            className={`w-full min-h-[44px] rounded-lg ${T.btnGhost} border ${T.border} font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-2 ${T.textMuted} hover:opacity-100 hover:border-emerald-500/40 active:scale-95 transition-colors cursor-pointer`}
           >
             <RefreshCw size={14} className={isUpdatingRate ? 'animate-spin text-emerald-400' : 'text-slate-400'} />
             <span>{isUpdatingRate ? 'Consultando en Supabase...' : 'Verificar Tasa Manualmente (Opcional)'}</span>

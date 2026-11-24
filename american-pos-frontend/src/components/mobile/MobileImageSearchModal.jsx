@@ -233,7 +233,7 @@ export default function MobileImageSearchModal({
           )}
 
           {/* Contenido Principal */}
-          <div className="flex-1 overflow-y-auto p-3.5 custom-scrollbar min-h-[260px] max-h-[55vh]">
+          <div className="flex-1 overflow-y-auto p-3.5 custom-scrollbar min-h-[260px] max-h-[55dvh]">
             {activeTab === 'web' ? (
               <>
                 {/* Cargando */}

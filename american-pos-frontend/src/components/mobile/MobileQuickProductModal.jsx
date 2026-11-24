@@ -72,7 +72,7 @@ export default function MobileQuickProductModal({
           <button 
             type="button"
             onClick={() => onClose()}
-            className={`${T.textMuted} hover:${T.textPrimary} p-1.5 rounded-lg cursor-pointer active:scale-90 transition-transform`}
+            className={`${T.textMuted} hover:opacity-100 p-2 rounded-lg cursor-pointer active:scale-90 transition-transform`}
           >
             <X size={18} />
           </button>
@@ -273,7 +273,7 @@ export default function MobileQuickProductModal({
                         setIsScannerOpen(true);
                       }}
                       title="Escanear código"
-                      className={`absolute right-1.5 p-1 rounded-md ${T.textMuted} hover:${T.textPrimary} cursor-pointer flex items-center justify-center`}
+                      className={`absolute right-1.5 p-1.5 rounded-md ${T.textMuted} hover:opacity-100 cursor-pointer flex items-center justify-center`}
                     >
                       <ScanBarcode size={15} />
                     </button>
@@ -661,7 +661,7 @@ export default function MobileQuickProductModal({
                         setIsScannerOpen(true);
                       }}
                       title="Escanear código de caja"
-                      className={`absolute right-1.5 p-1 rounded-md ${T.textMuted} hover:${T.textPrimary} cursor-pointer flex items-center justify-center`}
+                      className={`absolute right-1.5 p-1.5 rounded-md ${T.textMuted} hover:opacity-100 cursor-pointer flex items-center justify-center`}
                     >
                       <ScanBarcode size={15} />
                     </button>

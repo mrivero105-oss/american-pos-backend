@@ -106,7 +106,9 @@ export default function MobileThermalPrinterModal({
         showToast?.(`Impresora vinculada: ${dev.name}`);
       }
     } catch (err) {
-      alert(`No se pudo conectar: ${err.message}`);
+      const msg = err?.message || 'Error desconocido al conectar impresora Bluetooth';
+      setTestResult({ success: false, message: `No se pudo conectar: ${msg}` });
+      showToast?.(`⚠️ No se pudo conectar: ${msg}`);
     } finally {
       setIsLoadingDevices(false);
     }
@@ -176,7 +178,7 @@ export default function MobileThermalPrinterModal({
 
   return (
     <div className="fixed inset-0 bg-black/85 z-[9999] flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
-      <div className={`w-full max-w-md ${T?.cardBg || 'bg-slate-900'} rounded-xl border ${T?.border || 'border-slate-800'} shadow-2xl overflow-hidden flex flex-col max-h-[90vh]`}>
+      <div className={`w-full max-w-md ${T?.cardBg || 'bg-slate-900'} rounded-xl border ${T?.border || 'border-slate-800'} shadow-2xl overflow-hidden flex flex-col max-h-[90dvh]`}>
         
         {/* Cabecera */}
         <div className={`p-4 border-b ${T?.border || 'border-slate-800'} flex items-center justify-between shrink-0 bg-slate-950/40`}>
