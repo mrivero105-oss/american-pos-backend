@@ -221,22 +221,34 @@ export default function Settings() {
 
     const handleSaveRate = async (e) => {
         if (e) e.preventDefault();
+        const parsedRate = parseFloat(String(rate).replace(',', '.'));
+        if (isNaN(parsedRate) || parsedRate <= 0) {
+            toast.error('Ingresa una tasa de cambio válida');
+            return;
+        }
         try {
             setSaving(true);
-            localStorage.setItem('pos_exchange_rate', String(rate));
+            localStorage.setItem('pos_exchange_rate', String(parsedRate));
             localStorage.setItem('pos_currency_mode', currencyMode);
-            const parsedEuro = Number(euroRate);
-            const payload = { rate, currencyMode };
-            if (parsedEuro > 0) {
+            localStorage.setItem('pos_auto_update_rate', 'false');
+            const parsedEuro = euroRate !== '' && euroRate !== null && euroRate !== undefined
+                ? parseFloat(String(euroRate).replace(',', '.'))
+                : 0;
+            const payload = { rate: parsedRate, currencyMode, autoUpdateRate: false };
+            if (!isNaN(parsedEuro) && parsedEuro > 0) {
                 localStorage.setItem('pos_euro_rate', String(parsedEuro));
                 payload.euroRate = parsedEuro;
             }
             await api.post('/settings/rate', payload);
-            toast.success('Configuración de tasas guardada con éxito');
-        } catch (_error) { 
-            toast.success('Tasa guardada localmente'); 
-        } finally { 
-            setSaving(false); 
+            toast.success('Configuración de tasas guardada con éxito (modo manual)');
+        } catch (error) {
+            if (error?.response?.status >= 400 && error?.response?.status < 500) {
+                toast.error(error.response?.data?.error || 'No se pudo guardar la tasa de cambio');
+            } else {
+                toast.success('Tasa guardada localmente (sin conexión al servidor)');
+            }
+        } finally {
+            setSaving(false);
         }
     };
 

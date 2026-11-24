@@ -31,6 +31,13 @@ export default function BaseModal({
 }) {
     const dialogRef = useRef(null);
     const previousFocusRef = useRef(null);
+    const onCloseRef = useRef(onClose);
+    const disableEscCloseRef = useRef(disableEscClose);
+
+    useEffect(() => {
+        onCloseRef.current = onClose;
+        disableEscCloseRef.current = disableEscClose;
+    }, [onClose, disableEscClose]);
 
     useEffect(() => {
         if (!isOpen) return undefined;
@@ -39,6 +46,10 @@ export default function BaseModal({
         const focusTimer = setTimeout(() => {
             const container = dialogRef.current;
             if (!container) return;
+            // No robar foco si el modal hijo ya enfocó un input específico dentro del diálogo
+            if (document.activeElement && container.contains(document.activeElement) && document.activeElement !== container) {
+                return;
+            }
             const firstFocusable = container.querySelector(FOCUSABLE_SELECTOR);
             if (firstFocusable && typeof firstFocusable.focus === 'function') {
                 firstFocusable.focus();
@@ -48,10 +59,10 @@ export default function BaseModal({
         }, 10);
 
         const handleKeyDown = (e) => {
-            if ((e.key === 'Escape' || e.key === 'Esc') && onClose && !disableEscClose) {
+            if ((e.key === 'Escape' || e.key === 'Esc') && onCloseRef.current && !disableEscCloseRef.current) {
                 e.preventDefault();
                 e.stopPropagation();
-                onClose();
+                onCloseRef.current();
                 return;
             }
             if (e.key === 'Tab') {
@@ -85,7 +96,7 @@ export default function BaseModal({
                 prev.focus();
             }
         };
-    }, [isOpen, onClose, disableEscClose]);
+    }, [isOpen]);
 
     if (!isOpen) return null;
 

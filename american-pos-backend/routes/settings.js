@@ -277,6 +277,7 @@ router.post('/rate', validate(positiveRateSchema), async (req, res) => {
         }
         if (autoUpdateRate !== undefined) {
             userSettings.autoUpdateRate = !!autoUpdateRate;
+            userSettings.rateSource = userSettings.autoUpdateRate ? 'BCV' : 'MANUAL';
         }
         allSettings[companyId] = userSettings;
         if (companyId === '2') {
@@ -286,6 +287,7 @@ router.post('/rate', validate(positiveRateSchema), async (req, res) => {
                 ...(parsedEuroRate !== null ? { euroRate: parsedEuroRate, lastEuroRate: parsedEuroRate } : {}),
                 currencyMode: currencyMode || userSettings.currencyMode,
                 autoUpdateRate: userSettings.autoUpdateRate,
+                rateSource: userSettings.rateSource || (userSettings.autoUpdateRate ? 'BCV' : 'MANUAL'),
                 lastRateSyncAt: userSettings.lastRateSyncAt
             };
         }

@@ -1562,7 +1562,7 @@ export default function DashboardLayout() {
                         currentRate={exchangeRate}
                         currentEuroRate={euroRate}
                         currencyMode={currencyMode}
-                        onRateUpdated={fetchExchangeRate}
+                        onRateUpdated={() => fetchExchangeRate(true)}
                     />
                 </Suspense>
             )}

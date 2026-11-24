@@ -24,6 +24,8 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
     const [lastBcvRate, setLastBcvRate] = useState(null);
     const [lastBcvEuroRate, setLastBcvEuroRate] = useState(null);
     const inputRef = useRef(null);
+    const wasOpenRef = useRef(false);
+    const hasManualEditRef = useRef(false);
 
     const handleFetchBCV = useCallback(async (isSilent = false) => {
         setIsFetchingBCV(true);
@@ -73,13 +75,13 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                 if (bcvEuro && !isNaN(bcvEuro)) {
                     setLastBcvEuroRate(bcvEuro);
                 }
-                if (!isSilent || autoUpdate) {
+                // Solo rellenar los inputs cuando el usuario pulsa "Actualizar" explícitamente (nunca pisar edición manual al abrir)
+                if (!isSilent) {
+                    hasManualEditRef.current = false;
                     setRate(bcvRate.toString());
                     if (bcvEuro && !isNaN(bcvEuro)) {
                         setEuroRate(bcvEuro.toString());
                     }
-                }
-                if (!isSilent) {
                     toast.success(`Tasa BCV obtenida: ${bcvRate} Bs/$${bcvEuro ? ` · ${bcvEuro} Bs/€` : ''}`);
                     if (inputRef.current) inputRef.current.focus();
                 }
@@ -94,45 +96,79 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
         } finally {
             setIsFetchingBCV(false);
         }
-    }, [autoUpdate]);
+    }, []);
 
     useEffect(() => {
-        if (isOpen) {
-            const initial = currentRate?.toString() || '1';
-            setRate(initial);
-            const savedEur = Number(currentEuroRate) > 0 ? String(currentEuroRate) : (localStorage.getItem('pos_euro_rate') || '');
-            setEuroRate(Number(savedEur) > 0 ? savedEur : '');
-            setBcvError('');
-
-            api.get('/settings/rate').then(res => {
-                if (res.data) {
-                    if (res.data.autoUpdateRate !== undefined) {
-                        setAutoUpdate(res.data.autoUpdateRate);
-                        localStorage.setItem('pos_auto_update_rate', res.data.autoUpdateRate ? 'true' : 'false');
-                    }
-                    if (res.data.rate) {
-                        setLastBcvRate(res.data.rate);
-                    }
-                    if (Number(res.data.euroRate) > 0) {
-                        setLastBcvEuroRate(res.data.euroRate);
-                        setEuroRate(String(res.data.euroRate));
-                        localStorage.setItem('pos_euro_rate', String(res.data.euroRate));
-                    }
-                }
-            }).catch(() => {});
-
-            if (!isSingleDollar) {
-                handleFetchBCV(true);
-            }
-
-            setTimeout(() => {
-                if (inputRef.current) {
-                    inputRef.current.focus();
-                    inputRef.current.select();
-                }
-            }, 80);
+        if (!isOpen) {
+            wasOpenRef.current = false;
+            return;
         }
+        // Inicializar únicamente en la transición cerrado -> abierto (nunca resetear inputs si cambia autoUpdate o llegan ticks)
+        if (wasOpenRef.current) return;
+        wasOpenRef.current = true;
+        hasManualEditRef.current = false;
+
+        const initial = currentRate?.toString() || '1';
+        setRate(initial);
+        const savedEur = Number(currentEuroRate) > 0 ? String(currentEuroRate) : (localStorage.getItem('pos_euro_rate') || '');
+        setEuroRate(Number(savedEur) > 0 ? savedEur : '');
+        setBcvError('');
+
+        api.get('/settings/rate').then(res => {
+            if (res.data) {
+                if (res.data.autoUpdateRate !== undefined && !hasManualEditRef.current) {
+                    setAutoUpdate(res.data.autoUpdateRate);
+                    localStorage.setItem('pos_auto_update_rate', res.data.autoUpdateRate ? 'true' : 'false');
+                }
+                if (res.data.rate) {
+                    setLastBcvRate((prev) => prev ?? res.data.rate);
+                }
+                if (Number(res.data.euroRate) > 0) {
+                    setLastBcvEuroRate((prev) => prev ?? res.data.euroRate);
+                    if (!hasManualEditRef.current) {
+                        setEuroRate(String(res.data.euroRate));
+                    }
+                    localStorage.setItem('pos_euro_rate', String(res.data.euroRate));
+                }
+            }
+        }).catch(() => {});
+
+        if (!isSingleDollar) {
+            handleFetchBCV(true);
+        }
+
+        const focusTimer = setTimeout(() => {
+            if (inputRef.current) {
+                inputRef.current.focus();
+                inputRef.current.select();
+            }
+        }, 80);
+
+        return () => clearTimeout(focusTimer);
     }, [isOpen, currentRate, currentEuroRate, isSingleDollar, handleFetchBCV]);
+
+    const handleManualRateChange = (rawValue) => {
+        const cleaned = rawValue.replace(/[^0-9.,]/g, '');
+        hasManualEditRef.current = true;
+        setRate(cleaned);
+        // Si el usuario ingresa una tasa manual diferente a la oficial/actual, desactivar auto-sync inmediatamente
+        const parsed = parseFloat(cleaned.replace(',', '.'));
+        const refUsd = Number(lastBcvRate || currentRate || 0);
+        if (!isNaN(parsed) && parsed > 0 && (!refUsd || Math.abs(parsed - refUsd) > 0.0001)) {
+            setAutoUpdate(false);
+        }
+    };
+
+    const handleManualEuroChange = (rawValue) => {
+        const cleaned = rawValue.replace(/[^0-9.,]/g, '');
+        hasManualEditRef.current = true;
+        setEuroRate(cleaned);
+        const parsed = parseFloat(cleaned.replace(',', '.'));
+        const refEur = Number(lastBcvEuroRate || currentEuroRate || 0);
+        if (!isNaN(parsed) && parsed > 0 && (!refEur || Math.abs(parsed - refEur) > 0.0001)) {
+            setAutoUpdate(false);
+        }
+    };
 
     const handleSave = async () => {
         const val = parseFloat(rate.toString().replace(',', '.'));
@@ -146,29 +182,41 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
             return;
         }
 
+        // Si el usuario modificó la tasa manualmente a un valor distinto al BCV, respetar el modo manual sin sobrescribir
+        const differsFromBcv =
+            hasManualEditRef.current &&
+            lastBcvRate != null &&
+            Math.abs(val - Number(lastBcvRate)) > 0.0001;
+        const effectiveAutoUpdate = differsFromBcv ? false : autoUpdate;
+
         setIsSaving(true);
         try {
             await api.post('/settings/rate', {
                 rate: val,
                 ...(eurVal ? { euroRate: eurVal } : {}),
-                autoUpdateRate: autoUpdate
+                autoUpdateRate: effectiveAutoUpdate
             });
-            localStorage.setItem('pos_auto_update_rate', autoUpdate ? 'true' : 'false');
+            localStorage.setItem('pos_auto_update_rate', effectiveAutoUpdate ? 'true' : 'false');
             localStorage.setItem('pos_exchange_rate', String(val));
             if (eurVal) {
                 localStorage.setItem('pos_euro_rate', String(eurVal));
             }
 
-            if (autoUpdate) {
+            // Solo sincronizar con el BCV si el usuario dejó autoUpdate activo y NO editó una tasa manual personalizada
+            if (effectiveAutoUpdate && !hasManualEditRef.current) {
                 try {
                     await api.post('/settings/bcv/sync');
                 } catch (caughtErr) { console.warn('[ExchangeRateModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
             }
 
             if (onRateUpdated) {
-                onRateUpdated(val, eurVal);
+                await Promise.resolve(onRateUpdated(val, eurVal));
             }
-            toast.success(`Tasa guardada: ${val} ${currencySuffix}${eurVal ? ` · € ${eurVal} Bs` : ''}`);
+            toast.success(
+                differsFromBcv
+                    ? `Tasa manual guardada: ${val} ${currencySuffix} (Auto-BCV desactivado)`
+                    : `Tasa guardada: ${val} ${currencySuffix}${eurVal ? ` · € ${eurVal} Bs` : ''}`
+            );
             onClose();
         } catch (err) {
             console.error('Error al guardar tasa:', err);
@@ -262,7 +310,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                                 type="text"
                                 inputMode="decimal"
                                 value={rate}
-                                onChange={(e) => setRate(e.target.value.replace(/[^0-9.,]/g, ''))}
+                                onChange={(e) => handleManualRateChange(e.target.value)}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter') {
                                         e.preventDefault();
@@ -280,7 +328,10 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                     {lastBcvRate && String(lastBcvRate) !== rate.trim() && (
                         <button
                             type="button"
-                            onClick={() => setRate(String(lastBcvRate))}
+                            onClick={() => {
+                                hasManualEditRef.current = false;
+                                setRate(String(lastBcvRate));
+                            }}
                             className="text-[11px] font-medium text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1 cursor-pointer pt-0.5"
                         >
                             Usar tasa oficial del BCV ({lastBcvRate} Bs)
@@ -302,7 +353,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                                 type="text"
                                 inputMode="decimal"
                                 value={euroRate}
-                                onChange={(e) => setEuroRate(e.target.value.replace(/[^0-9.,]/g, ''))}
+                                onChange={(e) => handleManualEuroChange(e.target.value)}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter') {
                                         e.preventDefault();
@@ -319,7 +370,10 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                         {lastBcvEuroRate && String(lastBcvEuroRate) !== euroRate.trim() && (
                             <button
                                 type="button"
-                                onClick={() => setEuroRate(String(lastBcvEuroRate))}
+                                onClick={() => {
+                                    hasManualEditRef.current = false;
+                                    setEuroRate(String(lastBcvEuroRate));
+                                }}
                                 className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer pt-0.5"
                             >
                                 Usar Euro oficial del BCV ({lastBcvEuroRate} Bs/€)
