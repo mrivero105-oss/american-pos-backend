@@ -1,7 +1,10 @@
 {
-  "version": "24.4.0.1795365711",
-  "buildTime": "2026-11-22T16:41:51.208Z",
+  "version": "24.4.0.1795523567",
+  "buildTime": "2026-11-24T12:32:47.467Z",
   "bundleUrl": "/dist.zip",
-  "checksum": "f87b79a464007db340f24b8a5cd54afa8325109c3438303f13807d12da749ccc",
+  "checksum": "68fdeb14e2405f165278ff0eb572119c46367a51f51e011cfd6142523b5513d5",
+  "otaSignature": "fnSMrmlwiJBRPpFaEizxBuGqkG4xaw9gFT4nybl/Gt43QH1o8Gt+1RRX24/Tkdy3MC383qboPJpYCp7Shh5b7hnHBONB2qS3l29wNg468y8PQZVx8wydCPIqckueXlnUIQsNIoGxIrf1wH+ZG//kFEWZwSmGaRUZW0oJwzSeOyBPs0GbUFHQQ4K0p0jyyUOqoQZs4nTqoeDpjynOwflVgFAD3kK7iNI8+jh23rDlEL6Fs8Ts9ZPhGyn6XnitXzXEDgqMCyMcq8TFjzF55nWOdqjrnWZ17ofdyUGEP7Vlj5dnOaezP2S6E5SZmEc+1HHwxMLbIhqQODvycrQ4vPgXNA==",
+  "otaManifestSignature": "fi9buT0hekeKNWsUGkUlsGSZpx+/ozKbpTssuObcX3yhZAZ9nQPNLZsdywWn6/5416bZBiDJG4Q2F09kQOg4Cm+PuFiflI0T+VtnJ7tVIm3IWatDv0TtNhxg0gpGMmfr5S1nhvWXJyyNvTaEdMacZhgoXlPLCKhtFqHIZHly51c88gm++LvyIcS7ob+nIT90+DY5V98XM36eVLVZWLvzOQ73qODsjhEbA4Kyg6smRAKMau4H/GvxxOeX4rcjnUjc1CtVzDERP911qK5lIFF/ajO4WwUL2BI3oPWqMcWOKFEm77TFQqdVHxs7JOSYOXAeVPpnCNI4f3c/ERb5MkvBuA==",
+  "otaSignatureAlg": "RSA-SHA256",
   "apkUrl": "/Isaac-POS-Mobile.apk"
 }
