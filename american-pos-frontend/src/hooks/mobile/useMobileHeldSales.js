@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import api from '../../services/api';
+import { db as primaryDb } from '../../services/db';
 import lanSyncService from '../../services/lanSyncService';
 import { triggerHaptic } from '../../utils/haptics';
 import { playSuccessSound } from '../../utils/sounds';
@@ -9,10 +10,13 @@ import { normalizeMobileCartItems } from '../../store/useMobilePosStore';
 /**
  * useMobileHeldSales
  * Hook modularizado para gestión de ventas en espera (PC + Móvil) y despacho de preventas a caja.
+ * Usa persistencia unificada vía store (sin doble escritura síncrona en localStorage) y encola preventas offline.
  */
 export function useMobileHeldSales({
   cart,
   setCart,
+  setCartDiscountPercent,
+  setDiscountSupervisorApprovalId,
   heldSales,
   setHeldSales,
   setIsHeldSalesModalOpen,
@@ -42,11 +46,6 @@ export function useMobileHeldSales({
 }) {
   const persistHeldSales = useCallback((updated) => {
     setHeldSales(updated);
-    try {
-      localStorage.setItem('pos_held_sales', JSON.stringify(updated));
-    } catch (caughtErr) {
-      console.warn('[useMobileHeldSales] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr);
-    }
   }, [setHeldSales]);
 
   const handleHoldSale = useCallback(() => {
@@ -57,6 +56,9 @@ export function useMobileHeldSales({
       items: [...cart],
       customerName,
       customerDoc,
+      customerPhone,
+      customer: selectedCustomer || null,
+      customerId: selectedCustomer?.id || null,
       totalUSD,
       totalBS,
       itemCount: totalItemsCount
@@ -64,11 +66,18 @@ export function useMobileHeldSales({
     const updated = [newHeldSale, ...heldSales];
     persistHeldSales(updated);
     setCart([]);
+    if (typeof setCartDiscountPercent === 'function') setCartDiscountPercent(0);
+    if (typeof setDiscountSupervisorApprovalId === 'function') setDiscountSupervisorApprovalId(null);
     setIsMobileCartOpen(false);
     showToast(`⏸️ Venta pausada (${totalItemsCount} productos guardados en espera)`);
-  }, [cart, customerName, customerDoc, totalUSD, totalBS, totalItemsCount, heldSales, persistHeldSales, setCart, setIsMobileCartOpen, showToast]);
+  }, [
+    cart, customerName, customerDoc, customerPhone, selectedCustomer,
+    totalUSD, totalBS, totalItemsCount, heldSales, persistHeldSales,
+    setCart, setCartDiscountPercent, setDiscountSupervisorApprovalId,
+    setIsMobileCartOpen, showToast
+  ]);
 
-  const handleSendPreSaleToMainRegister = useCallback(() => {
+  const handleSendPreSaleToMainRegister = useCallback(async () => {
     if (cart.length === 0) {
       showToast('⚠️ El carrito de venta está vacío');
       return;
@@ -83,17 +92,25 @@ export function useMobileHeldSales({
       phone: customerPhone
     } : null);
 
+    const sellerDisplayName = user?.name || user?.username || 'Vendedor Móvil';
+    const composedNotes = selectedTable
+      ? `🍽️ ${selectedTable}${orderNotes ? ` - ${orderNotes.trim()}` : ''}`
+      : (orderNotes ? orderNotes.trim() : '');
+
     const preSalePayload = {
       id: `presale_${Date.now()}`,
       code: preSaleCode,
       type: 'remote_preventa',
       source: 'Móvil',
-      sellerName: user?.name || user?.username || 'Vendedor Móvil',
+      sellerName: sellerDisplayName,
+      waiterName: sellerDisplayName,
+      userName: sellerDisplayName,
       terminalId: getTerminalId() || 'terminal_mobile',
       table: selectedTable || null,
       tableNumber: selectedTable || null,
       orderNotes: orderNotes ? orderNotes.trim() : '',
-      note: selectedTable ? `🍽️ ${selectedTable}${orderNotes ? ` - ${orderNotes}` : ''}` : (orderNotes ? orderNotes.trim() : ''),
+      notes: composedNotes,
+      note: composedNotes,
       customerId: activeCust?.id || null,
       customerName: activeCust?.name || customerName || 'Consumidor Final',
       customerDoc: activeCust?.idDocument || activeCust?.identification || customerDoc || '',
@@ -101,37 +118,64 @@ export function useMobileHeldSales({
       customer: activeCust,
       totalUSD,
       totalBS,
+      totalVES: totalBS,
       exchangeRate,
       createdAt: new Date().toISOString(),
       timestamp: Date.now(),
       date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       itemCount: totalItemsCount,
       items: [...cart],
-      companyId: user?.companyId || '1'
+      companyId: user?.companyId || '2'
     };
 
+    // 1. Envío REST autoritativo + broadcast único por socket (sin duplicar en dos sockets)
+    let deliveredOnline = false;
     try {
-      if (socket && socket.connected) {
-        socket.emit('remote_held_sale', preSalePayload);
+      await api.post('/sales/remote-held-sale', preSalePayload, { timeout: 3500 });
+      deliveredOnline = true;
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.error || 'Preventa rechazada por la caja principal';
+        showToast(`⚠️ ${msg}`);
+        return;
       }
-      if (lanSyncService.socket && lanSyncService.socket.connected) {
-        lanSyncService.socket.emit('remote_held_sale', preSalePayload);
+      // Fallback: intentar por socket si está vivo y encolar en syncQueue para entrega garantizada
+      try {
+        const activeSocket = (lanSyncService.socket && lanSyncService.socket.connected)
+          ? lanSyncService.socket
+          : ((socket && socket.connected) ? socket : null);
+        if (activeSocket) {
+          activeSocket.emit('remote_held_sale', preSalePayload);
+        }
+      } catch (sockErr) {
+        console.warn('[useMobileHeldSales] Error propagando preventa por socket:', sockErr?.message || sockErr);
       }
-    } catch (caughtErr) {
-      console.warn('[useMobileHeldSales] Error propagando evento de sincronización:', caughtErr?.message || caughtErr);
+      try {
+        await primaryDb.put('syncQueue', {
+          id: `presale_sync_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          tempLocalId: preSalePayload.id,
+          endpoint: '/sales/remote-held-sale',
+          method: 'POST',
+          payload: preSalePayload,
+          createdAt: new Date().toISOString()
+        });
+      } catch (queueErr) {
+        console.warn('[useMobileHeldSales] Error encolando preventa offline:', queueErr?.message || queueErr);
+      }
     }
 
-    try {
-      api.post('/sales/remote-held-sale', preSalePayload, { timeout: 3500 })
-        .catch(err => console.warn('Aviso HTTP remote-held-sale:', err?.message || err));
-    } catch (caughtErr) {
-      console.warn('[useMobileHeldSales] Error en operación auxiliar:', caughtErr?.message || caughtErr);
-    }
+    const enrichedPreSale = {
+      ...preSalePayload,
+      isOfflinePending: !deliveredOnline
+    };
 
-    const updated = [preSalePayload, ...heldSales];
+    const updated = [enrichedPreSale, ...heldSales];
     persistHeldSales(updated);
 
     setCart([]);
+    if (typeof setCartDiscountPercent === 'function') setCartDiscountPercent(0);
+    if (typeof setDiscountSupervisorApprovalId === 'function') setDiscountSupervisorApprovalId(null);
     setSelectedCustomer(null);
     setSelectedTable(null);
     setOrderNotes('');
@@ -141,11 +185,16 @@ export function useMobileHeldSales({
     setIsMobileCartOpen(false);
     triggerHaptic(30);
     playSuccessSound();
-    setPreSaleSentModal(preSalePayload);
+
+    if (!deliveredOnline) {
+      showToast(`⚡ Preventa ${preSaleCode} encolada offline. Se enviará a caja al reconectar.`);
+    }
+    setPreSaleSentModal(enrichedPreSale);
   }, [
     cart, selectedCustomer, customerName, customerDoc, customerPhone, user,
     selectedTable, orderNotes, totalUSD, totalBS, exchangeRate, totalItemsCount,
-    socket, heldSales, persistHeldSales, setCart, setSelectedCustomer,
+    socket, heldSales, persistHeldSales, setCart, setCartDiscountPercent,
+    setDiscountSupervisorApprovalId, setSelectedCustomer,
     setSelectedTable, setOrderNotes, setCustomerName, setCustomerDoc,
     setCustomerPhone, isDollarCountry, setIsMobileCartOpen, setPreSaleSentModal, showToast
   ]);
@@ -163,6 +212,7 @@ export function useMobileHeldSales({
         items: [...cart],
         customerName: customerName || 'Consumidor Final',
         customerDoc: customerDoc || '',
+        customerPhone: customerPhone || '',
         customer: selectedCustomer || null,
         customerId: selectedCustomer?.id || null,
         totalUSD,
@@ -176,6 +226,7 @@ export function useMobileHeldSales({
     setCart(normalizedRestoredItems);
     if (sale.customerName) setCustomerName(sale.customerName);
     if (sale.customerDoc) setCustomerDoc(sale.customerDoc);
+    if (sale.customerPhone) setCustomerPhone(sale.customerPhone);
     if (sale.customer) {
       setSelectedCustomer(sale.customer);
     } else if (sale.customerName && sale.customerName !== 'Consumidor Final') {
@@ -183,7 +234,8 @@ export function useMobileHeldSales({
         id: sale.customerId || null,
         name: sale.customerName,
         idDocument: sale.customerDoc || '',
-        doc: sale.customerDoc || ''
+        doc: sale.customerDoc || '',
+        phone: sale.customerPhone || ''
       });
     } else {
       setSelectedCustomer(null);
@@ -195,8 +247,8 @@ export function useMobileHeldSales({
     triggerHaptic(20);
     showToast(`▶️ Venta reanudada (${sale.items?.length || sale.itemCount || 0} ítems en carrito)`);
   }, [
-    heldSales, cart, customerName, customerDoc, selectedCustomer, totalUSD, totalBS,
-    productsMap, setCart, setCustomerName, setCustomerDoc, setSelectedCustomer,
+    heldSales, cart, customerName, customerDoc, customerPhone, selectedCustomer, totalUSD, totalBS,
+    productsMap, setCart, setCustomerName, setCustomerDoc, setCustomerPhone, setSelectedCustomer,
     persistHeldSales, setIsHeldSalesModalOpen, setIsMobileCartOpen, showToast
   ]);
 

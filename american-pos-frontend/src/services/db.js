@@ -182,13 +182,19 @@ const migrateAndPurgeLegacyDatabases = async () => {
     const readLegacyStore = (dbName, storeName) => new Promise((resolve) => {
         try {
             const req = indexedDB.open(dbName);
-            const timer = setTimeout(() => resolve([]), 800);
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    resolve({ ok: false, items: [] });
+                }
+            }, 2500);
             req.onsuccess = (ev) => {
                 clearTimeout(timer);
                 const legacyDb = ev.target.result;
                 if (!legacyDb.objectStoreNames.contains(storeName)) {
                     try { legacyDb.close(); } catch { /* Conexión ya cerrada */ }
-                    resolve([]);
+                    if (!settled) { settled = true; resolve({ ok: true, items: [] }); }
                     return;
                 }
                 try {
@@ -197,31 +203,33 @@ const migrateAndPurgeLegacyDatabases = async () => {
                     getAllReq.onsuccess = () => {
                         const res = Array.isArray(getAllReq.result) ? getAllReq.result : [];
                         try { legacyDb.close(); } catch { /* Conexión ya cerrada */ }
-                        resolve(res);
+                        if (!settled) { settled = true; resolve({ ok: true, items: res }); }
                     };
                     getAllReq.onerror = () => {
                         try { legacyDb.close(); } catch { /* Conexión ya cerrada */ }
-                        resolve([]);
+                        if (!settled) { settled = true; resolve({ ok: false, items: [] }); }
                     };
                 } catch {
                     try { legacyDb.close(); } catch { /* Conexión ya cerrada */ }
-                    resolve([]);
+                    if (!settled) { settled = true; resolve({ ok: false, items: [] }); }
                 }
             };
             req.onerror = () => {
                 clearTimeout(timer);
-                resolve([]);
+                if (!settled) { settled = true; resolve({ ok: false, items: [] }); }
             };
         } catch (_) {
-            resolve([]);
+            resolve({ ok: false, items: [] });
         }
     });
 
     try {
+        let allLegacyMigrated = true;
         for (const legacyName of LEGACY_DB_NAMES) {
             let migrationOk = true;
-            const legacySales = await readLegacyStore(legacyName, 'sales');
-            const pendingSales = legacySales.filter(s => s && (s.status === 'pending_sync' || s.isOffline));
+            const salesRead = await readLegacyStore(legacyName, 'sales');
+            if (!salesRead.ok) migrationOk = false;
+            const pendingSales = salesRead.items.filter(s => s && (s.status === 'pending_sync' || s.isOffline));
             for (const sale of pendingSales) {
                 try {
                     await db.put('sales', sale);
@@ -231,8 +239,9 @@ const migrateAndPurgeLegacyDatabases = async () => {
                 }
             }
 
-            const legacyQueue = await readLegacyStore(legacyName, 'syncQueue');
-            for (const qItem of legacyQueue) {
+            const queueRead = await readLegacyStore(legacyName, 'syncQueue');
+            if (!queueRead.ok) migrationOk = false;
+            for (const qItem of queueRead.items) {
                 try {
                     await db.put('syncQueue', qItem);
                 } catch (qErr) {
@@ -248,11 +257,14 @@ const migrateAndPurgeLegacyDatabases = async () => {
                     console.warn(`[Storage Migration] No se pudo eliminar ${legacyName}:`, delErr?.message || delErr);
                 }
             } else {
-                console.warn(`[Storage Migration] Se conserva ${legacyName} por error al migrar registros pendientes.`);
+                allLegacyMigrated = false;
+                console.warn(`[Storage Migration] Se conserva ${legacyName} por error o timeout al migrar registros pendientes.`);
             }
         }
-        localStorage.setItem(LEGACY_CLEANUP_FLAG, 'true');
-        console.log('🧹 [Storage Migration] Bases de datos antiguas de IndexedDB procesadas tras verificar migración.');
+        if (allLegacyMigrated) {
+            localStorage.setItem(LEGACY_CLEANUP_FLAG, 'true');
+            console.log('🧹 [Storage Migration] Bases de datos antiguas de IndexedDB procesadas tras verificar migración.');
+        }
     } catch (migErr) {
         console.warn('[Storage Migration] Error en limpieza de bases legadas:', migErr?.message || migErr);
     }
@@ -332,11 +344,13 @@ export const db = {
     put: async (storeName, data) => {
         if (!data || typeof data !== 'object') return null;
         const recordKey = extractRecordKey(storeName, data);
-        // imageCache usa su propio caché LRU acotado en imageCache.js para no saturar RAM
-        if (recordKey && storeName !== 'imageCache') {
-            const mirror = getMirrorMap(storeName);
-            mirror.set(recordKey, data);
-        }
+        const commitMirror = () => {
+            // imageCache usa su propio caché LRU acotado en imageCache.js para no saturar RAM
+            if (recordKey && storeName !== 'imageCache') {
+                const mirror = getMirrorMap(storeName);
+                mirror.set(recordKey, data);
+            }
+        };
 
         if (await isNativeSqliteAvailable()) {
             const plugin = getNativePlugin();
@@ -347,25 +361,28 @@ export const db = {
                 status: String(data.status || ''),
                 searchText: buildSearchText(storeName, data)
             });
+            commitMirror();
             notifyQueueUpdated(storeName, 'put');
             return data[getKeyPath(storeName)] ?? recordKey;
         }
 
         const store = await getStore(storeName, 'readwrite');
         if (!store) {
+            commitMirror();
             notifyQueueUpdated(storeName, 'put');
             return recordKey;
         }
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             try {
                 const request = store.put(data);
                 request.onsuccess = () => {
+                    commitMirror();
                     notifyQueueUpdated(storeName, 'put');
                     resolve(request.result);
                 };
-                request.onerror = () => resolve(recordKey);
-            } catch (_) {
-                resolve(recordKey);
+                request.onerror = () => reject(request.error || new Error(`IndexedDB put error en ${storeName}`));
+            } catch (putErr) {
+                reject(putErr);
             }
         });
     },
@@ -679,16 +696,20 @@ export const db = {
     },
 
     getByIndex: async (storeName, indexName, value) => {
-        if (indexName === 'status' && (await isNativeSqliteAvailable())) {
-            try {
-                const plugin = getNativePlugin();
-                const res = await plugin.sqliteGetByStatus({ storeName, status: String(value) });
-                if (res && typeof res.jsonArray === 'string') {
-                    return JSON.parse(res.jsonArray);
+        if (await isNativeSqliteAvailable()) {
+            if (indexName === 'status') {
+                try {
+                    const plugin = getNativePlugin();
+                    const res = await plugin.sqliteGetByStatus({ storeName, status: String(value) });
+                    if (res && typeof res.jsonArray === 'string') {
+                        return JSON.parse(res.jsonArray);
+                    }
+                } catch (sqlErr) {
+                    console.warn(`[DB] Native sqliteGetByStatus fallo (${storeName}):`, sqlErr?.message);
                 }
-            } catch (sqlErr) {
-                console.warn(`[DB] Native sqliteGetByStatus fallo (${storeName}):`, sqlErr?.message);
             }
+            const allNative = await db.getAll(storeName);
+            return allNative.filter(item => item?.[indexName] === value);
         }
 
         const store = await getStore(storeName, 'readonly');

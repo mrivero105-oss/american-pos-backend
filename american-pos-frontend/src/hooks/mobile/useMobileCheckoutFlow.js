@@ -5,15 +5,47 @@ import { db as primaryDb } from '../../services/db';
 import lanSyncService from '../../services/lanSyncService';
 import mobilePrinterService from '../../services/mobilePrinterService';
 import { evaluateCartPromotions } from '../../utils/promotionsEngine';
+import { getRegionConfig } from '../../utils/regionConfig';
 import { triggerHaptic } from '../../utils/haptics';
 import { playScanSound, playSuccessSound, playErrorSound } from '../../utils/sounds';
 import { getTerminalId } from '../../utils/terminalIdentity';
 import { normalizeMobileCartItems } from '../../store/useMobilePosStore';
 
+const round2 = (v) => Math.round((Number(v || 0) + Number.EPSILON) * 100) / 100;
+
+/**
+ * Normaliza etiquetas de UI o alias legados a IDs canónicos del backend
+ * (evita corrupción de asientos NIIF y arqueos de caja).
+ */
+export function canonicalizeMobilePaymentMethod(rawMethod) {
+  const clean = String(rawMethod || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_');
+
+  if (!clean || clean === 'efectivo_usd' || clean === 'cash_usd' || clean === 'cash' || clean === 'efectivo') return 'cash_usd';
+  if (clean === 'efectivo_bs' || clean === 'cash_bs' || clean === 'cash_ves' || clean === 'bs' || clean === 'ves') return 'cash_bs';
+  if (clean === 'pago_movil' || clean === 'pagomovil' || clean === 'mobile') return 'pago_movil';
+  if (clean === 'tarjeta' || clean === 'punto_de_venta' || clean === 'punto' || clean === 'debit' || clean === 'debito' || clean === 'card') return 'debit';
+  if (clean === 'biopago') return 'biopago';
+  if (clean === 'transferencia' || clean === 'transfer' || clean === 'transfer_bs') return 'transfer';
+  if (clean === 'zelle') return 'zelle';
+  if (clean === 'binance' || clean === 'binance_usdt' || clean === 'binance_pay' || clean === 'usdt') return 'binance_usdt';
+  if (clean === 'credito' || clean === 'credit' || clean === 'fiado') return 'fiado';
+  if (clean === 'mixto' || clean === 'mixto_/_dividido' || clean === 'split') return 'mixto';
+  return clean;
+}
+
+export function stripMobileProductSuffix(rawId) {
+  return String(rawId || '').replace(/__bulk$|__mid$|__pres_.*$|__wpres_.*$|__srv_.*$/, '');
+}
+
 /**
  * useMobileCheckoutFlow
- * Hook modularizado para cálculo de promociones, totales multimoneda (USD/VES + IGTF),
- * cotizaciones y despacho de ventas online/offline con idempotencia UUID v4.
+ * Hook modularizado para cálculo de promociones, totales multimoneda (USD/VES + IVA/IGTF dinámicos),
+ * cotizaciones (con respaldo offline) y despacho de ventas online/offline con idempotencia UUID v4.
  */
 export function useMobileCheckoutFlow({
   cart,
@@ -24,10 +56,14 @@ export function useMobileCheckoutFlow({
   discountSupervisorApprovalId,
   setDiscountSupervisorApprovalId,
   exchangeRate,
+  lockedExchangeRate = null,
   businessInfo,
   documentType,
+  setDocumentType,
   checkoutMode,
+  setCheckoutMode,
   splitPayments,
+  setSplitPayments,
   selectedMethod,
   setSelectedMethod,
   amountPaidUSD,
@@ -49,28 +85,66 @@ export function useMobileCheckoutFlow({
   getCleanProductId,
   getProductUnitsMultiplier,
   customers,
+  selectedCustomer = null,
+  setSelectedCustomer,
+  setSelectedTable,
+  setOrderNotes,
   customerName,
+  setCustomerName,
   customerDoc,
+  setCustomerDoc,
+  setCustomerPhone,
   isDollarCountry,
   autoPrint,
+  canApplyDiscounts = true,
   user,
   requestSupervisorAuth,
   showToast
 }) {
+  const effectiveRate = useMemo(() => {
+    const locked = Number(lockedExchangeRate);
+    if (locked > 0) return locked;
+    const live = Number(exchangeRate);
+    return live > 0 ? live : 1;
+  }, [lockedExchangeRate, exchangeRate]);
+
+  const regionCfg = useMemo(() => getRegionConfig(businessInfo?.country), [businessInfo?.country]);
+
+  const { isIvaEnabled, effectiveIvaRate, taxLabel } = useMemo(() => {
+    const enabled = businessInfo?.taxConfig?.ivaEnabled !== undefined
+      ? Boolean(businessInfo.taxConfig.ivaEnabled)
+      : (businessInfo?.ivaEnabled !== undefined ? Boolean(businessInfo.ivaEnabled) : true);
+    const rawRate = businessInfo?.taxConfig?.ivaRate ?? businessInfo?.ivaRate ?? businessInfo?.taxRate ?? regionCfg.defaultTaxRate;
+    const parsedRate = Number(rawRate);
+    const rate = enabled && Number.isFinite(parsedRate) && parsedRate >= 0 ? parsedRate : 0;
+    const label = businessInfo?.taxConfig?.taxLabel || businessInfo?.taxLabel || regionCfg.taxLabel || 'IVA';
+    return { isIvaEnabled: enabled, effectiveIvaRate: rate, taxLabel: label };
+  }, [businessInfo, regionCfg]);
+
+  const canonicalSelectedMethod = useMemo(() => {
+    if (checkoutMode === 'split') return 'mixto';
+    return canonicalizeMobilePaymentMethod(selectedMethod);
+  }, [checkoutMode, selectedMethod]);
+
+  const safeCart = useMemo(() => normalizeMobileCartItems(cart), [cart]);
+
   const promoResult = useMemo(() => {
-    const safeCart = normalizeMobileCartItems(cart);
     const flattenedItems = safeCart.map(item => ({
       ...item.product,
       id: item.product.id,
+      productId: stripMobileProductSuffix(item.product.productId || item.product.id),
       name: item.product.name || item.product.nombre,
       price: Number(item.product.price || item.product.precio || 0),
       quantity: Number(item.quantity) || 1,
       category: item.product.category || item.product.categoria || ''
     }));
-    return evaluateCartPromotions(flattenedItems, promotions);
-  }, [cart, promotions]);
+    const paymentHint = checkoutMode === 'express' ? canonicalSelectedMethod : null;
+    return evaluateCartPromotions(flattenedItems, promotions, paymentHint);
+  }, [safeCart, promotions, checkoutMode, canonicalSelectedMethod]);
 
   const {
+    rawSubtotalUSD,
+    totalPromoSavings,
     cartDiscountAmountUSD,
     subtotalUSD,
     enrichedCart,
@@ -80,20 +154,24 @@ export function useMobileCheckoutFlow({
     totalBS,
     totalItemsCount
   } = useMemo(() => {
-    const safeCart = normalizeMobileCartItems(cart);
-    const rawSub = safeCart.reduce((acc, item) => acc + ((item.product.price || item.product.precio || 0) * item.quantity), 0);
-    const promoSavings = promoResult.totalPromoSavings || 0;
-    const subBeforeDisc = promoResult.finalCartSubtotal ?? rawSub;
-    const cartDisc = Number((subBeforeDisc * (cartDiscountPercent / 100)).toFixed(2));
-    const subUSD = Math.max(0, subBeforeDisc - cartDisc);
+    const rawSub = round2(
+      safeCart.reduce((acc, item) => acc + (Number(item.product.price || item.product.precio || 0) * Number(item.quantity || 1)), 0)
+    );
+    const promoSavings = round2(promoResult.totalPromoSavings || 0);
+    const subBeforeDisc = promoResult.finalCartSubtotal !== undefined ? round2(promoResult.finalCartSubtotal) : rawSub;
+    const cartDisc = round2(subBeforeDisc * (Number(cartDiscountPercent || 0) / 100));
+    const subUSD = round2(Math.max(0, subBeforeDisc - cartDisc));
 
-    const enriched = safeCart.map(item => {
-      const promoItem = (promoResult.itemsWithPromotions || []).find(p => String(p.id) === String(item.product.id));
+    const promoItems = Array.isArray(promoResult.itemsWithPromotions) ? promoResult.itemsWithPromotions : [];
+    const enriched = safeCart.map((item, idx) => {
+      const promoItem = promoItems[idx] && String(promoItems[idx].id) === String(item.product.id)
+        ? promoItems[idx]
+        : promoItems.find(p => String(p.id) === String(item.product.id));
       return {
         ...item,
         appliedPromoName: promoItem?.appliedPromoName || null,
-        promoDiscount: promoItem?.promoDiscount || 0,
-        finalSubtotal: promoItem?.finalSubtotal ?? ((item.product.price || item.product.precio || 0) * item.quantity)
+        promoDiscount: round2(promoItem?.promoDiscount || 0),
+        finalSubtotal: round2(promoItem?.finalSubtotal ?? (Number(item.product.price || item.product.precio || 0) * Number(item.quantity || 1)))
       };
     });
 
@@ -103,16 +181,17 @@ export function useMobileCheckoutFlow({
     }, 0);
 
     const discRatio = subBeforeDisc > 0 ? (subUSD / subBeforeDisc) : 1;
-    const effTaxable = Number((taxableSubBeforeDisc * discRatio).toFixed(2));
+    const effTaxable = round2(taxableSubBeforeDisc * discRatio);
 
-    const configuredIvaPct = Number(businessInfo?.ivaRate ?? businessInfo?.taxRate ?? 16) || 16;
-    const ivaDivisor = 1 + (configuredIvaPct / 100);
-    const tUSD = Number(Math.max(0, effTaxable - (effTaxable / ivaDivisor)).toFixed(2));
-    const baseImp = Number((effTaxable - tUSD).toFixed(2));
-    const exUSD = Number(Math.max(0, subUSD - effTaxable).toFixed(2));
+    const ivaDivisor = 1 + (effectiveIvaRate / 100);
+    const tUSD = (isIvaEnabled && effectiveIvaRate > 0)
+      ? round2(Math.max(0, effTaxable - (effTaxable / ivaDivisor)))
+      : 0;
+    const baseImp = round2(Math.max(0, effTaxable - tUSD));
+    const exUSD = round2(Math.max(0, subUSD - effTaxable));
     const totUSD = subUSD;
-    const totBS = totUSD * exchangeRate;
-    const totItems = cart.reduce((acc, item) => acc + item.quantity, 0);
+    const totBS = round2(totUSD * effectiveRate);
+    const totItems = safeCart.reduce((acc, item) => acc + Number(item.quantity || 0), 0);
 
     return {
       rawSubtotalUSD: rawSub,
@@ -130,76 +209,93 @@ export function useMobileCheckoutFlow({
       totalBS: totBS,
       totalItemsCount: totItems
     };
-  }, [cart, promoResult, cartDiscountPercent, exchangeRate, businessInfo?.ivaRate, businessInfo?.taxRate]);
+  }, [safeCart, promoResult, cartDiscountPercent, effectiveRate, isIvaEnabled, effectiveIvaRate]);
 
   const isIgtfEnabled = Boolean(
     businessInfo?.taxConfig?.igtfEnabled !== undefined
       ? businessInfo.taxConfig.igtfEnabled
-      : businessInfo?.igtfEnabled
+      : (businessInfo?.igtfEnabled !== undefined ? businessInfo.igtfEnabled : regionCfg.hasIgtf)
   );
-  const igtfRatePct = Number(businessInfo?.taxConfig?.igtfRate ?? businessInfo?.igtfRate ?? 3) || 3;
+  const igtfRatePct = useMemo(() => {
+    if (!isIgtfEnabled) return 0;
+    const raw = businessInfo?.taxConfig?.igtfRate ?? businessInfo?.igtfRate ?? regionCfg.defaultIgtfRate;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  }, [isIgtfEnabled, businessInfo, regionCfg]);
+
   const isBinanceIgtfEnabled = Boolean(
     businessInfo?.binanceIgtfEnabled ?? businessInfo?.taxConfig?.binanceIgtfEnabled
   );
 
   const currentIgtfUSD = useMemo(() => {
-    if (!isIgtfEnabled || documentType === 'cotizacion' || totalUSD <= 0) return 0;
-    const round2 = (v) => Math.round((Number(v) + Number.EPSILON) * 100) / 100;
+    if (!isIgtfEnabled || igtfRatePct <= 0 || documentType === 'cotizacion' || totalUSD <= 0) return 0;
     const factor = 1 + (igtfRatePct / 100);
     if (checkoutMode === 'split') {
       const sUsd = parseFloat(splitPayments.cash_usd) || 0;
-      if (sUsd <= 0) return 0;
-      const appliedPrincipal = Math.min(totalUSD, sUsd / factor);
+      const sBinance = isBinanceIgtfEnabled ? (parseFloat(splitPayments.binance) || 0) : 0;
+      const foreignSubjectTotal = sUsd + sBinance;
+      if (foreignSubjectTotal <= 0) return 0;
+      const appliedPrincipal = Math.min(totalUSD, foreignSubjectTotal / factor);
       return round2(appliedPrincipal * (igtfRatePct / 100));
     }
-    const methodNorm = String(selectedMethod || '').toLowerCase().trim();
-    const isCrypto = methodNorm === 'binance' || methodNorm === 'binance_usdt';
-    const isExemptUsd = methodNorm === 'zelle' || methodNorm === 'crédito' || methodNorm === 'credito' || methodNorm === 'fiado' || (isCrypto && !isBinanceIgtfEnabled);
-    const isVesOnly = ['efectivo bs', 'pago móvil', 'pago movil', 'tarjeta', 'punto de venta', 'biopago', 'cash_bs', 'pago_movil', 'debit'].includes(methodNorm);
+
+    const methodNorm = canonicalSelectedMethod;
+    const isCrypto = methodNorm === 'binance_usdt';
+    const isExemptUsd = methodNorm === 'zelle' || methodNorm === 'fiado' || (isCrypto && !isBinanceIgtfEnabled);
+    const isVesOnly = ['cash_bs', 'pago_movil', 'debit', 'biopago', 'transfer'].includes(methodNorm);
     if (isExemptUsd || isVesOnly) return 0;
+
+    const enteredUsd = parseFloat(amountPaidUSD) || 0;
+    const enteredBs = parseFloat(amountPaidBS) || 0;
+
     if (methodNorm === 'mixto') {
-      const enteredUsd = parseFloat(amountPaidUSD) || 0;
       if (enteredUsd <= 0) return 0;
       const appliedPrincipal = Math.min(totalUSD, enteredUsd / factor);
       return round2(appliedPrincipal * (igtfRatePct / 100));
     }
-    const enteredUsd = parseFloat(amountPaidUSD) || 0;
-    const enteredBs = parseFloat(amountPaidBS) || 0;
     if (enteredBs > 0 && enteredUsd <= 0) return 0;
     if (enteredUsd > 0) {
       const appliedPrincipal = Math.min(totalUSD, enteredUsd / factor);
       return round2(appliedPrincipal * (igtfRatePct / 100));
     }
     return round2(totalUSD * (igtfRatePct / 100));
-  }, [isIgtfEnabled, isBinanceIgtfEnabled, igtfRatePct, documentType, totalUSD, checkoutMode, splitPayments.cash_usd, selectedMethod, amountPaidUSD, amountPaidBS]);
+  }, [isIgtfEnabled, isBinanceIgtfEnabled, igtfRatePct, documentType, totalUSD, checkoutMode, splitPayments, canonicalSelectedMethod, amountPaidUSD, amountPaidBS]);
 
-  const totalDueUSD = useMemo(() => Number((totalUSD + currentIgtfUSD).toFixed(2)), [totalUSD, currentIgtfUSD]);
-  const totalDueBS = useMemo(() => Number((totalDueUSD * exchangeRate).toFixed(2)), [totalDueUSD, exchangeRate]);
+  const totalDueUSD = useMemo(() => round2(totalUSD + currentIgtfUSD), [totalUSD, currentIgtfUSD]);
+  const totalDueBS = useMemo(() => round2(totalDueUSD * effectiveRate), [totalDueUSD, effectiveRate]);
 
   const { paidUSD, paidBS, totalPaidInUSD, changeUSD, changeBS } = useMemo(() => {
     const pUSD = parseFloat(amountPaidUSD) || 0;
     const pBS = parseFloat(amountPaidBS) || 0;
-    const totPaidUSD = pUSD + (pBS / (exchangeRate || 1));
-    const chUSD = Math.max(0, totPaidUSD - totalDueUSD);
-    const chBS = chUSD * (exchangeRate || 1);
+    const totPaidUSD = pUSD + (pBS / effectiveRate);
+    const chUSD = round2(Math.max(0, totPaidUSD - totalDueUSD));
+    const chBS = round2(chUSD * effectiveRate);
     return { paidUSD: pUSD, paidBS: pBS, totalPaidInUSD: totPaidUSD, changeUSD: chUSD, changeBS: chBS };
-  }, [amountPaidUSD, amountPaidBS, exchangeRate, totalDueUSD]);
+  }, [amountPaidUSD, amountPaidBS, effectiveRate, totalDueUSD]);
 
   const splitPaidUSD = useMemo(() => {
     const usdCash = parseFloat(splitPayments.cash_usd) || 0;
     const zelle = parseFloat(splitPayments.zelle) || 0;
+    const binance = parseFloat(splitPayments.binance) || 0;
     const credit = parseFloat(splitPayments.credito) || 0;
     const bsCash = parseFloat(splitPayments.cash_bs) || 0;
     const pagoMovil = parseFloat(splitPayments.pago_movil) || 0;
     const debit = parseFloat(splitPayments.tarjeta) || 0;
-    const bsTotalInUSD = (bsCash + pagoMovil + debit) / (exchangeRate || 1);
-    return usdCash + zelle + credit + bsTotalInUSD;
-  }, [splitPayments, exchangeRate]);
+    const bsTotalInUSD = (bsCash + pagoMovil + debit) / effectiveRate;
+    return usdCash + zelle + binance + credit + bsTotalInUSD;
+  }, [splitPayments, effectiveRate]);
 
-  const splitRemainingUSD = Math.max(0, totalDueUSD - splitPaidUSD);
-  const splitChangeUSD = Math.max(0, splitPaidUSD - totalDueUSD);
+  const splitRemainingUSD = useMemo(() => round2(Math.max(0, totalDueUSD - splitPaidUSD)), [totalDueUSD, splitPaidUSD]);
+  const splitChangeUSD = useMemo(() => round2(Math.max(0, splitPaidUSD - totalDueUSD)), [totalDueUSD, splitPaidUSD]);
+  const splitChangeBS = useMemo(() => round2(splitChangeUSD * effectiveRate), [splitChangeUSD, effectiveRate]);
 
   const handleApplyDiscount = useCallback((pct) => {
+    if (pct > 0 && !canApplyDiscounts) {
+      triggerHaptic(30);
+      playErrorSound();
+      showToast('⚠️ No tienes permisos para aplicar descuentos');
+      return;
+    }
     if (pct > 10) {
       requestSupervisorAuth(
         'Autorizar Descuento Especial',
@@ -209,51 +305,126 @@ export function useMobileCheckoutFlow({
           setDiscountSupervisorApprovalId(approvalData?.id || null);
           showToast(`✅ Descuento de ${pct}% autorizado`);
         },
-        'discount'
+        'HIGH_DISCOUNT'
       );
     } else {
       setCartDiscountPercent(pct);
       if (pct === 0) setDiscountSupervisorApprovalId(null);
     }
-  }, [requestSupervisorAuth, setCartDiscountPercent, setDiscountSupervisorApprovalId, showToast]);
+  }, [canApplyDiscounts, requestSupervisorAuth, setCartDiscountPercent, setDiscountSupervisorApprovalId, showToast]);
 
   const handleSelectPaymentMethod = useCallback((method) => {
     setSelectedMethod(method);
-    const round2 = (v) => Math.round((Number(v) + Number.EPSILON) * 100) / 100;
-    if (method === 'Efectivo Bs' || method === 'Pago Móvil' || method === 'Tarjeta' || method === 'Punto de Venta') {
+    const canon = canonicalizeMobilePaymentMethod(method);
+    if (['cash_bs', 'pago_movil', 'debit', 'biopago', 'transfer'].includes(canon)) {
       setAmountPaidBS(totalBS.toFixed(2));
       setAmountPaidUSD('');
-    } else if (method === 'Efectivo USD') {
-      const usdDue = isIgtfEnabled ? round2(totalUSD * (1 + (igtfRatePct / 100))) : totalUSD;
+    } else if (canon === 'cash_usd') {
+      const usdDue = isIgtfEnabled && igtfRatePct > 0 ? round2(totalUSD * (1 + (igtfRatePct / 100))) : totalUSD;
       setAmountPaidUSD(usdDue.toFixed(2));
       setAmountPaidBS('');
-    } else if (method === 'Zelle') {
+    } else if (canon === 'binance_usdt') {
+      const usdDue = (isIgtfEnabled && isBinanceIgtfEnabled && igtfRatePct > 0)
+        ? round2(totalUSD * (1 + (igtfRatePct / 100)))
+        : totalUSD;
+      setAmountPaidUSD(usdDue.toFixed(2));
+      setAmountPaidBS('');
+    } else if (canon === 'zelle') {
       setAmountPaidUSD(totalUSD.toFixed(2));
       setAmountPaidBS('');
-    } else if (method === 'Mixto') {
+    } else if (canon === 'mixto') {
       const halfUSD = totalUSD / 2;
-      const halfIgtf = isIgtfEnabled ? round2(halfUSD * (igtfRatePct / 100)) : 0;
+      const halfIgtf = isIgtfEnabled && igtfRatePct > 0 ? round2(halfUSD * (igtfRatePct / 100)) : 0;
       setAmountPaidUSD((halfUSD + halfIgtf).toFixed(2));
-      setAmountPaidBS((halfUSD * exchangeRate).toFixed(2));
-    } else if (method === 'Crédito') {
+      setAmountPaidBS((halfUSD * effectiveRate).toFixed(2));
+    } else if (canon === 'fiado') {
       setAmountPaidUSD('0.00');
       setAmountPaidBS('0.00');
     }
-  }, [setSelectedMethod, totalBS, setAmountPaidBS, setAmountPaidUSD, isIgtfEnabled, totalUSD, igtfRatePct, exchangeRate]);
+  }, [setSelectedMethod, totalBS, setAmountPaidBS, setAmountPaidUSD, isIgtfEnabled, isBinanceIgtfEnabled, totalUSD, igtfRatePct, effectiveRate]);
+
+  const resetCheckoutTransientState = useCallback(() => {
+    setCart([]);
+    setCartDiscountPercent(0);
+    setDiscountSupervisorApprovalId(null);
+    setIsCheckoutOpen(false);
+    setIsMobileCartOpen(false);
+    setPaymentReference('');
+    setAmountPaidUSD('');
+    setAmountPaidBS('');
+    if (typeof setSplitPayments === 'function') {
+      setSplitPayments({ cash_usd: '', cash_bs: '', pago_movil: '', tarjeta: '', zelle: '', binance: '', credito: '' });
+    }
+    if (typeof setCheckoutMode === 'function') setCheckoutMode('express');
+    if (typeof setDocumentType === 'function') setDocumentType('factura');
+    if (typeof setSelectedCustomer === 'function') setSelectedCustomer(null);
+    if (typeof setSelectedTable === 'function') setSelectedTable(null);
+    if (typeof setOrderNotes === 'function') setOrderNotes('');
+    if (typeof setCustomerName === 'function') setCustomerName('Consumidor Final');
+    if (typeof setCustomerDoc === 'function') setCustomerDoc(isDollarCountry ? '0000000000' : 'V-00000000');
+    if (typeof setCustomerPhone === 'function') setCustomerPhone('');
+  }, [
+    setCart, setCartDiscountPercent, setDiscountSupervisorApprovalId,
+    setIsCheckoutOpen, setIsMobileCartOpen, setPaymentReference,
+    setAmountPaidUSD, setAmountPaidBS, setSplitPayments, setCheckoutMode,
+    setDocumentType, setSelectedCustomer, setSelectedTable, setOrderNotes,
+    setCustomerName, setCustomerDoc, setCustomerPhone, isDollarCountry
+  ]);
+
+  const openQuotationWhatsApp = useCallback((quoteId) => {
+    const taxLine = isIvaEnabled && effectiveIvaRate > 0
+      ? [`${taxLabel} (${effectiveIvaRate}%): $${taxUSD.toFixed(2)}`]
+      : [];
+    const bsLines = !isDollarCountry
+      ? [
+          `*TOTAL BS: Bs. ${totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
+          `Tasa Oficial: Bs. ${effectiveRate.toFixed(2)}`
+        ]
+      : [];
+    const lines = [
+      `📋 *PRESUPUESTO / COTIZACIÓN*`,
+      `Comercio: *${businessInfo?.name || 'Isaac POS'}*`,
+      `Nº Presupuesto: *${quoteId}*`,
+      `Fecha: ${new Date().toLocaleDateString('es-VE')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      `Cliente: *${customerName || 'Consumidor Final'}* ${customerDoc ? `(${customerDoc})` : ''}`,
+      `--------------------------------`,
+      ...enrichedCart.map(i => `• ${i.quantity}x ${i.product.name || i.product.nombre} = $${Number(i.finalSubtotal).toFixed(2)}`),
+      `--------------------------------`,
+      `Subtotal: $${subtotalUSD.toFixed(2)}`,
+      ...taxLine,
+      `*TOTAL USD: $${totalUSD.toFixed(2)}*`,
+      ...bsLines,
+      `--------------------------------`,
+      `*Validez de la oferta: 3 días continuos*`,
+      `¡Gracias por su consulta!`
+    ];
+    const encoded = encodeURIComponent(lines.join('\n'));
+    try {
+      window.open(`https://wa.me/?text=${encoded}`, '_blank');
+    } catch (_openErr) {
+      /* Entorno sin window.open */
+    }
+  }, [isIvaEnabled, effectiveIvaRate, taxLabel, taxUSD, isDollarCountry, totalBS, effectiveRate, businessInfo?.name, customerName, customerDoc, enrichedCart, subtotalUSD, totalUSD]);
 
   const handleSaveQuotation = useCallback(async () => {
-    if (cart.length === 0) return;
+    if (safeCart.length === 0) return;
     setIsProcessingSale(true);
 
+    const resolvedCustomerId = selectedCustomer?.id
+      || (Array.isArray(customers) ? customers.find(c => c.name === customerName)?.id : null)
+      || null;
+
     const quotationData = {
-      customerId: (Array.isArray(customers) ? customers.find(c => c.name === customerName)?.id : null) || null,
+      customerId: resolvedCustomerId,
       customerName: customerName || 'Consumidor Final',
       customerDocument: customerDoc || '',
+      exchangeRate: effectiveRate,
       items: enrichedCart.map(item => ({
-        productId: String(item.product.id),
+        productId: stripMobileProductSuffix(item.product.productId || item.product.id),
         name: item.product.name || item.product.nombre,
         quantity: Number(item.quantity),
         price: Number(item.product.price || item.product.precio || 0),
+        promoDiscount: Number(item.promoDiscount || 0),
         subtotal: Number(item.finalSubtotal || 0)
       })),
       subtotal: Number(subtotalUSD.toFixed(2)),
@@ -270,44 +441,48 @@ export function useMobileCheckoutFlow({
       const quote = res.data || {};
       const quoteId = quote.id || `COT-${Date.now().toString().slice(-6)}`;
       showToast('✅ Presupuesto guardado en servidor');
+      openQuotationWhatsApp(quoteId);
+      resetCheckoutTransientState();
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.error || err?.response?.data?.message || 'Cotización rechazada por el servidor';
+        showToast(`⚠️ ${msg}`);
+        return;
+      }
 
-      const lines = [
-        `📋 *PRESUPUESTO / COTIZACIÓN*`,
-        `Comercio: *${businessInfo.name || 'Isaac POS'}*`,
-        `Nº Presupuesto: *${quoteId}*`,
-        `Fecha: ${new Date().toLocaleDateString('es-VE')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-        `Cliente: *${customerName}* (${customerDoc})`,
-        `--------------------------------`,
-        ...enrichedCart.map(i => `• ${i.quantity}x ${i.product.name || i.product.nombre} = $${Number(i.finalSubtotal).toFixed(2)}`),
-        `--------------------------------`,
-        `Subtotal: $${subtotalUSD.toFixed(2)}`,
-        `IVA (16%): $${taxUSD.toFixed(2)}`,
-        `*TOTAL USD: $${totalUSD.toFixed(2)}*`,
-        `*TOTAL BS: Bs. ${totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
-        `Tasa Oficial: Bs. ${exchangeRate.toFixed(2)}`,
-        `--------------------------------`,
-        `*Validez de la oferta: 3 días continuos*`,
-        `¡Gracias por su consulta!`
-      ];
-      const encoded = encodeURIComponent(lines.join('\n'));
-      window.open(`https://wa.me/?text=${encoded}`, '_blank');
+      const offlineQuoteId = `COT-OFF-${Date.now().toString().slice(-6)}`;
+      let queuedOk = false;
+      try {
+        await primaryDb.put('syncQueue', {
+          id: `quote_sync_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          tempLocalId: offlineQuoteId,
+          endpoint: '/quotations',
+          method: 'POST',
+          payload: quotationData,
+          createdAt: new Date().toISOString()
+        });
+        queuedOk = true;
+      } catch (queueErr) {
+        console.warn('[useMobileCheckoutFlow] Error respaldando cotización offline:', queueErr?.message || queueErr);
+      }
 
-      setCart([]);
-      setIsCheckoutOpen(false);
-      setIsMobileCartOpen(false);
-    } catch (_err) {
-      showToast('⚡ Cotización generada (modo offline)');
-      setCart([]);
-      setIsCheckoutOpen(false);
-      setIsMobileCartOpen(false);
+      if (!queuedOk) {
+        showToast('❌ No se pudo guardar la cotización offline. Intenta nuevamente.');
+        return;
+      }
+
+      showToast(`⚡ Cotización ${offlineQuoteId} respaldada offline y lista en WhatsApp`);
+      openQuotationWhatsApp(offlineQuoteId);
+      resetCheckoutTransientState();
     } finally {
       setIsProcessingSale(false);
     }
   }, [
-    cart.length, setIsProcessingSale, customers, customerName, customerDoc,
-    enrichedCart, subtotalUSD, cartDiscountAmountUSD, cartDiscountPercent,
-    taxUSD, totalUSD, showToast, businessInfo?.name, totalBS, exchangeRate,
-    setCart, setIsCheckoutOpen, setIsMobileCartOpen
+    safeCart.length, setIsProcessingSale, selectedCustomer?.id, customers,
+    customerName, customerDoc, effectiveRate, enrichedCart, subtotalUSD,
+    cartDiscountAmountUSD, cartDiscountPercent, taxUSD, totalUSD,
+    showToast, openQuotationWhatsApp, resetCheckoutTransientState
   ]);
 
   const activeCurrencyMode = businessInfo?.currencyMode || localStorage.getItem('pos_currency_mode') || (isDollarCountry ? 'USD' : 'BOTH');
@@ -322,21 +497,21 @@ export function useMobileCheckoutFlow({
           ...businessInfo,
           receiptWidth: paperWidth
         },
-        exchangeRate,
+        exchangeRate: effectiveRate,
         currencyMode: activeCurrencyMode
       });
       triggerHaptic(15);
       playScanSound();
       showToast('🖨️ Enviado a la cola de impresión térmica');
     } catch (printErr) {
-      alert(`Error al encolar impresión Bluetooth: ${printErr.message}`);
+      showToast(`❌ Error al imprimir por Bluetooth: ${printErr?.message || 'Impresora no disponible'}`);
       setIsThermalPrinterModalOpen(true);
     }
-  }, [businessInfo, exchangeRate, activeCurrencyMode, showToast, setIsThermalPrinterModalOpen]);
+  }, [businessInfo, effectiveRate, activeCurrencyMode, showToast, setIsThermalPrinterModalOpen]);
 
   const handleConfirmSale = useCallback(async () => {
     if (isProcessingSale) return;
-    if (cart.length === 0) return;
+    if (safeCart.length === 0) return;
     if (documentType === 'cotizacion') {
       await handleSaveQuotation();
       return;
@@ -349,7 +524,7 @@ export function useMobileCheckoutFlow({
         showToast(`⚠️ Pago incompleto: faltan $${Math.max(0, totalDueUSD - splitPaidUSD).toFixed(2)}`);
         return;
       }
-    } else if (selectedMethod !== 'Crédito' && selectedMethod !== 'fiado') {
+    } else if (canonicalSelectedMethod !== 'fiado') {
       const hasEnteredTender = String(amountPaidUSD || '').trim() !== '' || String(amountPaidBS || '').trim() !== '';
       if (hasEnteredTender && totalPaidInUSD < totalDueUSD - 0.02) {
         triggerHaptic(30);
@@ -360,8 +535,11 @@ export function useMobileCheckoutFlow({
     }
 
     const isRefRequired = checkoutMode === 'express'
-      ? ['pago móvil', 'pago movil', 'tarjeta', 'punto de venta', 'zelle', 'transferencia', 'biopago'].some(m => String(selectedMethod || '').toLowerCase().includes(m))
-      : ((parseFloat(splitPayments.pago_movil) || 0) > 0 || (parseFloat(splitPayments.tarjeta) || 0) > 0 || (parseFloat(splitPayments.zelle) || 0) > 0);
+      ? ['pago_movil', 'debit', 'zelle', 'transfer', 'biopago', 'binance_usdt'].includes(canonicalSelectedMethod)
+      : ((parseFloat(splitPayments.pago_movil) || 0) > 0
+        || (parseFloat(splitPayments.tarjeta) || 0) > 0
+        || (parseFloat(splitPayments.zelle) || 0) > 0
+        || (parseFloat(splitPayments.binance) || 0) > 0);
 
     if (isRefRequired && !String(paymentReference || '').trim()) {
       triggerHaptic(30);
@@ -376,62 +554,90 @@ export function useMobileCheckoutFlow({
       ? crypto.randomUUID()
       : `tx_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    const effectiveMethod = checkoutMode === 'split'
-      ? 'Mixto / Dividido'
-      : ((selectedMethod === 'Efectivo USD' && paidBS > 0 && paidUSD <= 0) ? 'Efectivo Bs' : selectedMethod);
-    const finalChangeUSD = checkoutMode === 'split' ? splitChangeUSD : changeUSD;
-    const finalChangeBS = finalChangeUSD * exchangeRate;
+    // Detectar si el cajero combinó manualmente USD + Bs en modo Express
+    const isExpressDualTender = checkoutMode === 'express'
+      && paidUSD > 0
+      && paidBS > 0
+      && canonicalSelectedMethod !== 'fiado';
 
-    const isVesMethod = ['Pago Móvil', 'Efectivo Bs', 'Punto de Venta', 'Tarjeta', 'Biopago', 'pago_movil', 'cash_bs', 'debit', 'biopago'].includes(effectiveMethod);
+    const effectiveCanonicalMethod = checkoutMode === 'split'
+      ? 'mixto'
+      : isExpressDualTender
+        ? 'mixto'
+        : ((canonicalSelectedMethod === 'cash_usd' && paidBS > 0 && paidUSD <= 0) ? 'cash_bs' : canonicalSelectedMethod);
+
+    const finalChangeUSD = checkoutMode === 'split' ? splitChangeUSD : changeUSD;
+    const finalChangeBS = checkoutMode === 'split' ? splitChangeBS : changeBS;
+    const isVesMethod = ['pago_movil', 'cash_bs', 'debit', 'biopago', 'transfer'].includes(effectiveCanonicalMethod);
 
     let normalizedPaymentMethods = [];
+    const cleanRef = paymentReference ? String(paymentReference).trim() : '';
+
     if (checkoutMode === 'split') {
       const sUsd = parseFloat(splitPayments.cash_usd) || 0;
       const sBs = parseFloat(splitPayments.cash_bs) || 0;
       const sPm = parseFloat(splitPayments.pago_movil) || 0;
       const sCard = parseFloat(splitPayments.tarjeta) || 0;
       const sZelle = parseFloat(splitPayments.zelle) || 0;
+      const sBinance = parseFloat(splitPayments.binance) || 0;
       const sCred = parseFloat(splitPayments.credito) || 0;
 
-      if (sUsd > 0) normalizedPaymentMethods.push({ method: 'cash_usd', amount: sUsd, currency: 'USD', convertedAmountUsd: sUsd, reference: '' });
-      if (sBs > 0) normalizedPaymentMethods.push({ method: 'cash_bs', amount: sBs, currency: 'VES', convertedAmountUsd: Number((sBs / (exchangeRate || 1)).toFixed(2)), reference: '' });
-      if (sPm > 0) normalizedPaymentMethods.push({ method: 'pago_movil', amount: sPm, currency: 'VES', convertedAmountUsd: Number((sPm / (exchangeRate || 1)).toFixed(2)), reference: paymentReference ? String(paymentReference).trim() : '' });
-      if (sCard > 0) normalizedPaymentMethods.push({ method: 'debit', amount: sCard, currency: 'VES', convertedAmountUsd: Number((sCard / (exchangeRate || 1)).toFixed(2)), reference: paymentReference ? String(paymentReference).trim() : '' });
-      if (sZelle > 0) normalizedPaymentMethods.push({ method: 'zelle', amount: sZelle, currency: 'USD', convertedAmountUsd: sZelle, reference: paymentReference ? String(paymentReference).trim() : '' });
-      if (sCred > 0) normalizedPaymentMethods.push({ method: 'fiado', amount: sCred, currency: 'USD', convertedAmountUsd: sCred, reference: '' });
+      if (sUsd > 0) normalizedPaymentMethods.push({ method: 'cash_usd', amount: round2(sUsd), currency: 'USD', convertedAmountUsd: round2(sUsd), reference: '' });
+      if (sBs > 0) normalizedPaymentMethods.push({ method: 'cash_bs', amount: round2(sBs), currency: 'VES', convertedAmountUsd: round2(sBs / effectiveRate), reference: '' });
+      if (sPm > 0) normalizedPaymentMethods.push({ method: 'pago_movil', amount: round2(sPm), currency: 'VES', convertedAmountUsd: round2(sPm / effectiveRate), reference: cleanRef });
+      if (sCard > 0) normalizedPaymentMethods.push({ method: 'debit', amount: round2(sCard), currency: 'VES', convertedAmountUsd: round2(sCard / effectiveRate), reference: cleanRef });
+      if (sZelle > 0) normalizedPaymentMethods.push({ method: 'zelle', amount: round2(sZelle), currency: 'USD', convertedAmountUsd: round2(sZelle), reference: cleanRef });
+      if (sBinance > 0) normalizedPaymentMethods.push({ method: 'binance_usdt', amount: round2(sBinance), currency: 'USDT', convertedAmountUsd: round2(sBinance), reference: cleanRef });
+      if (sCred > 0) normalizedPaymentMethods.push({ method: 'fiado', amount: round2(sCred), currency: 'USD', convertedAmountUsd: round2(sCred), reference: '' });
       if (normalizedPaymentMethods.length === 0) {
-        normalizedPaymentMethods.push({ method: 'cash_usd', amount: Number(totalDueUSD.toFixed(2)), currency: 'USD', convertedAmountUsd: Number(totalDueUSD.toFixed(2)), reference: '' });
+        normalizedPaymentMethods.push({ method: 'cash_usd', amount: totalDueUSD, currency: 'USD', convertedAmountUsd: totalDueUSD, reference: '' });
       }
-    } else if (effectiveMethod === 'Mixto') {
-      const mUsd = paidUSD > 0 ? paidUSD : 0;
-      const mBs = paidBS > 0 ? paidBS : 0;
-      if (mUsd > 0) normalizedPaymentMethods.push({ method: 'cash_usd', amount: Number(mUsd.toFixed(2)), currency: 'USD', convertedAmountUsd: Number(mUsd.toFixed(2)), reference: '' });
-      if (mBs > 0) normalizedPaymentMethods.push({ method: 'cash_bs', amount: Number(mBs.toFixed(2)), currency: 'VES', convertedAmountUsd: Number((mBs / (exchangeRate || 1)).toFixed(2)), reference: '' });
+    } else if (effectiveCanonicalMethod === 'mixto') {
+      if (paidUSD > 0) normalizedPaymentMethods.push({ method: 'cash_usd', amount: round2(paidUSD), currency: 'USD', convertedAmountUsd: round2(paidUSD), reference: '' });
+      if (paidBS > 0) normalizedPaymentMethods.push({ method: 'cash_bs', amount: round2(paidBS), currency: 'VES', convertedAmountUsd: round2(paidBS / effectiveRate), reference: '' });
       if (normalizedPaymentMethods.length === 0) {
-        normalizedPaymentMethods.push({ method: 'cash_usd', amount: Number(totalDueUSD.toFixed(2)), currency: 'USD', convertedAmountUsd: Number(totalDueUSD.toFixed(2)), reference: '' });
+        normalizedPaymentMethods.push({ method: 'cash_usd', amount: totalDueUSD, currency: 'USD', convertedAmountUsd: totalDueUSD, reference: '' });
       }
     } else {
       normalizedPaymentMethods = [{
-        method: effectiveMethod === 'Crédito' ? 'fiado' : effectiveMethod,
-        amount: isVesMethod ? Number(totalDueBS.toFixed(2)) : Number(totalDueUSD.toFixed(2)),
-        currency: isVesMethod ? 'VES' : 'USD',
-        convertedAmountUsd: Number(totalDueUSD.toFixed(2)),
-        reference: paymentReference ? String(paymentReference).trim() : ''
+        method: effectiveCanonicalMethod,
+        amount: isVesMethod ? totalDueBS : totalDueUSD,
+        currency: effectiveCanonicalMethod === 'binance_usdt' ? 'USDT' : (isVesMethod ? 'VES' : 'USD'),
+        convertedAmountUsd: totalDueUSD,
+        reference: cleanRef
       }];
     }
+
+    const resolvedCustomerId = selectedCustomer?.id
+      || (customerName && customerName !== 'Consumidor Final' && Array.isArray(customers)
+        ? customers.find(c => c.name === customerName)?.id || null
+        : null);
+
+    const receivedAmountFinal = checkoutMode === 'split'
+      ? round2(splitPaidUSD > 0 ? splitPaidUSD : totalDueUSD)
+      : round2(totalPaidInUSD > 0 ? totalPaidInUSD : totalDueUSD);
 
     const salePayload = {
       id: persistentTransactionId,
       clientTransactionId: persistentTransactionId,
+      customerId: resolvedCustomerId,
       items: enrichedCart.map(item => ({
-        productId: String(item.product.productId || item.product.id).replace(/__bulk$|__mid$|__pres_.*$/, ''),
+        productId: stripMobileProductSuffix(item.product.productId || item.product.id),
         name: item.product.name || item.product.nombre,
         quantity: Number(item.quantity),
         price: Number(item.product.price || item.product.precio || 0),
+        cost: Number(item.product.cost || item.product.costo || 0),
+        category: item.product.category || item.product.categoria || 'General',
+        taxStatus: item.product.taxStatus || (item.product.isExempt ? 'exento' : 'gravable'),
+        promoDiscount: Number(item.promoDiscount || 0),
+        appliedPromoName: item.appliedPromoName || null,
         subtotal: Number(item.finalSubtotal || 0),
         isCustom: Boolean(item.product.isCustom),
         selectedVariant: item.product.selectedVariant || null,
         recipe: item.product.recipe || null,
+        batchNumber: item.product.batchNumber || null,
+        expirationDate: item.product.expirationDate || null,
+        es_controlado: Boolean(item.product.es_controlado),
         presentationId: item.product.presentationId || null,
         presentationName: item.product.presentationName || null,
         factorConversion: Number(item.product.factorConversion || item.product.unitsMultiplier) || 1,
@@ -444,38 +650,40 @@ export function useMobileCheckoutFlow({
         midBulkPrice: Number(item.product.midBulkPrice) || 0,
         midBulkUnitName: item.product.midBulkUnitName || ''
       })),
-      subtotal: Number(subtotalUSD.toFixed(2)),
-      discount: Number(cartDiscountAmountUSD.toFixed(2)) || 0,
+      subtotal: rawSubtotalUSD,
+      discount: cartDiscountAmountUSD,
       discountPercent: Number(cartDiscountPercent) || 0,
+      promoDiscount: totalPromoSavings,
+      appliedPromotions: Array.isArray(promoResult.appliedPromotions) ? promoResult.appliedPromotions : [],
       supervisorApprovalId: discountSupervisorApprovalId || null,
-      tax: Number(taxUSD.toFixed(2)),
-      igtf: Number(currentIgtfUSD.toFixed(2)),
-      igtfAmount: Number(currentIgtfUSD.toFixed(2)),
-      total: Number(totalDueUSD.toFixed(2)),
-      exchangeRate: Number(exchangeRate),
-      paymentMethod: effectiveMethod === 'Crédito' ? 'fiado' : effectiveMethod,
-      paymentReference: paymentReference ? String(paymentReference).trim() : null,
+      tax: taxUSD,
+      igtf: currentIgtfUSD,
+      igtfAmount: currentIgtfUSD,
+      total: totalDueUSD,
+      exchangeRate: effectiveRate,
+      paymentMethod: effectiveCanonicalMethod,
+      paymentReference: cleanRef || null,
       paymentMethods: normalizedPaymentMethods,
-      receivedAmount: Number((totalPaidInUSD > 0 ? totalPaidInUSD : totalDueUSD).toFixed(2)),
-      changeAmount: Number(finalChangeUSD.toFixed(2)),
-      changeUSD: Number(finalChangeUSD.toFixed(2)),
-      changeBS: Number(finalChangeBS.toFixed(2)),
+      receivedAmount: receivedAmountFinal,
+      changeAmount: finalChangeUSD,
+      changeUSD: finalChangeUSD,
+      changeBS: finalChangeBS,
       documentType: documentType || 'factura',
       splitDetails: checkoutMode === 'split' ? splitPayments : null,
       customerName: customerName || 'Consumidor Final',
       customerDoc: customerDoc || (isDollarCountry ? '0000000000' : 'V-00000000'),
       registerId: 'Caja Móvil',
       terminalId: getTerminalId(),
-      notes: paymentReference ? `Ref: ${paymentReference}` : (documentType === 'nota_entrega' ? 'Nota de Entrega' : 'Venta Terminal Móvil')
+      notes: cleanRef ? `Ref: ${cleanRef}` : (documentType === 'nota_entrega' ? 'Nota de Entrega' : 'Venta Terminal Móvil')
     };
 
     const deductLocalInventory = async () => {
       setProducts(prev => prev.map(p => {
-        const cartItemsForProd = cart.filter(c => getCleanProductId(c.product.productId || c.product.id) === String(p.id));
+        const cartItemsForProd = safeCart.filter(c => getCleanProductId(c.product.productId || c.product.id) === String(p.id));
         if (cartItemsForProd.length > 0) {
           const totalUnitsToDeduct = cartItemsForProd.reduce((sum, item) => {
             const mult = getProductUnitsMultiplier(item.product);
-            return sum + (item.quantity * mult);
+            return sum + (Number(item.quantity) * mult);
           }, 0);
           const currentStock = Number(p.stockQuantity ?? p.stock ?? 0);
           const nextStock = Math.max(0, currentStock - totalUnitsToDeduct);
@@ -495,7 +703,8 @@ export function useMobileCheckoutFlow({
               deductedByCleanId.set(cleanId, (deductedByCleanId.get(cleanId) || 0) + unitsToDeduct);
             }
             for (const [cleanId, totalUnitsToDeduct] of deductedByCleanId.entries()) {
-              const currentProd = productsMap.get(cleanId) || await localDb.products.get(cleanId);
+              // Priorizar lectura fresca de BD antes que snapshot React para evitar sobrescribir ventas consecutivas
+              const currentProd = (await localDb.products.get(cleanId)) || productsMap.get(cleanId);
               if (currentProd) {
                 const currentStock = Number(currentProd.stockQuantity ?? currentProd.stock ?? 0);
                 const newStock = Math.max(0, currentStock - totalUnitsToDeduct);
@@ -518,7 +727,7 @@ export function useMobileCheckoutFlow({
       const nowIso = now.toISOString();
       const completedSaleRecord = {
         ...salePayload,
-        id: String(createdSale.id || Date.now().toString()),
+        id: String(createdSale.id || persistentTransactionId),
         invoiceNumber: invoiceNum,
         date: nowIso,
         displayTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -530,7 +739,7 @@ export function useMobileCheckoutFlow({
         baseImponibleUSD,
         totalUSD: totalDueUSD,
         totalBS: totalDueBS,
-        method: effectiveMethod,
+        method: effectiveCanonicalMethod,
         changeUSD: finalChangeUSD,
         changeBS: finalChangeBS,
         status: 'synced',
@@ -538,10 +747,9 @@ export function useMobileCheckoutFlow({
       };
 
       try {
-        if (localDb && localDb.sales) await localDb.sales.put(completedSaleRecord);
         await primaryDb.put('sales', completedSaleRecord);
       } catch (caughtErr) {
-        console.warn('[useMobileCheckoutFlow] Error guardando venta en IndexedDB:', caughtErr?.message || caughtErr);
+        console.warn('[useMobileCheckoutFlow] Error guardando venta en BD local:', caughtErr?.message || caughtErr);
       }
 
       await deductLocalInventory();
@@ -561,18 +769,13 @@ export function useMobileCheckoutFlow({
             ...businessInfo,
             receiptWidth: localStorage.getItem('pos_mobile_paper_width') || '58mm'
           },
-          exchangeRate,
+          exchangeRate: effectiveRate,
           currencyMode: activeCurrencyMode
         });
         setPrintedReceipt(completedSaleRecord);
       }
 
-      setCart([]);
-      setCartDiscountPercent(0);
-      setDiscountSupervisorApprovalId(null);
-      setIsCheckoutOpen(false);
-      setIsMobileCartOpen(false);
-      setPaymentReference('');
+      resetCheckoutTransientState();
       playSuccessSound();
       showToast(`¡Venta #${invoiceNum} registrada en servidor PC!`);
     } catch (err) {
@@ -589,16 +792,6 @@ export function useMobileCheckoutFlow({
       const offlineId = persistentTransactionId;
       const offlineInvoiceNum = `MOV-OFF-${persistentTransactionId.slice(-6).toUpperCase()}`;
 
-      let cryptoSig = 'SHA256_LOCAL_STAMP';
-      try {
-        const rawPayload = `${offlineId}|${offlineInvoiceNum}|${totalDueUSD}|${user?.id || 'movil'}|${Date.now()}`;
-        const buffer = new TextEncoder().encode(rawPayload);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-        cryptoSig = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-      } catch (caughtErr) {
-        console.warn('[useMobileCheckoutFlow] Error generando firma criptográfica local:', caughtErr?.message || caughtErr);
-      }
-
       const nowOffline = new Date();
       const nowOfflineIso = nowOffline.toISOString();
       const offlineSaleRecord = {
@@ -607,7 +800,6 @@ export function useMobileCheckoutFlow({
         clientTransactionId: String(offlineId),
         terminalId: getTerminalId(),
         invoiceNumber: offlineInvoiceNum,
-        cryptographicSignature: cryptoSig,
         date: nowOfflineIso,
         displayTime: nowOffline.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         items: Array.isArray(salePayload.items) ? [...salePayload.items] : [],
@@ -618,7 +810,7 @@ export function useMobileCheckoutFlow({
         baseImponibleUSD,
         totalUSD: totalDueUSD,
         totalBS: totalDueBS,
-        method: effectiveMethod,
+        method: effectiveCanonicalMethod,
         changeUSD: finalChangeUSD,
         changeBS: finalChangeBS,
         status: 'pending_sync',
@@ -627,10 +819,11 @@ export function useMobileCheckoutFlow({
       };
 
       try {
-        if (localDb && localDb.sales) await localDb.sales.put(offlineSaleRecord);
         await primaryDb.put('sales', offlineSaleRecord);
       } catch (storeErr) {
-        console.warn('Error guardando venta offline en DB:', storeErr);
+        console.error('[useMobileCheckoutFlow] Error crítico guardando venta offline:', storeErr);
+        showToast('❌ Error guardando venta en almacenamiento local. No se vació el carrito.');
+        return;
       }
 
       await deductLocalInventory();
@@ -645,35 +838,30 @@ export function useMobileCheckoutFlow({
             ...businessInfo,
             receiptWidth: localStorage.getItem('pos_mobile_paper_width') || '58mm'
           },
-          exchangeRate,
+          exchangeRate: effectiveRate,
           currencyMode: activeCurrencyMode
         });
         setPrintedReceipt(offlineSaleRecord);
       }
 
-      setCart([]);
-      setCartDiscountPercent(0);
-      setDiscountSupervisorApprovalId(null);
-      setIsCheckoutOpen(false);
-      setIsMobileCartOpen(false);
-      setPaymentReference('');
+      resetCheckoutTransientState();
       playSuccessSound();
       showToast(`⚡ Venta #${offlineInvoiceNum} guardada offline. Se sincronizará al conectar con la PC.`);
     } finally {
       setIsProcessingSale(false);
     }
   }, [
-    isProcessingSale, cart, documentType, handleSaveQuotation, checkoutMode,
-    splitPaidUSD, totalDueUSD, selectedMethod, amountPaidUSD, amountPaidBS,
+    isProcessingSale, safeCart, documentType, handleSaveQuotation, checkoutMode,
+    splitPaidUSD, totalDueUSD, canonicalSelectedMethod, amountPaidUSD, amountPaidBS,
     totalPaidInUSD, splitPayments, paymentReference, setIsProcessingSale,
-    paidBS, paidUSD, splitChangeUSD, changeUSD, exchangeRate, totalDueBS,
-    enrichedCart, subtotalUSD, cartDiscountAmountUSD, cartDiscountPercent,
-    discountSupervisorApprovalId, taxUSD, currentIgtfUSD, customerName,
-    customerDoc, isDollarCountry, baseImponibleUSD, setProducts, getCleanProductId,
-    getProductUnitsMultiplier, productsMap, setSalesHistory, autoPrint,
-    businessInfo, activeCurrencyMode, setPrintedReceipt, setCart,
-    setCartDiscountPercent, setDiscountSupervisorApprovalId, setIsCheckoutOpen,
-    setIsMobileCartOpen, setPaymentReference, showToast, user?.id, setPendingSalesCount
+    paidBS, paidUSD, splitChangeUSD, splitChangeBS, changeUSD, changeBS, effectiveRate, totalDueBS,
+    selectedCustomer?.id, customers, customerName, customerDoc, enrichedCart,
+    rawSubtotalUSD, subtotalUSD, cartDiscountAmountUSD, cartDiscountPercent,
+    totalPromoSavings, promoResult.appliedPromotions, discountSupervisorApprovalId,
+    taxUSD, currentIgtfUSD, isDollarCountry, baseImponibleUSD, setProducts,
+    getCleanProductId, getProductUnitsMultiplier, productsMap, setSalesHistory,
+    autoPrint, businessInfo, activeCurrencyMode, setPrintedReceipt,
+    resetCheckoutTransientState, showToast, setPendingSalesCount
   ]);
 
   const generateEcoReceiptText = useCallback((sale) => {
@@ -689,10 +877,17 @@ export function useMobileCheckoutFlow({
         ? parsedSaleDate.toLocaleString('es-VE')
         : (rawSaleDate || new Date().toLocaleString('es-VE')));
 
+    const bsLines = !isDollarCountry
+      ? [
+          `*TOTAL BS: Bs. ${Number(sale.totalBS || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
+          `Tasa Oficial: Bs. ${Number(sale.exchangeRate || effectiveRate).toFixed(2)}`
+        ]
+      : [];
+
     const lines = [
       `🧾 *COMPROBANTE DIGITAL DE COMPRA*`,
       `🏢 *${company.toUpperCase()}*`,
-      ...(rif ? [`🔖 RIF / NIT: ${rif}`] : []),
+      ...(rif ? [`🔖 ${regionCfg.taxIdLabel || 'RIF'}: ${rif}`] : []),
       ...(address ? [`📍 ${address}`] : []),
       `--------------------------------`,
       `N° Documento: *${sale.invoiceNumber || sale.code || 'TICKET'}*`,
@@ -701,37 +896,43 @@ export function useMobileCheckoutFlow({
       `Atendido por: ${user?.name || user?.username || 'Cajero'}`,
       `--------------------------------`,
       `🛒 *DETALLE DE PRODUCTOS:*`,
-      ...(Array.isArray(sale.items) ? sale.items.map(item => {
+      ...(Array.isArray(sale.displayItems || sale.items) ? (sale.displayItems || sale.items).map(item => {
         const q = item.quantity || 1;
         const name = item.product?.name || item.name || item.product?.nombre || 'Producto';
-        const price = Number(item.finalSubtotal || (item.price * q) || (item.product?.price * q) || 0).toFixed(2);
+        const price = Number(item.finalSubtotal || item.subtotal || (item.price * q) || (item.product?.price * q) || 0).toFixed(2);
         return `• ${q}x ${name} = $${price}`;
       }) : []),
       `--------------------------------`,
-      `Subtotal: $${Number(sale.subtotal || sale.totalUSD || sale.total || 0).toFixed(2)}`,
+      `Subtotal: $${Number(sale.subtotalUSD || sale.subtotal || sale.totalUSD || sale.total || 0).toFixed(2)}`,
+      ...(sale.promoDiscount > 0 ? [`Promociones: -$${Number(sale.promoDiscount).toFixed(2)}`] : []),
       ...(sale.discount > 0 ? [`Descuento: -$${Number(sale.discount).toFixed(2)}`] : []),
+      ...(sale.igtf > 0 || sale.igtfUSD > 0 ? [`IGTF: +$${Number(sale.igtf || sale.igtfUSD).toFixed(2)}`] : []),
       `*TOTAL USD: $${Number(sale.totalUSD || sale.total || 0).toFixed(2)}*`,
-      `*TOTAL BS: Bs. ${Number(sale.totalBS || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
-      `Tasa Oficial: Bs. ${Number(sale.exchangeRate || exchangeRate).toFixed(2)}`,
+      ...bsLines,
       `Forma de Pago: *${sale.method || sale.paymentMethod || 'Efectivo'}*`,
       ...(sale.paymentReference || (Array.isArray(sale.paymentMethods) && sale.paymentMethods[0]?.reference)
         ? [`Ref. Operación: *#${sale.paymentReference || sale.paymentMethods[0]?.reference}*`]
         : []),
-      ...(sale.changeUSD > 0 ? [`Cambio Devuelto: $${Number(sale.changeUSD).toFixed(2)} (Bs. ${Number(sale.changeBS).toFixed(2)})`] : []),
+      ...(sale.changeUSD > 0 ? [`Cambio Devuelto: $${Number(sale.changeUSD).toFixed(2)}${!isDollarCountry ? ` (Bs. ${Number(sale.changeBS || 0).toFixed(2)})` : ''}`] : []),
       `--------------------------------`,
       `🌱 *Recibo Ecológico - Cuidemos el planeta*`,
       `¡Gracias por su compra!`
     ];
 
     return lines.join('\n');
-  }, [businessInfo, user, exchangeRate]);
+  }, [businessInfo, regionCfg.taxIdLabel, isDollarCountry, user, effectiveRate]);
 
   return {
     promoResult,
+    rawSubtotalUSD,
+    totalPromoSavings,
     cartDiscountAmountUSD,
     subtotalUSD,
     enrichedCart,
     taxUSD,
+    effectiveIvaRate,
+    taxLabel,
+    isIvaEnabled,
     baseImponibleUSD,
     totalUSD,
     totalBS,
@@ -750,7 +951,9 @@ export function useMobileCheckoutFlow({
     splitPaidUSD,
     splitRemainingUSD,
     splitChangeUSD,
+    splitChangeBS,
     activeCurrencyMode,
+    effectiveRate,
     handleApplyDiscount,
     handleSelectPaymentMethod,
     handleSaveQuotation,

@@ -54,10 +54,15 @@ export default function MobileSimulatorModals(props) {
     documentType,
     setDocumentType,
     totalUSD,
+    baseTotalUSD = null,
     totalBS,
     taxUSD,
+    taxLabel = 'IVA',
+    effectiveIvaRate = 16,
+    isIvaEnabled = true,
     currentIgtfUSD = 0,
     igtfRate = 3,
+    isIgtfEnabled = false,
     customerDoc,
     setCustomerDoc,
     customerName,
@@ -87,6 +92,7 @@ export default function MobileSimulatorModals(props) {
     splitPaidUSD,
     splitRemainingUSD,
     splitChangeUSD,
+    splitChangeBS = 0,
     paymentReference,
     setPaymentReference,
     handleConfirmSale,
@@ -225,10 +231,15 @@ export default function MobileSimulatorModals(props) {
           documentType={documentType}
           setDocumentType={setDocumentType}
           totalUSD={totalUSD}
+          baseTotalUSD={baseTotalUSD}
           totalBS={totalBS}
           taxUSD={taxUSD}
+          taxLabel={taxLabel}
+          effectiveIvaRate={effectiveIvaRate}
+          isIvaEnabled={isIvaEnabled}
           currentIgtfUSD={currentIgtfUSD}
           igtfRate={igtfRate}
+          isIgtfEnabled={isIgtfEnabled}
           exchangeRate={exchangeRate}
           customerDoc={customerDoc}
           setCustomerDoc={setCustomerDoc}
@@ -263,6 +274,7 @@ export default function MobileSimulatorModals(props) {
           splitPaidUSD={splitPaidUSD}
           splitRemainingUSD={splitRemainingUSD}
           splitChangeUSD={splitChangeUSD}
+          splitChangeBS={splitChangeBS}
           pagoMovilPhone={businessInfo?.pagoMovilPhone || ''}
           pagoMovilId={businessInfo?.pagoMovilId || ''}
           pagoMovilBank={businessInfo?.pagoMovilBank || ''}

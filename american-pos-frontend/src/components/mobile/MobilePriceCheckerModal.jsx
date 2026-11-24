@@ -4,6 +4,7 @@ import { Tag, X, Search, Camera, Box, ShoppingCart, ScanBarcode, Plus, Minus } f
 import { playSuccessSound } from '../../utils/sounds';
 import CachedImage from '../CachedImage';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { getRegionConfig } from '../../utils/regionConfig';
 
 const stripAccents = (str = '') => String(str).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
@@ -176,8 +177,15 @@ export default function MobilePriceCheckerModal({
                       </div>
                     )}
                     <div className="text-[10px] text-slate-400 font-medium pt-0.5 flex items-center justify-center gap-2">
-                      <span className={priceCheckerProduct.is_exempt || priceCheckerProduct.taxRate === 0 ? 'text-blue-400 font-bold' : 'text-slate-300'}>
-                        {priceCheckerProduct.is_exempt || priceCheckerProduct.taxRate === 0 ? 'Exento de IVA' : 'IVA (16%) Incluido'}
+                      <span className={priceCheckerProduct.is_exempt || priceCheckerProduct.taxStatus === 'exento' || priceCheckerProduct.taxRate === 0 ? 'text-blue-400 font-bold' : 'text-slate-300'}>
+                        {(() => {
+                          const reg = getRegionConfig();
+                          const lbl = reg.taxLabel || 'IVA';
+                          const rt = reg.defaultTaxRate;
+                          return (priceCheckerProduct.is_exempt || priceCheckerProduct.taxStatus === 'exento' || priceCheckerProduct.taxRate === 0)
+                            ? `Exento de ${lbl}`
+                            : `${lbl} (${rt}%) Incluido`;
+                        })()}
                       </span>
                       <span>•</span>
                       <span>Tasa oficial: Bs. {exchangeRate.toFixed(2)}</span>

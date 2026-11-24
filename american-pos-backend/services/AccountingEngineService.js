@@ -74,8 +74,13 @@ class AccountingEngineService {
     }
 
     static _isBankMethod(methodStr) {
-        const mKey = String(methodStr || '').toLowerCase().trim();
-        if (!mKey || mKey === 'credit' || mKey === 'fiado' || mKey === 'credit_usd') return false;
+        const mKey = String(methodStr || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .trim()
+            .replace(/\s+/g, '_');
+        if (!mKey || mKey === 'credit' || mKey === 'credito' || mKey === 'fiado' || mKey === 'credit_usd') return false;
         if (mKey.includes('cash') || mKey.includes('efectivo')) return false;
         return BANK_METHOD_KEYWORDS.some(k => mKey.includes(k));
     }

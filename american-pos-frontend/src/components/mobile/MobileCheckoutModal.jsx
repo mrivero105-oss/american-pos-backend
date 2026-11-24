@@ -9,10 +9,15 @@ export default function MobileCheckoutModal({
   documentType,
   setDocumentType,
   totalUSD,
+  baseTotalUSD = null,
   totalBS,
   taxUSD,
+  taxLabel = 'IVA',
+  effectiveIvaRate = 16,
+  isIvaEnabled = true,
   currentIgtfUSD = 0,
   igtfRate = 3,
+  isIgtfEnabled = false,
   exchangeRate,
   customerDoc,
   setCustomerDoc,
@@ -42,6 +47,7 @@ export default function MobileCheckoutModal({
   splitPaidUSD,
   splitRemainingUSD,
   splitChangeUSD,
+  splitChangeBS = 0,
   businessInfo,
   paymentReference,
   setPaymentReference,
@@ -50,6 +56,20 @@ export default function MobileCheckoutModal({
   playScanSound = () => {}
 }) {
   const dragControls = useDragControls();
+  const round2 = (v) => Math.round((Number(v || 0) + Number.EPSILON) * 100) / 100;
+  const principalUSD = baseTotalUSD !== null && baseTotalUSD !== undefined ? Number(baseTotalUSD) : Number(totalUSD || 0);
+  const effectiveChangeUSD = checkoutMode === 'split' ? splitChangeUSD : changeUSD;
+  const effectiveChangeBS = checkoutMode === 'split' ? (splitChangeBS || round2(splitChangeUSD * (exchangeRate || 1))) : changeBS;
+  const igtfFactor = (isIgtfEnabled && Number(igtfRate) > 0) ? (1 + (Number(igtfRate) / 100)) : 1;
+  const exactUsdTarget = (() => {
+    const mNorm = String(selectedMethod || '').toLowerCase();
+    const isExemptUsd = mNorm.includes('zelle') || mNorm.includes('crédito') || mNorm.includes('credito') || mNorm.includes('fiado')
+      || (mNorm.includes('binance') && !(businessInfo?.binanceIgtfEnabled ?? businessInfo?.taxConfig?.binanceIgtfEnabled));
+    return (!isExemptUsd && igtfFactor > 1) ? round2(principalUSD * igtfFactor) : round2(principalUSD);
+  })();
+  const isRefRequired = checkoutMode === 'express'
+    ? ['pago móvil', 'pago movil', 'tarjeta', 'punto de venta', 'zelle', 'transferencia', 'biopago', 'binance'].some(m => String(selectedMethod || '').toLowerCase().includes(m))
+    : ((parseFloat(splitPayments.pago_movil) || 0) > 0 || (parseFloat(splitPayments.tarjeta) || 0) > 0 || (parseFloat(splitPayments.zelle) || 0) > 0 || (parseFloat(splitPayments.binance) || 0) > 0);
   return (
     <AnimatePresence>
       {isOpen && (
@@ -101,7 +121,8 @@ export default function MobileCheckoutModal({
                     triggerHaptic(10);
                     onClose();
                   }}
-                  className={`${T.textMuted} hover:${T.textPrimary} p-1 rounded-lg cursor-pointer active:scale-95`}
+                  aria-label="Cerrar cobro"
+                  className={`${T.textMuted} hover:opacity-100 p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg cursor-pointer active:scale-95`}
                 >
                   <X size={16} />
                 </button>
@@ -148,16 +169,20 @@ export default function MobileCheckoutModal({
                 <p className="text-[10px] font-bold text-[#94a3b8] uppercase tracking-wider">Total a Liquidar</p>
                 <p className="font-black text-xl text-[#34d399] font-mono">${totalUSD.toFixed(2)}</p>
                 <p className="text-[10px] text-[#64748b] font-semibold mt-0.5">
-                  IVA 16% incluido (${taxUSD.toFixed(2)})
+                  {isIvaEnabled && effectiveIvaRate > 0
+                    ? `${taxLabel} ${effectiveIvaRate}% incluido ($${taxUSD.toFixed(2)})`
+                    : `${taxLabel} Exento ($0.00)`}
                   {currentIgtfUSD > 0 && (
                     <span className="text-amber-400 font-bold ml-1.5">• IGTF {igtfRate}% (+${currentIgtfUSD.toFixed(2)})</span>
                   )}
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] font-bold text-[#94a3b8] uppercase tracking-wider">Bolívares (Tasa {exchangeRate.toFixed(2)})</p>
-                <p className="font-black text-base text-[#fbbf24] font-mono">Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              </div>
+              {!isDollarCountry && (
+                <div className="text-right">
+                  <p className="text-[10px] font-bold text-[#94a3b8] uppercase tracking-wider">Bolívares (Tasa {exchangeRate.toFixed(2)})</p>
+                  <p className="font-black text-base text-[#fbbf24] font-mono">Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                </div>
+              )}
             </div>
 
             {/* Si es Cotización: Vista simplificada de presupuesto */}
@@ -244,8 +269,8 @@ export default function MobileCheckoutModal({
                       <label className={`text-xs font-extrabold ${T.textSecondary} block`}>Forma de Pago</label>
                       <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 text-xs">
                         {(isDollarCountry 
-                          ? ['Efectivo USD', 'Tarjeta', 'Zelle', 'Transferencia', 'Mixto', 'Crédito'] 
-                          : ['Efectivo USD', 'Efectivo Bs', 'Tarjeta', 'Pago Móvil', 'Zelle', 'Mixto', 'Crédito']
+                          ? ['Efectivo USD', 'Tarjeta', 'Zelle', 'Binance', 'Transferencia', 'Mixto', 'Crédito'] 
+                          : ['Efectivo USD', 'Efectivo Bs', 'Tarjeta', 'Pago Móvil', 'Biopago', 'Zelle', 'Binance', 'Mixto', 'Crédito']
                         ).map(m => (
                           <button 
                             key={m}
@@ -346,15 +371,15 @@ export default function MobileCheckoutModal({
                             onClick={() => {
                               triggerHaptic(12);
                               playScanSound();
-                              setAmountPaidUSD(totalUSD.toFixed(2));
+                              setAmountPaidUSD(exactUsdTarget.toFixed(2));
                               setAmountPaidBS('');
                             }}
                             className={`col-span-1 p-1 rounded-xl text-center cursor-pointer active:scale-95 transition-colors flex flex-col items-center justify-center ${
-                              amountPaidUSD === totalUSD.toFixed(2) && !amountPaidBS
+                              amountPaidUSD === exactUsdTarget.toFixed(2) && !amountPaidBS
                                 ? 'bg-[#059669] text-white font-black shadow-sm'
                                 : 'bg-[#ecfdf5] dark:bg-emerald-500/15 text-[#047857] dark:text-emerald-400 border border-[#a7f3d0] dark:border-emerald-500/30 font-bold'
                             }`}
-                            title={`Exacto: $${totalUSD.toFixed(2)}`}
+                            title={`Exacto: $${exactUsdTarget.toFixed(2)}`}
                           >
                             <span className="text-[10px] font-black leading-tight">Exacto</span>
                           </button>
@@ -519,11 +544,12 @@ export default function MobileCheckoutModal({
                       <button
                         type="button"
                         onClick={() => {
-                          // Autocompletar el resto en Efectivo USD
+                          // Autocompletar el resto en Efectivo USD incluyendo factor IGTF si aplica
                           if (splitRemainingUSD > 0) {
+                            const remainingWithIgtf = igtfFactor > 1 ? round2(splitRemainingUSD * igtfFactor) : splitRemainingUSD;
                             setSplitPayments(p => ({
                               ...p,
-                              cash_usd: ((parseFloat(p.cash_usd) || 0) + splitRemainingUSD).toFixed(2)
+                              cash_usd: round2((parseFloat(p.cash_usd) || 0) + remainingWithIgtf).toFixed(2)
                             }));
                           }
                         }}
@@ -589,6 +615,18 @@ export default function MobileCheckoutModal({
                           step="0.01"
                           value={splitPayments.zelle}
                           onChange={(e) => setSplitPayments(p => ({ ...p, zelle: e.target.value }))}
+                          placeholder="0.00"
+                          className={`w-full ${T.inputBg} border rounded-xl p-2 text-xs font-black outline-none focus:border-purple-500`}
+                        />
+                      </div>
+
+                      <div>
+                        <label className={`text-[10px] font-bold ${T.textSecondary} block mb-0.5`}>Binance USDT ($)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={splitPayments.binance || ''}
+                          onChange={(e) => setSplitPayments(p => ({ ...p, binance: e.target.value }))}
                           placeholder="0.00"
                           className={`w-full ${T.inputBg} border rounded-xl p-2 text-xs font-black outline-none focus:border-purple-500`}
                         />
@@ -668,9 +706,6 @@ export default function MobileCheckoutModal({
 
                 {/* Referencia de Pago */}
                 {(() => {
-                  const isRefRequired = checkoutMode === 'express'
-                    ? ['pago móvil', 'pago movil', 'tarjeta', 'punto de venta', 'zelle', 'transferencia', 'biopago'].some(m => String(selectedMethod || '').toLowerCase().includes(m))
-                    : ((parseFloat(splitPayments.pago_movil) || 0) > 0 || (parseFloat(splitPayments.tarjeta) || 0) > 0 || (parseFloat(splitPayments.zelle) || 0) > 0);
                   const isMissing = isRefRequired && !String(paymentReference || '').trim();
 
                   return (
@@ -681,7 +716,7 @@ export default function MobileCheckoutModal({
                         }`}>
                           <span>N° de Referencia / Comprobante</span>
                           {isRefRequired ? (
-                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-500 border border-amber-500/30 font-mono">
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-500 border border-amber-500/30 font-mono">
                               OBLIGATORIO
                             </span>
                           ) : (
@@ -736,10 +771,8 @@ export default function MobileCheckoutModal({
               <button 
                 disabled={
                   isProcessingSale || 
-                  (checkoutMode === 'split' && splitRemainingUSD > 0.05) ||
-                  ((checkoutMode === 'express'
-                    ? ['pago móvil', 'pago movil', 'tarjeta', 'punto de venta', 'zelle', 'transferencia', 'biopago'].some(m => String(selectedMethod || '').toLowerCase().includes(m))
-                    : ((parseFloat(splitPayments.pago_movil) || 0) > 0 || (parseFloat(splitPayments.tarjeta) || 0) > 0 || (parseFloat(splitPayments.zelle) || 0) > 0)) && !String(paymentReference || '').trim())
+                  (checkoutMode === 'split' && splitRemainingUSD > 0.02) ||
+                  (isRefRequired && !String(paymentReference || '').trim())
                 }
                 onClick={handleConfirmSale}
                 className="pos-checkout-btn w-full min-h-[50px] bg-[#059669] hover:bg-[#047857] active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed text-white font-black py-3 px-4 rounded-xl text-xs sm:text-sm uppercase tracking-wider transition-all shadow-lg cursor-pointer flex items-center justify-between"
@@ -759,11 +792,11 @@ export default function MobileCheckoutModal({
                     </div>
                     <div className="font-mono text-right shrink-0">
                       <span className="text-sm sm:text-base font-black block leading-none tabular-nums">
-                        {changeUSD > 0 ? `VUELTO: +$${changeUSD.toFixed(2)}` : `$${totalUSD.toFixed(2)}`}
+                        {effectiveChangeUSD > 0 ? `VUELTO: +$${effectiveChangeUSD.toFixed(2)}` : `$${totalUSD.toFixed(2)}`}
                       </span>
-                      {!isDollarCountry && changeBS > 0 && (
+                      {!isDollarCountry && effectiveChangeBS > 0 && (
                         <span className="text-[10px] text-emerald-200 block leading-none mt-0.5 tabular-nums">
-                          Bs. {changeBS.toFixed(2)}
+                          Bs. {effectiveChangeBS.toFixed(2)}
                         </span>
                       )}
                     </div>

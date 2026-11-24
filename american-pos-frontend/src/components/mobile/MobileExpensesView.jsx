@@ -21,15 +21,22 @@ import { VoiceMicButton } from '../../utils/voiceSearch';
 const LOCAL_EXPENSES_KEY = 'isaac_pos_mobile_expenses';
 
 const persistExpensesLocally = async (list) => {
-  try {
-    localStorage.setItem(LOCAL_EXPENSES_KEY, JSON.stringify(list.slice(0, 200)));
-  } catch (caughtErr) { console.warn('[MobileExpensesView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
+  const incoming = Array.isArray(list) ? list : [];
+  let merged = incoming;
   try {
     if (localDb && localDb.expenses) {
-      await localDb.expenses.clear();
-      await localDb.expenses.bulkPut(list.slice(0, 200));
+      const existing = await localDb.expenses.toArray().catch(() => []);
+      const incomingIds = new Set(incoming.map(e => String(e?.id || '')));
+      const pendingOnly = (existing || []).filter(
+        e => e && (e.status === 'pending_sync' || String(e.id || '').startsWith('exp_')) && !incomingIds.has(String(e.id || ''))
+      );
+      merged = [...pendingOnly, ...incoming].slice(0, 200);
+      await primaryDb.replaceAllAtomic('expenses', merged, 'id');
     }
   } catch (caughtErr) { console.warn('[MobileExpensesView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
+  try {
+    localStorage.setItem(LOCAL_EXPENSES_KEY, JSON.stringify(merged.slice(0, 200)));
+  } catch (caughtErr) { console.warn('[MobileExpensesView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 };
 
 const triggerHaptic = (ms = 15) => {
@@ -181,7 +188,7 @@ export default function MobileExpensesView({
     triggerHaptic(20);
     setEditingExpense(exp);
     setAmount(String(exp.amount || exp.monto || ''));
-    setCurrency((exp.currency || 'USD').toUpperCase() === 'BS' || (exp.currency || '').toUpperCase() === 'VES' ? 'BS' : 'USD');
+    setCurrency(['BS', 'VES', 'BS.'].includes(String(exp.currency || 'USD').toUpperCase()) ? 'VES' : 'USD');
     setDescription(exp.description || exp.concepto || '');
     setCategory(exp.category || exp.categoria || 'Operativo');
     setPaymentMethod(exp.paymentMethod || 'Efectivo USD');
@@ -203,17 +210,19 @@ export default function MobileExpensesView({
     }
 
     setIsSubmitting(true);
+    const normalizedCur = ['BS', 'VES', 'BS.'].includes(String(currency || 'USD').toUpperCase()) ? 'VES' : 'USD';
+    const safeRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
     const payload = {
       amount: parsedAmount,
       monto: parsedAmount,
-      currency,
+      currency: normalizedCur,
       description: description.trim(),
       concepto: description.trim(),
       category,
       categoria: category,
       paymentMethod,
       notes: notes.trim(),
-      exchangeRate,
+      exchangeRate: safeRate,
       date: editingExpense ? editingExpense.date : new Date().toISOString(),
       registeredBy: user?.name || user?.username || 'Cajero Móvil'
     };
@@ -233,8 +242,14 @@ export default function MobileExpensesView({
         setIsFormModalOpen(false);
         if (detailExpense?.id === expId) setDetailExpense(updated);
       } catch (err) {
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          const msg = err?.response?.data?.error || err?.response?.data?.message || 'No tienes permiso para modificar este gasto';
+          showToast?.(`⚠️ ${msg}`);
+          return;
+        }
         console.warn('Error al actualizar gasto en servidor, guardando local:', err);
-        const updated = { ...editingExpense, ...payload };
+        const updated = { ...editingExpense, ...payload, status: 'pending_sync' };
         setExpenses(prev => {
           const next = prev.map(e => e.id === expId ? updated : e);
           persistExpensesLocally(next);
@@ -260,20 +275,28 @@ export default function MobileExpensesView({
       const newExpense = {
         id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         ...payload,
+        status: 'pending_sync',
         createdAt: new Date().toISOString()
       };
 
       try {
         const res = await api.post('/expenses', payload, { timeout: 4000 });
-        const created = res.data || newExpense;
+        const created = res.data || { ...newExpense, status: 'synced' };
         setExpenses(prev => {
           const next = [created, ...prev];
           persistExpensesLocally(next);
           return next;
         });
         showToast?.('✅ Gasto registrado en el servidor');
-      } catch (_err) {
-        console.warn('Servidor inaccesible, guardando gasto en cola local:', _err);
+        setIsFormModalOpen(false);
+      } catch (err) {
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          const msg = err?.response?.data?.error || err?.response?.data?.message || 'No tienes permiso para registrar gastos';
+          showToast?.(`⚠️ ${msg}`);
+          return;
+        }
+        console.warn('Servidor inaccesible, guardando gasto en cola local:', err);
         setExpenses(prev => {
           const next = [newExpense, ...prev];
           persistExpensesLocally(next);
@@ -282,6 +305,7 @@ export default function MobileExpensesView({
         try {
           await primaryDb.put('syncQueue', {
             id: `exp_sync_${Date.now()}`,
+            tempLocalId: newExpense.id,
             endpoint: '/expenses',
             method: 'POST',
             payload: newExpense,
@@ -289,9 +313,9 @@ export default function MobileExpensesView({
           });
         } catch (caughtErr) { console.warn('[MobileExpensesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         showToast?.('⚡ Gasto guardado offline en teléfono');
+        setIsFormModalOpen(false);
       } finally {
         setIsSubmitting(false);
-        setIsFormModalOpen(false);
       }
     }
   };
@@ -621,10 +645,10 @@ export default function MobileExpensesView({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setCurrency('BS')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'BS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                      onClick={() => setCurrency('VES')}
+                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'VES' || currency === 'BS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
                     >
-                      BS
+                      Bs (VES)
                     </button>
                   </div>
                 </div>
@@ -768,17 +792,30 @@ export default function MobileExpensesView({
             </div>
 
             {/* Monto Principal */}
-            <div className={`p-4 rounded-xl ${T.ticketItemBg} border ${T.border} text-center space-y-1`}>
-              <span className={`text-[10px] font-bold ${T.textMuted} uppercase tracking-wider block`}>
-                Monto Erogado
-              </span>
-              <div className="text-2xl font-bold text-rose-500">
-                -${(detailExpense.currency === 'BS' ? (detailExpense.amount / exchangeRate) : detailExpense.amount).toFixed(2)} USD
-              </div>
-              <div className={`text-xs font-semibold ${T.textSecondary}`}>
-                ≈ Bs. {(detailExpense.currency === 'BS' ? detailExpense.amount : (detailExpense.amount * exchangeRate)).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </div>
-            </div>
+            {(() => {
+              const rawAmt = Number(detailExpense.amount ?? detailExpense.monto ?? 0) || 0;
+              const cur = String(detailExpense.currency || 'USD').toUpperCase();
+              const isVes = cur === 'BS' || cur === 'VES' || cur === 'BS.';
+              const rate = Number(detailExpense.exchangeRate || exchangeRate) || 1;
+              const isAlreadyUsdNormalized = detailExpense.status !== 'pending_sync' && isVes && detailExpense.nativeAmount;
+              const usdVal = isAlreadyUsdNormalized ? rawAmt : (isVes ? (rawAmt / rate) : rawAmt);
+              const bsVal = detailExpense.nativeAmount
+                ? Number(detailExpense.nativeAmount)
+                : (isVes ? rawAmt : (rawAmt * rate));
+              return (
+                <div className={`p-4 rounded-xl ${T.ticketItemBg} border ${T.border} text-center space-y-1`}>
+                  <span className={`text-[10px] font-bold ${T.textMuted} uppercase tracking-wider block`}>
+                    Monto Erogado
+                  </span>
+                  <div className="text-2xl font-bold text-rose-500">
+                    -${usdVal.toFixed(2)} USD
+                  </div>
+                  <div className={`text-xs font-semibold ${T.textSecondary}`}>
+                    ≈ Bs. {bsVal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Datos detallados */}
             <div className={`p-3.5 rounded-xl ${T.ticketItemBg} border ${T.border} space-y-2.5 text-xs`}>

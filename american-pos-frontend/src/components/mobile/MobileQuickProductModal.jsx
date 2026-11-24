@@ -505,7 +505,15 @@ export default function MobileQuickProductModal({
                         : T.textMuted
                     }`}
                   >
-                    Gravable 16%
+                    Gravable ({(() => {
+                      try {
+                        const saved = JSON.parse(localStorage.getItem('pos_business_info') || '{}');
+                        const rate = Number(saved?.taxConfig?.ivaRate ?? saved?.ivaRate);
+                        return Number.isFinite(rate) && rate >= 0 ? `${rate}%` : 'Impuesto';
+                      } catch {
+                        return 'Impuesto';
+                      }
+                    })()})
                   </button>
                   <button
                     type="button"

@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Printer, Settings, Share2, CheckCircle2, X } from 'lucide-react';
+import { getRegionConfig } from '../../utils/regionConfig';
 
 export default function MobileReceiptModal({
   receipt,
@@ -16,6 +17,10 @@ export default function MobileReceiptModal({
   const printedReceipt = receipt;
   const companyName = businessInfo?.name || localStorage.getItem('company_name') || 'Isaac POS';
   const companyRif = businessInfo?.rif || localStorage.getItem('company_rif') || '';
+  const regionCfg = getRegionConfig(businessInfo?.country);
+  const taxLabel = businessInfo?.taxConfig?.taxLabel || businessInfo?.taxLabel || regionCfg.taxLabel || 'IVA';
+  const taxRate = Number(businessInfo?.taxConfig?.ivaRate ?? businessInfo?.ivaRate ?? regionCfg.defaultTaxRate);
+  const taxEnabled = businessInfo?.taxConfig?.ivaEnabled !== undefined ? Boolean(businessInfo.taxConfig.ivaEnabled) : (businessInfo?.ivaEnabled !== false);
 
   return (
     <AnimatePresence>
@@ -117,7 +122,7 @@ export default function MobileReceiptModal({
               <span>${Number(printedReceipt.subtotal || printedReceipt.totalUSD || 0).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-slate-500">
-              <span>IVA (16% INCLUIDO):</span>
+              <span>{taxEnabled && taxRate > 0 ? `${taxLabel} (${taxRate}% INCLUIDO):` : `${taxLabel} (EXENTO):`}</span>
               <span>${Number(printedReceipt.tax || printedReceipt.taxUSD || 0).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-emerald-800 font-black text-xs pt-0.5">

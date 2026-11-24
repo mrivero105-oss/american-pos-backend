@@ -632,8 +632,10 @@ export default function MobilePOSSimulator() {
     pago_movil: '',
     tarjeta: '',
     zelle: '',
+    binance: '',
     credito: ''
   });
+  const [lockedExchangeRate, setLockedExchangeRate] = useState(null);
   const [selectedMethod, setSelectedMethod] = useState('Efectivo USD');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [customerName, setCustomerName] = useState('Consumidor Final');
@@ -654,7 +656,29 @@ export default function MobilePOSSimulator() {
   const [paymentReference, setPaymentReference] = useState('');
   const [amountPaidUSD, setAmountPaidUSD] = useState('');
   const [amountPaidBS, setAmountPaidBS] = useState('');
-  const autoPrint = true;
+  const [autoPrint, setAutoPrint] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pos_mobile_auto_print');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    if (!isThermalPrinterModalOpen) {
+      try {
+        const saved = localStorage.getItem('pos_mobile_auto_print');
+        setAutoPrint(saved === null ? true : saved === 'true');
+      } catch { /* sin almacenamiento local */ }
+    }
+  }, [isThermalPrinterModalOpen]);
+  useEffect(() => {
+    if (isCheckoutOpen) {
+      setLockedExchangeRate((prev) => (prev && prev > 0 ? prev : exchangeRate));
+    } else {
+      setLockedExchangeRate(null);
+    }
+  }, [isCheckoutOpen, exchangeRate]);
   const [isAudioMuted, setIsAudioMuted] = useState(isSoundMuted());
   const [quantityModalItem, setQuantityModalItem] = useState(null);
   const [isQuantityModalOpen, setIsQuantityModalOpen] = useState(false);
@@ -1248,24 +1272,24 @@ export default function MobilePOSSimulator() {
 
         const remoteSig = computeCatalogSignature(adjustedRaw);
         if (catalogSignatureRef.current !== remoteSig || adjustedRaw.length !== localCount) {
+          // Preservar productos creados offline (off_prod_*) antes de reemplazar atómicamente
+          let mergedCatalog = adjustedRaw;
+          try {
+            const existingAll = await primaryDb.getAll('products').catch(() => []);
+            const incomingIds = new Set(adjustedRaw.map(p => String(p.id)).filter(Boolean));
+            const offlineOnly = (existingAll || []).filter(
+              p => p?.id && String(p.id).startsWith('off_prod_') && !incomingIds.has(String(p.id))
+            );
+            if (offlineOnly.length > 0) {
+              mergedCatalog = [...offlineOnly, ...adjustedRaw];
+            }
+          } catch (_presErr) { /* mantener catálogo remoto si falla lectura previa */ }
+
           catalogSignatureRef.current = remoteSig;
-          setProducts(adjustedRaw);
+          setProducts(mergedCatalog);
           setTimeout(async () => {
             try {
-              await primaryDb.replaceAllAtomic('products', adjustedRaw, 'id').catch((err) => console.warn('[MobilePOS] Error sincronizando catalogo en primaryDb:', err?.message || err));
-              if (localDb && localDb.products) {
-                await localDb.transaction('rw', localDb.products, async () => {
-                  const incomingIds = new Set(adjustedRaw.map(p => p.id).filter(Boolean));
-                  const existingKeys = await localDb.products.toCollection().primaryKeys();
-                  const keysToDelete = existingKeys.filter(
-                    k => !incomingIds.has(k) && !String(k).startsWith('off_prod_')
-                  );
-                  if (keysToDelete.length > 0) {
-                    await localDb.products.bulkDelete(keysToDelete);
-                  }
-                  await localDb.products.bulkPut(adjustedRaw);
-                });
-              }
+              await primaryDb.replaceAllAtomic('products', mergedCatalog, 'id').catch((err) => console.warn('[MobilePOS] Error sincronizando catalogo en primaryDb:', err?.message || err));
               // Precacheo incremental en segundo plano de imágenes nuevas para disponibilidad 100% offline
               cacheAllProductImages(adjustedRaw, { concurrency: 2, yieldMs: 25 }).catch(() => {});
             } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
@@ -1461,30 +1485,27 @@ export default function MobilePOSSimulator() {
       }
     };
 
+    const handleRemoteHeldSaleClaimed = (claimPayload) => {
+      const claimedId = String(claimPayload?.id || claimPayload?.code || '');
+      if (!claimedId) return;
+      setHeldSales(prev => prev.filter(s => String(s.id) !== claimedId && String(s.code || '') !== claimedId));
+    };
+
+    // Suscribirse a un único socket activo para evitar descargas duplicadas de catálogo en cada evento
     const activeSocket = socketContext?.socket;
+    const primarySocket = lanSyncService.socket || activeSocket || null;
 
-    if (lanSyncService.socket) {
-      lanSyncService.socket.on('connect', handleConnect);
-      lanSyncService.socket.on('disconnect', handleDisconnect);
-      lanSyncService.socket.on('inventory_changed', handleRemoteInventoryChange);
-      lanSyncService.socket.on('product_updated', handleRemoteProductUpdate);
-      lanSyncService.socket.on('settings_changed', handleSettingsChanged);
-      lanSyncService.socket.on('customers_changed', handleRemoteCustomersChanged);
-      lanSyncService.socket.on('promotions_updated', handleRemotePromotionsChanged);
-      lanSyncService.socket.on('promotions_changed', handleRemotePromotionsChanged);
-      lanSyncService.socket.on('sale_completed', handleRemoteSaleCompleted);
-    }
-
-    if (activeSocket) {
-      activeSocket.on('connect', handleConnect);
-      activeSocket.on('disconnect', handleDisconnect);
-      activeSocket.on('inventory_changed', handleRemoteInventoryChange);
-      activeSocket.on('product_updated', handleRemoteProductUpdate);
-      activeSocket.on('settings_changed', handleSettingsChanged);
-      activeSocket.on('customers_changed', handleRemoteCustomersChanged);
-      activeSocket.on('promotions_updated', handleRemotePromotionsChanged);
-      activeSocket.on('promotions_changed', handleRemotePromotionsChanged);
-      activeSocket.on('sale_completed', handleRemoteSaleCompleted);
+    if (primarySocket) {
+      primarySocket.on('connect', handleConnect);
+      primarySocket.on('disconnect', handleDisconnect);
+      primarySocket.on('inventory_changed', handleRemoteInventoryChange);
+      primarySocket.on('product_updated', handleRemoteProductUpdate);
+      primarySocket.on('settings_changed', handleSettingsChanged);
+      primarySocket.on('customers_changed', handleRemoteCustomersChanged);
+      primarySocket.on('promotions_updated', handleRemotePromotionsChanged);
+      primarySocket.on('promotions_changed', handleRemotePromotionsChanged);
+      primarySocket.on('sale_completed', handleRemoteSaleCompleted);
+      primarySocket.on('remote_held_sale_claimed', handleRemoteHeldSaleClaimed);
     }
 
     // Iniciar demonio unificado de sincronización con prioridad DAG y Backoff Exponencial
@@ -1536,27 +1557,17 @@ export default function MobilePOSSimulator() {
     }, 30000);
 
     return () => {
-      if (lanSyncService.socket) {
-        lanSyncService.socket.off('connect', handleConnect);
-        lanSyncService.socket.off('disconnect', handleDisconnect);
-        lanSyncService.socket.off('inventory_changed', handleRemoteInventoryChange);
-        lanSyncService.socket.off('product_updated', handleRemoteProductUpdate);
-        lanSyncService.socket.off('settings_changed', handleSettingsChanged);
-        lanSyncService.socket.off('customers_changed', handleRemoteCustomersChanged);
-        lanSyncService.socket.off('promotions_updated', handleRemotePromotionsChanged);
-        lanSyncService.socket.off('promotions_changed', handleRemotePromotionsChanged);
-        lanSyncService.socket.off('sale_completed', handleRemoteSaleCompleted);
-      }
-      if (activeSocket) {
-        activeSocket.off('connect', handleConnect);
-        activeSocket.off('disconnect', handleDisconnect);
-        activeSocket.off('inventory_changed', handleRemoteInventoryChange);
-        activeSocket.off('product_updated', handleRemoteProductUpdate);
-        activeSocket.off('settings_changed', handleSettingsChanged);
-        activeSocket.off('customers_changed', handleRemoteCustomersChanged);
-        activeSocket.off('promotions_updated', handleRemotePromotionsChanged);
-        activeSocket.off('promotions_changed', handleRemotePromotionsChanged);
-        activeSocket.off('sale_completed', handleRemoteSaleCompleted);
+      if (primarySocket) {
+        primarySocket.off('connect', handleConnect);
+        primarySocket.off('disconnect', handleDisconnect);
+        primarySocket.off('inventory_changed', handleRemoteInventoryChange);
+        primarySocket.off('product_updated', handleRemoteProductUpdate);
+        primarySocket.off('settings_changed', handleSettingsChanged);
+        primarySocket.off('customers_changed', handleRemoteCustomersChanged);
+        primarySocket.off('promotions_updated', handleRemotePromotionsChanged);
+        primarySocket.off('promotions_changed', handleRemotePromotionsChanged);
+        primarySocket.off('sale_completed', handleRemoteSaleCompleted);
+        primarySocket.off('remote_held_sale_claimed', handleRemoteHeldSaleClaimed);
       }
       if (typeof stopAutoSyncDaemon === 'function') {
         stopAutoSyncDaemon();
@@ -1578,7 +1589,7 @@ export default function MobilePOSSimulator() {
       clearInterval(syncInterval);
       clearTimeout(secondaryInitTimer);
     };
-  }, [user, socketContext?.socket, showToast]);
+  }, [user, socketContext?.socket, showToast, setHeldSales]);
 
   // Buscador y filtrado dinámico de clientes (60 FPS, tolerante a acentos, puntos, guiones y espacios en Cédula/RIF)
   const filteredCustomers = useMemo(() => {
@@ -2729,7 +2740,7 @@ export default function MobilePOSSimulator() {
   }, []);
 
   // Helpers unificados para IDs de producto limpio y multiplicador de unidades (Caja/Bulto/Presentaciones dinámicas)
-  const getCleanProductId = (rawId) => String(rawId || '').replace(/__bulk$|__mid$|__pres_.*$/, '');
+  const getCleanProductId = (rawId) => String(rawId || '').replace(/__bulk$|__mid$|__pres_.*$|__wpres_.*$|__srv_.*$/, '');
   const getProductUnitsMultiplier = (prod) => {
     if (!prod) return 1;
     const explicitFactor = Number(prod.factorConversion || prod.unitsMultiplier || 0);
@@ -2862,13 +2873,18 @@ export default function MobilePOSSimulator() {
   };
 
   // Flujo de Checkout, Promociones, Impuestos (IVA/IGTF), Cotizaciones y Confirmación de Venta (Modularizado)
+  const canApplyDiscountsMobile = hasPermission('canApplyDiscounts');
   const {
     cartDiscountAmountUSD,
     enrichedCart,
     taxUSD,
+    effectiveIvaRate,
+    taxLabel,
+    isIvaEnabled,
     totalUSD,
     totalBS,
     totalItemsCount,
+    isIgtfEnabled,
     igtfRatePct,
     currentIgtfUSD,
     totalDueUSD,
@@ -2881,7 +2897,9 @@ export default function MobilePOSSimulator() {
     splitPaidUSD,
     splitRemainingUSD,
     splitChangeUSD,
+    splitChangeBS,
     activeCurrencyMode,
+    effectiveRate: checkoutEffectiveRate,
     handleApplyDiscount,
     handleSelectPaymentMethod,
     handleSaveQuotation,
@@ -2897,10 +2915,14 @@ export default function MobilePOSSimulator() {
     discountSupervisorApprovalId,
     setDiscountSupervisorApprovalId,
     exchangeRate,
+    lockedExchangeRate,
     businessInfo,
     documentType,
+    setDocumentType,
     checkoutMode,
+    setCheckoutMode,
     splitPayments,
+    setSplitPayments,
     selectedMethod,
     setSelectedMethod,
     amountPaidUSD,
@@ -2922,10 +2944,18 @@ export default function MobilePOSSimulator() {
     getCleanProductId,
     getProductUnitsMultiplier,
     customers,
+    selectedCustomer,
+    setSelectedCustomer,
+    setSelectedTable,
+    setOrderNotes,
     customerName,
+    setCustomerName,
     customerDoc,
+    setCustomerDoc,
+    setCustomerPhone,
     isDollarCountry,
     autoPrint,
+    canApplyDiscounts: canApplyDiscountsMobile,
     user,
     requestSupervisorAuth,
     showToast
@@ -2940,6 +2970,8 @@ export default function MobilePOSSimulator() {
   } = useMobileHeldSales({
     cart,
     setCart,
+    setCartDiscountPercent,
+    setDiscountSupervisorApprovalId,
     heldSales,
     setHeldSales,
     setIsHeldSalesModalOpen,
@@ -3202,165 +3234,187 @@ export default function MobilePOSSimulator() {
         />
       ) : activeModule === 'inventory' ? (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden w-full">
-          <Suspense fallback={
-            <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
-              <RefreshCw className="animate-spin text-blue-500" size={32} />
-              <span className="text-xs font-bold text-slate-400">Cargando inventario...</span>
-            </div>
-          }>
-            <MobileInventoryView 
-              products={products}
-              categories={normalizedCategories}
-              exchangeRate={exchangeRate}
-              T={T}
-              isLight={isLight}
-              user={user}
-              onBackToPOS={() => setActiveModule('pos')}
-              onProductUpdated={(upd) => {
-                setProducts(prev => prev.map(p => String(p.id) === String(upd.id) ? { ...p, ...upd } : p));
-              }}
-              onProductCreated={(newProd) => {
-                setProducts(prev => [newProd, ...prev]);
-              }}
-              onProductDeleted={(delId) => {
-                setProducts(prev => prev.filter(p => String(p.id) !== String(delId)));
-              }}
-              showToast={showToast}
-            />
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
+                <RefreshCw className="animate-spin text-blue-500" size={32} />
+                <span className="text-xs font-bold text-slate-400">Cargando inventario...</span>
+              </div>
+            }>
+              <MobileInventoryView 
+                products={products}
+                categories={normalizedCategories}
+                exchangeRate={exchangeRate}
+                businessInfo={businessInfo}
+                T={T}
+                isLight={isLight}
+                user={user}
+                onBackToPOS={() => setActiveModule('pos')}
+                onProductUpdated={(upd) => {
+                  setProducts(prev => prev.map(p => String(p.id) === String(upd.id) ? { ...p, ...upd } : p));
+                }}
+                onProductCreated={(newProd) => {
+                  setProducts(prev => [newProd, ...prev]);
+                }}
+                onProductDeleted={(delId) => {
+                  setProducts(prev => prev.filter(p => String(p.id) !== String(delId)));
+                }}
+                showToast={showToast}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       ) : activeModule === 'sales' ? (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden w-full">
-          <Suspense fallback={
-            <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
-              <RefreshCw className="animate-spin text-blue-500" size={32} />
-              <span className="text-xs font-bold text-slate-400">Cargando ventas...</span>
-            </div>
-          }>
-            <MobileSalesView 
-              sales={salesHistory}
-              pendingSalesCount={pendingSalesCount}
-              isSyncing={isSyncingSales}
-              onSyncNow={syncOfflineSalesQueue}
-              onRefresh={loadSalesHistory}
-              onViewTicket={(sale) => setPrintedReceipt(sale)}
-              onShareWhatsApp={(sale) => shareReceiptWhatsApp(sale)}
-              onPrintTicket={(sale) => handlePrintBluetoothReceipt(sale)}
-              onSaleCancelled={(saleId, updatedSale) => {
-                setSalesHistory(prev => prev.map(s => String(s.id) === String(saleId) ? { ...s, ...updatedSale } : s));
-                const itemsList = updatedSale?.items || updatedSale?.SaleItems;
-                if (Array.isArray(itemsList) && itemsList.length > 0) {
-                  setProducts(prev => prev.map(p => {
-                    const match = itemsList.find(it => String(it.productId || it.product?.id || it.id) === String(p.id));
-                    if (match) {
-                      const returnQty = Number(match.quantity || 1);
-                      const currentStock = Number(p.stockQuantity ?? p.stock ?? 0);
-                      const newStock = currentStock + returnQty;
-                      // Persistir en IndexedDB local
-                      try {
-                        if (localDb && localDb.products) {
-                          localDb.products.update(String(p.id), { stockQuantity: newStock, stock: newStock }).catch((err) => console.warn('[MobilePOS] Error revirtiendo stock en IDB:', err?.message || err));
-                        }
-                        primaryDb.put('products', { ...p, stockQuantity: newStock, stock: newStock }).catch((err) => console.warn('[MobilePOS] Error revirtiendo stock en primaryDb:', err?.message || err));
-                      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
-                      return { ...p, stockQuantity: newStock, stock: newStock };
+          <ErrorBoundary>
+            <Suspense fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
+                <RefreshCw className="animate-spin text-blue-500" size={32} />
+                <span className="text-xs font-bold text-slate-400">Cargando ventas...</span>
+              </div>
+            }>
+              <MobileSalesView 
+                sales={salesHistory}
+                pendingSalesCount={pendingSalesCount}
+                isSyncing={isSyncingSales}
+                onSyncNow={syncOfflineSalesQueue}
+                onRefresh={loadSalesHistory}
+                onViewTicket={(sale) => setPrintedReceipt(sale)}
+                onShareWhatsApp={(sale) => shareReceiptWhatsApp(sale)}
+                onPrintTicket={(sale) => handlePrintBluetoothReceipt(sale)}
+                onSaleCancelled={(saleId, updatedSale) => {
+                  const prevSale = salesHistory.find(s => String(s.id) === String(saleId));
+                  const wasPendingOffline = Boolean(prevSale?.isOffline || prevSale?.status === 'pending_sync');
+                  setSalesHistory(prev => prev.map(s => String(s.id) === String(saleId) ? { ...s, ...updatedSale } : s));
+                  const itemsList = updatedSale?.items || updatedSale?.SaleItems;
+                  if (Array.isArray(itemsList) && itemsList.length > 0) {
+                    const returnedByCleanId = new Map();
+                    for (const it of itemsList) {
+                      const cleanId = getCleanProductId(it.productId || it.product?.productId || it.product?.id || it.id);
+                      if (!cleanId) continue;
+                      const mult = getProductUnitsMultiplier(it.product || it);
+                      const unitsToReturn = Number(it.quantity || 1) * mult;
+                      returnedByCleanId.set(cleanId, (returnedByCleanId.get(cleanId) || 0) + unitsToReturn);
                     }
-                    return p;
-                  }));
-                }
-                setPendingSalesCount(prev => Math.max(0, prev - 1));
-              }}
-              user={user}
-              showToast={showToast}
-              T={T}
-              isLight={isLight}
-              exchangeRate={exchangeRate}
-              onBackToPOS={() => setActiveModule('pos')}
-            />
-          </Suspense>
+                    setProducts(prev => prev.map(p => {
+                      const returnUnits = returnedByCleanId.get(String(p.id)) || 0;
+                      if (returnUnits > 0) {
+                        const currentStock = Number(p.stockQuantity ?? p.stock ?? 0);
+                        const newStock = currentStock + returnUnits;
+                        primaryDb.put('products', { ...p, stockQuantity: newStock, stock: newStock }).catch((err) => console.warn('[MobilePOS] Error revirtiendo stock en primaryDb:', err?.message || err));
+                        return { ...p, stockQuantity: newStock, stock: newStock };
+                      }
+                      return p;
+                    }));
+                  }
+                  if (wasPendingOffline) {
+                    setPendingSalesCount(prev => Math.max(0, prev - 1));
+                  }
+                }}
+                user={user}
+                showToast={showToast}
+                T={T}
+                isLight={isLight}
+                exchangeRate={exchangeRate}
+                onBackToPOS={() => setActiveModule('pos')}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       ) : activeModule === 'customers' ? (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden w-full">
-          <Suspense fallback={
-            <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
-              <RefreshCw className="animate-spin text-blue-500" size={32} />
-              <span className="text-xs font-bold text-slate-400">Cargando clientes...</span>
-            </div>
-          }>
-            <MobileCustomersView 
-              onSelectCustomerForSale={(c) => {
-                setCustomerName(c.name);
-                setCustomerDoc(c.doc);
-                showToast(`Cliente seleccionado: ${c.name}`);
-              }}
-              T={T}
-              isLight={isLight}
-              user={user}
-              onBackToPOS={() => setActiveModule('pos')}
-              showToast={showToast}
-            />
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
+                <RefreshCw className="animate-spin text-blue-500" size={32} />
+                <span className="text-xs font-bold text-slate-400">Cargando clientes...</span>
+              </div>
+            }>
+              <MobileCustomersView 
+                onSelectCustomerForSale={(c) => {
+                  setSelectedCustomer(c || null);
+                  setCustomerName(c?.name || 'Consumidor Final');
+                  setCustomerDoc(c?.idDocument || c?.doc || c?.identification || '');
+                  setCustomerPhone(c?.phone || '');
+                  showToast(`Cliente seleccionado: ${c?.name || 'Consumidor Final'}`);
+                }}
+                T={T}
+                isLight={isLight}
+                user={user}
+                onBackToPOS={() => setActiveModule('pos')}
+                showToast={showToast}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       ) : activeModule === 'cash' ? (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden w-full">
-          <Suspense fallback={
-            <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
-              <RefreshCw className="animate-spin text-blue-500" size={32} />
-              <span className="text-xs font-bold text-slate-400">Cargando control de caja...</span>
-            </div>
-          }>
-            <MobileCashView 
-              sales={salesHistory}
-              user={user}
-              exchangeRate={exchangeRate}
-              T={T}
-              isLight={isLight}
-              onBackToPOS={() => setActiveModule('pos')}
-              showToast={showToast}
-            />
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
+                <RefreshCw className="animate-spin text-blue-500" size={32} />
+                <span className="text-xs font-bold text-slate-400">Cargando control de caja...</span>
+              </div>
+            }>
+              <MobileCashView 
+                sales={salesHistory}
+                user={user}
+                exchangeRate={exchangeRate}
+                businessInfo={businessInfo}
+                T={T}
+                isLight={isLight}
+                onBackToPOS={() => setActiveModule('pos')}
+                showToast={showToast}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       ) : activeModule === 'expenses' ? (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden w-full">
-          <Suspense fallback={
-            <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
-              <RefreshCw className="animate-spin text-blue-500" size={32} />
-              <span className="text-xs font-bold text-slate-400">Cargando gastos...</span>
-            </div>
-          }>
-            <MobileExpensesView 
-              exchangeRate={exchangeRate}
-              user={user}
-              T={T}
-              isLight={isLight}
-              onBackToPOS={() => setActiveModule('pos')}
-              showToast={showToast}
-            />
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
+                <RefreshCw className="animate-spin text-blue-500" size={32} />
+                <span className="text-xs font-bold text-slate-400">Cargando gastos...</span>
+              </div>
+            }>
+              <MobileExpensesView 
+                exchangeRate={exchangeRate}
+                user={user}
+                T={T}
+                isLight={isLight}
+                onBackToPOS={() => setActiveModule('pos')}
+                showToast={showToast}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       ) : activeModule === 'sync' ? (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden w-full">
-          <Suspense fallback={
-            <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
-              <RefreshCw className="animate-spin text-blue-500" size={32} />
-              <span className="text-xs font-bold text-slate-400">Cargando centro de sincronización...</span>
-            </div>
-          }>
-            <MobileSyncCenterView 
-              isOnline={isOnline}
-              socketConnected={socketConnected}
-              pendingSalesCount={pendingSalesCount}
-              productsCount={products.length}
-              isSyncing={isSyncingSales}
-              onSyncNow={syncOfflineSalesQueue}
-              onRefreshCatalog={loadProducts}
-              T={T}
-              isLight={isLight}
-              onBackToPOS={() => setActiveModule('pos')}
-              showToast={showToast}
-              onOpenServerConfig={() => setShowServerModal(true)}
-            />
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3">
+                <RefreshCw className="animate-spin text-blue-500" size={32} />
+                <span className="text-xs font-bold text-slate-400">Cargando centro de sincronización...</span>
+              </div>
+            }>
+              <MobileSyncCenterView 
+                isOnline={isOnline}
+                socketConnected={socketConnected}
+                pendingSalesCount={pendingSalesCount}
+                productsCount={products.length}
+                exchangeRate={exchangeRate}
+                isSyncing={isSyncingSales}
+                onSyncNow={syncOfflineSalesQueue}
+                onRefreshCatalog={loadProducts}
+                T={T}
+                isLight={isLight}
+                onBackToPOS={() => setActiveModule('pos')}
+                showToast={showToast}
+                onOpenServerConfig={() => setShowServerModal(true)}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       ) : activeModule === 'receivables' ? (
         <MobileSubViewWrapper title="Por Cobrar" subtitle="Saldos pendientes y cobranzas" icon={DollarSign} onBack={() => setActiveModule('pos')} T={T}>
@@ -3511,6 +3565,10 @@ export default function MobilePOSSimulator() {
             handleApplyDiscount={handleApplyDiscount}
             cartDiscountAmountUSD={cartDiscountAmountUSD}
             taxUSD={taxUSD}
+            taxLabel={taxLabel}
+            effectiveIvaRate={effectiveIvaRate}
+            isIvaEnabled={isIvaEnabled}
+            isDollarCountry={isDollarCountry}
             totalUSD={totalUSD}
             totalBS={totalBS}
             handleHoldSale={handleHoldSale}
@@ -3561,6 +3619,10 @@ export default function MobilePOSSimulator() {
         handleApplyDiscount={handleApplyDiscount}
         cartDiscountAmountUSD={cartDiscountAmountUSD}
         taxUSD={taxUSD}
+        taxLabel={taxLabel}
+        effectiveIvaRate={effectiveIvaRate}
+        isIvaEnabled={isIvaEnabled}
+        isDollarCountry={isDollarCountry}
         totalUSD={totalUSD}
         totalBS={totalBS}
         handleHoldSale={handleHoldSale}
@@ -3579,7 +3641,7 @@ export default function MobilePOSSimulator() {
         T={T}
         isLight={isLight}
         isOledMode={isOledMode}
-        exchangeRate={exchangeRate}
+        exchangeRate={checkoutEffectiveRate}
         businessInfo={businessInfo}
         user={user}
         isDollarCountry={isDollarCountry}
@@ -3599,10 +3661,15 @@ export default function MobilePOSSimulator() {
         documentType={documentType}
         setDocumentType={setDocumentType}
         totalUSD={totalDueUSD}
+        baseTotalUSD={totalUSD}
         totalBS={totalDueBS}
         taxUSD={taxUSD}
+        taxLabel={taxLabel}
+        effectiveIvaRate={effectiveIvaRate}
+        isIvaEnabled={isIvaEnabled}
         currentIgtfUSD={currentIgtfUSD}
         igtfRate={igtfRatePct}
+        isIgtfEnabled={isIgtfEnabled}
         customerDoc={customerDoc}
         setCustomerDoc={setCustomerDoc}
         customerName={customerName}
@@ -3632,6 +3699,7 @@ export default function MobilePOSSimulator() {
         splitPaidUSD={splitPaidUSD}
         splitRemainingUSD={splitRemainingUSD}
         splitChangeUSD={splitChangeUSD}
+        splitChangeBS={splitChangeBS}
         paymentReference={paymentReference}
         setPaymentReference={setPaymentReference}
         handleConfirmSale={handleConfirmSale}

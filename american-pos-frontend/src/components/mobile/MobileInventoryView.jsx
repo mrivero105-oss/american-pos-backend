@@ -920,7 +920,7 @@ export default function MobileInventoryView({
                   ) : (
                     <div className={`pt-2 border-t ${T.border} flex items-center justify-between gap-1.5`}>
                       <span className={`text-[10px] ${T.textMuted} font-mono truncate`}>
-                        {p.taxStatus === 'exento' ? 'Exento IVA' : 'IVA 16%'}
+                        {p.taxStatus === 'exento' ? 'Exento' : 'Gravable'}
                       </span>
 
                       {/* Botones de Acción: Editar y Eliminar */}
@@ -1331,7 +1331,7 @@ export default function MobileInventoryView({
                         : T.textMuted
                     }`}
                   >
-                    Gravable 16%
+                    Gravable (Impuesto)
                   </button>
                   <button
                     type="button"

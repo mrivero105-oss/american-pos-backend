@@ -1,5 +1,16 @@
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { ShoppingCart, Trash2, X, User, UserCheck, Percent, PauseCircle, Store, ArrowRight, Utensils } from 'lucide-react';
+import { getRegionConfig } from '../../utils/regionConfig';
+
+const cleanProdId = (rawId) => String(rawId || '').replace(/__bulk$|__mid$|__pres_.*$|__wpres_.*$|__srv_.*$/, '');
+const getPackFactor = (prod) => {
+  if (!prod) return 1;
+  const f = Number(prod.factorConversion || prod.unitsMultiplier || 0);
+  if (f > 1) return f;
+  if (prod.isBulk) return Math.max(1, Number(prod.unitsPerBulk) || 1);
+  if (prod.isMidBulk) return Math.max(1, Number(prod.unitsPerMidBulk) || 1);
+  return 1;
+};
 
 export default function MobileCartSheet({
   productsMap = null,
@@ -26,6 +37,10 @@ export default function MobileCartSheet({
   handleApplyDiscount,
   cartDiscountAmountUSD,
   taxUSD,
+  taxLabel = null,
+  effectiveIvaRate = null,
+  isIvaEnabled = true,
+  isDollarCountry = false,
   totalUSD,
   totalBS,
   handleHoldSale,
@@ -36,6 +51,9 @@ export default function MobileCartSheet({
   onOpenTableSelect
 }) {
   const dragControls = useDragControls();
+  const regionCfg = getRegionConfig();
+  const resolvedTaxLabel = taxLabel || regionCfg.taxLabel || 'IVA';
+  const resolvedTaxRate = effectiveIvaRate !== null && effectiveIvaRate !== undefined ? effectiveIvaRate : regionCfg.defaultTaxRate;
   return (
     <AnimatePresence>
       {isOpen && (
@@ -229,18 +247,21 @@ export default function MobileCartSheet({
                     </div>
                   </div>
                 ) : (
-                  enrichedCart.map((item, idx) => {
+                  enrichedCart.map((item) => {
                     const prod = item?.product;
                     if (!prod || !prod.id) return null;
                     const unlimited = isUnlimitedStockProduct(prod);
+                    const baseId = cleanProdId(prod.productId || prod.id);
                     const latestProd = (!unlimited)
-                      ? (productsMap ? (productsMap.get(String(prod.id)) || prod) : (Array.isArray(products) ? (products.find(p => String(p.id) === String(prod.id)) || prod) : prod))
+                      ? (productsMap ? (productsMap.get(baseId) || prod) : (Array.isArray(products) ? (products.find(p => String(p.id) === baseId) || prod) : prod))
                       : prod;
-                    const itemMaxStock = unlimited ? Infinity : Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
+                    const packFactor = getPackFactor(prod);
+                    const rawBaseStock = Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
+                    const itemMaxStock = unlimited ? Infinity : (packFactor > 1 ? Math.floor(rawBaseStock / packFactor) : rawBaseStock);
                     const atMaxStock = !unlimited && item.quantity >= itemMaxStock;
 
                     return (
-                    <div key={`${prod.id}-${idx}`} className="relative overflow-hidden rounded-[7px] group select-none">
+                    <div key={String(prod.id)} className="relative overflow-hidden rounded-[7px] group select-none">
                       {/* Fondo de Acción Roja que se revela al deslizar a la izquierda */}
                       <div 
                         className="absolute inset-y-0 right-0 w-24 bg-rose-600 flex items-center justify-center text-white cursor-pointer transition-colors active:bg-rose-700 select-none z-0"
@@ -353,17 +374,19 @@ export default function MobileCartSheet({
                     </div>
                   )}
                   <div className="flex justify-between text-[11px] text-[#94a3b8]">
-                    <span>IVA (16% Incluido):</span>
+                    <span>{isIvaEnabled && resolvedTaxRate > 0 ? `${resolvedTaxLabel} (${resolvedTaxRate}% Incluido):` : `${resolvedTaxLabel} (Exento):`}</span>
                     <span className="font-bold text-white font-mono">${taxUSD.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-baseline pt-0.5">
                     <span className="font-extrabold text-xs text-[#cbd5e1] tracking-wide">TOTAL USD:</span>
                     <span className="font-black text-lg text-[#34d399] font-mono tabular-nums">${totalUSD.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between items-baseline text-xs text-[#fbbf24] font-bold">
-                    <span>TOTAL BS:</span>
-                    <span className="font-mono tabular-nums">Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
+                  {!isDollarCountry && (
+                    <div className="flex justify-between items-baseline text-xs text-[#fbbf24] font-bold">
+                      <span>TOTAL BS:</span>
+                      <span className="font-mono tabular-nums">Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
                 </div>
 
                 {cart.length > 0 ? (

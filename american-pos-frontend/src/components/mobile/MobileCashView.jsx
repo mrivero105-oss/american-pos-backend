@@ -83,6 +83,7 @@ export default function MobileCashView({
   sales = [],
   user,
   exchangeRate = 950,
+  businessInfo = null,
   T,
   isLight,
   onBackToPOS,
@@ -301,10 +302,18 @@ export default function MobileCashView({
   const handleOpenShift = async (e) => {
     e.preventDefault();
     setIsSubmittingOpen(true);
+    const parsedUsd = parseFloat(openFloatUSD) || 0;
+    const parsedBs = parseFloat(openFloatBS) || 0;
     const payload = {
-      initialAmountUsd: parseFloat(openFloatUSD) || 0,
-      initialAmountBs: parseFloat(openFloatBS) || 0,
-      initialAmount: parseFloat(openFloatUSD) || 0,
+      amount: parsedUsd,
+      initialBreakdown: {
+        cash: parsedUsd,
+        cash_usd: parsedUsd,
+        cash_bs: parsedBs
+      },
+      initialAmountUsd: parsedUsd,
+      initialAmountBs: parsedBs,
+      initialAmount: parsedUsd,
       registerId: 'Caja Móvil',
       registerName: 'Terminal Móvil',
       notes: openNotes.trim() || 'Apertura desde POS Móvil'
@@ -317,10 +326,17 @@ export default function MobileCashView({
       try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(created)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       setIsOpenShiftModalOpen(false);
       showToast('✅ ¡Turno de caja abierto exitosamente!');
-    } catch (_err) {
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.error || err?.response?.data?.message || 'No tienes permiso o no es posible abrir turno';
+        showToast(`⚠️ ${msg}`);
+        return;
+      }
       // Fallback offline con encolado automático hacia el servidor PC
+      const tempShiftId = `shift_off_${Date.now()}`;
       const offlineShift = {
-        id: `shift_off_${Date.now()}`,
+        id: tempShiftId,
         ...payload,
         openedAt: new Date().toISOString(),
         movements: [],
@@ -331,6 +347,7 @@ export default function MobileCashView({
       try {
         await primaryDb.put('syncQueue', {
           id: `cash_open_${Date.now()}`,
+          tempLocalId: tempShiftId,
           endpoint: '/cash/open',
           method: 'POST',
           payload,
@@ -452,7 +469,13 @@ export default function MobileCashView({
       setReportType('Z');
       setIsReportModalOpen(true);
       showToast('✅ ¡Caja cerrada exitosamente! Generando Corte Z.');
-    } catch (_err) {
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.error || err?.response?.data?.message || 'Cierre de caja rechazado por el servidor';
+        showToast(`⚠️ ${msg}`);
+        return;
+      }
       // Fallback offline con sincronización diferida
       try {
         await primaryDb.put('syncQueue', {
@@ -494,22 +517,22 @@ export default function MobileCashView({
 
     const finalBreakdown = {
       cash: cUSD,
-      cash_bs: cBS,
-      ...Object.fromEntries(
-        Object.entries(metrics.methods)
-          .filter(([mName]) => mName !== 'Efectivo USD' && mName !== 'Efectivo Bs')
-          .map(([mName, data]) => {
-            let canon = 'otros';
-            if (mName === 'Pago Móvil') canon = 'pago_movil';
-            else if (mName === 'Tarjeta') canon = 'debit';
-            else if (mName === 'Zelle') canon = 'zelle';
-            else if (mName === 'Transferencia') canon = 'transfer';
-            else if (mName === 'Crédito') canon = 'fiado';
-            const isVes = mName === 'Pago Móvil' || mName === 'Tarjeta';
-            return [canon, isVes ? data.bs : data.usd];
-          })
-      )
+      cash_bs: cBS
     };
+    Object.entries(metrics.methods)
+      .filter(([mName]) => mName !== 'Efectivo USD' && mName !== 'Efectivo Bs')
+      .forEach(([mName, data]) => {
+        let canon = 'otros';
+        if (mName === 'Pago Móvil') canon = 'pago_movil';
+        else if (mName === 'Tarjeta') canon = 'debit';
+        else if (mName === 'Zelle') canon = 'zelle';
+        else if (mName === 'Transferencia') canon = 'transfer';
+        else if (mName === 'Crédito') canon = 'fiado';
+        else if (mName === 'Mixto') canon = 'mixto';
+        const isVes = mName === 'Pago Móvil' || mName === 'Tarjeta';
+        const val = isVes ? data.bs : data.usd;
+        finalBreakdown[canon] = Number(((finalBreakdown[canon] || 0) + val).toFixed(2));
+      });
 
     const payload = {
       shiftId: currentShift?.id || null,
@@ -524,11 +547,13 @@ export default function MobileCashView({
       differenceBs: diffBS
     };
 
-    // Si hay discrepancia mayor a $5, solicitar autenticación biométrica o PIN de supervisor
-    if (Math.abs(diffUSD) > 5) {
+    // Tolerancia alineada con CashReconciliationService (por defecto $1.0 USD)
+    const configuredTolerance = Number(businessInfo?.cashDifferenceToleranceUsd ?? 1);
+    const toleranceUsd = Number.isFinite(configuredTolerance) && configuredTolerance >= 0 ? configuredTolerance : 1;
+    if (Math.abs(diffUSD) > toleranceUsd) {
       setSupervisorAuthRequest({
         title: 'Autorizar Cierre con Diferencia',
-        reason: `Discrepancia detectada: $${diffUSD.toFixed(2)} USD`,
+        reason: `Discrepancia detectada: $${diffUSD.toFixed(2)} USD (tolerancia $${toleranceUsd.toFixed(2)})`,
         actionType: 'cash_discrepancy',
         referenceId: String(currentShift?.id || 'caja_movil'),
         onAuthorized: (approvalData) => executeCloseShift({
@@ -542,9 +567,18 @@ export default function MobileCashView({
     await executeCloseShift(payload, cUSD, cBS);
   };
 
+  // Fuente de métricas activa para Reporte X vs Corte Z (preserva snapshot del turno recién cerrado)
+  const getReportMetrics = (type = 'X') => {
+    if (type === 'Z' && lastZReportData?.metrics) {
+      return lastZReportData.metrics;
+    }
+    return metrics;
+  };
+
   // Generar texto para WhatsApp (Corte X o Z)
   const generateReportText = (type = 'X') => {
     const isZ = type === 'Z';
+    const rMetrics = getReportMetrics(type);
     const lines = [
       `📊 *${isZ ? 'CORTE Z (CIERRE DEFINITIVO)' : 'CORTE X (ARQUEO PARCIAL)'}*`,
       `Terminal: *Caja Móvil*`,
@@ -553,22 +587,22 @@ export default function MobileCashView({
       `Tasa Oficial: Bs. ${exchangeRate.toFixed(2)}`,
       `--------------------------------`,
       `*FONDO INICIAL DE APERTURA:*`,
-      `• USD: $${metrics.initialUsd.toFixed(2)}`,
-      `• Bs: Bs. ${metrics.initialBs.toFixed(2)}`,
+      `• USD: $${rMetrics.initialUsd.toFixed(2)}`,
+      `• Bs: Bs. ${rMetrics.initialBs.toFixed(2)}`,
       `--------------------------------`,
       `*VENTAS TOTALES DEL TURNO:*`,
-      `• Total USD: *$${metrics.totalUSD.toFixed(2)}*`,
-      `• Total BS: *Bs. ${metrics.totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
-      `• Tickets emitidos: *${metrics.count}*`,
+      `• Total USD: *$${rMetrics.totalUSD.toFixed(2)}*`,
+      `• Total BS: *Bs. ${rMetrics.totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
+      `• Tickets emitidos: *${rMetrics.count}*`,
       `--------------------------------`,
       `*DESGLOSE POR FORMA DE PAGO:*`,
-      ...Object.entries(metrics.methods)
+      ...Object.entries(rMetrics.methods)
         .filter(([_, data]) => data.count > 0)
         .map(([name, data]) => `• ${name} (${data.count}): $${data.usd.toFixed(2)} / Bs. ${data.bs.toFixed(2)}`),
       `--------------------------------`,
       `*EFECTIVO TEÓRICO EN CAJA:*`,
-      `• Efectivo USD Esperado: *$${metrics.theoreticalCashUsd.toFixed(2)}*`,
-      `• Efectivo Bs Esperado: *Bs. ${metrics.theoreticalCashBs.toFixed(2)}*`,
+      `• Efectivo USD Esperado: *$${rMetrics.theoreticalCashUsd.toFixed(2)}*`,
+      `• Efectivo Bs Esperado: *Bs. ${rMetrics.theoreticalCashBs.toFixed(2)}*`,
       ...(isZ && lastZReportData ? [
         `--------------------------------`,
         `*CONTEO FÍSICO ARQUEADO:*`,
@@ -578,7 +612,7 @@ export default function MobileCashView({
         `• Diferencia Bs: Bs. ${Number(lastZReportData.differenceBs || 0).toFixed(2)}`
       ] : []),
       `--------------------------------`,
-      metrics.offlineCount > 0 ? `⚠️ Ventas offline por sincronizar: ${metrics.offlineCount}` : `✅ Todo sincronizado en red LAN`,
+      rMetrics.offlineCount > 0 ? `⚠️ Ventas offline por sincronizar: ${rMetrics.offlineCount}` : `✅ Todo sincronizado en red LAN`,
       `--------------------------------`,
       `Isaac POS Ultra Móvil • Sistema Seguro`
     ];
@@ -594,6 +628,7 @@ export default function MobileCashView({
   const handlePrintBluetooth = async (type = 'X') => {
     try {
       const isZ = type === 'Z';
+      const rMetrics = getReportMetrics(type);
       const cleanStr = (s = '') => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]/g, '');
       const ESC = '\x1B';
       const GS = '\x1D';
@@ -609,24 +644,24 @@ export default function MobileCashView({
       receipt += `${ESC}a\x00`; // Left
       receipt += divider;
       receipt += `${ESC}E\x01FONDO INICIAL DE APERTURA:${ESC}E\x00\n`;
-      receipt += `USD: $${metrics.initialUsd.toFixed(2)}\n`;
-      receipt += `Bs:  Bs. ${metrics.initialBs.toFixed(2)}\n`;
+      receipt += `USD: $${rMetrics.initialUsd.toFixed(2)}\n`;
+      receipt += `Bs:  Bs. ${rMetrics.initialBs.toFixed(2)}\n`;
       receipt += divider;
       receipt += `${ESC}E\x01VENTAS TOTALES DEL TURNO:${ESC}E\x00\n`;
-      receipt += `Total USD: $${metrics.totalUSD.toFixed(2)}\n`;
-      receipt += `Total BS:  Bs. ${metrics.totalBS.toFixed(2)}\n`;
-      receipt += `Tickets:   ${metrics.count}\n`;
+      receipt += `Total USD: $${rMetrics.totalUSD.toFixed(2)}\n`;
+      receipt += `Total BS:  Bs. ${rMetrics.totalBS.toFixed(2)}\n`;
+      receipt += `Tickets:   ${rMetrics.count}\n`;
       receipt += divider;
       receipt += `${ESC}E\x01DESGLOSE POR PAGO:${ESC}E\x00\n`;
-      Object.entries(metrics.methods)
+      Object.entries(rMetrics.methods)
         .filter(([_, data]) => data.count > 0)
         .forEach(([name, data]) => {
           receipt += `${cleanStr(name)} (${data.count}): $${data.usd.toFixed(2)}\n`;
         });
       receipt += divider;
       receipt += `${ESC}E\x01EFECTIVO ESPERADO EN CAJA:${ESC}E\x00\n`;
-      receipt += `USD Esperado: $${metrics.theoreticalCashUsd.toFixed(2)}\n`;
-      receipt += `Bs Esperado:  Bs. ${metrics.theoreticalCashBs.toFixed(2)}\n`;
+      receipt += `USD Esperado: $${rMetrics.theoreticalCashUsd.toFixed(2)}\n`;
+      receipt += `Bs Esperado:  Bs. ${rMetrics.theoreticalCashBs.toFixed(2)}\n`;
       if (isZ && lastZReportData) {
         receipt += divider;
         receipt += `${ESC}E\x01CONTEO FISICO ARQUEADO:${ESC}E\x00\n`;
@@ -1228,53 +1263,60 @@ export default function MobileCashView({
               <div className="flex justify-between"><span>Cajero:</span><span>{user?.name || user?.username || 'Cajero Móvil'}</span></div>
             </div>
 
-            <div className="border-t border-b border-dashed py-2 space-y-1">
-              <div className="flex justify-between font-bold">
-                <span>Fondo Inicial ($):</span>
-                <span>${metrics.initialUsd.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold">
-                <span>Fondo Inicial (Bs):</span>
-                <span>Bs. {metrics.initialBs.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold text-emerald-800">
-                <span>Total Ventas USD:</span>
-                <span>${metrics.totalUSD.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold">
-                <span>Total Ventas Bs:</span>
-                <span>Bs. {metrics.totalBS.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Tickets Emitidos:</span>
-                <span>{metrics.count}</span>
-              </div>
-            </div>
-
-            {/* Desglose métodos */}
-            <div className="space-y-0.5 text-[9px]">
-              <p className="font-bold font-sans uppercase">Desglose por Método:</p>
-              {Object.entries(metrics.methods).map(([mName, data]) => {
-                if (data.count === 0) return null;
-                return (
-                  <div key={mName} className="flex justify-between">
-                    <span>{mName} ({data.count}):</span>
-                    <span>${data.usd.toFixed(2)} / Bs. {data.bs.toFixed(2)}</span>
+            {(() => {
+              const modalMetrics = getReportMetrics(reportType);
+              return (
+                <>
+                  <div className="border-t border-b border-dashed py-2 space-y-1">
+                    <div className="flex justify-between font-bold">
+                      <span>Fondo Inicial ($):</span>
+                      <span>${modalMetrics.initialUsd.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Fondo Inicial (Bs):</span>
+                      <span>Bs. {modalMetrics.initialBs.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-emerald-800">
+                      <span>Total Ventas USD:</span>
+                      <span>${modalMetrics.totalUSD.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Total Ventas Bs:</span>
+                      <span>Bs. {modalMetrics.totalBS.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tickets Emitidos:</span>
+                      <span>{modalMetrics.count}</span>
+                    </div>
                   </div>
-                );
-              })}
-            </div>
 
-            <div className="border-t border-dashed pt-2 space-y-1 font-bold text-[10px]">
-              <div className="flex justify-between text-blue-900">
-                <span>Efectivo Teórico USD:</span>
-                <span>${metrics.theoreticalCashUsd.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Efectivo Teórico Bs:</span>
-                <span>Bs. {metrics.theoreticalCashBs.toFixed(2)}</span>
-              </div>
-            </div>
+                  {/* Desglose métodos */}
+                  <div className="space-y-0.5 text-[9px]">
+                    <p className="font-bold font-sans uppercase">Desglose por Método:</p>
+                    {Object.entries(modalMetrics.methods).map(([mName, data]) => {
+                      if (data.count === 0) return null;
+                      return (
+                        <div key={mName} className="flex justify-between">
+                          <span>{mName} ({data.count}):</span>
+                          <span>${data.usd.toFixed(2)} / Bs. {data.bs.toFixed(2)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="border-t border-dashed pt-2 space-y-1 font-bold text-[10px]">
+                    <div className="flex justify-between text-blue-900">
+                      <span>Efectivo Teórico USD:</span>
+                      <span>${modalMetrics.theoreticalCashUsd.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Efectivo Teórico Bs:</span>
+                      <span>Bs. {modalMetrics.theoreticalCashBs.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="space-y-2 pt-2 border-t border-dashed font-sans">
               <button
