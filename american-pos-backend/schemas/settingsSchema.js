@@ -3,6 +3,7 @@ const { z } = require('zod');
 const positiveRateSchema = z.object({
     body: z.object({
         rate: z.coerce.number().positive('La tasa debe ser mayor a 0').max(100000000),
+        euroRate: z.coerce.number().positive('La tasa de Euro debe ser mayor a 0').max(100000000).optional(),
         currencyMode: z.enum(['BOTH', 'SINGLE', 'USD', 'VES']).or(z.string().trim().max(20)).optional(),
         autoUpdateRate: z.boolean().optional()
     })

@@ -115,19 +115,51 @@ async function resolvePublicTargetIp(hostname) {
         if (isPrivateOrReservedIp(cleanHost)) {
             throw new Error('Acceso a direcciones IP privadas o internas bloqueado (anti-SSRF).');
         }
-        return { address: cleanHost, family: net.isIPv6(cleanHost) ? 6 : 4 };
+        const single = { address: cleanHost, family: net.isIPv6(cleanHost) ? 6 : 4 };
+        return { ...single, records: [single] };
     }
 
     const records = await dns.lookup(cleanHost, { all: true, verbatim: true });
     if (!Array.isArray(records) || records.length === 0) {
         throw new Error('No se pudo resolver el host de la imagen.');
     }
+    const validated = [];
     for (const rec of records) {
-        if (isPrivateOrReservedIp(rec.address)) {
+        if (!rec || !rec.address || isPrivateOrReservedIp(rec.address)) {
             throw new Error('El host de la imagen resuelve a una dirección IP privada o interna bloqueada (anti-SSRF).');
         }
+        validated.push({
+            address: rec.address,
+            family: rec.family || (net.isIPv6(rec.address) ? 6 : 4)
+        });
     }
-    return records[0];
+    // Priorizar IPv4 sobre IPv6 para evitar timeouts en redes Windows sin salida IPv6
+    validated.sort((a, b) => (a.family === 4 ? 0 : 1) - (b.family === 4 ? 0 : 1));
+    return { ...validated[0], records: validated };
+}
+
+/**
+ * Construye una función lookup compatible con Node 18/20/24 (autoSelectFamily con opts.all === true
+ * y modo clásico con (address, family)) usando exclusivamente las IPs públicas previamente validadas.
+ */
+function createPinnedPublicLookup(resolved) {
+    const records = Array.isArray(resolved?.records) && resolved.records.length > 0
+        ? resolved.records
+        : [{ address: resolved.address, family: resolved.family || (net.isIPv6(resolved.address) ? 6 : 4) }];
+
+    return (_hostname, opts, cb) => {
+        let optionsObj = opts;
+        let callback = cb;
+        if (typeof optionsObj === 'function') {
+            callback = optionsObj;
+            optionsObj = {};
+        }
+        if (optionsObj && optionsObj.all) {
+            return callback(null, records);
+        }
+        const primary = records[0];
+        return callback(null, primary.address, primary.family);
+    };
 }
 
 async function fetchSafeImageBuffer(rawUrl, options = {}) {
@@ -176,7 +208,7 @@ async function fetchSafeImageBuffer(rawUrl, options = {}) {
                 port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
                 path: `${parsed.pathname}${parsed.search}`,
                 method: 'GET',
-                lookup: (_h, _opts, cb) => cb(null, resolved.address, resolved.family),
+                lookup: createPinnedPublicLookup(resolved),
                 servername: parsed.protocol === 'https:' ? parsed.hostname : undefined,
                 headers: {
                     'User-Agent': 'IsaacPOS-SafeMediaFetcher/2.0',
@@ -255,5 +287,6 @@ module.exports = {
     isPrivateOrReservedIp,
     detectSafeRasterImage,
     resolvePublicTargetIp,
+    createPinnedPublicLookup,
     fetchSafeImageBuffer
 };

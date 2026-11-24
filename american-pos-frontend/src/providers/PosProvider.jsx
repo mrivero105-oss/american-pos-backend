@@ -8,7 +8,10 @@ import secureMobileStorage from '../utils/secureMobileStorage';
 import { db } from '../services/db';
 import {
     isDollarOnlyCountry,
+    isSingleCurrencyCountry,
     isUsdOnlyMode,
+    invalidateSettingsResourceCache,
+    setGlobalSettings as syncFormatGlobalSettings,
     fetchGlobalSettings,
     fetchExchangeRateCached,
     fetchBusinessSettingsCached,
@@ -51,15 +54,20 @@ export function PosProvider({ children }) {
             return [];
         }
     });
-    const isDollarCountry = isDollarOnlyCountry(country);
+    const isSingleCountry = isSingleCurrencyCountry(country);
 
     const [exchangeRate, setExchangeRate] = useState(() => {
-        if (isDollarCountry) return 1;
+        if (isSingleCountry) return 1;
         const saved = localStorage.getItem('pos_exchange_rate');
         return saved ? Number(saved) : 1;
     });
+    const [euroRate, setEuroRate] = useState(() => {
+        if (isSingleCountry) return 0;
+        const saved = localStorage.getItem('pos_euro_rate');
+        return saved ? Number(saved) : 0;
+    });
     const [currencyMode, setCurrencyMode] = useState(() => {
-        if (isDollarCountry) return 'USD';
+        if (isSingleCountry) return 'SINGLE';
         return localStorage.getItem('pos_currency_mode') || 'VES';
     });
     const [businessMode, setBusinessMode] = useState(() => localStorage.getItem('pos_business_mode') || 'STANDARD');
@@ -369,13 +377,23 @@ export function PosProvider({ children }) {
                 setCurrencyMode(data.currencyMode);
                 localStorage.setItem('pos_exchange_rate', String(data.exchangeRate));
                 localStorage.setItem('pos_currency_mode', data.currencyMode);
-                const newSettings = { rate: data.exchangeRate, currencyMode: data.currencyMode };
-                setGlobalSettings(newSettings);
+                const nextEurRate = Number(data.euroRate) > 0 ? Number(data.euroRate) : undefined;
+                if (nextEurRate !== undefined) {
+                    setEuroRate(nextEurRate);
+                    localStorage.setItem('pos_euro_rate', String(nextEurRate));
+                }
+                const newSettings = {
+                    rate: data.exchangeRate,
+                    ...(nextEurRate !== undefined ? { euroRate: nextEurRate } : {}),
+                    currencyMode: data.currencyMode
+                };
+                setGlobalSettings(prev => ({ ...prev, ...newSettings }));
+                syncFormatGlobalSettings(newSettings);
                 localStorage.setItem('pos_global_settings', JSON.stringify(newSettings));
                 db.put('metadata', { key: 'pos_exchange_rate', value: data.exchangeRate }).catch(err => console.warn('[POS] Error guardando tasa en IDB:', err?.message));
 
                 if (data.currencyMode !== 'SINGLE') {
-                    toast.success(`Tasa de cambio actualizada: ${data.exchangeRate}`, {
+                    toast.success(`Tasa actualizada: ${data.exchangeRate} Bs/$${nextEurRate ? ` · ${nextEurRate} Bs/€` : ''}`, {
                         id: 'rate-update-toast',
                         icon: '💱',
                         style: {
@@ -389,16 +407,37 @@ export function PosProvider({ children }) {
             }
             if (data && data.type === 'region') {
                 console.log('🌎 POS: Cambio de región recibido via socket:', data);
-                setExchangeRate(data.exchangeRate);
-                setCurrencyMode(data.currencyMode);
+                const nextRate = Number(data.exchangeRate) || 1;
+                const nextEurRate = Number(data.euroRate) || 0;
+                const nextMode = data.currencyMode || (isSingleCurrencyCountry(data.country) ? 'SINGLE' : 'BOTH');
+                setExchangeRate(nextRate);
+                setEuroRate(nextEurRate);
+                setCurrencyMode(nextMode);
                 setCountry(data.country);
-                localStorage.setItem('pos_exchange_rate', String(data.exchangeRate));
-                localStorage.setItem('pos_currency_mode', data.currencyMode);
+                localStorage.setItem('pos_exchange_rate', String(nextRate));
+                localStorage.setItem('pos_euro_rate', String(nextEurRate));
+                localStorage.setItem('pos_currency_mode', nextMode);
                 localStorage.setItem('pos_country', data.country);
-                const newSettings = { rate: data.exchangeRate, currencyMode: data.currencyMode, country: data.country };
+                if (data.taxConfig) {
+                    localStorage.setItem('pos_tax_settings', JSON.stringify(data.taxConfig));
+                }
+                if (Array.isArray(data.paymentMethods)) {
+                    localStorage.setItem('pos_payment_methods', JSON.stringify(data.paymentMethods));
+                }
+                const newSettings = {
+                    rate: nextRate,
+                    euroRate: nextEurRate,
+                    currencyMode: nextMode,
+                    country: data.country,
+                    taxConfig: data.taxConfig,
+                    paymentMethods: data.paymentMethods,
+                    regionConfig: data.regionConfig
+                };
                 setGlobalSettings(newSettings);
+                syncFormatGlobalSettings(newSettings);
+                invalidateSettingsResourceCache('all');
                 localStorage.setItem('pos_global_settings', JSON.stringify(newSettings));
-                db.put('metadata', { key: 'pos_exchange_rate', value: data.exchangeRate }).catch(err => console.warn('[POS] Error guardando tasa en IDB:', err?.message));
+                db.put('metadata', { key: 'pos_exchange_rate', value: nextRate }).catch(err => console.warn('[POS] Error guardando tasa en IDB:', err?.message));
 
                 toast.success(`Región actualizada: ${data.country?.toUpperCase()}`, {
                     id: 'region-update-toast',
@@ -406,7 +445,7 @@ export function PosProvider({ children }) {
                     duration: 4000
                 });
                 // Force page reload to apply all regional changes
-                setTimeout(() => window.location.reload(), 2000);
+                setTimeout(() => window.location.reload(), 1200);
             }
         };
 
@@ -557,13 +596,17 @@ export function PosProvider({ children }) {
                 fetchBusinessSettingsCached(shouldForce).catch(() => null)
             ]);
             if (rateData) {
-                const newCountry = bizData?.country || '';
+                const newCountry = bizData?.country || rateData.country || '';
                 const isDollar = isDollarOnlyCountry(newCountry);
-                const newRate = isDollar ? 1 : (rateData.rate || 1);
-                const newMode = isDollar ? 'USD' : (rateData.currencyMode || 'BOTH');
+                const isSingle = isSingleCurrencyCountry(newCountry);
+                const newRate = isSingle ? 1 : (rateData.rate || 1);
+                const newEuroRate = isSingle ? 0 : (Number(rateData.euroRate || bizData?.euroRate || localStorage.getItem('pos_euro_rate') || 0));
+                const newMode = isDollar ? 'USD' : (isSingle ? 'SINGLE' : (rateData.currencyMode || 'BOTH'));
                 setExchangeRate(newRate);
+                setEuroRate(newEuroRate);
                 setCurrencyMode(newMode);
                 localStorage.setItem('pos_exchange_rate', String(newRate));
+                localStorage.setItem('pos_euro_rate', String(newEuroRate));
                 localStorage.setItem('pos_currency_mode', newMode);
                 if (newCountry) {
                     setCountry(newCountry);
@@ -573,8 +616,9 @@ export function PosProvider({ children }) {
                     setBusinessMode(bizData.businessMode);
                     localStorage.setItem('pos_business_mode', bizData.businessMode);
                 }
-                const newSettings = { rate: newRate, currencyMode: newMode, country: newCountry, businessInfo: bizData };
+                const newSettings = { rate: newRate, euroRate: newEuroRate, currencyMode: newMode, country: newCountry, businessInfo: bizData };
                 setGlobalSettings(newSettings);
+                syncFormatGlobalSettings(newSettings);
                 localStorage.setItem('pos_global_settings', JSON.stringify(newSettings));
                 db.put('metadata', { key: 'pos_exchange_rate', value: newRate }).catch(err => console.warn('[POS] Error guardando tasa en IDB:', err?.message));
             } else {
@@ -1081,9 +1125,11 @@ export function PosProvider({ children }) {
     }, [country]);
 
     const isDollarCountryActive = isDollarOnlyCountry(country);
+    const isSingleCountryActive = isSingleCurrencyCountry(country);
     const isUsdOnlyActive = isDollarCountryActive || isUsdOnlyMode({ currencyMode, country });
-    const activeEffectiveRate = isUsdOnlyActive ? 1 : exchangeRate;
-    const activeEffectiveMode = isUsdOnlyActive ? 'USD' : currencyMode;
+    const activeEffectiveRate = (isSingleCountryActive || isUsdOnlyActive) ? 1 : exchangeRate;
+    const activeEffectiveEuroRate = isSingleCountryActive ? 0 : (Number(euroRate) || 0);
+    const activeEffectiveMode = isUsdOnlyActive ? 'USD' : (isSingleCountryActive ? 'SINGLE' : currencyMode);
 
     const value = useMemo(() => ({
         isHydrating,
@@ -1100,6 +1146,7 @@ export function PosProvider({ children }) {
         setHeldSales,
         clearPosState,
         exchangeRate: activeEffectiveRate,
+        euroRate: activeEffectiveEuroRate,
         currencyMode: activeEffectiveMode,
         isUsdOnly: isUsdOnlyActive,
         isDollarCountry: isDollarCountryActive,
@@ -1134,7 +1181,7 @@ export function PosProvider({ children }) {
         handleRestoreDraft,
         handleDiscardDraft
     }), [
-        posState, searchTerm, heldSales, activeEffectiveRate, activeEffectiveMode, isUsdOnlyActive, isDollarCountryActive, country, globalSettings, businessMode,
+        posState, searchTerm, heldSales, activeEffectiveRate, activeEffectiveEuroRate, activeEffectiveMode, isUsdOnlyActive, isDollarCountryActive, country, globalSettings, businessMode,
         registerId, registerDisplayName, allowedCategories, setAllowedCategories, allowedProducts, setAllowedProducts, posViewMode, isHydrating, isShiftOpen, currentShift,
         activePromotions, refreshActivePromotions, promoEvaluation,
         setCart, setSelectedCustomer, setDiscountActive, setSearchTermVal, 
@@ -1145,12 +1192,13 @@ export function PosProvider({ children }) {
     useEffect(() => {
         useBusinessSettingsStore.getState().setSettings({
             rate: activeEffectiveRate,
+            euroRate: activeEffectiveEuroRate,
             currencyMode: activeEffectiveMode,
             country,
             businessMode,
             businessInfo: globalSettings?.businessInfo || {}
         });
-    }, [activeEffectiveRate, activeEffectiveMode, country, businessMode, globalSettings]);
+    }, [activeEffectiveRate, activeEffectiveEuroRate, activeEffectiveMode, country, businessMode, globalSettings]);
 
     return (
         <PosContext.Provider value={value}>

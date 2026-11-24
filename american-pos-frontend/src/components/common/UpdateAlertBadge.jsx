@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download, Loader2, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -10,6 +10,7 @@ export default function UpdateAlertBadge() {
     const canCheckUpdates = Boolean(user && hasPermission('canManageSettings'));
     const [updateStatus, setUpdateStatus] = useState(null);
     const [downloading, setDownloading] = useState(false);
+    const downloadingRef = useRef(false);
     const [downloadProgress, setDownloadProgress] = useState(0);
     const [downloaded, setDownloaded] = useState(false);
     const navigate = useNavigate();
@@ -45,15 +46,24 @@ export default function UpdateAlertBadge() {
                         latestRelease: data.info || prev?.latestRelease
                     }));
                 } else if (data.status === 'downloading') {
+                    downloadingRef.current = true;
                     setDownloading(true);
                     setDownloadProgress(Math.round(data.progress || 0));
                 } else if (data.status === 'downloaded') {
+                    downloadingRef.current = false;
                     setDownloading(false);
                     setDownloaded(true);
                     setDownloadProgress(100);
                 } else if (data.status === 'error') {
+                    const wasDownloading = downloadingRef.current;
+                    downloadingRef.current = false;
                     setDownloading(false);
-                    toast.error('Error al descargar la actualización');
+                    // No mostrar alerta roja al abrir el POS cuando solo falla un chequeo automático en segundo plano (ej. offline o sin modern.yml en GitHub)
+                    if (wasDownloading && !data.silent) {
+                        toast.error('Error al descargar la actualización');
+                    } else if (data.error) {
+                        console.warn('[UpdateAlertBadge] Verificación en segundo plano omitida:', data.error);
+                    }
                 }
             });
         }
@@ -92,20 +102,24 @@ export default function UpdateAlertBadge() {
         const isDesktop = !!window.electronAPI;
         if (isDesktop && typeof window.electronAPI.downloadUpdate === 'function') {
             toast.success('Iniciando descarga en segundo plano...');
+            downloadingRef.current = true;
             setDownloading(true);
             setDownloadProgress(0);
             try {
                 const res = await window.electronAPI.downloadUpdate(updateStatus?.latestRelease?.downloadUrl);
                 if (!res.success && updateStatus?.latestRelease?.downloadUrl) {
                     window.open(updateStatus.latestRelease.downloadUrl, '_blank');
+                    downloadingRef.current = false;
                     setDownloading(false);
                 } else if (!res.success) {
                     toast.error(res.error || 'Error al iniciar descarga');
+                    downloadingRef.current = false;
                     setDownloading(false);
                 }
             } catch (err) {
                 console.warn('[UpdateAlertBadge] Error capturado en operación:', err?.message || err);
                 toast.error('Error al iniciar la descarga');
+                downloadingRef.current = false;
                 setDownloading(false);
             }
         } else {

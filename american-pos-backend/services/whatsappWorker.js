@@ -28,6 +28,7 @@ class WhatsappWorkerRuntime {
         this._activeInitToken = null;
         this._initInFlight = null;
         this.initTimeout = null;
+        this._loginWatchTimer = null;
         this.pendingBursts = new Map();
         this.recentMessages = new Map(); // msgRefId -> { msg, createdAt }
         this._seq = 0;
@@ -78,8 +79,191 @@ class WhatsappWorkerRuntime {
         return msgRefId;
     }
 
+    _logWorker(level, message) {
+        if (level === 'error') console.error(message);
+        else if (level === 'warn') console.warn(message);
+        else console.log(message);
+        this._sendIpc({ type: 'worker_log', level, message });
+    }
+
+    _clearLoginWatcher() {
+        if (this._loginWatchTimer) {
+            clearInterval(this._loginWatchTimer);
+            this._loginWatchTimer = null;
+        }
+    }
+
+    /**
+     * Adaptador para el nuevo flujo de WhatsApp Web 2026 (`https://web.whatsapp.com/login/`):
+     * en `/login/`, el código QR ya está renderizado en `[data-ref]` pero `WAWebSocketModel`
+     * todavía no existe hasta completar la vinculación y navegar a `https://web.whatsapp.com/`.
+     * Sin este adaptador, `whatsapp-web.js@1.34.8` queda bloqueado en `waitForFunction` hasta agotar el timeout.
+     */
+    _installLoginRouteAdapter(client, currentInitToken) {
+        const originalInject = client.inject.bind(client);
+
+        client.inject = async () => {
+            if (this._activeInitToken !== currentInitToken) return;
+            const page = client.pupPage;
+            if (!page || page.isClosed()) return;
+
+            const currentUrl = String(page.url() || '');
+            const isLoginRoute = /\/login\/?(?:\?|$|#)/i.test(currentUrl);
+
+            let hasSocketModel = false;
+            if (!isLoginRoute) {
+                return await originalInject();
+            }
+
+            try {
+                hasSocketModel = await page.evaluate(() => {
+                    try {
+                        return Boolean(window.require?.('WAWebSocketModel')?.Socket?.state);
+                    } catch (_e) {
+                        return false;
+                    }
+                });
+            } catch (_e) {
+                hasSocketModel = false;
+            }
+
+            if (hasSocketModel) {
+                this._clearLoginWatcher();
+                return await originalInject();
+            }
+
+            this._logWorker('info', `[WHATSAPP-WORKER] Detectada ruta /login/ de WhatsApp Web (${currentUrl}); activando lector nativo de QR [data-ref].`);
+
+            if (client._injectAbort) client._injectAbort.abort();
+            const abort = new AbortController();
+            client._injectAbort = abort;
+
+            const authTimeout = client.options?.authTimeoutMs || 60000;
+
+            try {
+                await page.waitForSelector('[data-ref]', {
+                    timeout: Math.min(authTimeout, 30000),
+                    signal: abort.signal
+                });
+            } catch (waitErr) {
+                if (abort.signal.aborted || this._activeInitToken !== currentInitToken) return;
+                // Si durante la espera la página ya navegó fuera de /login/, delegar a originalInject
+                const latestUrl = String(page.url() || '');
+                if (!/\/login\/?(?:\?|$|#)/i.test(latestUrl)) {
+                    return await originalInject();
+                }
+                throw waitErr;
+            }
+
+            if (abort.signal.aborted || this._activeInitToken !== currentInitToken) return;
+
+            if (client.authStrategy && typeof client.authStrategy.onAuthenticationNeeded === 'function') {
+                const authNeeded = await client.authStrategy.onAuthenticationNeeded();
+                if (authNeeded?.failed) {
+                    client.emit('auth_failure', authNeeded.failureEventPayload);
+                    await client.destroy();
+                    if (authNeeded.restart) {
+                        return client.initialize();
+                    }
+                    return;
+                }
+            }
+
+            // Exponer callback seguro hacia Node una sola vez por documento/página
+            const fnAlreadyExposed = await page.evaluate(() => typeof window.__isaacOnLoginQR === 'function').catch(() => false);
+            if (!fnAlreadyExposed) {
+                try {
+                    await page.exposeFunction('__isaacOnLoginQR', (qrRef) => {
+                        if (this._activeInitToken !== currentInitToken) return;
+                        if (typeof qrRef === 'string' && qrRef.trim().length >= 10) {
+                            client.emit('qr', qrRef.trim());
+                        }
+                    });
+                } catch (_exposeErr) {
+                    // Ya expuesta por una invocación concurrente previa
+                }
+            }
+
+            // Emitir QR actual y suscribir MutationObserver para futuras rotaciones (~cada 20s)
+            await page.evaluate(() => {
+                const readCurrentRef = () => {
+                    const el = document.querySelector('[data-ref]');
+                    return el ? String(el.getAttribute('data-ref') || '').trim() : '';
+                };
+
+                if (window.__isaacLoginQrObserver) {
+                    try { window.__isaacLoginQrObserver.disconnect(); } catch (_e) {}
+                }
+
+                let lastEmitted = '';
+                const emitIfChanged = () => {
+                    const ref = readCurrentRef();
+                    if (ref && ref !== lastEmitted) {
+                        lastEmitted = ref;
+                        if (typeof window.__isaacOnLoginQR === 'function') {
+                            window.__isaacOnLoginQR(ref);
+                        }
+                    }
+                };
+
+                emitIfChanged();
+
+                const observer = new MutationObserver(() => {
+                    emitIfChanged();
+                });
+                observer.observe(document.body || document.documentElement, {
+                    subtree: true,
+                    childList: true,
+                    attributes: true,
+                    attributeFilter: ['data-ref']
+                });
+                window.__isaacLoginQrObserver = observer;
+            });
+
+            // Respaldo por si WhatsApp Web transiciona por SPA sin disparar framenavigated
+            this._clearLoginWatcher();
+            let handoffInProgress = false;
+            this._loginWatchTimer = setInterval(async () => {
+                if (handoffInProgress || this._activeInitToken !== currentInitToken || !client.pupPage || client.pupPage.isClosed()) {
+                    if (this._activeInitToken !== currentInitToken || !client.pupPage || client.pupPage.isClosed()) {
+                        this._clearLoginWatcher();
+                    }
+                    return;
+                }
+                try {
+                    const nowUrl = String(client.pupPage.url() || '');
+                    const leftLogin = !/\/login\/?(?:\?|$|#)/i.test(nowUrl);
+                    const sockReady = leftLogin || await client.pupPage.evaluate(() => {
+                        try {
+                            const st = window.require?.('WAWebSocketModel')?.Socket?.state;
+                            return Boolean(st && st !== 'UNPAIRED' && st !== 'UNPAIRED_IDLE');
+                        } catch (_e) {
+                            return false;
+                        }
+                    }).catch(() => false);
+
+                    if (sockReady) {
+                        handoffInProgress = true;
+                        this._clearLoginWatcher();
+                        this._logWorker('info', `[WHATSAPP-WORKER] Transición post-QR detectada (${nowUrl}); completando inyección oficial...`);
+                        await originalInject().catch((err) => {
+                            const msg = String(err?.message || err || '');
+                            if (!/Execution context was destroyed|detached|aborted/i.test(msg)) {
+                                this._logWorker('warn', `[WHATSAPP-WORKER] Aviso en transición post-QR: ${msg}`);
+                            }
+                        });
+                    }
+                } catch (_e) {}
+            }, 1500);
+            if (typeof this._loginWatchTimer.unref === 'function') {
+                this._loginWatchTimer.unref();
+            }
+        };
+    }
+
     async _teardownStaleClient(authDataPath, { nextStatus = 'DISCONNECTED', lastError = null, pruneCache = false, includeServiceWorkerCache = false } = {}) {
         this._activeInitToken = null;
+        this._clearLoginWatcher();
         if (this.initTimeout) {
             clearTimeout(this.initTimeout);
             this.initTimeout = null;
@@ -262,10 +446,12 @@ class WhatsappWorkerRuntime {
                 this.client = new Client({
                     authStrategy: new LocalAuth({ dataPath: authDataPath }),
                     webVersionCache: { type: 'local', path: webCachePath },
+                    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
                     puppeteer: puppeteerOptions,
                     authTimeoutMs: 60000,
                     qrMaxRetries: 0
                 });
+                this._installLoginRouteAdapter(this.client, currentInitToken);
             } catch (instErr) {
                 console.warn('[WHATSAPP-WORKER] No se pudo instanciar cliente WhatsApp:', instErr.message);
                 await this._teardownStaleClient(authDataPath, {
@@ -318,7 +504,7 @@ class WhatsappWorkerRuntime {
             }
             console.log(`[WHATSAPP-WORKER] QR Code generado (${this.qrAttempts}/${this.maxQrAttempts})`);
             try {
-                const qrDataUrl = await qrcode.toDataURL(qr, { width: 280, margin: 1 });
+                const qrDataUrl = await qrcode.toDataURL(qr, { width: 280, margin: 1, errorCorrectionLevel: 'L' });
                 if (this._activeInitToken !== currentInitToken) return;
                 this.qrCodeUrl = qrDataUrl;
                 this.lastError = null;
@@ -331,6 +517,7 @@ class WhatsappWorkerRuntime {
 
         this.client.on('ready', () => {
             if (this._activeInitToken !== currentInitToken) return;
+            this._clearLoginWatcher();
             if (this.initTimeout) {
                 clearTimeout(this.initTimeout);
                 this.initTimeout = null;
@@ -347,6 +534,7 @@ class WhatsappWorkerRuntime {
 
         this.client.on('auth_failure', (msg) => {
             if (this._activeInitToken !== currentInitToken) return;
+            this._clearLoginWatcher();
             if (this.initTimeout) {
                 clearTimeout(this.initTimeout);
                 this.initTimeout = null;

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { X, Printer, CheckCircle2, MessageCircle, Mail, Loader2, Copy, Download, ExternalLink, Phone, Check, CornerUpLeft, Share2 } from 'lucide-react';
-import { formatMoney as utilFormatMoney, formatBs, formatUSD, formatStock, isDollarOnlyCountry, isUsdOnlyMode, getTaxIdLabel, getCustomerDocLabel } from '../utils/format';
+import { formatMoney as utilFormatMoney, formatBs, formatUSD, formatEUR, formatCOP, formatStock, isDollarOnlyCountry, isSingleCurrencyCountry, isUsdOnlyMode, getTaxIdLabel, getCustomerDocLabel, getTaxLabel, getDefaultTaxRate, getRegionConfig } from '../utils/format';
 import BaseModal from './BaseModal';
 import { formatSaleToEscPos } from '../utils/escposFormatter';
 import { escapeHtml } from '../utils/escapeHtml';
@@ -17,10 +17,15 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
     const [sendingEmail, setSendingEmail] = useState(false);
 
     const effectiveCountry = businessSettings?.country || localStorage.getItem('pos_country') || '';
+    const regionCfg = getRegionConfig(effectiveCountry);
     const isDollarCountry = isDollarOnlyCountry(effectiveCountry);
+    const isSingleCountry = isSingleCurrencyCountry(effectiveCountry);
     const isUsdOnly = isDollarCountry || isUsdOnlyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
+    const isSingleMode = isSingleCountry || isUsdOnly;
     const taxIdLabel = getTaxIdLabel(effectiveCountry);
     const clientDocLabel = getCustomerDocLabel(effectiveCountry);
+    const taxLabel = getTaxLabel(effectiveCountry);
+    const defaultTaxRate = getDefaultTaxRate(effectiveCountry);
 
     // Modo de visualización de comprobante: Solo en Bs (Ocultar tasa y ref. USD) o Moneda Dual (Bs y USD)
     const [receiptOnlyBs, setReceiptOnlyBs] = useState(() => {
@@ -29,7 +34,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         return Boolean(businessSettings?.receiptOnlyBs);
     });
 
-    const isOnlyBs = !isUsdOnly && (currencyMode === 'VES' || receiptOnlyBs === true);
+    const isOnlyBs = !isSingleMode && (currencyMode === 'VES' || receiptOnlyBs === true);
 
     // WhatsApp Image Modal states
     const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
@@ -135,9 +140,9 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
 
     if (!isOpen || !sale) return null;
 
-    const isSingle = isUsdOnly;
-    const effectiveRate = isUsdOnly ? 1 : Number(sale?.exchangeRate || exchangeRate || 1);
-    const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, isUsdOnly ? 'USD' : mode, { rate: effectiveRate, currencyMode: isUsdOnly ? 'USD' : currencyMode });
+    const isSingle = isSingleMode || isUsdOnly;
+    const effectiveRate = isSingle ? 1 : Number(sale?.exchangeRate || exchangeRate || 1);
+    const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, isSingle ? regionCfg.currencyCode : mode, { rate: effectiveRate, currencyMode: isSingle ? 'SINGLE' : currencyMode, country: effectiveCountry });
 
     const documentTitle = sale?.documentType === 'nota_entrega' 
         ? 'Nota de Entrega' 
@@ -204,15 +209,20 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         const curr = String(currency || '').toUpperCase().trim();
         const isVesCurrency = curr === 'VES' || curr === 'BS';
 
-        // 1. Modo exclusivo USD (Ecuador, Panamá, USA)
+        // 1. Modo moneda única (Ecuador, Panamá, USA, Colombia, España/Europa)
         if (isSingle || isUsdOnly) {
-            if (key.includes('cash') || key.includes('efectivo')) return 'EFECTIVO';
+            if (key.includes('cash') || key.includes('efectivo')) return regionCfg.currencyCode === 'EUR' ? 'EFECTIVO €' : 'EFECTIVO';
             if (key === 'biopago') return 'PAGO DIGITAL';
-            if (key === 'debit' || key === 'debito' || key === 'punto_de_venta' || key.includes('punto') || key === 'card' || key === 'tarjeta') return 'TARJETA / DÉBITO';
-            if (key === 'pago_movil' || key.includes('movil') || key === 'transfer' || key === 'transferencia' || key === 'transfer_bs') return 'TRANSFERENCIA';
+            if (key === 'bizum') return 'BIZUM';
+            if (key === 'debit' || key === 'debito' || key === 'punto_de_venta' || key.includes('punto') || key === 'card' || key === 'tarjeta') return regionCfg.currencyCode === 'EUR' ? 'TARJETA / TPV' : 'TARJETA / DÉBITO';
+            if (key === 'pago_movil' || key.includes('movil') || key === 'transfer' || key === 'transferencia' || key === 'transfer_bs') return regionCfg.currencyCode === 'EUR' ? 'TRANSFERENCIA SEPA' : 'TRANSFERENCIA';
             if (key === 'zelle') return 'ZELLE';
             if (key === 'fiado' || key === 'credit' || key === 'credito') return 'CRÉDITO (CUENTA POR COBRAR)';
             if (key === 'binance_usdt' || key.includes('binance') || key === 'usdt') return 'PAGO ELECTRÓNICO';
+        }
+
+        if (key === 'cash_eur' || curr === 'EUR') {
+            return 'EFECTIVO € (EUR)';
         }
 
         // Blindaje Fiscal Venezuela: Criptoactivos jamás deben imprimirse como "BINANCE" o "USDT" en comprobantes al cliente
@@ -509,13 +519,13 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         saleItems.forEach(item => {
             const qty = formatStock(item.quantity);
             const subtotal = item.subtotal !== undefined ? item.subtotal : (item.price * item.quantity);
-            const formattedPrice = renderFormatMoney(subtotal, (!isUsdOnly && currencyMode === 'BOTH') ? 'VES' : 'USD');
+            const formattedPrice = renderFormatMoney(subtotal, (!isSingle && currencyMode === 'BOTH') ? 'VES' : regionCfg.currencyCode);
             lines.push(`• ${qty}x ${item.name} ➔ *${formattedPrice}*`);
         });
 
         lines.push('----------------------------------------');
-        lines.push(`*TOTAL:* *${renderFormatMoney(sale.total, (!isUsdOnly && !isSingle) ? 'VES' : 'USD')}*`);
-        if (!isUsdOnly && currencyMode === 'BOTH' && !isOnlyBs) {
+        lines.push(`*TOTAL:* *${renderFormatMoney(sale.total, (!isSingle && currencyMode === 'BOTH') ? 'VES' : regionCfg.currencyCode)}*`);
+        if (!isSingle && currencyMode === 'BOTH' && !isOnlyBs) {
             lines.push(`*Ref. USD:* *${renderFormatMoney(sale.total, 'USD')}* (Tasa: ${formatBs(effectiveRate).replace(/Bs\.S?\s?/g, '').trim()} Bs/$)`);
         }
 
@@ -525,17 +535,19 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
             lines.push('*PAGO:*');
             paymentDetails.forEach((p, idx) => {
                 const isCrypto = p.method === 'binance_usdt' || String(p.method).toLowerCase().includes('binance') || (p.currency || '').toUpperCase() === 'USDT';
-                const pCurr = isCrypto ? (isUsdOnly ? 'USD' : 'VES') : (isUsdOnly ? 'USD' : (p.currency || 'VES'));
+                const rawCurr = String(p.currency || (p.method === 'cash_eur' ? 'EUR' : 'VES')).toUpperCase();
+                const pCurr = isCrypto ? (isSingle ? regionCfg.currencyCode : 'VES') : (isSingle ? regionCfg.currencyCode : rawCurr);
                 let amt = p.amount;
-                if (isCrypto && !isUsdOnly) {
+                if (isCrypto && !isSingle) {
                     amt = p.convertedAmountBs || (p.amount && p.cryptoRate ? Number(p.amount) * Number(p.cryptoRate) : (sale.totalBs || (sale.total * effectiveRate)));
                 }
                 const pRef = String(p.reference || p.ref || p.paymentReference || (idx === 0 ? fallbackSaleReference : '') || '').trim();
-                lines.push(`  ✓ ${formatPaymentMethodName(p.method, pCurr)}: ${renderFormatMoney(amt, pCurr)}${pRef ? ` (Ref: #${pRef})` : ''}`);
+                const formattedPayAmt = pCurr === 'EUR' ? formatEUR(amt) : renderFormatMoney(amt, pCurr);
+                lines.push(`  ✓ ${formatPaymentMethodName(p.method, pCurr)}: ${formattedPayAmt}${pRef ? ` (Ref: #${pRef})` : ''}`);
             });
         } else if (sale.paymentMethod || fallbackSaleReference) {
             lines.push('----------------------------------------');
-            const fallbackCurr = sale.currency || (sale.paymentMethod === 'cash_bs' ? 'VES' : 'USD');
+            const fallbackCurr = sale.currency || (sale.paymentMethod === 'cash_bs' ? 'VES' : regionCfg.currencyCode);
             lines.push(`*PAGO:* ${formatPaymentMethodName(sale.paymentMethod, fallbackCurr)}${fallbackSaleReference ? ` (Ref: #${fallbackSaleReference})` : ''}`);
         }
 
@@ -1270,7 +1282,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
 
                             {(sale.taxAmount > 0 || sale.tax > 0) && (
                                 <div className="flex justify-between">
-                                    <span>IVA ({sale.taxRate || 16}%):</span>
+                                    <span>{taxLabel} ({sale.taxRate ?? defaultTaxRate}%):</span>
                                     <span className="font-bold text-slate-900">{renderFormatMoney(sale.taxAmount || sale.tax)}</span>
                                 </div>
                             )}
@@ -1293,12 +1305,12 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                             <div className="flex justify-between items-baseline text-base sm:text-lg font-black text-slate-950 pt-2.5 mt-2 border-t-2 border-slate-950">
                                 <span>TOTAL A PAGAR:</span>
                                 <span className="tracking-tight text-right font-black">
-                                    {renderFormatMoney(sale.total, (!isUsdOnly && currencyMode === 'BOTH') ? 'VES' : 'USD')}
+                                    {renderFormatMoney(sale.total, (!isSingleMode && currencyMode === 'BOTH') ? 'VES' : regionCfg.currencyCode)}
                                 </span>
                             </div>
 
                             {/* REFERENCIA EN DÓLARES */}
-                            {!isUsdOnly && currencyMode === 'BOTH' && !isOnlyBs && (
+                            {!isSingleMode && currencyMode === 'BOTH' && !isOnlyBs && (
                                 <div className="flex justify-between items-center text-xs font-bold text-slate-700 bg-slate-100/90 rounded-xl px-3 py-1.5 mt-2 border border-slate-200/80">
                                     <span>REF. USD ($):</span>
                                     <span className="font-mono font-black text-slate-950 text-sm">{renderFormatMoney(sale.total, 'USD')}</span>
@@ -1318,13 +1330,16 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                                 <div className="space-y-1.5">
                                     {normalizedPaymentMethods.map((pm, idx) => {
                                         const isCrypto = pm.method === 'binance_usdt' || String(pm.method).toLowerCase().includes('binance') || (pm.currency || '').toUpperCase() === 'USDT';
-                                        const pmCurr = isCrypto ? (isUsdOnly ? 'USD' : 'VES') : (isUsdOnly ? 'USD' : (pm.currency || (['cash_bs', 'debit', 'pago_movil', 'biopago', 'transfer'].includes(pm.method) ? 'VES' : 'USD')).toUpperCase());
-                                        const isVes = !isUsdOnly && (pmCurr === 'VES' || pmCurr === 'BS');
+                                        const rawCurr = String(pm.currency || (pm.method === 'cash_eur' ? 'EUR' : (['cash_bs', 'debit', 'pago_movil', 'biopago', 'transfer'].includes(pm.method) ? 'VES' : regionCfg.currencyCode))).toUpperCase();
+                                        const pmCurr = isCrypto ? (isSingle ? regionCfg.currencyCode : 'VES') : (isSingle ? regionCfg.currencyCode : rawCurr);
+                                        const isVes = !isSingle && (pmCurr === 'VES' || pmCurr === 'BS');
                                         let amt = pm.amount;
-                                        if (isCrypto && !isUsdOnly) {
+                                        if (isCrypto && !isSingle) {
                                             amt = pm.convertedAmountBs || (pm.amount && pm.cryptoRate ? Number(pm.amount) * Number(pm.cryptoRate) : (sale.totalBs || (sale.total * (exchangeRate || 1))));
                                         }
-                                        const amtFormatted = isVes ? formatBs(amt) : formatUSD(amt);
+                                        const amtFormatted = pmCurr === 'EUR'
+                                            ? formatEUR(amt)
+                                            : (pmCurr === 'COP' ? formatCOP(amt) : (isVes ? formatBs(amt) : formatUSD(amt)));
                                         const pmRef = String(pm.reference || pm.ref || pm.paymentReference || (normalizedPaymentMethods.length === 1 ? fallbackSaleReference : '') || '').trim();
                                         return (
                                             <div key={idx} className="space-y-0.5">
@@ -1345,8 +1360,8 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                             ) : (
                                 <div className="space-y-0.5">
                                     <div className="flex justify-between items-center text-slate-950 font-bold">
-                                        <span>• {formatPaymentMethodName(sale.paymentMethod, sale.currency || (sale.paymentMethod === 'cash_bs' ? 'VES' : 'USD'))}:</span>
-                                        <span>{renderFormatMoney(sale.total, (!isUsdOnly && currencyMode === 'BOTH') ? 'VES' : 'USD')}</span>
+                                        <span>• {formatPaymentMethodName(sale.paymentMethod, sale.currency || (sale.paymentMethod === 'cash_bs' ? 'VES' : regionCfg.currencyCode))}:</span>
+                                        <span>{renderFormatMoney(sale.total, (!isSingle && currencyMode === 'BOTH') ? 'VES' : regionCfg.currencyCode)}</span>
                                     </div>
                                     {fallbackSaleReference && (
                                         <div className="flex justify-between items-center text-[10px] font-mono font-bold text-slate-700 pl-2.5">
@@ -1362,7 +1377,9 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                                 <div className="flex justify-between items-center text-emerald-700 font-bold mt-2 pt-2 border-t border-slate-200/80">
                                     <span>VUELTO / CAMBIO ENTREGADO:</span>
                                     <span className="font-black">
-                                        {!isUsdOnly && sale.changeBs > 0 ? formatBs(sale.changeBs) : formatUSD(sale.changeUsd || sale.change || sale.changeBs)}
+                                        {!isSingle && sale.changeBs > 0
+                                            ? formatBs(sale.changeBs)
+                                            : renderFormatMoney(sale.changeUsd || sale.change || sale.changeBs, regionCfg.currencyCode)}
                                     </span>
                                 </div>
                             )}

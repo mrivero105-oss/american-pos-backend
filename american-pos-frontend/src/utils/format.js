@@ -2,6 +2,36 @@ import api from '../services/api';
 import secureMobileStorage from '../utils/secureMobileStorage';
 import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
 import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
+import {
+    REGION_CONFIGS,
+    COUNTRY_LIST,
+    normalizeCountry,
+    getCountryKey,
+    getRegionConfig,
+    isVenezuelaCountry,
+    isDollarOnlyCountry as isDollarOnlyCountryBase,
+    isSingleCurrencyCountry,
+    getTaxLabel,
+    getTaxFullName,
+    getTaxAuthority,
+    getDefaultTaxRate,
+    getCurrencyBadge
+} from './regionConfig';
+
+export {
+    REGION_CONFIGS,
+    COUNTRY_LIST,
+    normalizeCountry,
+    getCountryKey,
+    getRegionConfig,
+    isVenezuelaCountry,
+    isSingleCurrencyCountry,
+    getTaxLabel,
+    getTaxFullName,
+    getTaxAuthority,
+    getDefaultTaxRate,
+    getCurrencyBadge
+};
 
 const IS_TEST_ENV = Boolean(
     (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.MODE === 'test')
@@ -142,6 +172,7 @@ const getStoredBusinessSettings = () => {
 let globalSettings = { 
     ...getStoredBusinessSettings(),
     rate: Number(getStoredSetting('pos_exchange_rate', 1)) || 1, 
+    euroRate: Number(getStoredSetting('pos_euro_rate', 0)) || 0,
     currencyMode: getStoredSetting('pos_currency_mode', 'BOTH'), 
     country: getStoredSetting('pos_country', '') 
 };
@@ -150,6 +181,7 @@ export const setGlobalSettings = (newSettings) => {
     if (!newSettings) return;
     Object.assign(globalSettings, newSettings);
     if (newSettings.rate !== undefined) globalSettings.rate = Number(newSettings.rate) || 1;
+    if (newSettings.euroRate !== undefined) globalSettings.euroRate = Number(newSettings.euroRate) || 0;
     if (newSettings.currencyMode !== undefined) globalSettings.currencyMode = newSettings.currencyMode;
     if (newSettings.country !== undefined) globalSettings.country = (newSettings.country || '').toLowerCase().trim();
     if (newSettings.businessInfo?.country !== undefined) globalSettings.country = (newSettings.businessInfo.country || '').toLowerCase().trim();
@@ -158,6 +190,7 @@ export const setGlobalSettings = (newSettings) => {
         useBusinessSettingsStore.getState().setSettings({
             ...newSettings,
             rate: globalSettings.rate,
+            euroRate: globalSettings.euroRate,
             currencyMode: globalSettings.currencyMode,
             country: globalSettings.country
         });
@@ -297,8 +330,8 @@ export const getGlobalSettings = () => globalSettings;
 
 const formatters = {};
 
-const getFormatter = (currency, locale = 'es-VE') => {
-    const key = `${locale}-${currency}`;
+const getFormatter = (currency, locale = 'es-VE', decimals = 2) => {
+    const key = `${locale}-${currency}-${decimals}`;
     if (!formatters[key]) {
         try {
             // Check if Intl is available and NumberFormat is a function
@@ -306,7 +339,8 @@ const getFormatter = (currency, locale = 'es-VE') => {
                 formatters[key] = new Intl.NumberFormat(locale, {
                     style: 'currency',
                     currency: currency,
-                    minimumFractionDigits: 2
+                    minimumFractionDigits: decimals,
+                    maximumFractionDigits: decimals
                 });
             } else {
                 throw new Error('Intl.NumberFormat not available');
@@ -314,7 +348,7 @@ const getFormatter = (currency, locale = 'es-VE') => {
         } catch (_e) {
             console.warn(`Intl.NumberFormat failed for ${key}, using fallback.`);
             formatters[key] = {
-                format: (val) => `${currency === 'VES' ? 'Bs.' : currency} ${Number(val).toFixed(2)}`
+                format: (val) => `${currency === 'VES' ? 'Bs.' : currency} ${Number(val).toFixed(decimals)}`
             };
         }
     }
@@ -323,12 +357,13 @@ const getFormatter = (currency, locale = 'es-VE') => {
 
 const dateFormatters = {};
 
-export const formatDate = (date, options = { dateStyle: 'medium' }, locale = 'es-VE') => {
-    const key = `${locale}-${JSON.stringify(options)}`;
+export const formatDate = (date, options = { dateStyle: 'medium' }, locale = null) => {
+    const resolvedLocale = locale || getRegionConfig(globalSettings.country).locale || 'es-VE';
+    const key = `${resolvedLocale}-${JSON.stringify(options)}`;
     if (!dateFormatters[key]) {
         try {
             if (typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function') {
-                dateFormatters[key] = new Intl.DateTimeFormat(locale, options);
+                dateFormatters[key] = new Intl.DateTimeFormat(resolvedLocale, options);
             } else {
                 throw new Error('Intl.DateTimeFormat not available');
             }
@@ -356,63 +391,88 @@ export const formatDate = (date, options = { dateStyle: 'medium' }, locale = 'es
     }
 };
 
-export const isDollarOnlyCountry = (country) => {
-    if (!country) return false;
-    const c = String(country)
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9]/g, "");
-    return ['ecuador', 'panama', 'usa', 'eeuu', 'estadosunidos', 'unitedstates', 'us'].includes(c);
+export const isDollarOnlyCountry = (country) => isDollarOnlyCountryBase(country);
+
+const resolveEffectiveCountry = (settings = null) => {
+    const s = settings || globalSettings;
+    return s?.country || s?.businessInfo?.country || globalSettings.country || getStoredSetting('pos_country', '');
+};
+
+export const isSingleCurrencyMode = (settings = null) => {
+    const rawCountry = resolveEffectiveCountry(settings);
+    if (isSingleCurrencyCountry(rawCountry)) return true;
+    const s = settings || globalSettings;
+    const mode = s?.currencyMode || globalSettings.currencyMode || getStoredSetting('pos_currency_mode', 'BOTH');
+    return mode === 'SINGLE' || mode === 'USD' || mode === 'USD_ONLY';
 };
 
 export const isUsdOnlyMode = (settings = null) => {
-    const s = settings || globalSettings;
-    const rawCountry = s?.country || s?.businessInfo?.country || globalSettings.country || getStoredSetting('pos_country', '');
+    const rawCountry = resolveEffectiveCountry(settings);
+    const region = getRegionConfig(rawCountry);
+    if (region.currencyCode !== 'USD') return false;
     if (isDollarOnlyCountry(rawCountry)) return true;
+    const s = settings || globalSettings;
     const mode = s?.currencyMode || globalSettings.currencyMode || getStoredSetting('pos_currency_mode', 'BOTH');
     return mode === 'SINGLE' || mode === 'USD' || mode === 'USD_ONLY';
 };
 
 export const isVesOnlyMode = (settings = null) => {
-    if (isUsdOnlyMode(settings)) return false;
+    if (isSingleCurrencyMode(settings)) return false;
     const s = settings || globalSettings;
     const mode = s?.currencyMode || globalSettings.currencyMode || getStoredSetting('pos_currency_mode', 'BOTH');
     return mode === 'VES' || mode === 'VES_ONLY' || mode === 'BS';
 };
 
 export const isDualCurrencyMode = (settings = null) => {
-    if (isUsdOnlyMode(settings)) return false;
+    if (isSingleCurrencyMode(settings)) return false;
     return !isVesOnlyMode(settings);
 };
 
-export const isSingleCurrencyMode = (settings = null) => {
-    return isUsdOnlyMode(settings);
+export const formatCOP = (val) => {
+    const numVal = parseFloat(val) || 0;
+    const formatted = getFormatter('COP', 'es-CO', 0).format(numVal);
+    return formatted.includes('COP') ? formatted : `COP ${formatted}`;
+};
+
+export const formatEUR = (val) => {
+    const numVal = parseFloat(val) || 0;
+    return getFormatter('EUR', 'es-ES', 2).format(numVal).replace('EUR', '€');
 };
 
 export const formatMoney = (val, forceCurrency = null, customSettings = null) => {
     const settings = customSettings || globalSettings;
-    
-    // EN MODO "SOLO USD": Absolutamente NADA en el sistema debe mostrarse en Bs.
-    // Todo valor monetario se formatea indefectiblemente en Dólares ($).
+    const rawCountry = resolveEffectiveCountry(settings);
+    const region = getRegionConfig(rawCountry);
+
+    // Moneda explícita Euro o país Zona Euro / España: jamás mostrar Bs ni USD ni multiplicar por tasa BCV
+    if (region.currencyCode === 'EUR' || forceCurrency === 'EUR') {
+        return formatEUR(val);
+    }
+
+    // Moneda única no-USD (ej. Colombia COP): jamás mostrar Bs ni USD ni multiplicar por tasa BCV
+    if (region.currencyCode === 'COP' || forceCurrency === 'COP') {
+        return formatCOP(val);
+    }
+
+    // EN MODO "SOLO USD" (Ecuador, Panamá, USA o SINGLE USD): Absolutamente NADA debe mostrarse en Bs.
     if (isUsdOnlyMode(settings)) {
-        return getFormatter('USD', 'en-US').format(val || 0).replace('USD', '$');
+        return getFormatter('USD', 'en-US', 2).format(val || 0).replace('USD', '$');
     }
 
     if (forceCurrency === 'USD') {
-        return getFormatter('USD', 'en-US').format(val || 0).replace('USD', '$');
+        return getFormatter('USD', 'en-US', 2).format(val || 0).replace('USD', '$');
     }
 
     if (forceCurrency === 'VES') {
         const numVal = parseFloat(val) || 0;
         const finalVal = numVal * (settings.rate || 1);
-        return getFormatter('VES').format(finalVal || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs');
+        return getFormatter('VES', 'es-VE', 2).format(finalVal || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs');
     }
 
     if (isVesOnlyMode(settings)) {
         const numVal = parseFloat(val) || 0;
         const finalVal = numVal * (settings.rate || 1);
-        return getFormatter('VES').format(finalVal || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs');
+        return getFormatter('VES', 'es-VE', 2).format(finalVal || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs');
     }
 
     const mode = forceCurrency || (settings.currencyMode === 'BOTH' ? 'VES' : settings.currencyMode);
@@ -421,21 +481,28 @@ export const formatMoney = (val, forceCurrency = null, customSettings = null) =>
     const finalVal = isVES ? numVal * (settings.rate || 1) : numVal;
     const finalCurrency = isVES ? 'VES' : 'USD';
 
-    return getFormatter(finalCurrency).format(finalVal || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs').replace('USD', '$');
+    return getFormatter(finalCurrency, 'es-VE', 2).format(finalVal || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs').replace('USD', '$');
 };
 
 export const formatCurrency = formatMoney;
 
 export const formatBs = (val, customSettings = null) => {
     const settings = customSettings || globalSettings;
+    const region = getRegionConfig(resolveEffectiveCountry(settings));
+    if (region.currencyCode === 'EUR') {
+        return formatEUR(val);
+    }
+    if (region.currencyCode === 'COP') {
+        return formatCOP(val);
+    }
     if (isUsdOnlyMode(settings) || isSingleCurrencyMode(settings)) {
         return formatUSD(val);
     }
-    return getFormatter('VES').format(val || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs');
+    return getFormatter('VES', 'es-VE', 2).format(val || 0).replace('VES', 'Bs').replace('Bs.S', 'Bs').replace('Bs.', 'Bs');
 };
 
 export const formatUSD = (val) => {
-    return getFormatter('USD', 'en-US').format(val || 0);
+    return getFormatter('USD', 'en-US', 2).format(val || 0);
 };
 
 /**
@@ -494,16 +561,11 @@ export const formatWeight = (val, unit = 'kg', decimals = 3) => {
 };
 
 /**
- * Returns the country-specific Tax ID label (RUC for Ecuador/Panamá, NIT for Colombia, RIF for Venezuela).
+ * Returns the country-specific Tax ID label (RUC for Ecuador/Panamá, NIT for Colombia, EIN for USA, RIF for Venezuela).
  */
 export const getTaxIdLabel = (countryOverride) => {
     const raw = countryOverride || globalSettings.country || getStoredSetting('pos_country', 'venezuela');
-    const c = String(raw).toLowerCase().trim();
-    if (c === 'ecuador' || c === 'ec') return 'RUC';
-    if (c === 'colombia' || c === 'co') return 'NIT';
-    if (c === 'panama' || c === 'pa') return 'RUC';
-    if (c === 'usa' || c === 'us') return 'EIN';
-    return 'RIF';
+    return getRegionConfig(raw).taxIdLabel;
 };
 
 /**
@@ -511,12 +573,7 @@ export const getTaxIdLabel = (countryOverride) => {
  */
 export const getCustomerDocLabel = (countryOverride) => {
     const raw = countryOverride || globalSettings.country || getStoredSetting('pos_country', 'venezuela');
-    const c = String(raw).toLowerCase().trim();
-    if (c === 'ecuador' || c === 'ec') return 'RUC / C.I.';
-    if (c === 'colombia' || c === 'co') return 'C.C. / NIT';
-    if (c === 'panama' || c === 'pa') return 'CÉDULA / RUC';
-    if (c === 'usa' || c === 'us') return 'ID / SSN';
-    return 'CÉDULA / RIF';
+    return getRegionConfig(raw).customerDocLabel;
 };
 
 /**
@@ -524,12 +581,7 @@ export const getCustomerDocLabel = (countryOverride) => {
  */
 export const getTaxIdPlaceholder = (countryOverride) => {
     const raw = countryOverride || globalSettings.country || getStoredSetting('pos_country', 'venezuela');
-    const c = String(raw).toLowerCase().trim();
-    if (c === 'ecuador' || c === 'ec') return 'EJ: 1790012345001';
-    if (c === 'colombia' || c === 'co') return 'EJ: 900.123.456-1';
-    if (c === 'panama' || c === 'pa') return 'EJ: 155612345-2-2020 DV 45';
-    if (c === 'usa' || c === 'us') return 'EJ: 12-3456789';
-    return 'EJ: J-12345678-0';
+    return getRegionConfig(raw).taxIdPlaceholder;
 };
 
 

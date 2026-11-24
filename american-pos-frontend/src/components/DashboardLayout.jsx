@@ -16,7 +16,7 @@ import { usePos } from '../hooks/PosContext';
 import {
     formatStock,
     isDualCurrencyMode,
-    isDollarOnlyCountry,
+    isSingleCurrencyCountry,
     isUsdOnlyMode,
     fetchBusinessSettingsCached,
     fetchCurrentShiftCached
@@ -42,11 +42,11 @@ const FirstTimeSetupWizard = lazy(() => import('./FirstTimeSetupWizard'));
 
 // Isolated Exchange Rate Monitor to prevent full layout re-renders on cart changes
 function ExchangeRateMonitor({ businessSettings }) {
-    const { exchangeRate, currencyMode, fetchExchangeRate, country } = usePos();
+    const { exchangeRate, euroRate, currencyMode, fetchExchangeRate, country } = usePos();
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     const activeCountry = businessSettings?.country || country || localStorage.getItem('pos_country') || '';
-    if (isDollarOnlyCountry(activeCountry) || isUsdOnlyMode({ currencyMode, country: activeCountry, ...businessSettings })) return null;
+    if (isSingleCurrencyCountry(activeCountry) || isUsdOnlyMode({ currencyMode, country: activeCountry, ...businessSettings })) return null;
 
     const isVenezuela = (activeCountry && (activeCountry.toLowerCase() === 'venezuela' || activeCountry.toLowerCase() === 've')) || (!activeCountry && (!localStorage.getItem('pos_country') || localStorage.getItem('pos_country')?.toLowerCase() === 'venezuela'));
     const isDual = isDualCurrencyMode({ currencyMode, country: activeCountry, ...businessSettings });
@@ -57,7 +57,7 @@ function ExchangeRateMonitor({ businessSettings }) {
             <button
                 type="button"
                 onClick={() => setIsModalOpen(true)}
-                title="Clic para actualizar tasa de cambio BCV"
+                title={euroRate > 0 ? `Tasa BCV: 1 $ = ${exchangeRate} Bs · 1 € = ${euroRate} Bs (clic para actualizar)` : 'Clic para actualizar tasa de cambio BCV'}
                 className="hidden sm:flex items-center gap-2 h-9 px-3 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-xs hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 transition-all cursor-pointer group shrink-0 whitespace-nowrap"
             >
                 <div className="w-5 h-5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center font-bold shrink-0 border border-slate-200 dark:border-slate-700">
@@ -68,6 +68,15 @@ function ExchangeRateMonitor({ businessSettings }) {
                     <span className="text-xs sm:text-[13px] font-bold text-slate-900 dark:text-white tabular-nums tracking-tight">
                         {exchangeRate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs
                     </span>
+                    {euroRate > 0 && (
+                        <>
+                            <span className="hidden xl:inline text-slate-300 dark:text-slate-700 mx-0.5">|</span>
+                            <span className="hidden xl:inline text-[11px] font-medium text-indigo-500">1 € =</span>
+                            <span className="hidden xl:inline text-xs font-bold text-indigo-700 dark:text-indigo-300 tabular-nums tracking-tight">
+                                {euroRate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs
+                            </span>
+                        </>
+                    )}
                 </div>
             </button>
 
@@ -75,6 +84,7 @@ function ExchangeRateMonitor({ businessSettings }) {
                 isOpen={isModalOpen} 
                 onClose={() => setIsModalOpen(false)} 
                 currentRate={exchangeRate}
+                currentEuroRate={euroRate}
                 currencyMode={currencyMode}
                 onRateUpdated={() => {
                     fetchExchangeRate(true);
@@ -91,7 +101,7 @@ export default function DashboardLayout() {
     const { user, logout, appLock, hasPermission } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
-    const { registerId, registerDisplayName, currencyMode, exchangeRate, fetchExchangeRate, country, isUsdOnly } = usePos();
+    const { registerId, registerDisplayName, currencyMode, exchangeRate, euroRate, fetchExchangeRate, country, isUsdOnly } = usePos();
     const [isCashModalOpen, setIsCashModalOpen] = useState(false);
     const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
     const [lowStockItems, setLowStockItems] = useState([]);
@@ -1413,7 +1423,7 @@ export default function DashboardLayout() {
 
                             {/* Compact Row: Exchange Rate + Theme Switch */}
                             <div className="flex items-center gap-2">
-                                {!isUsdOnly && !isDollarOnlyCountry(country) && exchangeRate > 1 && (
+                                {!isUsdOnly && !isSingleCurrencyCountry(country) && exchangeRate > 1 && (
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -1550,6 +1560,7 @@ export default function DashboardLayout() {
                         isOpen={isExchangeModalOpen}
                         onClose={() => setIsExchangeModalOpen(false)}
                         currentRate={exchangeRate}
+                        currentEuroRate={euroRate}
                         currencyMode={currencyMode}
                         onRateUpdated={fetchExchangeRate}
                     />

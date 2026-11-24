@@ -24,27 +24,63 @@ class BCVRateService {
     }
 
     /**
-     * Consulta la tasa activa actual vigente de bcv.org.ve o APIs de respaldo
+     * Extrae numéricamente una tasa de un contenedor HTML de bcv.org.ve (ej. id="dolar" o id="euro").
+     */
+    static parseBcvHtmlRate(html, containerId) {
+        if (!html || typeof html !== 'string' || !containerId) return null;
+        const idx = html.indexOf(`id="${containerId}"`);
+        if (idx === -1) return null;
+        const snippet = html.substring(idx, idx + 600);
+        const match = snippet.match(/<strong>\s*([\d.,]+)\s*<\/strong>/i);
+        if (!match || !match[1]) return null;
+        let s = match[1].trim();
+        if (s.includes(',') && s.includes('.')) {
+            if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
+                s = s.replace(/\./g, '').replace(/,/g, '.');
+            } else {
+                s = s.replace(/,/g, '');
+            }
+        } else if (s.includes(',')) {
+            s = s.replace(/,/g, '.');
+        }
+        const rateVal = parseFloat(s);
+        return (!isNaN(rateVal) && rateVal > 0) ? rateVal : null;
+    }
+
+    /**
+     * Consulta la tasa activa actual vigente de bcv.org.ve o APIs de respaldo (USD + EUR oficial BCV)
      */
     static async getCurrentRate() {
-        // Intento 1: Scraping directo a la web oficial bcv.org.ve
+        // Intento 1: Scraping directo a la web oficial bcv.org.ve (obtiene Dólar y Euro en una sola petición)
         try {
-            const bcvRate = await this.scrapeDirectBCV();
-            if (bcvRate && bcvRate > 0) {
-                console.log(`✅ Tasa BCV obtenida directamente de bcv.org.ve: ${bcvRate} Bs/$`);
-                return { success: true, rate: bcvRate, source: 'bcv.org.ve' };
+            const direct = await this.scrapeDirectBCVRates();
+            if (direct && direct.rate > 0) {
+                let euroRate = direct.euroRate || null;
+                if (!euroRate) {
+                    try {
+                        const eurFallback = await this.fetchEuroRateFromApis();
+                        if (eurFallback && eurFallback.euroRate > 0) euroRate = eurFallback.euroRate;
+                    } catch { /* no bloquear USD si falla fallback EUR */ }
+                }
+                console.log(`✅ Tasa BCV obtenida directamente de bcv.org.ve: ${direct.rate} Bs/$${euroRate ? ` | ${euroRate} Bs/€` : ''}`);
+                return { success: true, rate: direct.rate, euroRate, source: 'bcv.org.ve' };
             }
         } catch (err) {
             console.warn(`⚠️ Aviso: No se pudo conectar a bcv.org.ve directamente (${err.message}). Probando API de respaldo...`);
         }
 
-        // Intento 2: DolarAPI Venezuela
+        // Intento 2: DolarAPI Venezuela (USD + EUR oficial en paralelo)
         try {
-            const res = await axios.get('https://ve.dolarapi.com/v1/dolares/oficial', { timeout: 5000 });
-            const promedio = res.data?.promedio;
+            const [usdRes, eurRes] = await Promise.allSettled([
+                axios.get('https://ve.dolarapi.com/v1/dolares/oficial', { timeout: 5000 }),
+                axios.get('https://ve.dolarapi.com/v1/euros/oficial', { timeout: 5000 })
+            ]);
+            const promedio = usdRes.status === 'fulfilled' ? usdRes.value?.data?.promedio : null;
+            const eurPromedio = eurRes.status === 'fulfilled' ? eurRes.value?.data?.promedio : null;
             if (promedio && !isNaN(promedio) && promedio > 0) {
-                console.log(`✅ Tasa BCV actual obtenida vía DolarAPI: ${promedio} Bs/$`);
-                return { success: true, rate: Number(promedio), source: 'dolarapi' };
+                const euroRate = (eurPromedio && !isNaN(eurPromedio) && Number(eurPromedio) > 0) ? Number(eurPromedio) : null;
+                console.log(`✅ Tasa BCV actual obtenida vía DolarAPI: ${promedio} Bs/$${euroRate ? ` | ${euroRate} Bs/€` : ''}`);
+                return { success: true, rate: Number(promedio), euroRate, source: 'dolarapi' };
             }
         } catch (err) {
             console.warn(`⚠️ Fallo en DolarAPI: ${err.message}`);
@@ -52,17 +88,71 @@ class BCVRateService {
 
         // Intento 3: API PyDolarVenezuela
         try {
-            const res = await axios.get('https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv', { timeout: 5000 });
-            const price = res.data?.monitors?.bcv?.price;
+            const [usdRes, eurRes] = await Promise.allSettled([
+                axios.get('https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv', { timeout: 5000 }),
+                axios.get('https://pydolarvenezuela-api.vercel.app/api/v1/euro?page=bcv', { timeout: 5000 })
+            ]);
+            const price = usdRes.status === 'fulfilled' ? usdRes.value?.data?.monitors?.bcv?.price : null;
+            const eurPrice = eurRes.status === 'fulfilled' ? eurRes.value?.data?.monitors?.bcv?.price : null;
             if (price && !isNaN(price) && price > 0) {
-                console.log(`✅ Tasa BCV obtenida vía PyDolarVenezuela API: ${price} Bs/$`);
-                return { success: true, rate: Number(price), source: 'pydolarvenezuela' };
+                const euroRate = (eurPrice && !isNaN(eurPrice) && Number(eurPrice) > 0) ? Number(eurPrice) : null;
+                console.log(`✅ Tasa BCV obtenida vía PyDolarVenezuela API: ${price} Bs/$${euroRate ? ` | ${euroRate} Bs/€` : ''}`);
+                return { success: true, rate: Number(price), euroRate, source: 'pydolarvenezuela' };
             }
         } catch (err) {
             console.warn(`⚠️ Fallo en PyDolarVenezuela API: ${err.message}`);
         }
 
         throw new Error('No se pudo obtener la tasa BCV actual de ninguna fuente oficial ni de respaldo.');
+    }
+
+    /**
+     * Respaldo externo exclusivamente para Euro oficial BCV
+     */
+    static async fetchEuroRateFromApis() {
+        try {
+            const res = await axios.get('https://ve.dolarapi.com/v1/euros/oficial', { timeout: 5000 });
+            const promedio = res.data?.promedio;
+            if (promedio && !isNaN(promedio) && Number(promedio) > 0) {
+                return { success: true, euroRate: Number(promedio), source: 'dolarapi' };
+            }
+        } catch (err) {
+            console.warn(`⚠️ Fallo en DolarAPI Euro: ${err.message}`);
+        }
+
+        try {
+            const res = await axios.get('https://pydolarvenezuela-api.vercel.app/api/v1/euro?page=bcv', { timeout: 5000 });
+            const price = res.data?.monitors?.bcv?.price;
+            if (price && !isNaN(price) && Number(price) > 0) {
+                return { success: true, euroRate: Number(price), source: 'pydolarvenezuela' };
+            }
+        } catch (err) {
+            console.warn(`⚠️ Fallo en PyDolarVenezuela Euro: ${err.message}`);
+        }
+
+        return null;
+    }
+
+    /**
+     * Consulta dedicada de la tasa oficial del Euro (EUR/Bs) del BCV
+     */
+    static async getCurrentEuroRate() {
+        try {
+            const direct = await this.scrapeDirectBCVRates();
+            if (direct && direct.euroRate > 0) {
+                console.log(`✅ Tasa Euro BCV obtenida directamente de bcv.org.ve: ${direct.euroRate} Bs/€`);
+                return { success: true, euroRate: direct.euroRate, rate: direct.euroRate, source: 'bcv.org.ve' };
+            }
+        } catch (err) {
+            console.warn(`⚠️ No se pudo leer Euro directo de bcv.org.ve (${err.message}). Probando APIs de respaldo...`);
+        }
+
+        const apiResult = await this.fetchEuroRateFromApis();
+        if (apiResult && apiResult.euroRate > 0) {
+            return { ...apiResult, rate: apiResult.euroRate };
+        }
+
+        throw new Error('No se pudo obtener la tasa oficial Euro BCV de ninguna fuente.');
     }
 
     /**
@@ -123,9 +213,9 @@ class BCVRateService {
     }
 
     /**
-     * Petición HTTP nativa a https://www.bcv.org.ve extrayendo la tasa del contenedor #dolar
+     * Petición HTTP nativa a https://www.bcv.org.ve extrayendo #dolar y #euro en una sola petición
      */
-    static scrapeDirectBCV() {
+    static scrapeDirectBCVRates() {
         return new Promise((resolve, reject) => {
             const options = {
                 hostname: 'www.bcv.org.ve',
@@ -145,28 +235,12 @@ class BCVRateService {
                 let data = '';
                 res.on('data', chunk => data += chunk);
                 res.on('end', () => {
-                    const dolarIdx = data.indexOf('id="dolar"');
-                    if (dolarIdx !== -1) {
-                        const snippet = data.substring(dolarIdx, dolarIdx + 500);
-                        const match = snippet.match(/<strong>\s*([\d.,]+)\s*<\/strong>/i);
-                        if (match && match[1]) {
-                            let s = match[1].trim();
-                            if (s.includes(',') && s.includes('.')) {
-                                if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
-                                    s = s.replace(/\./g, '').replace(/,/g, '.');
-                                } else {
-                                    s = s.replace(/,/g, '');
-                                }
-                            } else if (s.includes(',')) {
-                                s = s.replace(/,/g, '.');
-                            }
-                            const rateVal = parseFloat(s);
-                            if (!isNaN(rateVal) && rateVal > 0) {
-                                return resolve(rateVal);
-                            }
-                        }
+                    const usdRate = this.parseBcvHtmlRate(data, 'dolar');
+                    const eurRate = this.parseBcvHtmlRate(data, 'euro');
+                    if (usdRate || eurRate) {
+                        return resolve({ rate: usdRate, euroRate: eurRate });
                     }
-                    reject(new Error('Estructura HTML de bcv.org.ve cambió o no contiene id="dolar"'));
+                    reject(new Error('Estructura HTML de bcv.org.ve cambió o no contiene id="dolar" ni id="euro"'));
                 });
             });
 
@@ -181,6 +255,15 @@ class BCVRateService {
 
             req.end();
         });
+    }
+
+    /**
+     * Compatibilidad retroactiva: retorna directamente el valor numérico de la tasa USD BCV
+     */
+    static async scrapeDirectBCV() {
+        const rates = await this.scrapeDirectBCVRates();
+        if (rates && rates.rate > 0) return rates.rate;
+        throw new Error('Estructura HTML de bcv.org.ve cambió o no contiene id="dolar"');
     }
 }
 

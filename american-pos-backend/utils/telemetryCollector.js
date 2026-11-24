@@ -50,15 +50,47 @@ function sanitizeSqlForLog(sql) {
         .slice(0, 240);
 }
 
+class RingBuffer {
+    constructor(capacity) {
+        this.capacity = Math.max(1, capacity);
+        this.buffer = new Array(this.capacity);
+        this.head = 0;
+        this.size = 0;
+    }
+
+    push(value) {
+        this.buffer[this.head] = value;
+        this.head = (this.head + 1) % this.capacity;
+        if (this.size < this.capacity) {
+            this.size++;
+        }
+    }
+
+    toArray() {
+        if (this.size === 0) return [];
+        const out = new Array(this.size);
+        const start = this.size === this.capacity ? this.head : 0;
+        for (let i = 0; i < this.size; i++) {
+            out[i] = this.buffer[(start + i) % this.capacity];
+        }
+        return out;
+    }
+
+    clear() {
+        this.head = 0;
+        this.size = 0;
+    }
+}
+
 class TelemetryCollector {
     constructor() {
         this.startedAt = Date.now();
         this.totalRequests = 0;
         this.totalErrors5xx = 0;
         this.totalErrors4xx = 0;
-        this.globalSamples = [];
+        this.globalSamples = new RingBuffer(MAX_GLOBAL_SAMPLES);
         this.routeStats = new Map();
-        this.slowQueries = [];
+        this.slowQueries = new RingBuffer(MAX_SLOW_QUERIES);
         this.totalDbQueries = 0;
         this.totalSlowDbQueries = 0;
 
@@ -80,9 +112,6 @@ class TelemetryCollector {
         else if (statusCode >= 400) this.totalErrors4xx++;
 
         this.globalSamples.push(ms);
-        if (this.globalSamples.length > MAX_GLOBAL_SAMPLES) {
-            this.globalSamples.shift();
-        }
 
         const routeKey = normalizeRouteKey(method, url);
         let entry = this.routeStats.get(routeKey);
@@ -92,16 +121,17 @@ class TelemetryCollector {
                 const oldestKey = this.routeStats.keys().next().value;
                 if (oldestKey) this.routeStats.delete(oldestKey);
             }
-            entry = { count: 0, errors5xx: 0, samples: [], lastSeenAt: 0 };
+            entry = { count: 0, errors5xx: 0, samples: new RingBuffer(MAX_ROUTE_SAMPLES), lastSeenAt: 0 };
+            this.routeStats.set(routeKey, entry);
+        } else {
+            // Promoción LRU O(1) para conservar las rutas activas
+            this.routeStats.delete(routeKey);
             this.routeStats.set(routeKey, entry);
         }
         entry.count++;
         if (statusCode >= 500) entry.errors5xx++;
         entry.lastSeenAt = Date.now();
         entry.samples.push(ms);
-        if (entry.samples.length > MAX_ROUTE_SAMPLES) {
-            entry.samples.shift();
-        }
     }
 
     recordDbQuery(sql, durationMs) {
@@ -114,9 +144,6 @@ class TelemetryCollector {
                 timestamp: new Date().toISOString(),
                 sql: sanitizeSqlForLog(sql)
             });
-            if (this.slowQueries.length > MAX_SLOW_QUERIES) {
-                this.slowQueries.shift();
-            }
         }
     }
 
@@ -152,7 +179,7 @@ class TelemetryCollector {
         const mem = process.memoryUsage();
         const routes = [];
         for (const [route, data] of this.routeStats.entries()) {
-            const stats = summarizeSamples(data.samples);
+            const stats = summarizeSamples(data.samples.toArray());
             routes.push({
                 route,
                 totalCalls: data.count,
@@ -183,7 +210,7 @@ class TelemetryCollector {
                 error5xxRatePct: this.totalRequests > 0
                     ? Number(((this.totalErrors5xx / this.totalRequests) * 100).toFixed(3))
                     : 0,
-                latency: summarizeSamples(this.globalSamples),
+                latency: summarizeSamples(this.globalSamples.toArray()),
                 slowestRoutes,
                 busiestRoutes
             },
@@ -191,7 +218,7 @@ class TelemetryCollector {
                 totalTrackedQueries: this.totalDbQueries,
                 slowQueryThresholdMs: SLOW_QUERY_THRESHOLD_MS,
                 totalSlowQueries: this.totalSlowDbQueries,
-                recentSlowQueries: [...this.slowQueries].reverse().slice(0, 20)
+                recentSlowQueries: this.slowQueries.toArray().reverse().slice(0, 20)
             },
             eventLoop: this.getEventLoopStats(),
             memory: {
@@ -207,9 +234,9 @@ class TelemetryCollector {
         this.totalRequests = 0;
         this.totalErrors5xx = 0;
         this.totalErrors4xx = 0;
-        this.globalSamples = [];
+        this.globalSamples.clear();
         this.routeStats.clear();
-        this.slowQueries = [];
+        this.slowQueries.clear();
         this.totalDbQueries = 0;
         this.totalSlowDbQueries = 0;
         if (this.eld && typeof this.eld.reset === 'function') {

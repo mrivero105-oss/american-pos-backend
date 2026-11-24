@@ -484,7 +484,8 @@ const startServer = (ports, userDataPath = null) => {
             app.use(cors(corsOptions));
             app.options('/{*splat}', cors(corsOptions));
             app.use(cookieParser());
-            app.use(compression());
+            const { createCompressionOptions } = require('./utils/httpCompression');
+            app.use(compression(createCompressionOptions()));
 
             const isLocalOrLanIp = (ip) => {
                 if (!ip) return false;
@@ -693,7 +694,14 @@ const startServer = (ports, userDataPath = null) => {
                 }
             });
 
-            app.use('/uploads', safeUserMediaMimeTypes, express.static(path.join(staticPath, 'uploads')));
+            const {
+                createPublicMediaStaticOptions,
+                createPrivateMediaStaticOptions
+            } = require('./utils/staticMediaCache');
+            const publicMediaStaticOptions = createPublicMediaStaticOptions();
+            const privateMediaStaticOptions = createPrivateMediaStaticOptions();
+
+            app.use('/uploads', safeUserMediaMimeTypes, express.static(path.join(staticPath, 'uploads'), publicMediaStaticOptions));
             
             // Serve all existing media paths without crear directorios legacy vacíos en cada arranque
             const getValidCandidatePaths = (subfolder) => {
@@ -720,12 +728,12 @@ const startServer = (ports, userDataPath = null) => {
 
             const productImagesDirs = getValidCandidatePaths('product_images');
             productImagesDirs.forEach(dir => {
-                app.use('/product_images', safeUserMediaMimeTypes, express.static(dir));
+                app.use('/product_images', safeUserMediaMimeTypes, express.static(dir, publicMediaStaticOptions));
             });
 
             const supplierLogosDirs = getValidCandidatePaths('supplier_logos');
             supplierLogosDirs.forEach(dir => {
-                app.use('/supplier_logos', safeUserMediaMimeTypes, express.static(dir));
+                app.use('/supplier_logos', safeUserMediaMimeTypes, express.static(dir, publicMediaStaticOptions));
             });
 
             const invoicesDirs = getValidCandidatePaths('invoices');
@@ -742,12 +750,12 @@ const startServer = (ports, userDataPath = null) => {
                 }
             };
             invoicesDirs.forEach(dir => {
-                app.use('/invoices', verifyToken, verifyInvoiceAccess, safeUserMediaMimeTypes, express.static(dir));
+                app.use('/invoices', verifyToken, verifyInvoiceAccess, safeUserMediaMimeTypes, express.static(dir, privateMediaStaticOptions));
             });
 
             const displayAdsDirs = getValidCandidatePaths('display_ads');
             displayAdsDirs.forEach(dir => {
-                app.use('/display_ads', safeUserMediaMimeTypes, express.static(dir));
+                app.use('/display_ads', safeUserMediaMimeTypes, express.static(dir, publicMediaStaticOptions));
             });
 
             // Routes

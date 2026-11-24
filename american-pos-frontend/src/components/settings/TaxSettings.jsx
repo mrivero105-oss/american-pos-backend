@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import { Calculator, DollarSign, Loader2, Save, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getRegionConfig, isVenezuelaCountry } from '../../utils/format';
 
 export default function TaxSettings({ taxes, setTaxes, saving, onSave, country }) {
     const [isSectionOpen, setIsSectionOpen] = useState(true);
 
     const effectiveCountry = (country || localStorage.getItem('pos_country') || '').toLowerCase();
-    const isVenezuela = effectiveCountry === 'venezuela' || effectiveCountry === 've';
+    const region = getRegionConfig(effectiveCountry);
+    const isVenezuela = isVenezuelaCountry(effectiveCountry);
+    const taxLabel = region.taxLabel;
+    const taxFullName = region.taxFullName;
 
     return (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xs h-fit">
@@ -23,7 +27,7 @@ export default function TaxSettings({ taxes, setTaxes, saving, onSave, country }
                         <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2 flex-wrap">
                             Esquema Tributario
                             <span className="text-xs font-semibold px-2 py-0.5 bg-primary-50 dark:bg-primary-950/50 text-primary-700 dark:text-primary-300 rounded-md border border-primary-200 dark:border-primary-800/60 whitespace-nowrap">
-                                IVA {taxes?.ivaEnabled ? `${taxes.ivaRate}%` : 'Inactivo'}
+                                {taxLabel} {taxes?.ivaEnabled ? `${taxes.ivaRate}%` : 'Inactivo'}
                             </span>
                         </h2>
                         <p className="text-xs text-slate-500 dark:text-slate-400 font-normal mt-0.5">Gestión de alícuotas e impuestos locales</p>
@@ -55,8 +59,8 @@ export default function TaxSettings({ taxes, setTaxes, saving, onSave, country }
                                                 <Calculator size={15} />
                                             </div>
                                             <div>
-                                                <h3 className="text-xs font-bold text-slate-900 dark:text-white">Activar IVA</h3>
-                                                <p className="text-[11px] text-slate-500 dark:text-slate-400">Impuesto al Valor Agregado</p>
+                                                <h3 className="text-xs font-bold text-slate-900 dark:text-white">Activar {taxLabel}</h3>
+                                                <p className="text-[11px] text-slate-500 dark:text-slate-400">{taxFullName} ({region.taxAuthority})</p>
                                             </div>
                                         </div>
                                         <div className="relative inline-flex items-center cursor-pointer shrink-0" onClick={() => setTaxes({ ...taxes, ivaEnabled: !taxes.ivaEnabled })}>
@@ -67,7 +71,7 @@ export default function TaxSettings({ taxes, setTaxes, saving, onSave, country }
 
                                     {taxes.ivaEnabled && (
                                         <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
-                                            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Tasa IVA Vigente (%)</label>
+                                            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Tasa {taxLabel} Vigente (%)</label>
                                             <input
                                                 type="number"
                                                 step="any"

@@ -5,10 +5,15 @@ import toast from 'react-hot-toast';
 import api from '../services/api';
 import { isSingleCurrencyMode } from '../utils/format';
 
-export default function ExchangeRateModal({ isOpen, onClose, currentRate, currencyMode, onRateUpdated }) {
+export default function ExchangeRateModal({ isOpen, onClose, currentRate, currentEuroRate = 0, currencyMode, onRateUpdated }) {
     const isSingleDollar = isSingleCurrencyMode(currencyMode);
     const currencySuffix = isSingleDollar ? '$' : 'Bs';
     const [rate, setRate] = useState(currentRate?.toString() || '1');
+    const [euroRate, setEuroRate] = useState(() => {
+        if (Number(currentEuroRate) > 0) return String(currentEuroRate);
+        const saved = localStorage.getItem('pos_euro_rate');
+        return saved && Number(saved) > 0 ? saved : '';
+    });
     const [autoUpdate, setAutoUpdate] = useState(() => {
         const saved = localStorage.getItem('pos_auto_update_rate');
         return saved !== null ? saved === 'true' : true;
@@ -17,6 +22,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
     const [isFetchingBCV, setIsFetchingBCV] = useState(false);
     const [bcvError, setBcvError] = useState('');
     const [lastBcvRate, setLastBcvRate] = useState(null);
+    const [lastBcvEuroRate, setLastBcvEuroRate] = useState(null);
     const inputRef = useRef(null);
 
     const handleFetchBCV = useCallback(async (isSilent = false) => {
@@ -24,23 +30,30 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
         setBcvError('');
         try {
             let bcvRate = null;
-            // 1. Backend oficial
+            let bcvEuro = null;
+            // 1. Backend oficial (retorna USD y EUR oficial en una sola llamada)
             try {
                 const { data } = await api.get('/settings/bcv');
-                if (data && data.success && data.rate) {
-                    bcvRate = data.rate;
+                if (data && data.success) {
+                    if (data.rate) bcvRate = data.rate;
+                    if (data.euroRate) bcvEuro = data.euroRate;
                 }
             } catch (caughtErr) { console.warn('[ExchangeRateModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
 
-            // 2. Fallback DolarAPI
-            if (!bcvRate) {
+            // 2. Fallback DolarAPI (USD + EUR)
+            if (!bcvRate || !bcvEuro) {
                 try {
-                    const res = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data && data.promedio) {
-                            bcvRate = data.promedio;
-                        }
+                    const [usdRes, eurRes] = await Promise.allSettled([
+                        !bcvRate ? fetch('https://ve.dolarapi.com/v1/dolares/oficial') : Promise.resolve(null),
+                        !bcvEuro ? fetch('https://ve.dolarapi.com/v1/euros/oficial') : Promise.resolve(null)
+                    ]);
+                    if (usdRes.status === 'fulfilled' && usdRes.value?.ok) {
+                        const data = await usdRes.value.json();
+                        if (data?.promedio) bcvRate = data.promedio;
+                    }
+                    if (eurRes.status === 'fulfilled' && eurRes.value?.ok) {
+                        const data = await eurRes.value.json();
+                        if (data?.promedio) bcvEuro = data.promedio;
                     }
                 } catch (caughtErr) { console.warn('[ExchangeRateModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
             }
@@ -57,11 +70,17 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
 
             if (bcvRate && !isNaN(bcvRate)) {
                 setLastBcvRate(bcvRate);
+                if (bcvEuro && !isNaN(bcvEuro)) {
+                    setLastBcvEuroRate(bcvEuro);
+                }
                 if (!isSilent || autoUpdate) {
                     setRate(bcvRate.toString());
+                    if (bcvEuro && !isNaN(bcvEuro)) {
+                        setEuroRate(bcvEuro.toString());
+                    }
                 }
                 if (!isSilent) {
-                    toast.success(`Tasa BCV obtenida: ${bcvRate} Bs/$`);
+                    toast.success(`Tasa BCV obtenida: ${bcvRate} Bs/$${bcvEuro ? ` · ${bcvEuro} Bs/€` : ''}`);
                     if (inputRef.current) inputRef.current.focus();
                 }
             } else {
@@ -81,14 +100,23 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
         if (isOpen) {
             const initial = currentRate?.toString() || '1';
             setRate(initial);
+            const savedEur = Number(currentEuroRate) > 0 ? String(currentEuroRate) : (localStorage.getItem('pos_euro_rate') || '');
+            setEuroRate(Number(savedEur) > 0 ? savedEur : '');
             setBcvError('');
 
             api.get('/settings/rate').then(res => {
-                if (res.data && res.data.autoUpdateRate !== undefined) {
-                    setAutoUpdate(res.data.autoUpdateRate);
-                    localStorage.setItem('pos_auto_update_rate', res.data.autoUpdateRate ? 'true' : 'false');
+                if (res.data) {
+                    if (res.data.autoUpdateRate !== undefined) {
+                        setAutoUpdate(res.data.autoUpdateRate);
+                        localStorage.setItem('pos_auto_update_rate', res.data.autoUpdateRate ? 'true' : 'false');
+                    }
                     if (res.data.rate) {
                         setLastBcvRate(res.data.rate);
+                    }
+                    if (Number(res.data.euroRate) > 0) {
+                        setLastBcvEuroRate(res.data.euroRate);
+                        setEuroRate(String(res.data.euroRate));
+                        localStorage.setItem('pos_euro_rate', String(res.data.euroRate));
                     }
                 }
             }).catch(() => {});
@@ -104,7 +132,7 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                 }
             }, 80);
         }
-    }, [isOpen, currentRate, isSingleDollar, handleFetchBCV]);
+    }, [isOpen, currentRate, currentEuroRate, isSingleDollar, handleFetchBCV]);
 
     const handleSave = async () => {
         const val = parseFloat(rate.toString().replace(',', '.'));
@@ -112,15 +140,24 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
             toast.error('Ingresa una tasa de cambio válida');
             return;
         }
+        const eurVal = euroRate !== '' ? parseFloat(euroRate.toString().replace(',', '.')) : null;
+        if (eurVal !== null && (isNaN(eurVal) || eurVal <= 0)) {
+            toast.error('Ingresa una tasa de Euro válida o déjala vacía');
+            return;
+        }
 
         setIsSaving(true);
         try {
             await api.post('/settings/rate', {
                 rate: val,
+                ...(eurVal ? { euroRate: eurVal } : {}),
                 autoUpdateRate: autoUpdate
             });
             localStorage.setItem('pos_auto_update_rate', autoUpdate ? 'true' : 'false');
             localStorage.setItem('pos_exchange_rate', String(val));
+            if (eurVal) {
+                localStorage.setItem('pos_euro_rate', String(eurVal));
+            }
 
             if (autoUpdate) {
                 try {
@@ -129,9 +166,9 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
             }
 
             if (onRateUpdated) {
-                onRateUpdated(val);
+                onRateUpdated(val, eurVal);
             }
-            toast.success(`Tasa guardada: ${val} ${currencySuffix}`);
+            toast.success(`Tasa guardada: ${val} ${currencySuffix}${eurVal ? ` · € ${eurVal} Bs` : ''}`);
             onClose();
         } catch (err) {
             console.error('Error al guardar tasa:', err);
@@ -192,13 +229,18 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                         <div className="text-base font-bold font-mono text-slate-900 dark:text-white">
                             {lastBcvRate ? `${lastBcvRate} Bs / USD` : 'Consultando...'}
                         </div>
+                        {lastBcvEuroRate && (
+                            <div className="text-xs font-bold font-mono text-indigo-600 dark:text-indigo-400">
+                                {lastBcvEuroRate} Bs / EUR (€)
+                            </div>
+                        )}
                     </div>
                     <button
                         type="button"
                         onClick={() => handleFetchBCV(false)}
                         disabled={isFetchingBCV}
                         className="px-3 py-1.5 bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shadow-sm"
-                        title="Consultar tasa oficial en vivo"
+                        title="Consultar tasas oficiales USD y EUR en vivo"
                     >
                         <RefreshCw size={13} className={isFetchingBCV ? "animate-spin text-primary-500" : ""} />
                         <span>{isFetchingBCV ? 'Buscando...' : 'Actualizar'}</span>
@@ -245,6 +287,46 @@ export default function ExchangeRateModal({ isOpen, onClose, currentRate, curren
                         </button>
                     )}
                 </div>
+
+                {/* Input de tasa Euro BCV */}
+                {!isSingleDollar && (
+                    <div className="space-y-1.5">
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                            Tasa Euro BCV (Bs por 1 EUR) <span className="font-normal text-slate-400">· cobros en €</span>
+                        </label>
+                        <div className="flex items-center border border-slate-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-950 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all overflow-hidden shadow-sm">
+                            <div className="px-3.5 py-2 bg-indigo-50/70 dark:bg-indigo-950/40 border-r border-slate-200 dark:border-slate-700 text-xs font-bold text-indigo-600 dark:text-indigo-400 select-none">
+                                €1.00 =
+                            </div>
+                            <input
+                                type="text"
+                                inputMode="decimal"
+                                value={euroRate}
+                                onChange={(e) => setEuroRate(e.target.value.replace(/[^0-9.,]/g, ''))}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleSave();
+                                    }
+                                }}
+                                className="w-full px-3 py-2 bg-transparent font-mono text-lg font-bold text-slate-900 dark:text-white focus:outline-none text-right"
+                                placeholder="0.00"
+                            />
+                            <div className="px-3.5 py-2 text-xs font-bold font-mono text-indigo-500 dark:text-indigo-400 select-none">
+                                Bs
+                            </div>
+                        </div>
+                        {lastBcvEuroRate && String(lastBcvEuroRate) !== euroRate.trim() && (
+                            <button
+                                type="button"
+                                onClick={() => setEuroRate(String(lastBcvEuroRate))}
+                                className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer pt-0.5"
+                            >
+                                Usar Euro oficial del BCV ({lastBcvEuroRate} Bs/€)
+                            </button>
+                        )}
+                    </div>
+                )}
 
                 {/* Sincronización automática */}
                 <div className="pt-1">

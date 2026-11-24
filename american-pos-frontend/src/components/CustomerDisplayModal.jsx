@@ -748,7 +748,7 @@ export default function CustomerDisplayModal({ isOpen, onClose }) {
                                                             <div className="flex items-center gap-2.5 min-w-0">
                                                                 <div className="w-8 h-8 rounded border border-slate-200 dark:border-[#263040] bg-slate-100 dark:bg-[#161C26] flex items-center justify-center overflow-hidden shrink-0">
                                                                     {img ? (
-                                                                        <img src={img} alt={prod.name} className="w-full h-full object-contain" />
+                                                                        <img src={img} alt={prod.name} loading="lazy" decoding="async" className="w-full h-full object-contain" />
                                                                     ) : (
                                                                         <Package size={14} className="text-slate-400" />
                                                                     )}

@@ -483,6 +483,12 @@ class WhatsappBotService {
                     this._emitStatus();
                     return;
                 }
+                if (msg.type === 'worker_log' && msg.message) {
+                    if (msg.level === 'error') console.error(msg.message);
+                    else if (msg.level === 'warn') console.warn(msg.message);
+                    else console.log(msg.message);
+                    return;
+                }
                 if (msg.type === 'incoming_consolidated') {
                     this._handleIncomingConsolidated(msg).catch(() => {});
                 }

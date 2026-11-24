@@ -2,7 +2,10 @@ const { z } = require('zod');
 
 const toggleBlockSchema = z.object({
     body: z.object({
-        isBlocked: z.boolean().optional()
+        isBlocked: z.boolean().optional(),
+        allowOverdueCredit: z.boolean().optional(),
+        supervisorApprovalId: z.string().trim().max(128).nullable().optional(),
+        notes: z.string().trim().max(500).optional()
     }).passthrough().optional().default({})
 });
 

@@ -29,88 +29,16 @@ const getCachedSettings = () => {
     return settings;
 };
 
-const normalizeCountry = (country) => {
-    if (!country || typeof country !== 'string') return '';
-    return country
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]/g, '');
-};
-
-const getPresetKey = (country) => {
-    const clean = normalizeCountry(country);
-    if (['ecuador'].includes(clean)) return 'ecuador';
-    if (['panama'].includes(clean)) return 'panama';
-    if (['usa', 'eeuu', 'estadosunidos', 'unitedstates', 'us'].includes(clean)) return 'usa';
-    if (['colombia'].includes(clean)) return 'colombia';
-    if (['venezuela', 've'].includes(clean)) return 'venezuela';
-    return null;
-};
-
-const isDollarOnlyCountry = (country) => {
-    const key = getPresetKey(country);
-    return key === 'ecuador' || key === 'panama' || key === 'usa';
-};
-
-const COUNTRY_PRESETS = {
-    'venezuela': {
-        exchangeRate: 36.5,
-        currencyMode: 'BOTH',
-        taxConfig: { ivaEnabled: true, ivaRate: 16.0, igtfEnabled: true, igtfRate: 3.0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo $', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'cash_bs', name: 'Efectivo Bs', icon: 'DollarSign', type: 'CASH', currency: 'VES' },
-            { id: 'debit', name: 'Punto de Venta', icon: 'CreditCard', type: 'DIGITAL', currency: 'VES' },
-            { id: 'pago_movil', name: 'Pago Móvil', icon: 'Smartphone', type: 'DIGITAL', currency: 'VES' },
-            { id: 'binance_usdt', name: 'Binance Pay (USDT)', icon: 'Wallet', type: 'DIGITAL', currency: 'USDT' },
-            { id: 'zelle', name: 'Zelle', icon: 'Send', type: 'DIGITAL', currency: 'USD' },
-            { id: 'fiado', name: 'Crédito / Fiado', icon: 'User', type: 'CREDIT', currency: 'USD' }
-        ]
-    },
-    'colombia': {
-        exchangeRate: 3950,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 19.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo COP', icon: 'DollarSign', type: 'CASH', currency: 'COP' },
-            { id: 'debit', name: 'Tarjeta Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'COP' },
-            { id: 'nequi', name: 'Nequi / Daviplata', icon: 'Smartphone', type: 'DIGITAL', currency: 'COP' },
-            { id: 'fiado', name: 'Crédito', icon: 'User', type: 'CREDIT', currency: 'COP' }
-        ]
-    },
-    'usa': {
-        exchangeRate: 1.0,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 7.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'card', name: 'Tarjeta / Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'USD' },
-            { id: 'zelle', name: 'Zelle / Venmo', icon: 'Send', type: 'DIGITAL', currency: 'USD' }
-        ]
-    },
-    'panama': {
-        exchangeRate: 1.0,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 7.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'card', name: 'Tarjeta / Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'USD' },
-            { id: 'yappy', name: 'Yappy', icon: 'Smartphone', type: 'DIGITAL', currency: 'USD' }
-        ]
-    },
-    'ecuador': {
-        exchangeRate: 1.0,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 15.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'card', name: 'Tarjeta / Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'USD' },
-            { id: 'transfer', name: 'Transferencia', icon: 'Smartphone', type: 'DIGITAL', currency: 'USD' },
-            { id: 'fiado', name: 'Crédito', icon: 'User', type: 'CREDIT', currency: 'USD' }
-        ]
-    }
-};
+const {
+    COUNTRY_PRESETS,
+    normalizeCountry,
+    getPresetKey,
+    getRegionConfig,
+    isVenezuelaCountry,
+    isDollarOnlyCountry,
+    isSingleCurrencyCountry,
+    buildPublicRegionMetadata
+} = require('../constants/regionPresets');
 
 router.get('/', verifyToken, async (req, res) => {
     try {
@@ -131,9 +59,9 @@ router.get('/rate', async (req, res) => {
         const userSettings = getUserSettings(allSettings, companyId);
 
         const country = userSettings.businessInfo?.country || '';
-        const isUsdSingleCountry = isDollarOnlyCountry(country);
-        const presetKey = getPresetKey(country);
-        const isSingleCountry = isUsdSingleCountry || presetKey === 'colombia';
+        const regionMeta = buildPublicRegionMetadata(country);
+        const isVenezuela = isVenezuelaCountry(country);
+        const isSingleCountry = isSingleCurrencyCountry(country);
         const userCacheKey = req.user?.id ? `user_currency_${req.user.id}` : null;
         let currencyMode = isSingleCountry ? 'SINGLE' : (userCacheKey ? cache.get(userCacheKey) : null);
 
@@ -154,11 +82,11 @@ router.get('/rate', async (req, res) => {
         }
 
         if (process.env.DEBUG_VERBOSE === 'true') {
-            console.log(`[RATE DEBUG] GET /rate - User: ${req.user?.id || 'guest'}, Company: ${companyId}, Rate: ${userSettings.exchangeRate}, Mode: ${currencyMode}`);
+            console.log(`[RATE DEBUG] GET /rate - User: ${req.user?.id || 'guest'}, Company: ${companyId}, Country: ${regionMeta.id}, Rate: ${userSettings.exchangeRate}, Mode: ${currencyMode}`);
         }
 
-        // Si la auto-actualización está activa, solo sesiones autenticadas disparan refresco reactivo (evita SSRF/scraping por tráfico público anónimo)
-        if (!isUsdSingleCountry && userSettings.autoUpdateRate !== false && !req.user?.isPublicContext && req.user?.role !== 'public_guest') {
+        // BCV aplica exclusivamente a Venezuela (nunca disparar scraping BCV en Ecuador, Colombia, Panamá o USA)
+        if (isVenezuela && userSettings.autoUpdateRate !== false && !req.user?.isPublicContext && req.user?.role !== 'public_guest') {
             const lastSync = userSettings.lastRateSyncAt ? new Date(userSettings.lastRateSyncAt).getTime() : 0;
             if (Date.now() - lastSync > 1000 * 60 * 60) {
                 const BCVAutoSyncService = require('../services/BCVAutoSyncService');
@@ -167,11 +95,18 @@ router.get('/rate', async (req, res) => {
         }
 
         res.json({
-            rate: isUsdSingleCountry ? 1.0 : (userSettings.exchangeRate || 1.0),
-            currencyMode: isUsdSingleCountry ? 'SINGLE' : currencyMode,
-            autoUpdateRate: isUsdSingleCountry ? false : (userSettings.autoUpdateRate !== false),
-            lastRateSyncAt: userSettings.lastRateSyncAt || null,
-            rateSource: userSettings.rateSource || 'BCV'
+            rate: isSingleCountry ? 1.0 : (userSettings.exchangeRate || 1.0),
+            euroRate: isVenezuela ? (Number(userSettings.euroRate) || 0) : (regionMeta.currencyCode === 'EUR' ? 1.0 : 0),
+            currencyMode: isSingleCountry ? 'SINGLE' : currencyMode,
+            autoUpdateRate: isVenezuela ? (userSettings.autoUpdateRate !== false) : false,
+            lastRateSyncAt: isVenezuela ? (userSettings.lastRateSyncAt || null) : null,
+            rateSource: isVenezuela ? (userSettings.rateSource || 'BCV') : 'LOCAL',
+            country: regionMeta.id,
+            currencyCode: regionMeta.currencyCode,
+            currencySymbol: regionMeta.currencySymbol,
+            taxLabel: regionMeta.taxLabel,
+            taxAuthority: regionMeta.taxAuthority,
+            regionConfig: regionMeta
         });
     } catch (error) {
         console.error('Error getting rate:', error);
@@ -188,6 +123,16 @@ router.get('/bcv', async (req, res) => {
         res.json(result);
     } catch (error) {
         console.error('Error al consultar BCV:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/bcv/euro', async (req, res) => {
+    try {
+        const result = await BCVRateService.getCurrentEuroRate();
+        res.json(result);
+    } catch (error) {
+        console.error('Error al consultar Euro BCV:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -285,16 +230,24 @@ router.post('/rate', validate(positiveRateSchema), async (req, res) => {
         }
 
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
-        const { rate, currencyMode, autoUpdateRate } = req.body;
+        const { rate, euroRate, currencyMode, autoUpdateRate } = req.body;
         
         const parsedRate = parseFloat(rate);
         if (isNaN(parsedRate) || parsedRate <= 0) {
             return res.status(400).json({ error: 'La tasa de cambio debe ser un número mayor a 0' });
         }
+        const parsedEuroRate = euroRate !== undefined && euroRate !== null && euroRate !== '' ? parseFloat(euroRate) : null;
+        if (parsedEuroRate !== null && (isNaN(parsedEuroRate) || parsedEuroRate <= 0)) {
+            return res.status(400).json({ error: 'La tasa de Euro debe ser un número mayor a 0' });
+        }
 
         const allSettings = getCachedSettings();
         const userSettings = allSettings[companyId] || { exchangeRate: 1.0, businessInfo: {}, currencyMode: 'BOTH' };
         userSettings.exchangeRate = parsedRate;
+        if (parsedEuroRate !== null) {
+            userSettings.euroRate = parsedEuroRate;
+            userSettings.lastEuroRate = parsedEuroRate;
+        }
         userSettings.lastRateSyncAt = new Date().toISOString();
         if (currencyMode) {
             userSettings.currencyMode = currencyMode;
@@ -306,7 +259,8 @@ router.post('/rate', validate(positiveRateSchema), async (req, res) => {
         if (companyId === '2') {
             allSettings['default'] = { 
                 ...allSettings['default'], 
-                exchangeRate: parsedRate, 
+                exchangeRate: parsedRate,
+                ...(parsedEuroRate !== null ? { euroRate: parsedEuroRate, lastEuroRate: parsedEuroRate } : {}),
                 currencyMode: currencyMode || userSettings.currencyMode,
                 autoUpdateRate: userSettings.autoUpdateRate,
                 lastRateSyncAt: userSettings.lastRateSyncAt
@@ -327,14 +281,21 @@ router.post('/rate', validate(positiveRateSchema), async (req, res) => {
         if (io) {
             const payload = { 
                 type: 'rate', 
-                exchangeRate: parseFloat(rate),
+                exchangeRate: parsedRate,
+                euroRate: userSettings.euroRate || undefined,
                 currencyMode: currencyMode || userSettings.currencyMode,
                 autoUpdateRate: userSettings.autoUpdateRate
             };
             io.to(companyId).emit('settings_changed', payload);
         }
 
-        res.json({ success: true, rate, currencyMode: userSettings.currencyMode, autoUpdateRate: userSettings.autoUpdateRate });
+        res.json({
+            success: true,
+            rate: parsedRate,
+            euroRate: userSettings.euroRate || null,
+            currencyMode: userSettings.currencyMode,
+            autoUpdateRate: userSettings.autoUpdateRate
+        });
     } catch (error) {
         console.error('Update rate error:', error);
         res.status(500).json({ error: 'Error al actualizar tasa' });
@@ -347,19 +308,29 @@ router.get('/business', async (req, res) => {
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const userSettings = getUserSettings(allSettings, companyId);
         const bInfo = userSettings.businessInfo || { businessMode: 'STANDARD' };
+        const regionMeta = buildPublicRegionMetadata(bInfo.country);
+        const isVenezuela = isVenezuelaCountry(bInfo.country);
         const taxCfg = userSettings.taxConfig || {};
-        const igtfEnabledVal = taxCfg.igtfEnabled !== undefined
-            ? Boolean(taxCfg.igtfEnabled)
-            : Boolean(userSettings.igtfEnabled);
-        const igtfRateVal = Number(taxCfg.igtfRate ?? userSettings.igtfRate ?? 3) || 0;
-        const ivaEnabledVal = taxCfg.ivaEnabled !== false && userSettings.ivaEnabled !== false;
-        const ivaRateVal = Number(taxCfg.ivaRate ?? userSettings.ivaRate ?? 16) || 0;
+        const igtfEnabledVal = isVenezuela
+            ? (taxCfg.igtfEnabled !== undefined ? Boolean(taxCfg.igtfEnabled) : Boolean(userSettings.igtfEnabled))
+            : false;
+        const igtfRateVal = isVenezuela ? (Number(taxCfg.igtfRate ?? userSettings.igtfRate ?? 3) || 0) : 0;
+        const ivaEnabledVal = taxCfg.ivaEnabled !== undefined
+            ? Boolean(taxCfg.ivaEnabled)
+            : (userSettings.ivaEnabled !== false);
+        const defaultCountryIva = getRegionConfig(bInfo.country).taxConfig.ivaRate;
+        const ivaRateVal = Number(taxCfg.ivaRate ?? userSettings.ivaRate ?? defaultCountryIva) || 0;
         
         const methods = userSettings.paymentMethods || [];
         const pmMethod = methods.find(m => m.id === 'pago_movil' || m.pagoMovilBank || m.pagoMovilPhone || m.pagoMovilId) || {};
 
         res.json({
             ...bInfo,
+            regionConfig: regionMeta,
+            currencyCode: regionMeta.currencyCode,
+            currencySymbol: regionMeta.currencySymbol,
+            taxLabel: regionMeta.taxLabel,
+            taxAuthority: regionMeta.taxAuthority,
             taxConfig: {
                 ...taxCfg,
                 ivaEnabled: ivaEnabledVal,
@@ -382,6 +353,7 @@ router.get('/business', async (req, res) => {
             binancePayId: bInfo.binancePayId || '',
             binanceEmail: bInfo.binanceEmail || '',
             binanceRate: userSettings.binanceRate || 0,
+            euroRate: isVenezuela ? (Number(userSettings.euroRate) || 0) : (regionMeta.currencyCode === 'EUR' ? 1.0 : 0),
             binanceQrImage: bInfo.binanceQrImage || '',
             binanceRoundingToleranceBs: bInfo.binanceRoundingToleranceBs ?? userSettings.binanceRoundingToleranceBs ?? 0.50,
             binanceIgtfEnabled: userSettings.binanceIgtfEnabled ?? false,
@@ -450,24 +422,22 @@ router.post('/business', async (req, res) => {
         }
         if (info && info.country) {
             const key = getPresetKey(info.country);
-            if (isDollarOnlyCountry(info.country)) {
+            if (isSingleCurrencyCountry(info.country)) {
                 userSettings.currencyMode = 'SINGLE';
                 userSettings.exchangeRate = 1.0;
-            } else if (key === 'colombia') {
-                userSettings.currencyMode = 'SINGLE';
-                userSettings.exchangeRate = COUNTRY_PRESETS.colombia.exchangeRate || 3950;
+                userSettings.autoUpdateRate = false;
             } else if (key === 'venezuela') {
                 userSettings.currencyMode = 'BOTH';
             }
             if (key && COUNTRY_PRESETS[key]) {
                 if (!userSettings.paymentMethods || !Array.isArray(userSettings.paymentMethods) || userSettings.paymentMethods.length === 0) {
                     if (COUNTRY_PRESETS[key].paymentMethods) {
-                        userSettings.paymentMethods = COUNTRY_PRESETS[key].paymentMethods;
+                        userSettings.paymentMethods = COUNTRY_PRESETS[key].paymentMethods.map(m => ({ ...m }));
                     }
                 }
                 if (!userSettings.taxConfig) {
                     if (COUNTRY_PRESETS[key].taxConfig) {
-                        userSettings.taxConfig = COUNTRY_PRESETS[key].taxConfig;
+                        userSettings.taxConfig = { ...COUNTRY_PRESETS[key].taxConfig };
                     }
                 }
             }
@@ -504,26 +474,32 @@ router.get('/payment-methods', async (req, res) => {
         const userSettings = getUserSettings(allSettings, companyId);
 
         const country = userSettings.businessInfo?.country || '';
-        const isUsdSingleCountry = isDollarOnlyCountry(country);
+        const regionCfg = getRegionConfig(country);
         const presetKey = getPresetKey(country);
-        const isSingleCountry = isUsdSingleCountry || presetKey === 'colombia';
+        const isSingleCountry = isSingleCurrencyCountry(country);
         const isSingleMode = isSingleCountry || userSettings.currencyMode === 'SINGLE';
 
         let methods = userSettings.paymentMethods;
 
-        if (isUsdSingleCountry) {
+        if (isSingleCountry) {
+            const targetCurrency = regionCfg.currencyCode;
             if (!methods || !Array.isArray(methods) || methods.length === 0) {
-                methods = (COUNTRY_PRESETS[presetKey] || COUNTRY_PRESETS['ecuador']).paymentMethods;
+                methods = regionCfg.paymentMethods.map(m => ({ ...m }));
             } else {
                 methods = methods
-                    .filter(m => m.currency !== 'VES' && !m.id.includes('_bs') && m.id !== 'biopago' && m.id !== 'pago_movil')
+                    .filter(m => {
+                        if (m.currency === 'VES' || m.id.includes('_bs') || m.id === 'biopago' || m.id === 'pago_movil') return false;
+                        if (targetCurrency !== 'EUR' && (m.id === 'cash_eur' || m.currency === 'EUR')) return false;
+                        return true;
+                    })
                     .map(m => {
                         let name = m.name;
-                        if (m.id === 'cash') name = 'Efectivo';
-                        return { ...m, name, currency: 'USD' };
+                        if (m.id === 'cash' && targetCurrency === 'USD') name = 'Efectivo';
+                        if (m.id === 'cash' && targetCurrency === 'EUR') name = 'Efectivo €';
+                        return { ...m, name, currency: targetCurrency };
                     });
                 if (methods.length === 0) {
-                    methods = (COUNTRY_PRESETS[presetKey] || COUNTRY_PRESETS['ecuador']).paymentMethods;
+                    methods = regionCfg.paymentMethods.map(m => ({ ...m }));
                 }
             }
             return res.json(methods);
@@ -542,6 +518,7 @@ router.get('/payment-methods', async (req, res) => {
             } else {
                 methods = [
                     { id: 'cash', name: 'Efectivo $', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
+                    { id: 'cash_eur', name: 'Efectivo €', icon: 'Euro', type: 'CASH', currency: 'EUR' },
                     { id: 'cash_bs', name: 'Efectivo Bs', icon: 'DollarSign', type: 'CASH', currency: 'VES' },
                     { id: 'debit', name: 'Punto de Venta', icon: 'CreditCard', type: 'DIGITAL', currency: 'VES' },
                     { id: 'pago_movil', name: 'Pago Móvil', icon: 'Wallet', type: 'DIGITAL', currency: 'VES' },
@@ -660,16 +637,26 @@ router.post('/payment-methods', requirePermission('canManageSettings'), validate
 
 router.get('/taxes', async (req, res) => {
     try {
-        const allSettings = readJson(SETTINGS_FILE);
+        const allSettings = getCachedSettings();
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const userSettings = getUserSettings(allSettings, companyId);
-        const defaultTaxes = {
-            ivaEnabled: true,
-            ivaRate: 16.0,
-            igtfEnabled: true,
-            igtfRate: 3.0
-        };
-        res.json(userSettings.taxConfig || defaultTaxes);
+        const country = userSettings.businessInfo?.country || '';
+        const regionCfg = getRegionConfig(country);
+        const isVenezuela = isVenezuelaCountry(country);
+        const stored = userSettings.taxConfig || {};
+        res.json({
+            ivaEnabled: stored.ivaEnabled !== undefined ? Boolean(stored.ivaEnabled) : (userSettings.ivaEnabled !== false),
+            ivaRate: Number(stored.ivaRate ?? userSettings.ivaRate ?? regionCfg.taxConfig.ivaRate) || 0,
+            igtfEnabled: isVenezuela
+                ? (stored.igtfEnabled !== undefined ? Boolean(stored.igtfEnabled) : Boolean(userSettings.igtfEnabled))
+                : false,
+            igtfRate: isVenezuela
+                ? (Number(stored.igtfRate ?? userSettings.igtfRate ?? regionCfg.taxConfig.igtfRate) || 0)
+                : 0,
+            taxLabel: regionCfg.taxLabel,
+            taxFullName: regionCfg.taxFullName,
+            taxAuthority: regionCfg.taxAuthority
+        });
     } catch (error) {
         console.error('Get taxes error:', error);
         res.status(500).json({ error: 'Error al obtener impuestos' });
@@ -678,17 +665,32 @@ router.get('/taxes', async (req, res) => {
 
 router.post('/taxes', requirePermission('canManageSettings'), validate(taxesSchema), async (req, res) => {
     try {
-        const taxConfig = req.body;
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const allSettings = getCachedSettings();
         const userSettings = allSettings[companyId] || { exchangeRate: 1.0, businessInfo: {} };
-        userSettings.taxConfig = taxConfig;
+        const isVenezuela = isVenezuelaCountry(userSettings.businessInfo?.country || '');
+        const normalizedTaxConfig = {
+            ...req.body,
+            ivaEnabled: Boolean(req.body.ivaEnabled),
+            ivaRate: Number(req.body.ivaRate) || 0,
+            igtfEnabled: isVenezuela ? Boolean(req.body.igtfEnabled) : false,
+            igtfRate: isVenezuela ? (Number(req.body.igtfRate) || 0) : 0
+        };
+        userSettings.taxConfig = normalizedTaxConfig;
+        userSettings.ivaEnabled = normalizedTaxConfig.ivaEnabled;
+        userSettings.ivaRate = normalizedTaxConfig.ivaRate;
+        userSettings.igtfEnabled = normalizedTaxConfig.igtfEnabled;
+        userSettings.igtfRate = normalizedTaxConfig.igtfRate;
         allSettings[companyId] = userSettings;
         if (companyId === '2' && allSettings['default']) {
-            allSettings['default'].taxConfig = taxConfig;
+            allSettings['default'].taxConfig = { ...normalizedTaxConfig };
+            allSettings['default'].ivaEnabled = normalizedTaxConfig.ivaEnabled;
+            allSettings['default'].ivaRate = normalizedTaxConfig.ivaRate;
+            allSettings['default'].igtfEnabled = normalizedTaxConfig.igtfEnabled;
+            allSettings['default'].igtfRate = normalizedTaxConfig.igtfRate;
         }
         await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
-        res.json({ success: true, taxConfig });
+        res.json({ success: true, taxConfig: normalizedTaxConfig });
     } catch (error) {
         console.error('Update taxes error:', error);
         res.status(500).json({ error: 'Error al actualizar impuestos' });
@@ -717,15 +719,26 @@ router.post('/setup', requirePermission('canManageSettings'), validate(setupSche
         const allSettings = getCachedSettings();
         const userSettings = allSettings[companyId] || { exchangeRate: 1.0, businessInfo: {} };
 
-        const presetKey = getPresetKey(country);
-        const selectedPreset = (presetKey && COUNTRY_PRESETS[presetKey]) || COUNTRY_PRESETS['venezuela'];
-        
-        // Aplicar preset
-        Object.assign(userSettings, selectedPreset);
-        if (isDollarOnlyCountry(country)) {
-            userSettings.currencyMode = 'SINGLE';
-            userSettings.exchangeRate = 1.0;
-        }
+        const presetKey = getPresetKey(country) || 'venezuela';
+        const selectedPreset = COUNTRY_PRESETS[presetKey] || COUNTRY_PRESETS.venezuela;
+        const isSingle = isSingleCurrencyCountry(presetKey);
+        const nextTaxConfig = { ...selectedPreset.taxConfig };
+        const nextPaymentMethods = selectedPreset.paymentMethods.map(m => ({ ...m }));
+        const regionMeta = buildPublicRegionMetadata(presetKey);
+
+        userSettings.exchangeRate = isSingle ? 1.0 : selectedPreset.exchangeRate;
+        userSettings.euroRate = isSingle
+            ? (selectedPreset.currencyCode === 'EUR' ? 1.0 : 0)
+            : (Number(selectedPreset.euroRate) || 0);
+        userSettings.currencyMode = isSingle ? 'SINGLE' : selectedPreset.currencyMode;
+        userSettings.autoUpdateRate = Boolean(selectedPreset.autoUpdateRate);
+        userSettings.taxConfig = nextTaxConfig;
+        userSettings.ivaEnabled = Boolean(nextTaxConfig.ivaEnabled);
+        userSettings.ivaRate = Number(nextTaxConfig.ivaRate) || 0;
+        userSettings.igtfEnabled = Boolean(nextTaxConfig.igtfEnabled);
+        userSettings.igtfRate = Number(nextTaxConfig.igtfRate) || 0;
+        userSettings.paymentMethods = nextPaymentMethods;
+        userSettings.regionConfig = regionMeta;
         
         // Aplicar info de negocio básica
         userSettings.businessInfo = {
@@ -735,7 +748,7 @@ router.post('/setup', requirePermission('canManageSettings'), validate(setupSche
             phone: '',
             email: req.user?.email || '',
             receiptWidth: '80mm',
-            country: presetKey || country.toLowerCase()
+            country: presetKey
         };
 
         allSettings[companyId] = userSettings;
@@ -744,10 +757,7 @@ router.post('/setup', requirePermission('canManageSettings'), validate(setupSche
         }
         userSettings.wizardCompleted = true; // Marcar como completado
         await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
-        if (req.user?.id) {
-            cache.del(`user_currency_${req.user.id}`);
-        }
-        cache.del('user_currency_default');
+        cache.delPrefix('user_currency_');
 
         const io = req.app.get('io');
         if (io && companyId) {
@@ -755,11 +765,15 @@ router.post('/setup', requirePermission('canManageSettings'), validate(setupSche
                 type: 'region',
                 country: userSettings.businessInfo.country,
                 currencyMode: userSettings.currencyMode,
-                exchangeRate: userSettings.exchangeRate
+                exchangeRate: userSettings.exchangeRate,
+                euroRate: userSettings.euroRate,
+                taxConfig: nextTaxConfig,
+                paymentMethods: nextPaymentMethods,
+                regionConfig: regionMeta
             });
         }
 
-        res.json({ success: true, settings: userSettings });
+        res.json({ success: true, regionConfig: regionMeta, settings: userSettings });
     } catch (error) {
         console.error('Setup error:', error);
         res.status(500).json({ error: 'Error al configurar el sistema' });
@@ -786,16 +800,45 @@ router.post('/region', requirePermission('canManageSettings'), validate(regionSc
         const selectedPreset = presetKey ? COUNTRY_PRESETS[presetKey] : null;
         if (!selectedPreset) return res.status(400).json({ error: `País no soportado: ${country}` });
 
-        // Apply preset fields (currency, taxes, payment methods) without overwriting business identity
-        userSettings.exchangeRate = selectedPreset.exchangeRate;
-        userSettings.currencyMode = selectedPreset.currencyMode;
-        userSettings.taxConfig = selectedPreset.taxConfig;
-        userSettings.paymentMethods = selectedPreset.paymentMethods;
-
-        if (isDollarOnlyCountry(country)) {
-            userSettings.currencyMode = 'SINGLE';
-            userSettings.exchangeRate = 1.0;
+        const previousCountry = userSettings.businessInfo?.country || '';
+        // Resguardar tasas BCV previas (USD y EUR) al salir de Venezuela para restaurarlas al regresar
+        if (isVenezuelaCountry(previousCountry)) {
+            if (Number(userSettings.exchangeRate) > 1) {
+                userSettings.lastBcvRate = Number(userSettings.exchangeRate);
+            }
+            if (Number(userSettings.euroRate) > 1) {
+                userSettings.lastEuroRate = Number(userSettings.euroRate);
+            }
         }
+
+        const isTargetSingle = isSingleCurrencyCountry(presetKey);
+        const targetExchangeRate = isTargetSingle
+            ? 1.0
+            : (Number(userSettings.lastBcvRate) > 1
+                ? Number(userSettings.lastBcvRate)
+                : (Number(userSettings.exchangeRate) > 1 ? Number(userSettings.exchangeRate) : selectedPreset.exchangeRate));
+        const targetEuroRate = isTargetSingle
+            ? (selectedPreset.currencyCode === 'EUR' ? 1.0 : 0)
+            : (Number(userSettings.lastEuroRate) > 1
+                ? Number(userSettings.lastEuroRate)
+                : (Number(userSettings.euroRate) > 1 ? Number(userSettings.euroRate) : (selectedPreset.euroRate || 0)));
+
+        const nextTaxConfig = { ...selectedPreset.taxConfig };
+        const nextPaymentMethods = selectedPreset.paymentMethods.map(m => ({ ...m }));
+        const regionMeta = buildPublicRegionMetadata(presetKey);
+
+        // Aplicar preset completo sincronizando tanto taxConfig como campos legacy top-level
+        userSettings.exchangeRate = targetExchangeRate;
+        userSettings.euroRate = targetEuroRate;
+        userSettings.currencyMode = isTargetSingle ? 'SINGLE' : selectedPreset.currencyMode;
+        userSettings.autoUpdateRate = Boolean(selectedPreset.autoUpdateRate);
+        userSettings.taxConfig = nextTaxConfig;
+        userSettings.ivaEnabled = Boolean(nextTaxConfig.ivaEnabled);
+        userSettings.ivaRate = Number(nextTaxConfig.ivaRate) || 0;
+        userSettings.igtfEnabled = Boolean(nextTaxConfig.igtfEnabled);
+        userSettings.igtfRate = Number(nextTaxConfig.igtfRate) || 0;
+        userSettings.paymentMethods = nextPaymentMethods;
+        userSettings.regionConfig = regionMeta;
 
         // Update country in businessInfo without resetting other business fields
         if (!userSettings.businessInfo) userSettings.businessInfo = {};
@@ -808,19 +851,20 @@ router.post('/region', requirePermission('canManageSettings'), validate(regionSc
         await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
 
         // Invalidate user-specific currency cache
-        if (req.user?.id) {
-            cache.del(`user_currency_${req.user.id}`);
-        }
-        cache.del('user_currency_default');
+        cache.delPrefix('user_currency_');
 
-        // Emit socket event to notify all clients
+        // Emit socket event to notify all clients with full regional payload
         const io = req.app.get('io');
         if (io) {
             io.to(companyId).emit('settings_changed', {
                 type: 'region',
                 country: presetKey,
                 currencyMode: userSettings.currencyMode,
-                exchangeRate: userSettings.exchangeRate
+                exchangeRate: userSettings.exchangeRate,
+                euroRate: userSettings.euroRate,
+                taxConfig: nextTaxConfig,
+                paymentMethods: nextPaymentMethods,
+                regionConfig: regionMeta
             });
         }
 
@@ -828,6 +872,7 @@ router.post('/region', requirePermission('canManageSettings'), validate(regionSc
             success: true,
             country: presetKey,
             preset: selectedPreset,
+            regionConfig: regionMeta,
             settings: userSettings
         });
     } catch (error) {

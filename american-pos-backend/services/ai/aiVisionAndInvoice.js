@@ -206,11 +206,8 @@ Responde ÚNICAMENTE con un objeto JSON válido con esta estructura exacta (usa 
         ];
 
         let result;
-        const modelsToTry = [
-            process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-            'gemini-2.0-flash'
-        ];
+        const { getCandidateModels } = require('./geminiClientAdapter');
+        const modelsToTry = getCandidateModels({ vision: true });
         let lastErr = null;
 
         for (const modelName of modelsToTry) {
@@ -433,11 +430,8 @@ Responde ÚNICAMENTE con un objeto JSON válido con este formato:
             }
         ];
 
-        const modelsToTry = [
-            process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-            'gemini-2.0-flash'
-        ];
+        const { getCandidateModels } = require('./geminiClientAdapter');
+        const modelsToTry = getCandidateModels({ vision: true });
         let rawText = '';
         for (const modelName of modelsToTry) {
             try {
@@ -640,11 +634,8 @@ RESPONDE ESTRICTAMENTE EN FORMATO JSON (SIN TEXTO EXTRA):
             }
         ];
 
-        const modelsToTry = [
-            process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-            'gemini-2.0-flash'
-        ];
+        const { getCandidateModels } = require('./geminiClientAdapter');
+        const modelsToTry = getCandidateModels({ vision: true });
         let rawText = '';
         for (const modelName of modelsToTry) {
             try {

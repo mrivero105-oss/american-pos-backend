@@ -4,6 +4,7 @@ const { generateRobustId, getUserSettings, readJson, readJsonAsync } = require('
 const { SETTINGS_FILE } = require('../config/paths');
 const { Op, Transaction } = require('sequelize');
 const precision = require('../utils/precision');
+const { isVenezuelaCountry, isSingleCurrencyCountry, getRegionConfig } = require('../constants/regionPresets');
 const cache = require('../utils/cacheService');
 const LANClusterService = require('./LANClusterService');
 
@@ -459,9 +460,17 @@ class SaleService {
         const settings = await this._getSettings(companyId);
         let recalculatedIgtf = 0;
 
-        // Recálculo Zero-Trust de IVA desde servidor (PVP incluye IVA para productos gravables)
-        const isIvaEnabled = settings.taxConfig?.ivaEnabled !== false && settings.ivaEnabled !== false;
-        const ivaRate = isIvaEnabled ? (Number(settings.taxConfig?.ivaRate ?? settings.ivaRate ?? 16) || 0) : 0;
+        // Recálculo Zero-Trust de IVA/ITBMS/Sales Tax desde servidor (PVP incluye impuesto para productos gravables)
+        const activeCountry = settings.businessInfo?.country || '';
+        const regionCfg = getRegionConfig(activeCountry);
+        const isVenezuela = isVenezuelaCountry(activeCountry);
+        const isSingleCountry = isSingleCurrencyCountry(activeCountry);
+        const isIvaEnabled = settings.taxConfig?.ivaEnabled !== undefined
+            ? Boolean(settings.taxConfig.ivaEnabled)
+            : settings.ivaEnabled !== false;
+        const ivaRate = isIvaEnabled
+            ? (Number(settings.taxConfig?.ivaRate ?? settings.ivaRate ?? regionCfg.taxConfig.ivaRate) || 0)
+            : 0;
         const netSubtotalAfterItemPromo = precision.add([taxableSubtotalAfterItemPromo, exemptSubtotalAfterItemPromo]);
         const netTotalAfterAllDiscounts = Math.max(0, precision.subtract(serverCalculatedSubtotal, totalEffectiveDiscount));
         const globalDiscountRatio = netSubtotalAfterItemPromo > 0
@@ -564,20 +573,20 @@ class SaleService {
             }
         }
 
-        const exchangeRate = Number(settings.exchangeRate) || 1.0;
-        console.log(`[SALE-CALC] Subtotal: ${serverCalculatedSubtotal}, Discount: ${discountValue}, Tax(Server): ${serverCalculatedTax}, Rate: ${exchangeRate}`);
+        const exchangeRate = isSingleCountry ? 1.0 : (Number(settings.exchangeRate) || 1.0);
+        console.log(`[SALE-CALC] Country: ${regionCfg.id}, Currency: ${regionCfg.currencyCode}, Subtotal: ${serverCalculatedSubtotal}, Discount: ${discountValue}, Tax(Server ${regionCfg.taxLabel} ${ivaRate}%): ${serverCalculatedTax}, Rate: ${exchangeRate}`);
 
-        const isBinanceIgtfEnabled = Boolean(
+        const isBinanceIgtfEnabled = isVenezuela && Boolean(
             settings.binanceIgtfEnabled ??
             settings.businessInfo?.binanceIgtfEnabled ??
             settings.taxConfig?.binanceIgtfEnabled
         );
-        const isIgtfEnabled = Boolean(
+        const isIgtfEnabled = isVenezuela && Boolean(
             settings.taxConfig?.igtfEnabled !== undefined
                 ? settings.taxConfig.igtfEnabled
                 : settings.igtfEnabled
         );
-        const effectiveIgtfRate = Number(settings.taxConfig?.igtfRate ?? settings.igtfRate ?? 3);
+        const effectiveIgtfRate = isVenezuela ? Number(settings.taxConfig?.igtfRate ?? settings.igtfRate ?? 3) : 0;
 
         // 3. NORMALIZAR PAGOS ANTES DEL CÁLCULO DE IGTF (evita evasión por amountTenderedUsd o métodos sin normalizar)
         const basePrincipalBeforeIgtf = precision.round(Math.max(0, precision.subtract(serverCalculatedSubtotal, totalEffectiveDiscount)), 2);
@@ -590,6 +599,9 @@ class SaleService {
             const isCrypto = pmMethod === 'binance_usdt' || pmCurrency === 'USDT';
             if (isCrypto) {
                 return isBinanceIgtfEnabled;
+            }
+            if (pmCurrency === 'EUR' || pmMethod === 'cash_eur') {
+                return true;
             }
             return pmCurrency ? pmCurrency === 'USD' : (!pmMethod.includes('_bs') && !pmMethod.includes('_ves'));
         });
@@ -621,10 +633,16 @@ class SaleService {
 
         let effectiveTolerance = 0.01;
         const hasBinancePayment = normalizedPayments.some(p => p.method === 'binance_usdt' || (p.currency || '').toUpperCase() === 'USDT');
+        const hasEurForeignPayment = !isSingleCountry && normalizedPayments.some(p => p.method === 'cash_eur' || (p.currency || '').toUpperCase() === 'EUR');
         if (hasBinancePayment) {
             const roundingToleranceBs = Number(settings.binanceRoundingToleranceBs ?? settings.businessInfo?.binanceRoundingToleranceBs ?? 0.50);
             const binRate = Number(settings.binanceRate ?? settings.businessInfo?.binanceRate ?? exchangeRate);
             const dynamicTolBs = Math.max(roundingToleranceBs, binRate * 0.006, exchangeRate * 0.006);
+            const toleranceInUsd = exchangeRate > 0 ? (dynamicTolBs / exchangeRate) : 0.02;
+            effectiveTolerance = Math.max(0.01, toleranceInUsd);
+        } else if (hasEurForeignPayment) {
+            const eurRateVal = Number(settings.euroRate ?? settings.businessInfo?.euroRate ?? exchangeRate);
+            const dynamicTolBs = Math.max(0.50, eurRateVal * 0.006, exchangeRate * 0.006);
             const toleranceInUsd = exchangeRate > 0 ? (dynamicTolBs / exchangeRate) : 0.02;
             effectiveTolerance = Math.max(0.01, toleranceInUsd);
         }
@@ -693,8 +711,9 @@ class SaleService {
             if (p.method === 'fiado' || p.method === 'credit') continue;
             const amt = Number(p.amount) || 0;
             if (amt > 0) {
-                const cur = String(p.currency || 'USD').toUpperCase();
-                if (Number(p.convertedAmountUsd) > 0 && (cur === 'USDT' || cur === 'VES' || cur === 'BS' || p.method === 'binance_usdt')) {
+                const cur = String(p.currency || regionCfg.currencyCode || 'USD').toUpperCase();
+                const isEurForeign = !isSingleCountry && (cur === 'EUR' || p.method === 'cash_eur');
+                if (Number(p.convertedAmountUsd) > 0 && (cur === 'USDT' || cur === 'VES' || cur === 'BS' || p.method === 'binance_usdt' || isEurForeign)) {
                     totalCoveredUsd = precision.add([totalCoveredUsd, Number(p.convertedAmountUsd)]);
                 } else if (cur === 'VES' || cur === 'BS') {
                     totalCoveredUsd = precision.add([totalCoveredUsd, exchangeRate > 0 ? precision.divide(amt, exchangeRate) : amt]);
@@ -1289,14 +1308,17 @@ class SaleService {
                     throw new Error(`CREDIT_ERROR: Cliente no encontrado en la base de datos.`);
                 }
 
+                const hasVerifiedCreditOverride = Boolean(options.bypassCreditLimit || supervisorApprovalRecord);
+
                 // 🛡️ REGLA FINANCIERA: Bloqueo explícito por suspensión administrativa
-                if (customer.isCreditBlocked && !options.bypassCreditLimit && !saleData.supervisorApprovalId) {
+                if (customer.isCreditBlocked && !hasVerifiedCreditOverride) {
                     throw new Error(`CREDIT_ERROR: El crédito del cliente "${customer.name}" se encuentra suspendido o bloqueado por administración.`);
                 }
 
                 // 🛡️ REGLA FINANCIERA: Verificación de facturas vencidas por días de mora (creditLimitDays)
+                // Si el cliente tiene allowOverdueCredit === true (desbloqueado para facturar con deudas viejas), se omite el bloqueo por antigüedad.
                 const creditLimitDays = Number(customer.creditLimitDays) || 0;
-                if (creditLimitDays > 0 && Number(customer.creditBalance) > 0 && !options.bypassCreditLimit && !saleData.supervisorApprovalId) {
+                if (creditLimitDays > 0 && Number(customer.creditBalance) > 0 && !customer.allowOverdueCredit && !hasVerifiedCreditOverride) {
                     // Conciliación FIFO exacta de cuentas por cobrar (idéntica a ReportService / Cobranzas):
                     const allCharges = await CreditHistory.findAll({
                         where: { customerId: customer.id, companyId, type: { [Op.in]: ['charge', 'debit'] } },
@@ -1368,10 +1390,10 @@ class SaleService {
                 const currentBalance = Number(customer.creditBalance) || 0;
                 const available = precision.round(precision.subtract(creditLimit, currentBalance), 6);
 
-                if (creditLimit <= 0 && !options.bypassCreditLimit) {
+                if (creditLimit <= 0 && !hasVerifiedCreditOverride) {
                     throw new Error(`CREDIT_ERROR: El cliente "${customer.name}" no tiene límite de crédito asignado.`);
                 }
-                if (creditTotal > available && !options.bypassCreditLimit) {
+                if (creditTotal > available && !hasVerifiedCreditOverride) {
                     throw new Error(`CREDIT_ERROR: Crédito insuficiente para "${customer.name}". Disponible: ${available.toFixed(2)}`);
                 }
 
@@ -1532,12 +1554,18 @@ class SaleService {
     }
 
     /**
-     * Payment Normalization (USD/VES).
+     * Payment Normalization (USD/VES/EUR/COP/USDT).
      */
     _normalizePayments(saleData, saleTotal, exchangeRate, settings = {}) {
+        const country = settings.businessInfo?.country || settings.country || '';
+        const regionCfg = getRegionConfig(country);
+        const isSingleCountry = isSingleCurrencyCountry(country);
+        const baseCurrency = regionCfg.currencyCode || 'USD';
+
         if (saleData.paymentMethods?.length > 0) {
             return saleData.paymentMethods.map(p => {
-                const isBinance = p.method === 'binance_usdt' || (p.currency || '').toUpperCase() === 'USDT';
+                const pCurr = String(p.currency || '').toUpperCase();
+                const isBinance = p.method === 'binance_usdt' || pCurr === 'USDT';
                 if (isBinance) {
                     const amountUsdt = precision.round(Number(p.amount) || 0, 2);
                     const cryptoRate = Number(p.cryptoRate || exchangeRate || 0);
@@ -1559,6 +1587,37 @@ class SaleService {
                         convertedAmountUsd
                     };
                 }
+
+                // Pago en Euros dentro de Venezuela (moneda extranjera convertible vía tasa oficial Euro BCV)
+                const isForeignEur = !isSingleCountry && (pCurr === 'EUR' || p.method === 'cash_eur');
+                if (isForeignEur) {
+                    const amountEur = precision.round(Number(p.amount) || 0, 2);
+                    const eurRate = Number(p.eurRate || p.euroRate || settings.euroRate || settings.businessInfo?.euroRate || 0);
+                    let convertedAmountBs = Number(p.convertedAmountBs || 0);
+                    if (!convertedAmountBs && eurRate > 0) {
+                        convertedAmountBs = precision.round(precision.multiply(amountEur, eurRate), 2);
+                    }
+                    let convertedAmountUsd = Number(p.convertedAmountUsd || 0);
+                    if (convertedAmountBs > 0 && exchangeRate > 0) {
+                        convertedAmountUsd = precision.round(precision.divide(convertedAmountBs, exchangeRate), 2);
+                    } else if (!convertedAmountUsd) {
+                        convertedAmountUsd = amountEur;
+                    }
+                    return {
+                        ...p,
+                        amount: amountEur,
+                        currency: 'EUR',
+                        eurRate: eurRate > 0 ? eurRate : undefined,
+                        convertedAmountBs: convertedAmountBs > 0 ? convertedAmountBs : undefined,
+                        convertedAmountUsd
+                    };
+                }
+
+                // En países de moneda única (ej. España EUR, Colombia COP), garantizar moneda nativa del país
+                if (isSingleCountry && !pCurr) {
+                    return { ...p, currency: baseCurrency };
+                }
+
                 return p;
             });
         }
@@ -1568,11 +1627,11 @@ class SaleService {
         const tenderedVes = Number(amountTenderedVes);
 
         if (tenderedUsd === 0 && tenderedVes === 0) {
-            return [{ method: paymentMethod, amount: saleTotal, currency: 'USD' }];
+            return [{ method: paymentMethod, amount: saleTotal, currency: baseCurrency }];
         }
 
         const normalized = [];
-        if (tenderedVes > 0) {
+        if (tenderedVes > 0 && !isSingleCountry) {
             const tenderedVesInUsd = precision.normalizeToUsd(tenderedVes, exchangeRate);
             normalized.push({ 
                 method: paymentMethod + '_bs', 
@@ -1585,11 +1644,11 @@ class SaleService {
             normalized.push({ 
                 method: paymentMethod, 
                 amount: precision.round(tenderedUsd, 2), 
-                currency: 'USD' 
+                currency: baseCurrency 
             });
         }
 
-        return normalized.length > 0 ? normalized : [{ method: paymentMethod, amount: saleTotal, currency: 'USD' }];
+        return normalized.length > 0 ? normalized : [{ method: paymentMethod, amount: saleTotal, currency: baseCurrency }];
     }
 
     async updateOrphanSaleCustomer(saleId, customerId, customerName, companyId = null) {

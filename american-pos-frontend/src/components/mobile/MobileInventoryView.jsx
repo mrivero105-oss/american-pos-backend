@@ -23,6 +23,7 @@ import lanSyncService from '../../services/lanSyncService';
 import CachedImage from '../CachedImage';
 import MobileImageSearchModal from './MobileImageSearchModal';
 import { triggerHaptic } from '../../utils/haptics';
+import { normalizeProductImage } from '../../utils/imageProcess';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { useFuzzySearch } from '../../hooks/useFuzzySearch';
 import VirtualProductList from '../common/VirtualProductList';
@@ -249,7 +250,7 @@ export default function MobileInventoryView({
   };
 
   // Subir o Cambiar Foto de Producto
-  const handleImageUpload = (e) => {
+  const handleImageUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -259,30 +260,38 @@ export default function MobileInventoryView({
     }
 
     setIsUploadingImage(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
+    try {
+      let base64 = '';
       try {
-        const base64 = event.target.result;
-        let imgUri = '';
-        try {
-          const res = await api.post('/products/upload-image', {
-            base64,
-            productId: editingProduct?.id || 'new'
-          }, { timeout: 6000 });
-          imgUri = res.data?.imageUri || '';
-          showToast?.('✅ Foto cargada con éxito');
-        } catch (_uploadErr) {
-          imgUri = base64;
-          showToast?.('⚡ Foto guardada localmente');
-        }
-        setProductFormData(prev => ({ ...prev, imageUri: imgUri }));
-      } catch (_err) {
-        showToast?.('❌ Error al procesar imagen');
-      } finally {
-        setIsUploadingImage(false);
+        // Comprime y estandariza fotos de cámara móvil a 500x500 WebP/JPEG (~25-40 KB)
+        base64 = await normalizeProductImage(file, { size: 500, mode: 'contain', quality: 0.84 });
+      } catch (_normErr) {
+        base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (event) => resolve(event.target.result);
+          reader.onerror = (err) => reject(err);
+          reader.readAsDataURL(file);
+        });
       }
-    };
-    reader.readAsDataURL(file);
+
+      let imgUri = '';
+      try {
+        const res = await api.post('/products/upload-image', {
+          base64,
+          productId: editingProduct?.id || 'new'
+        }, { timeout: 6000 });
+        imgUri = res.data?.imageUri || '';
+        showToast?.('✅ Foto optimizada y cargada con éxito');
+      } catch (_uploadErr) {
+        imgUri = base64;
+        showToast?.('⚡ Foto optimizada guardada localmente');
+      }
+      setProductFormData(prev => ({ ...prev, imageUri: imgUri }));
+    } catch (_err) {
+      showToast?.('❌ Error al procesar imagen');
+    } finally {
+      setIsUploadingImage(false);
+    }
   };
 
   // Guardar Cambios de Producto (Crear o Actualizar)

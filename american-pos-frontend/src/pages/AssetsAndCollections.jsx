@@ -187,16 +187,18 @@ export default function AssetsAndCollections() {
 
     const handleToggleBlock = async (customer) => {
         const cId = customer.customerId || customer.id;
-        const nextBlocked = !customer.isCreditBlocked;
+        const currentlyBlocked = Boolean(customer.isCreditBlocked || customer.isEffectivelyBlocked);
+        const nextBlocked = !currentlyBlocked;
         try {
             const res = await api.post(`/collections/toggle-block/${cId}`, {
-                isBlocked: nextBlocked
+                isBlocked: nextBlocked,
+                allowOverdueCredit: !nextBlocked
             });
             if (res.data?.success || res.data?.ok) {
                 showToast(
                     nextBlocked
                         ? `Crédito en caja suspendido para ${customer.name}`
-                        : `Línea de crédito rehabilitada para ${customer.name}`,
+                        : `Cliente desbloqueado: ${customer.name} ya puede recibir facturas con deuda pendiente`,
                     nextBlocked ? 'info' : 'success'
                 );
                 fetchAgingReport(includeZeroBalance);
@@ -369,7 +371,7 @@ export default function AssetsAndCollections() {
             if (statusFilter === '16_30') return (parseFloat(c.days16to30) || 0) > 0.01;
             if (statusFilter === '31_60') return (parseFloat(c.days31to60) || 0) > 0.01;
             if (statusFilter === 'OVER_60') return (parseFloat(c.daysOver60) || 0) > 0.01;
-            if (statusFilter === 'BLOCKED') return Boolean(c.isCreditBlocked);
+            if (statusFilter === 'BLOCKED') return Boolean(c.isCreditBlocked || c.isEffectivelyBlocked);
             return true;
         });
     }, [agingData.customers, searchTerm, statusFilter]);
@@ -734,8 +736,10 @@ export default function AssetsAndCollections() {
                                                 </td>
                                                 <td className="py-2.5 px-3 text-center">
                                                     <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border inline-block ${
-                                                        c.isCreditBlocked || c.status === 'RED'
+                                                        c.isCreditBlocked || (c.status === 'RED' && !c.allowOverdueCredit)
                                                             ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800'
+                                                            : c.allowOverdueCredit && c.hasOverdueDebt
+                                                            ? 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800'
                                                             : c.status === 'ORANGE' || c.status === 'YELLOW'
                                                             ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800'
                                                             : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
@@ -814,13 +818,28 @@ export default function AssetsAndCollections() {
                                                             type="button"
                                                             onClick={() => handleToggleBlock(c)}
                                                             className={`h-7 px-2 rounded border text-[11px] font-semibold flex items-center gap-1 cursor-pointer ${
-                                                                c.isCreditBlocked
-                                                                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                                                (c.isCreditBlocked || c.isEffectivelyBlocked)
+                                                                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800'
+                                                                    : c.allowOverdueCredit
+                                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
                                                                     : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300'
                                                             }`}
-                                                            title={c.isCreditBlocked ? 'Clic para rehabilitar crédito en caja' : 'Clic para suspender preventivamente el crédito en caja'}
+                                                            title={
+                                                                (c.isCreditBlocked || c.isEffectivelyBlocked)
+                                                                    ? 'Desbloquear cliente para seguir facturando con deudas viejas'
+                                                                    : c.allowOverdueCredit
+                                                                    ? 'Mora permitida activa · Clic para volver a bloquear crédito en caja'
+                                                                    : 'Clic para suspender preventivamente el crédito en caja'
+                                                            }
                                                         >
-                                                            {c.isCreditBlocked ? <Lock size={11} /> : <Unlock size={11} />}
+                                                            {(c.isCreditBlocked || c.isEffectivelyBlocked) ? (
+                                                                <>
+                                                                    <Lock size={11} />
+                                                                    <span>Desbloquear</span>
+                                                                </>
+                                                            ) : (
+                                                                <Unlock size={11} />
+                                                            )}
                                                         </button>
                                                         <button
                                                             type="button"

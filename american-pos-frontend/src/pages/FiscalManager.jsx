@@ -19,7 +19,7 @@ import {
     Terminal
 } from 'lucide-react';
 import api from '../services/api';
-import { formatMoney } from '../utils/format';
+import { formatMoney, getRegionConfig } from '../utils/format';
 import CreditNoteModal from '../components/CreditNoteModal';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -284,19 +284,28 @@ export default function FiscalManager() {
     }, [activeTab, salesBook, purchasesBook, searchTerm]);
 
     if (!isVenezuela) {
+        const activeRegion = getRegionConfig(effectiveCountry);
         return (
             <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 text-center animate-in fade-in duration-300">
                 <div className="w-16 h-16 bg-amber-500/10 text-amber-500 rounded-xl flex items-center justify-center border border-amber-500/20 mb-4">
                     <ShieldAlert size={32} />
                 </div>
                 <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-                    Módulo Fiscal Exclusivo de Venezuela
+                    Libros Fiscales SENIAT (Exclusivo Venezuela)
                 </h2>
                 <p className="text-sm font-normal text-slate-500 dark:text-slate-400 max-w-lg mt-2">
-                    La gestión de libros fiscales de compras/ventas, comprobantes de retención e IGTF aplican según la providencia administrativa del SENIAT en Venezuela.
+                    Tu sistema está configurado para <strong>{activeRegion.name}</strong> ({activeRegion.taxAuthority}). Los comprobantes y ventas del POS aplican automáticamente <strong>{activeRegion.taxSummary}</strong> en moneda <strong>{activeRegion.currencyCode}</strong> con identificación <strong>{activeRegion.taxIdLabel}</strong>.
                 </p>
-                <div className="mt-4 px-3.5 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
-                    Su nodo actual está operando en modalidad {effectiveCountry ? effectiveCountry.toUpperCase() : 'DÓLAR (USD)'}
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    <span className="px-3.5 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                        País: {activeRegion.name} ({activeRegion.code})
+                    </span>
+                    <span className="px-3.5 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-blue-600 dark:text-blue-400 text-xs font-semibold">
+                        Moneda: {activeRegion.currencyBadge}
+                    </span>
+                    <span className="px-3.5 py-1.5 bg-slate-500/10 border border-slate-500/20 rounded-lg text-slate-700 dark:text-slate-300 text-xs font-semibold">
+                        Ente Fiscal: {activeRegion.taxAuthority} · {activeRegion.taxLabel}
+                    </span>
                 </div>
             </div>
         );

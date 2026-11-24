@@ -6,7 +6,7 @@
  * estadísticas extendidas e índices B-Tree/GIN.
  */
 
-const TARGET_SCHEMA_VERSION = 240410;
+const TARGET_SCHEMA_VERSION = 240412;
 const POST_CONNECT_SCHEMA_MARKER = `post_connect:${TARGET_SCHEMA_VERSION}`;
 
 // Conservado por compatibilidad de exportación; el esquema en PostgreSQL se gestiona vía runPostConnectMigrations
@@ -429,6 +429,7 @@ async function runPostConnectMigrations(sequelize, options = {}) {
             // Customers
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "creditLimitDays" INTEGER DEFAULT 30;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "isCreditBlocked" BOOLEAN DEFAULT FALSE;',
+            'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "allowOverdueCredit" BOOLEAN DEFAULT FALSE;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "loyaltyPoints" NUMERIC(20, 6) DEFAULT 0;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "isVIP" BOOLEAN DEFAULT FALSE;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN DEFAULT TRUE;',
@@ -660,6 +661,10 @@ async function runPostConnectMigrations(sequelize, options = {}) {
             'CREATE INDEX IF NOT EXISTS idx_products_barcode ON "Products"("barcode")',
             'CREATE INDEX IF NOT EXISTS idx_products_company_barcode ON "Products" ("companyId", "barcode")',
             'CREATE INDEX IF NOT EXISTS idx_products_company_name ON "Products" ("companyId", "name")',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_updated ON "Products" ("companyId", "updatedAt" DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_status_name ON "Products" ("companyId", "name" ASC) WHERE "status" = \'active\'',
+            'CREATE INDEX IF NOT EXISTS idx_products_active_cat_lower ON "Products" ("companyId", LOWER(TRIM(COALESCE("category", \'\')))) WHERE "status" = \'active\'',
+            'CREATE INDEX IF NOT EXISTS idx_products_active_categories_list ON "Products" ("companyId", "category") WHERE "status" = \'active\' AND ("isCustom" = false OR "isCustom" IS NULL)',
             'CREATE INDEX IF NOT EXISTS idx_products_company_stock_qty ON "Products"("companyId", "stockQuantity")',
             'CREATE INDEX IF NOT EXISTS idx_products_company_price ON "Products"("companyId", "price")',
             'CREATE INDEX IF NOT EXISTS idx_products_unaccent_trgm ON "Products" USING gin (public.immutable_unaccent(lower("name")) gin_trgm_ops)',
@@ -667,11 +672,15 @@ async function runPostConnectMigrations(sequelize, options = {}) {
             'CREATE INDEX IF NOT EXISTS idx_products_barcode_trgm ON "Products" USING gin (COALESCE("barcode", \'\') gin_trgm_ops)',
             'CREATE INDEX IF NOT EXISTS idx_products_bulk_barcode_trgm ON "Products" USING gin (COALESCE("bulkBarcode", \'\') gin_trgm_ops)',
             'CREATE INDEX IF NOT EXISTS idx_presentations_barcode_trgm ON "product_presentaciones" USING gin (COALESCE("barcode", \'\') gin_trgm_ops)',
+            'CREATE INDEX IF NOT EXISTS idx_product_presentaciones_product_id ON "product_presentaciones" ("productId")',
+            'CREATE INDEX IF NOT EXISTS idx_variante_productos_producto_id ON "variante_productos" ("producto_id")',
             'CREATE INDEX IF NOT EXISTS idx_saleitems_sale_prod ON "SaleItems" ("saleId", "productId")',
             'CREATE INDEX IF NOT EXISTS idx_saleitems_product ON "SaleItems"("productId")',
             'CREATE INDEX IF NOT EXISTS idx_saleitems_company ON "SaleItems"("companyId")',
             'CREATE INDEX IF NOT EXISTS idx_branchstocks_product ON "BranchStocks"("productId")',
             'CREATE INDEX IF NOT EXISTS idx_branchstocks_company ON "BranchStocks"("companyId")',
+            'CREATE INDEX IF NOT EXISTS idx_branchstocks_company_updated ON "BranchStocks" ("companyId", "updatedAt" DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_branchstocks_product_branch ON "BranchStocks" ("productId", "branchId") INCLUDE ("quantity")',
             'CREATE INDEX IF NOT EXISTS idx_customers_company ON "Customers"("companyId")',
             'CREATE INDEX IF NOT EXISTS idx_customers_company_credit ON "Customers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0',
             'CREATE INDEX IF NOT EXISTS idx_suppliers_company_credit ON "Suppliers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0',

@@ -207,6 +207,7 @@ async function runMigrations() {
 
         await addColSafe('Customers', 'creditLimitDays', { type: require('sequelize').INTEGER, defaultValue: 30 });
         await addColSafe('Customers', 'isCreditBlocked', { type: require('sequelize').BOOLEAN, defaultValue: false });
+        await addColSafe('Customers', 'allowOverdueCredit', { type: require('sequelize').BOOLEAN, defaultValue: false });
         await addColSafe('Customers', 'loyaltyPoints', { type: require('sequelize').DECIMAL(20, 6), defaultValue: 0 });
 
         await addColSafe('CashShifts', 'registerName', { type: require('sequelize').TEXT });

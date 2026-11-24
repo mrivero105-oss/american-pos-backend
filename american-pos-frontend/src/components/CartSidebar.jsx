@@ -28,7 +28,7 @@ import {
     Hash
 } from 'lucide-react';
 import { CachedImage } from './CachedImage';
-import { formatStock, formatBs, isDualCurrencyMode, isDollarOnlyCountry } from '../utils/format';
+import { formatStock, formatBs, isDualCurrencyMode, isDollarOnlyCountry, isSingleCurrencyCountry, getTaxLabel } from '../utils/format';
 import { usePos } from '../hooks/PosContext';
 import { useAuth } from '../hooks/AuthContext';
 import SupervisorPinModal from './SupervisorPinModal';
@@ -389,8 +389,11 @@ const CartSidebar = memo(function CartSidebar({
     onClose = null
 }) {
     const { isShiftOpen, promptOpenCashShift, country, isUsdOnly, registerId, registerDisplayName, clearPosState } = usePos();
-    const isDollar = isUsdOnly || isDollarOnlyCountry(country) || isDollarOnlyCountry(businessSettings?.country);
-    const isDual = !isDollar && isDualCurrencyMode({ currencyMode, country, ...businessSettings });
+    const effectiveCountry = country || businessSettings?.country || localStorage.getItem('pos_country') || '';
+    const isDollar = isUsdOnly || isDollarOnlyCountry(effectiveCountry);
+    const isSingle = isDollar || isSingleCurrencyCountry(effectiveCountry);
+    const isDual = !isSingle && isDualCurrencyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
+    const taxLabel = getTaxLabel(effectiveCountry);
 
     const { user } = useAuth();
     const userRole = String(user?.role || '').toLowerCase();
@@ -883,7 +886,7 @@ const CartSidebar = memo(function CartSidebar({
                             {ivaAmount > 0 && (
                                 <div className="flex justify-between items-center text-slate-400">
                                     <span className="flex items-center gap-1">
-                                        IVA ({ivaRate}%):
+                                        {taxLabel} ({ivaRate}%):
                                     </span>
                                     <span className="text-slate-200 font-semibold">{renderFormatMoney(ivaAmount, isDual ? 'VES' : null)}</span>
                                 </div>

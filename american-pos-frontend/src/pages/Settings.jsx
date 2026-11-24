@@ -19,7 +19,7 @@ import {
 import { db } from '../services/db';
 import { syncManager } from '../services/syncManager';
 import ConfirmModal from '../components/ConfirmModal';
-import { isDollarOnlyCountry } from '../utils/format';
+import { isSingleCurrencyCountry, getRegionConfig } from '../utils/format';
 
 // Modular Components
 import RateSettings from '../components/settings/RateSettings';
@@ -86,12 +86,14 @@ export default function Settings() {
         if (c.includes('panam')) return '🇵🇦';
         if (c.includes('eeuu') || c.includes('usa') || c.includes('united') || c.includes('estados unidos')) return '🇺🇸';
         if (c.includes('colombia')) return '🇨🇴';
+        if (c.includes('espan') || c.includes('spain') || c.includes('europ') || c === 'es' || c === 'eu') return '🇪🇸';
         if (c.includes('venezuela')) return '🇻🇪';
         return '🌐';
     };
 
     // Rate & Currency Mode
     const [rate, setRate] = useState('');
+    const [euroRate, setEuroRate] = useState('');
     const [currencyMode, setCurrencyMode] = useState('BOTH');
 
     // Business
@@ -156,11 +158,16 @@ export default function Settings() {
             
             if (rateRes && rateRes.data) {
                 setRate(rateRes.data.rate || '');
+                setEuroRate(Number(rateRes.data.euroRate) > 0 ? String(rateRes.data.euroRate) : (localStorage.getItem('pos_euro_rate') || ''));
                 setCurrencyMode(rateRes.data.currencyMode || 'BOTH');
                 localStorage.setItem('pos_exchange_rate', String(rateRes.data.rate || ''));
+                if (Number(rateRes.data.euroRate) > 0) {
+                    localStorage.setItem('pos_euro_rate', String(rateRes.data.euroRate));
+                }
                 localStorage.setItem('pos_currency_mode', rateRes.data.currencyMode || 'BOTH');
             } else {
                 setRate(localStorage.getItem('pos_exchange_rate') || '');
+                setEuroRate(localStorage.getItem('pos_euro_rate') || '');
                 setCurrencyMode(localStorage.getItem('pos_currency_mode') || 'BOTH');
             }
 
@@ -217,8 +224,14 @@ export default function Settings() {
             setSaving(true);
             localStorage.setItem('pos_exchange_rate', String(rate));
             localStorage.setItem('pos_currency_mode', currencyMode);
-            await api.post('/settings/rate', { rate, currencyMode });
-            toast.success('Configuración de tasa guardada con éxito');
+            const parsedEuro = Number(euroRate);
+            const payload = { rate, currencyMode };
+            if (parsedEuro > 0) {
+                localStorage.setItem('pos_euro_rate', String(parsedEuro));
+                payload.euroRate = parsedEuro;
+            }
+            await api.post('/settings/rate', payload);
+            toast.success('Configuración de tasas guardada con éxito');
         } catch (_error) { 
             toast.success('Tasa guardada localmente'); 
         } finally { 
@@ -298,7 +311,8 @@ export default function Settings() {
     };
 
     const addPaymentMethod = () => {
-        const newMethod = { id: 'method_' + Date.now(), name: '', icon: 'CreditCard', type: 'DIGITAL', currency: 'USD', defaultCurrency: 'USD' };
+        const regionCurrency = getRegionConfig(business.country || localStorage.getItem('pos_country')).currencyCode || 'USD';
+        const newMethod = { id: 'method_' + Date.now(), name: '', icon: regionCurrency === 'EUR' ? 'Euro' : 'CreditCard', type: 'DIGITAL', currency: regionCurrency, defaultCurrency: regionCurrency };
         setPaymentMethods([...paymentMethods, newMethod]);
     };
 
@@ -756,18 +770,19 @@ export default function Settings() {
                         </span>
                     </button>
 
-                    {!isDollarOnlyCountry(business.country || localStorage.getItem('pos_country')) ? (
+                    {!isSingleCurrencyCountry(business.country || localStorage.getItem('pos_country')) ? (
                         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200">
                             <Banknote size={14} className="text-emerald-600 dark:text-emerald-400" />
                             <span className="font-mono font-semibold">
-                                {rate ? `Bs. ${Number(rate).toFixed(2)}` : 'Tasa Auto'}
+                                {rate ? `Bs. ${Number(rate).toFixed(2)}/$` : 'Tasa Auto'}
+                                {Number(euroRate) > 0 ? ` · Bs. ${Number(euroRate).toFixed(2)}/€` : ''}
                             </span>
                         </div>
                     ) : (
                         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200">
                             <Banknote size={14} className="text-emerald-600 dark:text-emerald-400" />
                             <span className="font-mono font-semibold">
-                                USD ($)
+                                {getRegionConfig(business.country || localStorage.getItem('pos_country')).currencyBadge}
                             </span>
                         </div>
                     )}
@@ -812,8 +827,8 @@ export default function Settings() {
                             <p className={`text-[11px] font-normal mt-0.5 truncate ${isActive ? 'text-white/80' : 'text-slate-500 dark:text-slate-400'}`}>
                                 {tab.id === 'business'
                                     ? 'Perfil Fiscal & Datos'
-                                    : tab.id === 'billing' && isDollarOnlyCountry(business.country || localStorage.getItem('pos_country'))
-                                        ? 'IVA, Moneda USD & Métodos'
+                                    : tab.id === 'billing' && isSingleCurrencyCountry(business.country || localStorage.getItem('pos_country'))
+                                        ? `${getRegionConfig(business.country || localStorage.getItem('pos_country')).taxLabel}, Moneda ${getRegionConfig(business.country || localStorage.getItem('pos_country')).currencyCode} & Métodos`
                                         : tab.desc}
                             </p>
                         </button>
@@ -827,24 +842,14 @@ export default function Settings() {
                 {activeTab === 'business' && (
                     <div className="space-y-8">
                         {isOwnerUser && (!isInitialSetupDone || showRegionSettings) && (
-                            <div className="relative">
-                                {isInitialSetupDone && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowRegionSettings(false)}
-                                        className="absolute top-5 right-5 z-10 px-3 py-1 text-xs font-bold rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
-                                    >
-                                        Ocultar
-                                    </button>
-                                )}
-                                <RegionSettings
-                                    currentCountry={business.country}
-                                    onRegionChanged={() => {
-                                        fetchSettings();
-                                        if (isInitialSetupDone) setShowRegionSettings(false);
-                                    }}
-                                />
-                            </div>
+                            <RegionSettings
+                                currentCountry={business.country}
+                                onHide={isInitialSetupDone ? () => setShowRegionSettings(false) : undefined}
+                                onRegionChanged={() => {
+                                    fetchSettings();
+                                    if (isInitialSetupDone) setShowRegionSettings(false);
+                                }}
+                            />
                         )}
                         <BusinessSettings
                             business={business}
@@ -877,10 +882,12 @@ export default function Settings() {
                 {activeTab === 'billing' && (
                     <div className="space-y-6 lg:space-y-8">
                         {/* Fila Superior: Divisa & Tasa + Esquema Tributario */}
-                        <div className={`grid grid-cols-1 ${!isDollarOnlyCountry(business.country || localStorage.getItem('pos_country')) ? 'lg:grid-cols-2' : 'max-w-2xl'} gap-6 lg:gap-8 items-start`}>
+                        <div className={`grid grid-cols-1 ${!isSingleCurrencyCountry(business.country || localStorage.getItem('pos_country')) ? 'lg:grid-cols-2' : 'max-w-2xl'} gap-6 lg:gap-8 items-start`}>
                             <RateSettings
                                 rate={rate}
                                 setRate={setRate}
+                                euroRate={euroRate}
+                                setEuroRate={setEuroRate}
                                 currencyMode={currencyMode}
                                 setCurrencyMode={setCurrencyMode}
                                 saving={saving}

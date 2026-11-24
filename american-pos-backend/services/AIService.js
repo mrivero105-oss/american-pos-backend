@@ -10,7 +10,7 @@ ensureFetchPolyfill();
 
 const fs = require('fs');
 const path = require('path');
-const { createGeminiClient } = require('./ai/geminiClientAdapter');
+const { createGeminiClient, getCandidateModels } = require('./ai/geminiClientAdapter');
 const ReportService = require("./ReportService");
 const StockIntelligenceService = require("./StockIntelligenceService");
 const { Product, PurchaseOrder } = require("../database/models");
@@ -318,7 +318,7 @@ SINTAXIS TÉCNICA:
             console.error("[ISAAC AI] Error en consulta:", error.message);
 
             // EMERGENCY FALLBACK TO ENSURE CONTINUITY WITH FULL CONTEXT
-            const fallbackModels = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"];
+            const fallbackModels = getCandidateModels({ preferred: this.modelName });
             for (const fbModel of fallbackModels) {
                 if (this.modelName === fbModel) continue;
                 console.log(`[ISAAC AI] Intentando rescate con modelo ${fbModel} manteniendo contexto...`);
@@ -340,6 +340,70 @@ SINTAXIS TÉCNICA:
             }
             return "Hubo un error al procesar tu solicitud con Gemini Pro. Revisa mi configuración.";
         }
+    }
+
+    /**
+     * Versión streaming de ask() para entregar tokens progresivamente vía SSE
+     * con fallback transparente a ask() si el proveedor o cliente no soporta streaming.
+     */
+    async askStream(companyId, userQuery, reqUser, history = [], cartContext = {}, onChunk = () => {}) {
+        if (!this.initialized) {
+            this.init();
+        }
+        if (!this.initialized || !this.genAI || typeof this.genAI.generateContentStream !== 'function') {
+            const full = await this.ask(companyId, userQuery, reqUser, history, cartContext);
+            if (full) onChunk(full);
+            return full;
+        }
+
+        try {
+            const [dashboard, inventory] = await Promise.all([
+                ReportService.getDashboardSummary(reqUser, { range: 'today' }).catch(() => ({})),
+                this._getCachedCatalog(companyId, 'stock_limit_200', {
+                    where: { companyId, stockQuantity: { [Op.gt]: 0 } },
+                    attributes: ['name', 'price', 'barcode', 'category'],
+                    limit: 200
+                }).catch(() => [])
+            ]);
+
+            const catalogPreview = (inventory || [])
+                .slice(0, 120)
+                .map((p) => `${p.name} ($${Number(p.price || 0).toFixed(2)})`)
+                .join('\n');
+            const cartItems = cartContext.items ? cartContext.items.map((i) => `${i.name} (x${i.qty})`).join(', ') : 'Vacío';
+            const systemInstruction = `Eres Isaac AI 2.0, asistente comercial de Isaac POS con trato cercano y profesional.
+Ventas hoy: $${Number(dashboard?.todaySales || 0).toFixed(2)}. Carrito actual: ${cartItems}.
+Catálogo disponible (muestra):
+${catalogPreview}`;
+
+            const modelsToTry = getCandidateModels({ preferred: this.modelName });
+            let fullText = '';
+            for (const modelName of modelsToTry) {
+                try {
+                    const stream = this.genAI.generateContentStream({
+                        model: modelName,
+                        contents: userQuery,
+                        systemInstruction
+                    });
+                    for await (const chunkText of stream) {
+                        if (chunkText) {
+                            fullText += chunkText;
+                            onChunk(chunkText);
+                        }
+                    }
+                    if (fullText) return fullText;
+                } catch (streamErr) {
+                    console.warn(`[ISAAC AI STREAM] Falló modelo ${modelName}:`, streamErr.message);
+                    if (fullText) return fullText;
+                }
+            }
+        } catch (err) {
+            console.warn('[ISAAC AI STREAM] Fallback a modo estándar:', err.message);
+        }
+
+        const fallback = await this.ask(companyId, userQuery, reqUser, history, cartContext);
+        if (fallback) onChunk(fallback);
+        return fallback;
     }
 
     /**

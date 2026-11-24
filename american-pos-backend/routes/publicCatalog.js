@@ -6,20 +6,7 @@ const PromotionService = require('../services/PromotionService');
 const { getUserSettings, readJson } = require('../utils/helpers');
 const { SETTINGS_FILE } = require('../config/paths');
 const cache = require('../utils/cacheService');
-
-const normalizeCountry = (country) => {
-    if (!country || typeof country !== 'string') return '';
-    return country
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]/g, '');
-};
-
-const isDollarOnlyCountry = (country) => {
-    const clean = normalizeCountry(country);
-    return ['ecuador', 'panama', 'usa', 'eeuu', 'estadosunidos', 'unitedstates', 'us'].includes(clean);
-};
+const { isSingleCurrencyCountry, buildPublicRegionMetadata } = require('../constants/regionPresets');
 
 /**
  * GET /display/feed
@@ -39,9 +26,10 @@ router.get('/display/feed', async (req, res) => {
         const userSettings = getUserSettings(allSettings, companyId) || {};
         const bInfo = userSettings.businessInfo || {};
         const country = bInfo.country || '';
-        const usdSingle = isDollarOnlyCountry(country);
-        const exchangeRate = usdSingle ? 1.0 : (parseFloat(userSettings.exchangeRate) || 1.0);
-        const currencyMode = usdSingle ? 'SINGLE' : (userSettings.currencyMode || 'BOTH');
+        const regionConfig = buildPublicRegionMetadata(country);
+        const isSingle = isSingleCurrencyCountry(country);
+        const exchangeRate = isSingle ? 1.0 : (parseFloat(userSettings.exchangeRate) || 1.0);
+        const currencyMode = isSingle ? 'SINGLE' : (userSettings.currencyMode || 'BOTH');
 
         const rawDisplay = (userSettings.customerDisplay && typeof userSettings.customerDisplay === 'object')
             ? userSettings.customerDisplay
@@ -217,6 +205,7 @@ router.get('/display/feed', async (req, res) => {
             },
             exchangeRate,
             currencyMode,
+            regionConfig,
             paymentMethods: publicPaymentMethods,
             pagoMovil,
             binancePay,

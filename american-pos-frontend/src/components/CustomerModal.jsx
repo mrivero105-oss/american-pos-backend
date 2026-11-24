@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Save, User, CreditCard, Phone, Mail, MapPin, Star, MessageCircle, Zap, BookOpen, FileText, Maximize2, Minimize2, Wallet } from 'lucide-react';
+import { X, Save, User, CreditCard, Phone, Mail, MapPin, Star, MessageCircle, Zap, BookOpen, FileText, Maximize2, Minimize2, Wallet, Unlock, Lock, CalendarClock } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -13,9 +13,12 @@ export default function CustomerModal({ isOpen, onClose, onSave, customer = null
         email: '',
         address: '',
         creditLimit: '0',
+        creditLimitDays: '30',
         creditBalance: '0',
         loyaltyPoints: '0',
         isVIP: false,
+        isCreditBlocked: false,
+        allowOverdueCredit: false,
     });
 
     // Expandido por defecto al tamaño de la pantalla
@@ -33,9 +36,12 @@ export default function CustomerModal({ isOpen, onClose, onSave, customer = null
                 email: customer.email || '',
                 address: customer.address || '',
                 creditLimit: customer.creditLimit !== undefined ? (Math.round(parseFloat(customer.creditLimit) * 100) / 100).toString() : '0',
+                creditLimitDays: customer.creditLimitDays !== undefined && customer.creditLimitDays !== null ? String(customer.creditLimitDays) : '30',
                 creditBalance: customer.creditBalance !== undefined ? (Math.round(parseFloat(customer.creditBalance) * 100) / 100).toString() : '0',
                 loyaltyPoints: customer.loyaltyPoints !== undefined ? (Math.round(parseFloat(customer.loyaltyPoints) * 100) / 100).toString() : '0',
                 isVIP: !!customer.isVIP,
+                isCreditBlocked: !!customer.isCreditBlocked,
+                allowOverdueCredit: !!customer.allowOverdueCredit,
             });
         } else {
             setFormData({
@@ -45,9 +51,12 @@ export default function CustomerModal({ isOpen, onClose, onSave, customer = null
                 email: '',
                 address: '',
                 creditLimit: '0',
+                creditLimitDays: '30',
                 creditBalance: '0',
                 loyaltyPoints: '0',
                 isVIP: false,
+                isCreditBlocked: false,
+                allowOverdueCredit: false,
             });
         }
     }, [customer, isOpen]);
@@ -70,9 +79,12 @@ export default function CustomerModal({ isOpen, onClose, onSave, customer = null
         const payload = {
             ...formData,
             creditLimit: parseFloat(formData.creditLimit) || 0,
+            creditLimitDays: Math.max(0, parseInt(formData.creditLimitDays, 10) || 0),
             creditBalance: parseFloat(formData.creditBalance) || 0,
             loyaltyPoints: parseFloat(formData.loyaltyPoints) || 0,
             isVIP: !!formData.isVIP,
+            isCreditBlocked: !!formData.isCreditBlocked,
+            allowOverdueCredit: formData.isCreditBlocked ? false : !!formData.allowOverdueCredit,
         };
         onSave(payload);
     };
@@ -427,6 +439,99 @@ export default function CustomerModal({ isOpen, onClose, onSave, customer = null
                                         </div>
                                         <p className="text-[10px] text-slate-400">Cuenta por cobrar</p>
                                     </div>
+                                </div>
+
+                                {/* Plazo de crédito y control de bloqueo por deudas viejas */}
+                                <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                                    <div className="space-y-1.5">
+                                        <div className="flex items-center gap-1.5">
+                                            <CalendarClock size={13} className="text-amber-500" />
+                                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Plazo Máximo de Crédito (Días)</label>
+                                        </div>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="3650"
+                                            name="creditLimitDays"
+                                            value={formData.creditLimitDays}
+                                            onChange={handleChange}
+                                            className="w-full px-3 h-9 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none text-slate-900 dark:text-white font-mono font-bold text-xs tabular-nums"
+                                        />
+                                        <p className="text-[10px] text-slate-400">Días permitidos antes de marcar factura en mora (0 = sin límite de días)</p>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setFormData(prev => {
+                                            const nextAllow = !prev.allowOverdueCredit;
+                                            return {
+                                                ...prev,
+                                                allowOverdueCredit: nextAllow,
+                                                ...(nextAllow ? { isCreditBlocked: false } : {})
+                                            };
+                                        })}
+                                        className={`w-full p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                                            formData.allowOverdueCredit
+                                                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-400 dark:border-emerald-700'
+                                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                                                formData.allowOverdueCredit
+                                                    ? 'bg-emerald-600 text-white'
+                                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-400'
+                                            }`}>
+                                                <Unlock size={15} />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <span className={`block text-xs font-bold leading-tight ${formData.allowOverdueCredit ? 'text-emerald-800 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200'}`}>
+                                                    Desbloquear deudas viejas (Permitir facturar)
+                                                </span>
+                                                <span className="block text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                                    Permite registrar nuevas facturas aunque existan cuentas vencidas anteriores
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 ${formData.allowOverdueCredit ? 'bg-emerald-600' : 'bg-slate-200 dark:bg-slate-700'}`}>
+                                            <div className={`w-4 h-4 rounded-full bg-white shadow-xs transition-transform ${formData.allowOverdueCredit ? 'translate-x-5' : 'translate-x-0'}`} />
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setFormData(prev => {
+                                            const nextBlocked = !prev.isCreditBlocked;
+                                            return {
+                                                ...prev,
+                                                isCreditBlocked: nextBlocked,
+                                                ...(nextBlocked ? { allowOverdueCredit: false } : {})
+                                            };
+                                        })}
+                                        className={`w-full p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                                            formData.isCreditBlocked
+                                                ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-400 dark:border-rose-700'
+                                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                                                formData.isCreditBlocked
+                                                    ? 'bg-rose-600 text-white'
+                                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-400'
+                                            }`}>
+                                                <Lock size={14} />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <span className={`block text-xs font-bold leading-tight ${formData.isCreditBlocked ? 'text-rose-800 dark:text-rose-300' : 'text-slate-600 dark:text-slate-300'}`}>
+                                                    Bloqueo administrativo de crédito
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 ${formData.isCreditBlocked ? 'bg-rose-600' : 'bg-slate-200 dark:bg-slate-700'}`}>
+                                            <div className={`w-4 h-4 rounded-full bg-white shadow-xs transition-transform ${formData.isCreditBlocked ? 'translate-x-5' : 'translate-x-0'}`} />
+                                        </div>
+                                    </button>
                                 </div>
 
                                 {/* Loyalty Points */}

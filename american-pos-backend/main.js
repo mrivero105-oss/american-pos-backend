@@ -1330,6 +1330,11 @@ if ($success) { exit 0 } else { exit 1 }`;
         }
     });
 
+    let isSilentUpdateCheck = false;
+    global.__setIsaacSilentUpdateCheck = (flag) => {
+        isSilentUpdateCheck = Boolean(flag);
+    };
+
     const getAutoUpdater = () => {
         if (electronUpdaterInstance) return electronUpdaterInstance;
         try {
@@ -1347,24 +1352,46 @@ if ($success) { exit 0 } else { exit 1 }`;
 
             autoUpdater.on('checking-for-update', () => {
                 log('Electron AutoUpdater: Buscando actualizaciones...');
-                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'checking' });
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'checking', silent: isSilentUpdateCheck });
             });
             autoUpdater.on('update-available', (info) => {
                 log(`Electron AutoUpdater: Nueva versión disponible v${info.version}. Descargando silenciosamente en segundo plano...`);
-                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'available', info });
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'available', info, silent: isSilentUpdateCheck });
             });
             autoUpdater.on('update-not-available', (info) => {
+                const silent = isSilentUpdateCheck;
+                isSilentUpdateCheck = false;
                 log('Electron AutoUpdater: El sistema está actualizado.');
-                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'not-available', info });
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'not-available', info, silent });
             });
             autoUpdater.on('error', (err) => {
-                log(`Electron AutoUpdater error: ${err.message}`);
-                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'error', error: err.message });
+                const msg = String(err?.message || err || '');
+                const silent = isSilentUpdateCheck;
+                isSilentUpdateCheck = false;
+                const isMissingChannelManifest = /Cannot find (?:modern|legacy|latest)\.yml|HttpError:\s*404/i.test(msg);
+                const isOfflineError = /ERR_INTERNET_DISCONNECTED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(msg);
+
+                if (silent || isMissingChannelManifest || isOfflineError) {
+                    log(`Electron AutoUpdater notice (silencioso): ${msg}`);
+                    if (mainWindow) {
+                        mainWindow.webContents.send('updater-event', {
+                            status: 'error',
+                            error: msg,
+                            silent: true,
+                            isMissingChannelManifest
+                        });
+                    }
+                    return;
+                }
+
+                log(`Electron AutoUpdater error: ${msg}`);
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'error', error: msg, silent: false });
             });
             autoUpdater.on('download-progress', (progressObj) => {
                 if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloading', progress: progressObj.percent });
             });
             autoUpdater.on('update-downloaded', (info) => {
+                isSilentUpdateCheck = false;
                 log(`Electron AutoUpdater: Actualización v${info.version} descargada. Se instalará automáticamente de forma silenciosa al salir o reiniciar.`);
                 if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloaded', info });
             });
@@ -2001,8 +2028,14 @@ app.whenReady().then(async () => {
                 }
                 const updater = typeof global.__getIsaacAutoUpdater === 'function' ? global.__getIsaacAutoUpdater() : null;
                 if (updater) {
+                    if (typeof global.__setIsaacSilentUpdateCheck === 'function') {
+                        global.__setIsaacSilentUpdateCheck(true);
+                    }
                     log('Verificación automática de actualizaciones iniciada (10s post-arranque)...');
                     updater.checkForUpdatesAndNotify().catch(e => {
+                        if (typeof global.__setIsaacSilentUpdateCheck === 'function') {
+                            global.__setIsaacSilentUpdateCheck(false);
+                        }
                         log(`Notice auto-update check: ${e.message}`);
                     });
                 }

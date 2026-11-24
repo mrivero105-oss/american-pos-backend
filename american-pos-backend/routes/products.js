@@ -87,7 +87,8 @@ router.get('/categories', async (req, res) => {
                 ...companyCondition,
                 status: 'active',
                 isCustom: { [Op.or]: [false, null] }
-            }
+            },
+            raw: true
         });
         const rawCategories = categories.map(c => c.category).filter(Boolean);
 

@@ -9,7 +9,8 @@ import {
     RefreshCcw, 
     CreditCard, 
     Send, 
-    DollarSign, 
+    DollarSign,
+    Euro,
     User, 
     QrCode, 
     Wallet, 
@@ -513,6 +514,7 @@ export default function PaymentMethodSettings({
         { id: 'CreditCard', label: 'Tarjeta / Punto', icon: CreditCard },
         { id: 'Send', label: isDollarCountry ? 'Transferencia / Envíos' : 'Pago Móvil / Envíos', icon: Send },
         { id: 'DollarSign', label: 'Divisas / Dólar', icon: DollarSign },
+        { id: 'Euro', label: 'Euros (€)', icon: Euro },
         { id: 'User', label: 'Cliente / Crédito', icon: User },
         { id: 'QrCode', label: 'Código QR / Digital', icon: QrCode },
         { id: 'Wallet', label: 'Billetera Digital', icon: Wallet },
@@ -550,6 +552,7 @@ export default function PaymentMethodSettings({
     const getCurrencyLabel = (curr) => {
         switch (curr) {
             case 'USD': return '🇺🇸 USD';
+            case 'EUR': return '🇪🇺 EUR';
             case 'VES': return '🇻🇪 VES';
             case 'COP': return '🇨🇴 COP';
             case 'USDT': return '🪙 USDT';
@@ -845,6 +848,7 @@ export default function PaymentMethodSettings({
                                                             className="w-full px-3 py-2 text-xs font-medium bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:border-primary-500 transition-colors cursor-pointer"
                                                         >
                                                             <option value="USD">🇺🇸 USD ($)</option>
+                                                            <option value="EUR">🇪🇺 EUR (€)</option>
                                                             {!isDollarCountry && (
                                                                 <>
                                                                     <option value="VES">🇻🇪 VES (Bs)</option>
