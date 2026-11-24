@@ -493,4 +493,88 @@ test.describe.serial('E2E POS Móvil, Offline Sync, Licencias Cloud y RBAC Negat
       expect(st).toBe(403);
     }
   });
+
+  test('5. Ruta Móvil #/mobile — RBAC de Cajero oculta creación de productos y bloquea POST /products/public-sync (403)', async ({ page }) => {
+    const baseUrl = `http://localhost:${testPort}`;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => {
+      localStorage.setItem('initial_setup_completed', 'true');
+    });
+
+    await page.goto(`${baseUrl}/#/mobile`, { waitUntil: 'domcontentloaded' });
+    await page.locator('input[placeholder="Ingresa tu usuario"]').fill(uiCashierUsername);
+    await page.locator('input[type="password"]').fill(uiCashierPassword);
+    await page.locator('form button[type="submit"]').click();
+
+    // Esperar a que cargue el buscador del POS móvil
+    await expect(
+      page.locator('input[placeholder="Buscar producto, principio activo o código..."]')
+    ).toBeVisible({ timeout: 20_000 });
+
+    // El cajero NO debe ver el botón de crear nuevo producto en la barra superior
+    await expect(page.locator('button[title="Crear nuevo producto en catálogo"]')).toHaveCount(0);
+
+    // El endpoint /products/public-sync debe rechazar al cajero con 403 Forbidden
+    const publicSyncStatus = await page.evaluate(async (base) => {
+      const res = await fetch(`${base}/products/public-sync`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          products: [{ id: 'local-hack-1', name: 'Producto No Autorizado', price: 10, stock: 5 }]
+        })
+      });
+      return res.status;
+    }, baseUrl);
+
+    expect(publicSyncStatus).toBe(403);
+  });
+
+  test('6. Ruta Móvil #/mobile — Venta offline en viewport 390px y sincronización posterior con PostgreSQL', async ({ page }) => {
+    const baseUrl = `http://localhost:${testPort}`;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => {
+      localStorage.setItem('initial_setup_completed', 'true');
+    });
+
+    const stockBefore = await fetchProductStock(baseUrl, uiProductId);
+
+    await page.goto(`${baseUrl}/#/mobile`, { waitUntil: 'domcontentloaded' });
+    await page.locator('input[placeholder="Ingresa tu usuario"]').fill(uiUsername);
+    await page.locator('input[type="password"]').fill(uiPassword);
+    await page.locator('form button[type="submit"]').click();
+
+    const mobileSearch = page.locator('input[placeholder="Buscar producto, principio activo o código..."]');
+    await expect(mobileSearch).toBeVisible({ timeout: 20_000 });
+
+    // Buscar producto E2E en catálogo móvil y esperar a que aparezca
+    await mobileSearch.fill(uiProductName);
+    const productCard = page.getByText(uiProductName).first();
+    await expect(productCard).toBeVisible({ timeout: 15_000 });
+
+    // Simular corte de red en creación/sincronización de ventas antes de cobrar
+    await page.route('**/sales**', (route) => route.abort('internetdisconnected'));
+
+    await productCard.click();
+    const payDockBtn = page.locator('button[title="Ir directo a cobrar en 1 toque"]');
+    await expect(payDockBtn).toBeVisible({ timeout: 10_000 });
+    await payDockBtn.click();
+
+    const confirmBtn = page.getByRole('button', { name: /REGISTRAR FACTURA EN SERVIDOR/i });
+    await expect(confirmBtn).toBeVisible({ timeout: 10_000 });
+    await confirmBtn.click();
+
+    // Esperar a que la venta quede guardada offline y confirmar que PostgreSQL aún conserva stockBefore
+    await expect(page.getByText(/Offline|Guardada|Sin conexi[oó]n|Recibo|Comprobante/i).first()).toBeVisible({ timeout: 15_000 });
+    expect(await fetchProductStock(baseUrl, uiProductId)).toBe(stockBefore);
+
+    // Restaurar red y disparar sincronización móvil
+    await page.unrouteAll({ behavior: 'wait' });
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('online'));
+      window.dispatchEvent(new Event('lan-sync-trigger'));
+    });
+
+    await expect.poll(() => fetchProductStock(baseUrl, uiProductId), { timeout: 25_000 }).toBe(stockBefore - 1);
+  });
 });

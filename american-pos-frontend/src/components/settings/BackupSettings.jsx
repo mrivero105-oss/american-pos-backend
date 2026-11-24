@@ -14,7 +14,8 @@ export default function BackupSettings({
     onGenerate, onDownload, onRestore, onDelete, 
     onRestoreManual, onExport, onMaintenance, 
     runningMaintenance = false, onExploreFolder,
-    onRefreshBackups
+    onRefreshBackups,
+    isDesktopElectron = true
 }) {
     const [isSectionOpen, setIsSectionOpen] = useState(true);
     const [isCloudPanelOpen, setIsCloudPanelOpen] = useState(true);
@@ -382,15 +383,17 @@ export default function BackupSettings({
                                                     placeholder="Ej: G:\Mi unidad\IsaacPOS_Respaldos o C:\Users\TuUsuario\OneDrive\IsaacPOS_Respaldos"
                                                     className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-sky-500"
                                                 />
-                                                <button
-                                                    type="button"
-                                                    onClick={handleBrowseCloudFolder}
-                                                    className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium flex items-center gap-1.5 shrink-0 cursor-pointer"
-                                                    title="Elegir carpeta en el Explorador de Windows"
-                                                >
-                                                    <FolderSearch size={14} className="text-sky-600 dark:text-sky-400" />
-                                                    <span>Examinar...</span>
-                                                </button>
+                                                {isDesktopElectron && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleBrowseCloudFolder}
+                                                        className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium flex items-center gap-1.5 shrink-0 cursor-pointer"
+                                                        title="Elegir carpeta en el Explorador de Windows"
+                                                    >
+                                                        <FolderSearch size={14} className="text-sky-600 dark:text-sky-400" />
+                                                        <span>Examinar...</span>
+                                                    </button>
+                                                )}
                                             </div>
                                         </div>
 

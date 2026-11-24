@@ -925,6 +925,7 @@ class SaleService {
             }
 
             const stockMovementsBatch = [];
+            const inventoryWarnings = [];
 
             for (const item of sortedItems) {
                 const rawId = String(item.productId || item.id || '').trim();
@@ -946,6 +947,13 @@ class SaleService {
                     if (!product) {
                         if (options.bypassStockCheck) {
                             console.warn(`[SYNC-INTEGRITY] Producto "${item.name}" (ID: ${pId}) no existe en el catálogo de la PC. Se procesa como personalizado en caliente para no bloquear la sincronización.`);
+                            inventoryWarnings.push({
+                                type: 'missing_product',
+                                productId: pId,
+                                productName: item.name || 'Producto eliminado',
+                                saleId: clientTransactionId,
+                                soldQuantity: Number(item.quantity) || 1
+                            });
                             cost = Number(item.cost) || 0;
                             category = item.category || category;
                         } else {
@@ -1016,6 +1024,16 @@ class SaleService {
                         if (options.bypassStockCheck && sequelize.getDialect() === 'postgres') {
                             await sequelize.query("SET LOCAL app.bypass_stock_trigger = 'true';", { transaction: t });
                         }
+
+                        inventoryWarnings.push({
+                            type: 'stock_overdraft',
+                            productId: pId,
+                            productName: product.name,
+                            saleId: clientTransactionId,
+                            expectedStock: stockBefore,
+                            soldQuantity: unitsToDeduct,
+                            overdraftAmount: overdraft
+                        });
 
                         // Registrar auditoría de sobregiro por venta offline concurrente
                         try {
@@ -1538,6 +1556,9 @@ class SaleService {
             });
             if (finalSale && typeof finalSale.setDataValue === 'function') {
                 finalSale.setDataValue('dailyTicketNumber', dailyTicketNumber);
+                if (inventoryWarnings.length > 0) {
+                    finalSale.setDataValue('inventoryWarnings', inventoryWarnings);
+                }
             }
 
             return finalSale;

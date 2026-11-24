@@ -1,22 +1,22 @@
 import { Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertCircle, AlertTriangle, Check, CheckCircle, Copy, Plus, Printer, RefreshCw, Wifi, X, Zap } from 'lucide-react';
-import BiometricEnrollModal from '../BiometricEnrollModal';
-import SupervisorAuthModal from './SupervisorAuthModal';
-import MobileCheckoutModal from './MobileCheckoutModal';
-import MobileReceiptModal from './MobileReceiptModal';
-import MobileQuickProductModal from './MobileQuickProductModal';
-import MobilePriceCardModal from './MobilePriceCardModal';
-import MobileImagePreviewModal from './MobileImagePreviewModal';
-import MobileQuickItemModal from './MobileQuickItemModal';
-import MobileHeldSalesModal from './MobileHeldSalesModal';
 import MobileSideNav from './MobileSideNav';
-import MobilePreSaleSentModal from './MobilePreSaleSentModal';
-import MobileWhatsAppReceiptModal from './MobileWhatsAppReceiptModal';
-import MobilePriceCheckerModal from './MobilePriceCheckerModal';
-import MobileCustomerSelectModal from './MobileCustomerSelectModal';
-import MobileTableSelectModal from './MobileTableSelectModal';
 
+const BiometricEnrollModal = lazy(() => import('../BiometricEnrollModal'));
+const SupervisorAuthModal = lazy(() => import('./SupervisorAuthModal'));
+const MobileCheckoutModal = lazy(() => import('./MobileCheckoutModal'));
+const MobileReceiptModal = lazy(() => import('./MobileReceiptModal'));
+const MobileQuickProductModal = lazy(() => import('./MobileQuickProductModal'));
+const MobilePriceCardModal = lazy(() => import('./MobilePriceCardModal'));
+const MobileImagePreviewModal = lazy(() => import('./MobileImagePreviewModal'));
+const MobileQuickItemModal = lazy(() => import('./MobileQuickItemModal'));
+const MobileHeldSalesModal = lazy(() => import('./MobileHeldSalesModal'));
+const MobilePreSaleSentModal = lazy(() => import('./MobilePreSaleSentModal'));
+const MobileWhatsAppReceiptModal = lazy(() => import('./MobileWhatsAppReceiptModal'));
+const MobilePriceCheckerModal = lazy(() => import('./MobilePriceCheckerModal'));
+const MobileCustomerSelectModal = lazy(() => import('./MobileCustomerSelectModal'));
+const MobileTableSelectModal = lazy(() => import('./MobileTableSelectModal'));
 const MobileBarcodeScannerModal = lazy(() => import('../MobileBarcodeScannerModal'));
 const MobileVariantPickerModal = lazy(() => import('./MobileVariantPickerModal'));
 const MobileControlledMedModal = lazy(() => import('./MobileControlledMedModal'));
@@ -233,81 +233,85 @@ export default function MobileSimulatorModals(props) {
   return (
     <>
       {isCheckoutOpen && (
-        <MobileCheckoutModal
-          isOpen={isCheckoutOpen}
-          onClose={() => setIsCheckoutOpen(false)}
-          T={T}
-          isLight={isLight}
-          documentType={documentType}
-          setDocumentType={setDocumentType}
-          totalUSD={totalUSD}
-          baseTotalUSD={baseTotalUSD}
-          totalBS={totalBS}
-          taxUSD={taxUSD}
-          taxLabel={taxLabel}
-          effectiveIvaRate={effectiveIvaRate}
-          isIvaEnabled={isIvaEnabled}
-          currentIgtfUSD={currentIgtfUSD}
-          igtfRate={igtfRate}
-          isIgtfEnabled={isIgtfEnabled}
-          exchangeRate={exchangeRate}
-          customerDoc={customerDoc}
-          setCustomerDoc={setCustomerDoc}
-          customerName={customerName}
-          setCustomerName={setCustomerName}
-          onOpenCustomerSelect={() => {
-            triggerHaptic(10);
-            setCustomerSearch('');
-            setIsCreatingCustomerInMobile(false);
-            setIsCustomerSelectModalOpen(true);
-          }}
-          isProcessingSale={isProcessingSale}
-          handleSaveQuotation={handleSaveQuotation}
-          checkoutMode={checkoutMode}
-          setCheckoutMode={setCheckoutMode}
-          selectedMethod={selectedMethod}
-          handleSelectPaymentMethod={handleSelectPaymentMethod}
-          cashAccumulateMode={cashAccumulateMode}
-          setCashAccumulateMode={setCashAccumulateMode}
-          amountPaidUSD={amountPaidUSD}
-          setAmountPaidUSD={setAmountPaidUSD}
-          amountPaidBS={amountPaidBS}
-          setAmountPaidBS={setAmountPaidBS}
-          totalPaidInUSD={totalPaidInUSD}
-          paidUSD={paidUSD}
-          paidBS={paidBS}
-          changeUSD={changeUSD}
-          changeBS={changeBS}
-          isDollarCountry={isDollarCountry}
-          splitPayments={splitPayments}
-          setSplitPayments={setSplitPayments}
-          splitPaidUSD={splitPaidUSD}
-          splitRemainingUSD={splitRemainingUSD}
-          splitChangeUSD={splitChangeUSD}
-          splitChangeBS={splitChangeBS}
-          pagoMovilPhone={businessInfo?.pagoMovilPhone || ''}
-          pagoMovilId={businessInfo?.pagoMovilId || ''}
-          pagoMovilBank={businessInfo?.pagoMovilBank || ''}
-          businessInfo={businessInfo}
-          paymentReference={paymentReference}
-          setPaymentReference={setPaymentReference}
-          handleConfirmSale={handleConfirmSale}
-          triggerHaptic={triggerHaptic}
-          playScanSound={playScanSound}
-        />
+        <Suspense fallback={null}>
+          <MobileCheckoutModal
+            isOpen={isCheckoutOpen}
+            onClose={() => setIsCheckoutOpen(false)}
+            T={T}
+            isLight={isLight}
+            documentType={documentType}
+            setDocumentType={setDocumentType}
+            totalUSD={totalUSD}
+            baseTotalUSD={baseTotalUSD}
+            totalBS={totalBS}
+            taxUSD={taxUSD}
+            taxLabel={taxLabel}
+            effectiveIvaRate={effectiveIvaRate}
+            isIvaEnabled={isIvaEnabled}
+            currentIgtfUSD={currentIgtfUSD}
+            igtfRate={igtfRate}
+            isIgtfEnabled={isIgtfEnabled}
+            exchangeRate={exchangeRate}
+            customerDoc={customerDoc}
+            setCustomerDoc={setCustomerDoc}
+            customerName={customerName}
+            setCustomerName={setCustomerName}
+            onOpenCustomerSelect={() => {
+              triggerHaptic(10);
+              setCustomerSearch('');
+              setIsCreatingCustomerInMobile(false);
+              setIsCustomerSelectModalOpen(true);
+            }}
+            isProcessingSale={isProcessingSale}
+            handleSaveQuotation={handleSaveQuotation}
+            checkoutMode={checkoutMode}
+            setCheckoutMode={setCheckoutMode}
+            selectedMethod={selectedMethod}
+            handleSelectPaymentMethod={handleSelectPaymentMethod}
+            cashAccumulateMode={cashAccumulateMode}
+            setCashAccumulateMode={setCashAccumulateMode}
+            amountPaidUSD={amountPaidUSD}
+            setAmountPaidUSD={setAmountPaidUSD}
+            amountPaidBS={amountPaidBS}
+            setAmountPaidBS={setAmountPaidBS}
+            totalPaidInUSD={totalPaidInUSD}
+            paidUSD={paidUSD}
+            paidBS={paidBS}
+            changeUSD={changeUSD}
+            changeBS={changeBS}
+            isDollarCountry={isDollarCountry}
+            splitPayments={splitPayments}
+            setSplitPayments={setSplitPayments}
+            splitPaidUSD={splitPaidUSD}
+            splitRemainingUSD={splitRemainingUSD}
+            splitChangeUSD={splitChangeUSD}
+            splitChangeBS={splitChangeBS}
+            pagoMovilPhone={businessInfo?.pagoMovilPhone || ''}
+            pagoMovilId={businessInfo?.pagoMovilId || ''}
+            pagoMovilBank={businessInfo?.pagoMovilBank || ''}
+            businessInfo={businessInfo}
+            paymentReference={paymentReference}
+            setPaymentReference={setPaymentReference}
+            handleConfirmSale={handleConfirmSale}
+            triggerHaptic={triggerHaptic}
+            playScanSound={playScanSound}
+          />
+        </Suspense>
       )}
 
       {printedReceipt && (
-        <MobileReceiptModal
-          receipt={printedReceipt}
-          onClose={() => setPrintedReceipt(null)}
-          businessInfo={businessInfo}
-          user={user}
-          onPrintBluetooth={handlePrintBluetoothReceipt}
-          onOpenThermalPrinterSettings={() => setIsThermalPrinterModalOpen(true)}
-          onShareWhatsApp={shareReceiptWhatsApp}
-          triggerHaptic={triggerHaptic}
-        />
+        <Suspense fallback={null}>
+          <MobileReceiptModal
+            receipt={printedReceipt}
+            onClose={() => setPrintedReceipt(null)}
+            businessInfo={businessInfo}
+            user={user}
+            onPrintBluetooth={handlePrintBluetoothReceipt}
+            onOpenThermalPrinterSettings={() => setIsThermalPrinterModalOpen(true)}
+            onShareWhatsApp={shareReceiptWhatsApp}
+            triggerHaptic={triggerHaptic}
+          />
+        </Suspense>
       )}
 
       {selectedProductForVariant && (
@@ -436,28 +440,30 @@ export default function MobileSimulatorModals(props) {
       )}
 
       {isQuickProductModalOpen && (
-        <MobileQuickProductModal
-          isOpen={isQuickProductModalOpen}
-          onClose={() => setIsQuickProductModalOpen(false)}
-          T={T}
-          isLight={isLight}
-          productFormData={productFormData}
-          setProductFormData={setProductFormData}
-          handleSaveProduct={handleSaveProduct}
-          isSavingProduct={isSavingProduct}
-          isUploadingImage={isUploadingImage}
-          handleProductImageUpload={handleProductImageUpload}
-          onOpenImageSearch={() => setIsImageSearchModalOpen(true)}
-          generateInternalEanBarcode={generateInternalEanBarcode}
-          setScannerTarget={setScannerTarget}
-          setIsScannerOpen={setIsScannerOpen}
-          isCustomCategoryMode={isCustomCategoryMode}
-          setIsCustomCategoryMode={setIsCustomCategoryMode}
-          selectableCategories={selectableCategories}
-          exchangeRate={exchangeRate}
-          triggerHaptic={triggerHaptic}
-          canViewCosts={canViewCosts}
-        />
+        <Suspense fallback={null}>
+          <MobileQuickProductModal
+            isOpen={isQuickProductModalOpen}
+            onClose={() => setIsQuickProductModalOpen(false)}
+            T={T}
+            isLight={isLight}
+            productFormData={productFormData}
+            setProductFormData={setProductFormData}
+            handleSaveProduct={handleSaveProduct}
+            isSavingProduct={isSavingProduct}
+            isUploadingImage={isUploadingImage}
+            handleProductImageUpload={handleProductImageUpload}
+            onOpenImageSearch={() => setIsImageSearchModalOpen(true)}
+            generateInternalEanBarcode={generateInternalEanBarcode}
+            setScannerTarget={setScannerTarget}
+            setIsScannerOpen={setIsScannerOpen}
+            isCustomCategoryMode={isCustomCategoryMode}
+            setIsCustomCategoryMode={setIsCustomCategoryMode}
+            selectableCategories={selectableCategories}
+            exchangeRate={exchangeRate}
+            triggerHaptic={triggerHaptic}
+            canViewCosts={canViewCosts}
+          />
+        </Suspense>
       )}
 
       {isImageSearchModalOpen && (
@@ -525,61 +531,69 @@ export default function MobileSimulatorModals(props) {
       )}
 
       {priceCheckerProduct && !isPriceCheckerModalOpen && (
-        <MobilePriceCardModal
-          product={priceCheckerProduct}
-          onClose={() => setPriceCheckerProduct(null)}
-          T={T}
-          getImageUrl={getImageUrl}
-          exchangeRate={exchangeRate}
-          addToCart={addToCart}
-          showToast={showToast}
-          onOpenScanner={() => {
-            setPriceCheckerProduct(null);
-            setIsScannerOpen(true);
-          }}
-        />
+        <Suspense fallback={null}>
+          <MobilePriceCardModal
+            product={priceCheckerProduct}
+            onClose={() => setPriceCheckerProduct(null)}
+            T={T}
+            getImageUrl={getImageUrl}
+            exchangeRate={exchangeRate}
+            addToCart={addToCart}
+            showToast={showToast}
+            onOpenScanner={() => {
+              setPriceCheckerProduct(null);
+              setIsScannerOpen(true);
+            }}
+          />
+        </Suspense>
       )}
 
       {previewProductImage && (
-        <MobileImagePreviewModal
-          previewProductImage={previewProductImage}
-          onClose={() => setPreviewProductImage(null)}
-          onEditProduct={openEditProduct}
-          triggerHaptic={triggerHaptic}
-          T={T}
-          isDollarCountry={isDollarCountry}
-        />
+        <Suspense fallback={null}>
+          <MobileImagePreviewModal
+            previewProductImage={previewProductImage}
+            onClose={() => setPreviewProductImage(null)}
+            onEditProduct={openEditProduct}
+            triggerHaptic={triggerHaptic}
+            T={T}
+            isDollarCountry={isDollarCountry}
+          />
+        </Suspense>
       )}
 
       {isManualItemModalOpen && (
-        <MobileQuickItemModal
-          isOpen={isManualItemModalOpen}
-          onClose={() => setIsManualItemModalOpen(false)}
-          T={T}
-          manualItemName={manualItemName}
-          setManualItemName={setManualItemName}
-          manualItemPrice={manualItemPrice}
-          setManualItemPrice={setManualItemPrice}
-          manualItemPriceBS={manualItemPriceBS}
-          setManualItemPriceBS={setManualItemPriceBS}
-          manualItemQty={manualItemQty}
-          setManualItemQty={setManualItemQty}
-          exchangeRate={exchangeRate}
-          handleAddManualItem={handleAddManualItem}
-        />
+        <Suspense fallback={null}>
+          <MobileQuickItemModal
+            isOpen={isManualItemModalOpen}
+            onClose={() => setIsManualItemModalOpen(false)}
+            T={T}
+            manualItemName={manualItemName}
+            setManualItemName={setManualItemName}
+            manualItemPrice={manualItemPrice}
+            setManualItemPrice={setManualItemPrice}
+            manualItemPriceBS={manualItemPriceBS}
+            setManualItemPriceBS={setManualItemPriceBS}
+            manualItemQty={manualItemQty}
+            setManualItemQty={setManualItemQty}
+            exchangeRate={exchangeRate}
+            handleAddManualItem={handleAddManualItem}
+          />
+        </Suspense>
       )}
 
       {isHeldSalesModalOpen && (
-        <MobileHeldSalesModal
-          isOpen={isHeldSalesModalOpen}
-          onClose={() => setIsHeldSalesModalOpen(false)}
-          T={T}
-          heldSales={heldSales}
-          currentCartCount={cart.length}
-          handleDeleteHeldSale={handleDeleteHeldSale}
-          handleRestoreHeldSale={handleRestoreHeldSale}
-          triggerHaptic={triggerHaptic}
-        />
+        <Suspense fallback={null}>
+          <MobileHeldSalesModal
+            isOpen={isHeldSalesModalOpen}
+            onClose={() => setIsHeldSalesModalOpen(false)}
+            T={T}
+            heldSales={heldSales}
+            currentCartCount={cart.length}
+            handleDeleteHeldSale={handleDeleteHeldSale}
+            handleRestoreHeldSale={handleRestoreHeldSale}
+            triggerHaptic={triggerHaptic}
+          />
+        </Suspense>
       )}
 
       <MobileSideNav
@@ -613,14 +627,18 @@ export default function MobileSimulatorModals(props) {
         logout={logout}
       />
 
-      <BiometricEnrollModal
-        isOpen={isBiometricsModalOpen}
-        onClose={() => setIsBiometricsModalOpen(false)}
-        onEnrolledChange={(cred) => {
-          setEnrolledBioUser(cred);
-          if (cred) showToast('Huella vinculada con éxito');
-        }}
-      />
+      {isBiometricsModalOpen && (
+        <Suspense fallback={null}>
+          <BiometricEnrollModal
+            isOpen={isBiometricsModalOpen}
+            onClose={() => setIsBiometricsModalOpen(false)}
+            onEnrolledChange={(cred) => {
+              setEnrolledBioUser(cred);
+              if (cred) showToast('Huella vinculada con éxito');
+            }}
+          />
+        </Suspense>
+      )}
 
       {toastMsg && (
         <div className="fixed bottom-5 right-5 bg-slate-900 border border-slate-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-2xl z-50 flex items-center gap-2 animate-slideUp">
@@ -630,21 +648,23 @@ export default function MobileSimulatorModals(props) {
       )}
 
       {supervisorAuthRequest && (
-        <SupervisorAuthModal
-          isOpen={Boolean(supervisorAuthRequest)}
-          onClose={() => setSupervisorAuthRequest(null)}
-          onAuthorized={(approvalData) => {
-            const cb = supervisorAuthRequest.onAuthorized;
-            setSupervisorAuthRequest(null);
-            cb?.(approvalData);
-          }}
-          actionType={supervisorAuthRequest.actionType || 'pos_override'}
-          referenceId={supervisorAuthRequest.referenceId || null}
-          title={supervisorAuthRequest.title}
-          reason={supervisorAuthRequest.reason}
-          isLight={isLight}
-          T={T}
-        />
+        <Suspense fallback={null}>
+          <SupervisorAuthModal
+            isOpen={Boolean(supervisorAuthRequest)}
+            onClose={() => setSupervisorAuthRequest(null)}
+            onAuthorized={(approvalData) => {
+              const cb = supervisorAuthRequest.onAuthorized;
+              setSupervisorAuthRequest(null);
+              cb?.(approvalData);
+            }}
+            actionType={supervisorAuthRequest.actionType || 'pos_override'}
+            referenceId={supervisorAuthRequest.referenceId || null}
+            title={supervisorAuthRequest.title}
+            reason={supervisorAuthRequest.reason}
+            isLight={isLight}
+            T={T}
+          />
+        </Suspense>
       )}
 
       <AnimatePresence>
@@ -664,106 +684,118 @@ export default function MobileSimulatorModals(props) {
         )}
       </AnimatePresence>
 
-      <MobileTableSelectModal
-        isOpen={isTableSelectModalOpen}
-        onClose={() => setIsTableSelectModalOpen(false)}
-        currentTable={selectedTable}
-        currentNotes={orderNotes}
-        onSave={({ table, notes }) => {
-          setSelectedTable(table);
-          setOrderNotes(notes);
-          if (table) {
-            showToast(`🍽️ Asignada: ${table}${notes ? ` (${notes})` : ''}`);
-          } else {
-            showToast('ℹ️ Venta libre (Sin mesa)');
-          }
-        }}
-        T={T}
-        triggerHaptic={triggerHaptic}
-      />
+      {isTableSelectModalOpen && (
+        <Suspense fallback={null}>
+          <MobileTableSelectModal
+            isOpen={isTableSelectModalOpen}
+            onClose={() => setIsTableSelectModalOpen(false)}
+            currentTable={selectedTable}
+            currentNotes={orderNotes}
+            onSave={({ table, notes }) => {
+              setSelectedTable(table);
+              setOrderNotes(notes);
+              if (table) {
+                showToast(`🍽️ Asignada: ${table}${notes ? ` (${notes})` : ''}`);
+              } else {
+                showToast('ℹ️ Venta libre (Sin mesa)');
+              }
+            }}
+            T={T}
+            triggerHaptic={triggerHaptic}
+          />
+        </Suspense>
+      )}
 
       {preSaleSentModal && (
-        <MobilePreSaleSentModal
-          preSaleSentModal={preSaleSentModal}
-          onClose={() => setPreSaleSentModal(null)}
-          T={T}
-          businessInfo={businessInfo}
-          printPreSaleBluetoothReceipt={printPreSaleBluetoothReceipt}
-          showToast={showToast}
-          onOpenThermalPrinterSettings={() => setIsThermalPrinterModalOpen(true)}
-          sharePreSaleWhatsApp={sharePreSaleWhatsApp}
-          triggerHaptic={triggerHaptic}
-        />
+        <Suspense fallback={null}>
+          <MobilePreSaleSentModal
+            preSaleSentModal={preSaleSentModal}
+            onClose={() => setPreSaleSentModal(null)}
+            T={T}
+            businessInfo={businessInfo}
+            printPreSaleBluetoothReceipt={printPreSaleBluetoothReceipt}
+            showToast={showToast}
+            onOpenThermalPrinterSettings={() => setIsThermalPrinterModalOpen(true)}
+            sharePreSaleWhatsApp={sharePreSaleWhatsApp}
+            triggerHaptic={triggerHaptic}
+          />
+        </Suspense>
       )}
 
       {whatsAppModalData && (
-        <MobileWhatsAppReceiptModal
-          whatsAppModalData={whatsAppModalData}
-          onClose={() => setWhatsAppModalData(null)}
-          T={T}
-          whatsAppPhoneInput={whatsAppPhoneInput}
-          setWhatsAppPhoneInput={setWhatsAppPhoneInput}
-          exchangeRate={exchangeRate}
-          handleConfirmSendWhatsApp={handleConfirmSendWhatsApp}
-          isGeneratingWhatsApp={isGeneratingWhatsApp}
-          whatsAppMessagePreview={whatsAppMessagePreview}
-          generateEcoReceiptText={generateEcoReceiptText}
-          cleanWhatsAppPhone={cleanWhatsAppPhone}
-          showToast={showToast}
-          triggerHaptic={triggerHaptic}
-        />
+        <Suspense fallback={null}>
+          <MobileWhatsAppReceiptModal
+            whatsAppModalData={whatsAppModalData}
+            onClose={() => setWhatsAppModalData(null)}
+            T={T}
+            whatsAppPhoneInput={whatsAppPhoneInput}
+            setWhatsAppPhoneInput={setWhatsAppPhoneInput}
+            exchangeRate={exchangeRate}
+            handleConfirmSendWhatsApp={handleConfirmSendWhatsApp}
+            isGeneratingWhatsApp={isGeneratingWhatsApp}
+            whatsAppMessagePreview={whatsAppMessagePreview}
+            generateEcoReceiptText={generateEcoReceiptText}
+            cleanWhatsAppPhone={cleanWhatsAppPhone}
+            showToast={showToast}
+            triggerHaptic={triggerHaptic}
+          />
+        </Suspense>
       )}
 
       {isPriceCheckerModalOpen && (
-        <MobilePriceCheckerModal
-          isOpen={isPriceCheckerModalOpen}
-          onClose={() => {
-            setIsPriceCheckerModalOpen(false);
-            setPriceCheckerProduct(null);
-            setPriceCheckerSearch('');
-          }}
-          T={T}
-          priceCheckerSearch={priceCheckerSearch}
-          setPriceCheckerSearch={setPriceCheckerSearch}
-          onOpenScanner={() => setIsScannerOpen(true)}
-          setScannerTarget={setScannerTarget}
-          setPosMode={setPosMode}
-          isDollarCountry={isDollarCountry}
-          triggerHaptic={triggerHaptic}
-          priceCheckerProduct={priceCheckerProduct}
-          setPriceCheckerProduct={setPriceCheckerProduct}
-          getImageUrl={getImageUrl}
-          exchangeRate={exchangeRate}
-          addToCart={addToCart}
-          showToast={showToast}
-          products={products}
-          isUnlimitedStockProduct={isUnlimitedStockProduct}
-        />
+        <Suspense fallback={null}>
+          <MobilePriceCheckerModal
+            isOpen={isPriceCheckerModalOpen}
+            onClose={() => {
+              setIsPriceCheckerModalOpen(false);
+              setPriceCheckerProduct(null);
+              setPriceCheckerSearch('');
+            }}
+            T={T}
+            priceCheckerSearch={priceCheckerSearch}
+            setPriceCheckerSearch={setPriceCheckerSearch}
+            onOpenScanner={() => setIsScannerOpen(true)}
+            setScannerTarget={setScannerTarget}
+            setPosMode={setPosMode}
+            isDollarCountry={isDollarCountry}
+            triggerHaptic={triggerHaptic}
+            priceCheckerProduct={priceCheckerProduct}
+            setPriceCheckerProduct={setPriceCheckerProduct}
+            getImageUrl={getImageUrl}
+            exchangeRate={exchangeRate}
+            addToCart={addToCart}
+            showToast={showToast}
+            products={products}
+            isUnlimitedStockProduct={isUnlimitedStockProduct}
+          />
+        </Suspense>
       )}
 
       {isCustomerSelectModalOpen && (
-        <MobileCustomerSelectModal
-          isOpen={isCustomerSelectModalOpen}
-          onClose={() => {
-            setIsCustomerSelectModalOpen(false);
-            setIsCreatingCustomerInMobile(false);
-          }}
-          T={T}
-          customers={customers}
-          customerName={customerName}
-          isDollarCountry={isDollarCountry}
-          isCreatingCustomerInMobile={isCreatingCustomerInMobile}
-          setIsCreatingCustomerInMobile={setIsCreatingCustomerInMobile}
-          customerSearch={customerSearch}
-          setCustomerSearch={setCustomerSearch}
-          filteredCustomers={filteredCustomers}
-          handleSelectExistingCustomer={handleSelectCustomer}
-          newCustomerData={newCustomerForm}
-          setNewCustomerData={setNewCustomerForm}
-          handleCreateCustomerSubmit={handleSaveNewCustomer}
-          isSavingCustomer={isSavingCustomer}
-          triggerHaptic={triggerHaptic}
-        />
+        <Suspense fallback={null}>
+          <MobileCustomerSelectModal
+            isOpen={isCustomerSelectModalOpen}
+            onClose={() => {
+              setIsCustomerSelectModalOpen(false);
+              setIsCreatingCustomerInMobile(false);
+            }}
+            T={T}
+            customers={customers}
+            customerName={customerName}
+            isDollarCountry={isDollarCountry}
+            isCreatingCustomerInMobile={isCreatingCustomerInMobile}
+            setIsCreatingCustomerInMobile={setIsCreatingCustomerInMobile}
+            customerSearch={customerSearch}
+            setCustomerSearch={setCustomerSearch}
+            filteredCustomers={filteredCustomers}
+            handleSelectExistingCustomer={handleSelectCustomer}
+            newCustomerData={newCustomerForm}
+            setNewCustomerData={setNewCustomerForm}
+            handleCreateCustomerSubmit={handleSaveNewCustomer}
+            isSavingCustomer={isSavingCustomer}
+            triggerHaptic={triggerHaptic}
+          />
+        </Suspense>
       )}
 
       {/* Modal Global de Configuración de IP de Servidor PC (accesible tanto desde Login como desde Sincronización PC) */}

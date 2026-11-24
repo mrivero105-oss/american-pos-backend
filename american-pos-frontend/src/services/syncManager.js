@@ -2,6 +2,25 @@ import api from './api';
 import { db as primaryDb } from './db';
 import db from '../db/localDb';
 
+const SYNC_ALERTS_STORAGE_KEY = 'pos_mobile_sync_alerts_v1';
+
+const pushSyncAlertRecord = (alertObj) => {
+  if (typeof window === 'undefined' || !alertObj) return;
+  try {
+    const raw = sessionStorage.getItem(SYNC_ALERTS_STORAGE_KEY);
+    const prev = raw ? JSON.parse(raw) : [];
+    const list = Array.isArray(prev) ? prev : [];
+    list.unshift({
+      id: alertObj.id || `alert_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      ...alertObj
+    });
+    sessionStorage.setItem(SYNC_ALERTS_STORAGE_KEY, JSON.stringify(list.slice(0, 20)));
+  } catch {
+    // Ignorar si sessionStorage no está disponible
+  }
+};
+
 class SyncManager {
   constructor() {
     this.syncInterval = null;
@@ -348,8 +367,14 @@ class SyncManager {
                 if (item.endpoint === '/products' && existingEntity?.id && item.tempLocalId) {
                   await this.reconcileOfflineProduct(item.payload, existingEntity, item.tempLocalId);
                 }
+                const conflictDetail = { itemId: item.id, endpoint: item.endpoint, tempLocalId: item.tempLocalId, error: itemErr.response?.data?.error || itemErr.message };
+                pushSyncAlertRecord({
+                  kind: 'conflict',
+                  title: `Conflicto en ${item.endpoint || 'operación'}`,
+                  message: conflictDetail.error || 'Registro duplicado o en conflicto'
+                });
                 window.dispatchEvent(new CustomEvent('sync-queue-conflict', {
-                  detail: { itemId: item.id, endpoint: item.endpoint, tempLocalId: item.tempLocalId, error: itemErr.response?.data?.error || itemErr.message }
+                  detail: conflictDetail
                 }));
                 await primaryDb.delete('syncQueue', item.id);
               } else if (status && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status)) {
@@ -363,6 +388,11 @@ class SyncManager {
                     lastError: errDetail,
                     lastHttpStatus: status,
                     failedAt: new Date().toISOString()
+                  });
+                  pushSyncAlertRecord({
+                    kind: 'error',
+                    title: `Error permanente (${status}) en ${item.endpoint || 'cola'}`,
+                    message: errDetail || 'La operación fue rechazada por el servidor'
                   });
                   window.dispatchEvent(new CustomEvent('sync-queue-error', {
                     detail: { itemId: item.id, endpoint: item.endpoint, status, error: errDetail }
@@ -533,6 +563,15 @@ class SyncManager {
             const serverWarnings = response.data?.inventoryWarnings || response.data?.stockDeficits || [];
             if (Array.isArray(serverWarnings) && serverWarnings.length > 0) {
               console.warn('[SyncManager] ⚠️ Se detectaron advertencias de inventario diferido tras sincronizar:', serverWarnings);
+              for (const w of serverWarnings) {
+                pushSyncAlertRecord({
+                  kind: 'stock_deficit',
+                  title: `Déficit de stock: ${w.productName || w.productId || 'Producto'}`,
+                  message: w.type === 'missing_product'
+                    ? `Producto eliminado en PC durante venta offline (${w.soldQuantity || 1} un).`
+                    : `Stock esperado: ${w.expectedStock ?? 0}, vendido: ${w.soldQuantity ?? 0}, sobregiro: ${w.overdraftAmount ?? 0}.`
+                });
+              }
               window.dispatchEvent(new CustomEvent('lan-stock-deficit-detected', { detail: { warnings: serverWarnings } }));
             }
           } catch (_wErr) {

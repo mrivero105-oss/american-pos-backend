@@ -1405,6 +1405,16 @@ button, input, select, textarea, a, [role="button"], .touch-fast {
 }
 
 @media (max-width: 768px) {
+  .mobile-embedded-module {
+    max-width: 100% !important;
+    overflow-x: clip !important;
+  }
+
+  .mobile-embedded-module > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   /* Scale down oversized desktop typography */
   .mobile-embedded-module h1,
   .mobile-embedded-module .text-3xl,
@@ -1474,8 +1484,17 @@ button, input, select, textarea, a, [role="button"], .touch-fast {
 
   /* Tables inside embedded modules auto-scroll horizontally and never blow up width */
   .mobile-embedded-module table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-embedded-module .overflow-x-auto > table {
     display: table;
     min-width: 100%;
+    overflow-x: visible;
   }
 
   .mobile-embedded-module table th,
@@ -1486,6 +1505,7 @@ button, input, select, textarea, a, [role="button"], .touch-fast {
 
   .mobile-embedded-module .overflow-x-auto {
     width: 100%;
+    max-width: 100%;
     -webkit-overflow-scrolling: touch;
   }
 

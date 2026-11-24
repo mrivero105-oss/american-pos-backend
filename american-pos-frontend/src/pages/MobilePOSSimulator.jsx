@@ -17,6 +17,7 @@ import { useTheme } from '../hooks/ThemeContext';
 import { useSocket } from '../hooks/SocketContext';
 import { isDollarOnlyCountry } from '../utils/format';
 import { getImageUrl } from '../utils/imageUtils';
+import { normalizeProductImage } from '../utils/imageProcess';
 import { cacheAllProductImages } from '../services/imageCache';
 import { triggerHaptic } from '../utils/haptics';
 import cloudRateSyncService from '../services/cloudRateSyncService';
@@ -1226,11 +1227,13 @@ export default function MobilePOSSimulator() {
   };
 
   const loadProductsRetryTimerRef = useRef(null);
-  const loadProducts = async (isRetry = false) => {
+  const loadProducts = async (isRetry = false, forceFull = false) => {
+    const isForceFull = forceFull === true;
+    const isRetryRun = isRetry === true;
     // 1. Rendimiento Instantáneo: Cargar de inmediato desde la base de datos local (5 ms)
     let localCount = 0;
+    let localItems = [];
     try {
-      let localItems = [];
       if (localDb && localDb.products) {
         localItems = await localDb.products.toArray();
       }
@@ -1247,11 +1250,106 @@ export default function MobilePOSSimulator() {
       }
     } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
+    const computePendingDeductions = async () => {
+      const pendingDeductions = new Map();
+      try {
+        if (localDb && localDb.sales) {
+          const pendSales = await localDb.sales.where('status').equals('pending_sync').toArray();
+          for (const s of pendSales) {
+            const items = Array.isArray(s.items) ? s.items : [];
+            for (const it of items) {
+              const pid = getCleanProductId(it.productId || it.id || '');
+              const qty = Number(it.quantity || 0);
+              const mult = Math.max(1, Number(it.factorConversion || it.unitsMultiplier || (it.isBulk ? it.unitsPerBulk : (it.isMidBulk ? it.unitsPerMidBulk : 1)) || 1));
+              if (pid && qty > 0) {
+                pendingDeductions.set(pid, (pendingDeductions.get(pid) || 0) + (qty * mult));
+              }
+            }
+          }
+        }
+      } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error leyendo ventas pendientes locales:', caughtErr?.message || caughtErr); }
+      return pendingDeductions;
+    };
 
-    // 2. Revalidación completa en segundo plano contra el servidor PC (incluyendo activos y agotados/inactivos)
+    const applyPendingStockAdjustments = (list, pendingDeductions) => {
+      if (!pendingDeductions || pendingDeductions.size === 0) return list;
+      return list.map(p => {
+        const deduct = pendingDeductions.get(String(p.id).trim()) || 0;
+        if (deduct <= 0) return p;
+        const curStock = Number(p.stockQuantity ?? p.stock ?? 0);
+        const nextStock = Math.max(0, Number((curStock - deduct).toFixed(3)));
+        return { ...p, stockQuantity: nextStock, stock: nextStock };
+      });
+    };
+
+    // 2A. Fast-Path Delta Sync (?since=): si ya tenemos catálogo local y no se pidió descarga completa, transferir solo cambios
+    const PRODUCTS_LAST_SYNC_KEY = 'pos_mobile_products_last_sync';
+    try {
+      const lastSyncIso = !isForceFull && localCount > 0 ? localStorage.getItem(PRODUCTS_LAST_SYNC_KEY) : null;
+      if (lastSyncIso) {
+        const deltaRes = await api.get(`/products?minimal=true&limit=0&since=${encodeURIComponent(lastSyncIso)}`, { timeout: 10000 });
+        const deltaPayload = deltaRes?.data;
+        if (deltaPayload && deltaPayload.delta === true && deltaPayload.fullSyncRequired !== true) {
+          if (loadProductsRetryTimerRef.current) {
+            clearTimeout(loadProductsRetryTimerRef.current);
+            loadProductsRetryTimerRef.current = null;
+          }
+          const changedProducts = Array.isArray(deltaPayload.products) ? deltaPayload.products : [];
+          const deletedIds = Array.isArray(deltaPayload.deletedIds) ? deltaPayload.deletedIds.map(String) : [];
+
+          if (deltaPayload.serverTime) {
+            try { localStorage.setItem(PRODUCTS_LAST_SYNC_KEY, deltaPayload.serverTime); } catch { /* noop */ }
+          }
+
+          if (changedProducts.length > 0 || deletedIds.length > 0) {
+            const pendingDeductions = await computePendingDeductions();
+            const adjustedDelta = applyPendingStockAdjustments(changedProducts, pendingDeductions);
+            const catalogMap = new Map();
+            for (const p of localItems) {
+              if (p && p.id != null) catalogMap.set(String(p.id), p);
+            }
+            for (const delId of deletedIds) {
+              if (!delId.startsWith('off_prod_')) {
+                catalogMap.delete(delId);
+              }
+            }
+            for (const prod of adjustedDelta) {
+              if (prod && prod.id != null) {
+                catalogMap.set(String(prod.id), prod);
+              }
+            }
+            const nextCatalog = Array.from(catalogMap.values());
+            catalogSignatureRef.current = computeCatalogSignature(nextCatalog);
+            setProducts(nextCatalog);
+
+            setTimeout(async () => {
+              try {
+                if (adjustedDelta.length > 0 && primaryDb?.putBatch) {
+                  await primaryDb.putBatch('products', adjustedDelta).catch((err) => console.warn('[MobilePOS] Error aplicando delta putBatch:', err?.message || err));
+                }
+                for (const delId of deletedIds) {
+                  if (!delId.startsWith('off_prod_')) {
+                    await primaryDb.delete('products', delId).catch(() => {});
+                  }
+                }
+                if (adjustedDelta.length > 0) {
+                  cacheAllProductImages(adjustedDelta, { concurrency: 2, yieldMs: 25 }).catch(() => {});
+                }
+              } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error aplicando delta en IndexedDB:', caughtErr?.message || caughtErr); }
+            }, 150);
+          }
+          return;
+        }
+      }
+    } catch (deltaErr) {
+      // Si el delta falla (ej. servidor antiguo o reiniciado), continuar con revalidación completa abajo
+      console.warn('[MobilePOSSimulator] Delta sync no disponible, continuando con carga completa:', deltaErr?.message || deltaErr);
+    }
+
+    // 2B. Revalidación completa en segundo plano contra el servidor PC (incluyendo activos y agotados/inactivos)
     try {
       const [activeRes, inactiveRes] = await Promise.allSettled([
-        api.get('/products?minimal=true&limit=0', { timeout: 15000 }),
+        api.get('/products?minimal=true&limit=0&delta=true', { timeout: 15000 }),
         api.get('/products?minimal=true&limit=0&status=inactive', { timeout: 15000 })
       ]);
 
@@ -1261,6 +1359,7 @@ export default function MobilePOSSimulator() {
         return Array.isArray(d) ? d : (d.products || []);
       };
 
+      const activeServerTime = activeRes.status === 'fulfilled' ? activeRes.value?.data?.serverTime : null;
       const activeList = extractList(activeRes);
       const inactiveList = extractList(inactiveRes);
 
@@ -1278,38 +1377,16 @@ export default function MobilePOSSimulator() {
           clearTimeout(loadProductsRetryTimerRef.current);
           loadProductsRetryTimerRef.current = null;
         }
+        try {
+          localStorage.setItem(PRODUCTS_LAST_SYNC_KEY, activeServerTime || new Date().toISOString());
+        } catch { /* noop */ }
 
         // Preservar descuentos de stock de ventas offline aún pendientes (pending_sync) multiplicados por presentación
-        let pendingDeductions = new Map();
-        try {
-          if (localDb && localDb.sales) {
-            const pendSales = await localDb.sales.where('status').equals('pending_sync').toArray();
-            for (const s of pendSales) {
-              const items = Array.isArray(s.items) ? s.items : [];
-              for (const it of items) {
-                const pid = getCleanProductId(it.productId || it.id || '');
-                const qty = Number(it.quantity || 0);
-                const mult = Math.max(1, Number(it.factorConversion || it.unitsMultiplier || (it.isBulk ? it.unitsPerBulk : (it.isMidBulk ? it.unitsPerMidBulk : 1)) || 1));
-                if (pid && qty > 0) {
-                  pendingDeductions.set(pid, (pendingDeductions.get(pid) || 0) + (qty * mult));
-                }
-              }
-            }
-          }
-        } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
-
-        const adjustedRaw = pendingDeductions.size === 0
-          ? raw
-          : raw.map(p => {
-              const deduct = pendingDeductions.get(String(p.id).trim()) || 0;
-              if (deduct <= 0) return p;
-              const curStock = Number(p.stockQuantity ?? p.stock ?? 0);
-              const nextStock = Math.max(0, Number((curStock - deduct).toFixed(3)));
-              return { ...p, stockQuantity: nextStock, stock: nextStock };
-            });
+        const pendingDeductions = await computePendingDeductions();
+        const adjustedRaw = applyPendingStockAdjustments(raw, pendingDeductions);
 
         const remoteSig = computeCatalogSignature(adjustedRaw);
-        if (catalogSignatureRef.current !== remoteSig || adjustedRaw.length !== localCount) {
+        if (isForceFull || catalogSignatureRef.current !== remoteSig || adjustedRaw.length !== localCount) {
           // Preservar productos creados offline (off_prod_*) antes de reemplazar atómicamente
           let mergedCatalog = adjustedRaw;
           try {
@@ -1333,7 +1410,7 @@ export default function MobilePOSSimulator() {
             } catch (caughtErr) { console.warn('[MobilePOSSimulator] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
           }, 400);
         }
-      } else if (!isRetry) {
+      } else if (!isRetryRun) {
         loadProductsRetryTimerRef.current = setTimeout(() => {
           loadProducts(true);
         }, 2200);
@@ -2022,7 +2099,7 @@ export default function MobilePOSSimulator() {
     showToast('✨ Código interno generado');
   };
 
-  // Subir o Cambiar Foto de Producto en Alta Definición
+  // Subir o Cambiar Foto de Producto (comprimida/normalizada a 500px antes de enviar o guardar offline)
   const handleProductImageUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2034,37 +2111,39 @@ export default function MobilePOSSimulator() {
 
     try {
       setIsUploadingImage(true);
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        try {
-          const base64 = event.target.result;
-          let imgUri = '';
-          try {
-            const res = await api.post('/products/upload-image', {
-              base64,
-              productId: productFormData.id || 'new'
-            }, { timeout: 6000 });
-            imgUri = res.data?.imageUri || '';
-            showToast('✅ Foto cargada en Alta Definición');
-          } catch (uploadErr) {
-            console.warn('Fallback offline para imagen:', uploadErr);
-            imgUri = base64;
-            showToast('⚡ Foto guardada localmente (Offline)');
-          }
-          setProductFormData(prev => ({
-            ...prev,
-            imageUri: imgUri
-          }));
-        } catch (err) {
-          console.error('Error subiendo imagen:', err);
-          showToast('❌ Error al procesar imagen');
-        } finally {
-          setIsUploadingImage(false);
-        }
-      };
-      reader.readAsDataURL(file);
+      let base64 = '';
+      try {
+        base64 = await normalizeProductImage(file, { size: 500, mode: 'contain', quality: 0.84 });
+      } catch (_normErr) {
+        base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (event) => resolve(event.target?.result || '');
+          reader.onerror = () => reject(reader.error || new Error('No se pudo leer la imagen'));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      let imgUri = '';
+      try {
+        const res = await api.post('/products/upload-image', {
+          base64,
+          productId: productFormData.id || 'new'
+        }, { timeout: 6000 });
+        imgUri = res.data?.imageUri || '';
+        showToast('✅ Foto optimizada y cargada');
+      } catch (uploadErr) {
+        console.warn('Fallback offline para imagen:', uploadErr);
+        imgUri = base64;
+        showToast('⚡ Foto optimizada y guardada localmente (Offline)');
+      }
+      setProductFormData(prev => ({
+        ...prev,
+        imageUri: imgUri
+      }));
     } catch (err) {
-      console.error(err);
+      console.error('Error subiendo imagen:', err);
+      showToast('❌ Error al procesar imagen');
+    } finally {
       setIsUploadingImage(false);
     }
   };
@@ -3419,7 +3498,7 @@ export default function MobilePOSSimulator() {
                 exchangeRate={exchangeRate}
                 isSyncing={isSyncingSales}
                 onSyncNow={syncOfflineSalesQueue}
-                onRefreshCatalog={loadProducts}
+                onRefreshCatalog={() => loadProducts(false, true)}
                 T={T}
                 isLight={isLight}
                 onBackToPOS={() => setActiveModule('pos')}
@@ -3435,7 +3514,7 @@ export default function MobilePOSSimulator() {
         </MobileSubViewWrapper>
       ) : activeModule === 'collections' ? (
         <MobileSubViewWrapper title="Cobranza" subtitle="Control de cartera y morosidad" icon={Coins} onBack={() => setActiveModule('pos')} T={T}>
-          <AssetsAndCollectionsPage />
+          <AssetsAndCollectionsPage initialTab="collections" />
         </MobileSubViewWrapper>
       ) : activeModule === 'promotions' ? (
         <MobileSubViewWrapper title="Promociones" subtitle="Descuentos automáticos y ofertas" icon={Tag} onBack={() => setActiveModule('pos')} T={T}>
@@ -3475,7 +3554,7 @@ export default function MobilePOSSimulator() {
         </MobileSubViewWrapper>
       ) : activeModule === 'assets' ? (
         <MobileSubViewWrapper title="Activos Fijos" subtitle="Bienes y cálculo de depreciación" icon={Building2} onBack={() => setActiveModule('pos')} T={T}>
-          <AssetsAndCollectionsPage />
+          <AssetsAndCollectionsPage initialTab="assets" />
         </MobileSubViewWrapper>
       ) : activeModule === 'audit' ? (
         <MobileSubViewWrapper title="Auditoría" subtitle="Bitácora y eventos del sistema" icon={ShieldCheck} onBack={() => setActiveModule('pos')} T={T}>

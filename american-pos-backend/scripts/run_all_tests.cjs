@@ -102,7 +102,13 @@ const steps = [
     name: '[BE+GW] Hardening 10/10 Suite (RCE, SSRF, Zod v4, Zero-Trust, Arqueo, Audit HMAC, Variantes, Licencias)',
     cwd: backendDir,
     cmd: 'node',
-    args: ['--test', 'tests/test_hardening_10_of_10.test.mjs', 'tests/test_phase3_modern_stack.test.mjs'],
+    args: ['--test', '--test-concurrency=1', 'tests/test_hardening_10_of_10.test.mjs', 'tests/test_phase3_modern_stack.test.mjs'],
+  },
+  {
+    name: '[BE] Mobile Audit Remediation Suite (Biometría ECDSA v2, RBAC, Modo Ciego, Gastos VES, Delta Sync, Sobregiro)',
+    cwd: backendDir,
+    cmd: 'node',
+    args: ['--test', '--test-concurrency=1', 'tests/test_mobile_audit_remediation.test.mjs'],
   },
 ];
 

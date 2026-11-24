@@ -138,6 +138,11 @@ export const updateApiBaseUrl = (newIp) => {
         localStorage.setItem('isaac_pos_server_ip_explicitly_cleared', 'true');
         api.defaults.baseURL = '';
     }
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('api-base-url-changed', {
+            detail: { baseUrl: api.defaults.baseURL || '' }
+        }));
+    }
 };
 
 // Check server health quickly via /hello endpoint (instant latency + real DB readiness)

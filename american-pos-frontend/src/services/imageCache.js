@@ -41,12 +41,28 @@ export const getMemoryCachedImage = (uri) => {
     return memoryCache.get(key) || memoryCache.get(uri) || null;
 };
 
+const revokeBlobUrlSafe = (val) => {
+    if (typeof val === 'string' && val.startsWith('blob:') && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        try {
+            URL.revokeObjectURL(val);
+        } catch {
+            // Blob URL ya revocada o inválida
+        }
+    }
+};
+
 const setMemoryCache = (key, val) => {
     if (!key || !val) return;
     if (memoryCache.has(key)) {
+        const prev = memoryCache.get(key);
+        if (prev && prev !== val) {
+            revokeBlobUrlSafe(prev);
+        }
         memoryCache.delete(key);
     } else if (memoryCache.size >= MAX_MEMORY_CACHE_ITEMS) {
         const firstKey = memoryCache.keys().next().value;
+        const evicted = memoryCache.get(firstKey);
+        revokeBlobUrlSafe(evicted);
         memoryCache.delete(firstKey);
     }
     memoryCache.set(key, val);
@@ -591,6 +607,9 @@ export const cacheAllProductImages = async (products, options = {}) => {
 };
 
 export const resetImageCacheRuntimeForTests = () => {
+    for (const val of memoryCache.values()) {
+        revokeBlobUrlSafe(val);
+    }
     memoryCache.clear();
     inFlightFetches.clear();
     failedFetchCooldown.clear();

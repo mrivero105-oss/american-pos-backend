@@ -6,7 +6,6 @@ import './index.css';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { AuthProvider } from './providers/AuthProvider';
 import { SocketProvider } from './providers/SocketProvider';
-import { PosProvider } from './providers/PosProvider';
 import { ensureStoragePersistence } from './services/storagePersistence';
 import ErrorBoundary from './components/ErrorBoundary';
 
@@ -65,11 +64,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <ThemeProvider>
         <AuthProvider>
           <SocketProvider>
-            <PosProvider>
-              <HashRouter>
-                <MobileApp />
-              </HashRouter>
-            </PosProvider>
+            <HashRouter>
+              <MobileApp />
+            </HashRouter>
           </SocketProvider>
         </AuthProvider>
       </ThemeProvider>

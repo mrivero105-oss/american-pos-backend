@@ -29,6 +29,7 @@ export const useFuzzySearch = (data, searchTerm, options = {}) => {
     const workerRef = useRef(null);
     const queryIdRef = useRef(0);
     const hasWorkerRef = useRef(false);
+    const lastWorkerResultsRef = useRef(null);
 
     // Mapeo rápido de productos locales por ID para enriquecer respuestas del backend
     const dataMap = useMemo(() => {
@@ -55,6 +56,7 @@ export const useFuzzySearch = (data, searchTerm, options = {}) => {
                 workerInstance.onmessage = (e) => {
                     const { type, queryId, results } = e.data || {};
                     if (type === 'SEARCH_RESULTS' && queryId === queryIdRef.current) {
+                        lastWorkerResultsRef.current = results;
                         setWorkerResults(results);
                     }
                 };
@@ -107,6 +109,7 @@ export const useFuzzySearch = (data, searchTerm, options = {}) => {
     // 3. Dispatch search query / category filter to Worker when user types or switches category
     useEffect(() => {
         if (!shouldQuery) {
+            lastWorkerResultsRef.current = null;
             setWorkerResults(null);
             return;
         }
@@ -161,16 +164,17 @@ export const useFuzzySearch = (data, searchTerm, options = {}) => {
         };
     }, [searchTerm, dataMap, workerResults, enableSemantic]);
 
-    // 4. Fallback Synchronous Index & Search (cuando Worker no está disponible o antes del primer ACK)
+    // 4. Fallback Synchronous Index & Search (ÚNICAMENTE cuando el runtime no soporta Web Worker; nunca bloquea main thread con Worker activo)
     const fallbackIndex = useMemo(() => {
         if (!shouldQuery) return null;
-        if (hasWorkerRef.current && workerResults !== null) return null;
+        if (hasWorkerRef.current) return null;
         if (!Array.isArray(data) || data.length === 0) return null;
         return createCatalogIndex(data);
-    }, [data, shouldQuery, workerResults]);
+    }, [data, shouldQuery]);
 
     const fallbackResults = useMemo(() => {
         if (!shouldQuery) return data || [];
+        if (hasWorkerRef.current) return lastWorkerResultsRef.current ?? (data || []);
         if (!fallbackIndex) return data || [];
         return searchCatalogIndex(fallbackIndex, searchTerm || '', {
             category: category || '',

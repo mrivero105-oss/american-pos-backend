@@ -47,13 +47,19 @@ const cleanupIds = {
     products: [],
     licenses: [],
     shifts: [],
-    expenses: []
+    expenses: [],
+    sales: []
 };
 let priorActiveLicenseIds = [];
 
 test.after(async () => {
     try {
         const models = require('../database/models');
+        if (cleanupIds.sales.length && models.Sale) {
+            if (models.StockAlert) await models.StockAlert.destroy({ where: { saleId: cleanupIds.sales } }).catch(() => {});
+            if (models.SaleItem) await models.SaleItem.destroy({ where: { saleId: cleanupIds.sales } }).catch(() => {});
+            await models.Sale.destroy({ where: { id: cleanupIds.sales } }).catch(() => {});
+        }
         if (cleanupIds.expenses.length && models.Expense) {
             await models.Expense.destroy({ where: { id: cleanupIds.expenses } }).catch(() => {});
         }
@@ -438,5 +444,66 @@ test('Suite Integral Fase M1+M2: Biometría ECDSA v2, RBAC Móvil, Modo Ciego, G
         assert.equal(syncExpDup.status, 200);
         const syncExpDupBody = await syncExpDup.json();
         assert.equal(syncExpDupBody.synced[0].action, 'skipped_existing');
+    });
+
+    await t.test('7. Fase M4: Delta Sync ?since= y retorno de inventoryWarnings en /sales/public-sync con sobregiro offline', async () => {
+        // 7A. Delta Sync inicial devuelve serverTime
+        const initDeltaRes = await fetch(`${posUrl}/products?minimal=true&limit=0&delta=true`, {
+            headers: { Authorization: `Bearer ${adminToken}` }
+        });
+        assert.equal(initDeltaRes.status, 200);
+        const initDelta = await initDeltaRes.json();
+        assert.ok(initDelta.serverTime, 'Debe devolver serverTime para futuras consultas delta');
+
+        // Crear producto con stock 1 para probar tanto Delta Sync incremental como sobregiro offline
+        const lowProd = await Product.create({
+            id: `m4-prod-${ts}`,
+            name: 'Producto Delta M4',
+            barcode: `DELTA-${ts}`,
+            price: 5,
+            cost: 2,
+            stock: 1,
+            stockQuantity: 1,
+            companyId,
+            status: 'active'
+        });
+        cleanupIds.products.push(lowProd.id);
+
+        const incDeltaRes = await fetch(`${posUrl}/products?minimal=true&limit=0&since=${encodeURIComponent(initDelta.serverTime)}`, {
+            headers: { Authorization: `Bearer ${adminToken}` }
+        });
+        assert.equal(incDeltaRes.status, 200);
+        const incDelta = await incDeltaRes.json();
+        assert.equal(incDelta.delta, true);
+        assert.equal(incDelta.fullSyncRequired, false);
+        assert.ok(incDelta.products.some((p) => String(p.id) === String(lowProd.id)), 'El delta debe incluir el producto nuevo');
+
+        // 7B. Venta offline por cantidad 3 sobre stock 1 -> debe sincronizar con bypassStockCheck y retornar inventoryWarnings
+        const offlineSaleId = `m4-sale-${ts}`;
+        cleanupIds.sales.push(offlineSaleId);
+        const saleSyncRes = await fetch(`${posUrl}/sales/public-sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+            body: JSON.stringify({
+                sales: [{
+                    id: offlineSaleId,
+                    total: 15,
+                    subtotal: 15,
+                    tax: 0,
+                    discount: 0,
+                    paymentMethod: 'cash_usd',
+                    paymentMethods: [{ method: 'cash_usd', amount: 15, currency: 'USD' }],
+                    items: [{ id: lowProd.id, productId: lowProd.id, name: lowProd.name, quantity: 3, price: 5 }]
+                }]
+            })
+        });
+        assert.equal(saleSyncRes.status, 200);
+        const saleSyncBody = await saleSyncRes.json();
+        assert.equal(saleSyncBody.success, true);
+        assert.equal(saleSyncBody.synced, 1);
+        assert.ok(Array.isArray(saleSyncBody.inventoryWarnings), 'Debe retornar array inventoryWarnings');
+        assert.equal(saleSyncBody.inventoryWarnings.length, 1, 'Debe reportar 1 advertencia de sobregiro');
+        assert.equal(saleSyncBody.inventoryWarnings[0].productId, lowProd.id);
+        assert.equal(Number(saleSyncBody.inventoryWarnings[0].overdraftAmount), 2);
     });
 });

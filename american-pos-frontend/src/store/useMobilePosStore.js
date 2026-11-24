@@ -199,12 +199,15 @@ const persistHeldSalesSafe = (heldSales) => {
   }, 120);
 };
 
+let hasUserMutatedCart = false;
+let hasUserMutatedHeld = false;
+
 /**
  * Store atómico de Zustand exclusivo para Isaac POS Mobile.
  * Aísla el estado del carrito, descuentos, ventas en espera y navegación móvil,
  * garantizando persistencia ante cierres accidentales o actualizaciones OTA.
  */
-export const useMobilePosStore = create((set) => ({
+export const useMobilePosStore = create((set, get) => ({
   activeModule: 'pos',
   setActiveModule: (mod) =>
     set((state) => ({
@@ -212,13 +215,15 @@ export const useMobilePosStore = create((set) => ({
     })),
 
   cart: loadInitialCart(),
-  setCart: (updater) =>
-    set((state) => {
+  setCart: (updater) => {
+    hasUserMutatedCart = true;
+    return set((state) => {
       const nextCart = typeof updater === 'function' ? updater(state.cart) : updater;
       const validCart = normalizeMobileCartItems(nextCart);
       persistCartSafe(validCart);
       return { cart: validCart };
-    }),
+    });
+  },
 
   cartDiscountPercent: 0,
   setCartDiscountPercent: (updater) =>
@@ -235,15 +240,58 @@ export const useMobilePosStore = create((set) => ({
     })),
 
   heldSales: loadInitialHeldSales(),
-  setHeldSales: (updater) =>
-    set((state) => {
+  setHeldSales: (updater) => {
+    hasUserMutatedHeld = true;
+    return set((state) => {
       const nextHeld = typeof updater === 'function' ? updater(state.heldSales) : updater;
       const validHeld = normalizeHeldSalesList(nextHeld);
       persistHeldSalesSafe(validHeld);
       return { heldSales: validHeld };
-    }),
+    });
+  },
+
+  hydrateFromDb: async () => {
+    if (typeof db?.getById !== 'function') return;
+    try {
+      const state = get();
+      const updates = {};
+
+      if (!hasUserMutatedCart && (!Array.isArray(state.cart) || state.cart.length === 0)) {
+        const savedCartRec = await db.getById('metadata', ACTIVE_CART_STORAGE_KEY).catch(() => null);
+        const hydratedCart = normalizeMobileCartItems(savedCartRec?.value);
+        if (hydratedCart.length > 0 && !hasUserMutatedCart) {
+          updates.cart = hydratedCart;
+          try {
+            localStorage.setItem(ACTIVE_CART_STORAGE_KEY, JSON.stringify(hydratedCart));
+          } catch {
+            // Ignorar si localStorage no permite escritura
+          }
+        }
+      }
+
+      if (!hasUserMutatedHeld && (!Array.isArray(state.heldSales) || state.heldSales.length === 0)) {
+        const savedHeldRec = await db.getById('metadata', HELD_SALES_STORAGE_KEY).catch(() => null);
+        const hydratedHeld = normalizeHeldSalesList(savedHeldRec?.value);
+        if (hydratedHeld.length > 0 && !hasUserMutatedHeld) {
+          updates.heldSales = hydratedHeld;
+          try {
+            localStorage.setItem(HELD_SALES_STORAGE_KEY, JSON.stringify(hydratedHeld));
+          } catch {
+            // Ignorar si localStorage no permite escritura
+          }
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        set(updates);
+      }
+    } catch (err) {
+      console.warn('[MobileStore] Error hidratando carrito/ventas en espera desde DB:', err?.message);
+    }
+  },
 
   resetMobileCart: () => {
+    hasUserMutatedCart = true;
     persistCartSafe([]);
     set({
       cart: [],
@@ -252,5 +300,12 @@ export const useMobilePosStore = create((set) => ({
     });
   }
 }));
+
+// Hidratación de respaldo desde SQLite/IndexedDB por si WebView purgó localStorage tras OTA/reinicio
+if (typeof window !== 'undefined') {
+  queueMicrotask(() => {
+    useMobilePosStore.getState().hydrateFromDb();
+  });
+}
 
 export default useMobilePosStore;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft, 
   RefreshCw, 
@@ -11,11 +11,28 @@ import {
   Sparkles, 
   DownloadCloud, 
   Check, 
-  Landmark
+  Landmark,
+  AlertTriangle,
+  RotateCcw,
+  Trash2
 } from 'lucide-react';
 import api from '../../services/api';
+import { db as primaryDb } from '../../services/db';
+import localDb from '../../db/localDb';
 import otaUpdateService from '../../services/otaUpdateService';
 import cloudRateSyncService from '../../services/cloudRateSyncService';
+
+const SYNC_ALERTS_STORAGE_KEY = 'pos_mobile_sync_alerts_v1';
+
+const readStoredSyncAlerts = () => {
+  try {
+    const raw = sessionStorage.getItem(SYNC_ALERTS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
 
 export default function MobileSyncCenterView({
   socketConnected = true,
@@ -41,6 +58,113 @@ export default function MobileSyncCenterView({
     const saved = localStorage.getItem('pos_rate_updated_at');
     return saved ? new Date(saved).toLocaleTimeString() : null;
   });
+  const [quarantinedSales, setQuarantinedSales] = useState([]);
+  const [failedQueueItems, setFailedQueueItems] = useState([]);
+  const [syncAlerts, setSyncAlerts] = useState(() => readStoredSyncAlerts());
+
+  const loadQuarantineAndAlerts = useCallback(async () => {
+    try {
+      let qSales = [];
+      if (localDb?.sales) {
+        qSales = await localDb.sales.where('status').equals('quarantined').toArray().catch(() => []);
+      } else {
+        qSales = await primaryDb.getByIndex('sales', 'status', 'quarantined').catch(() => []);
+      }
+      setQuarantinedSales(Array.isArray(qSales) ? qSales : []);
+    } catch {
+      setQuarantinedSales([]);
+    }
+
+    try {
+      const allQueue = await primaryDb.getAll('syncQueue').catch(() => []);
+      const failed = Array.isArray(allQueue)
+        ? allQueue.filter((item) => item?.failedPermanent || item?.status === 'sync_error')
+        : [];
+      setFailedQueueItems(failed);
+    } catch {
+      setFailedQueueItems([]);
+    }
+
+    setSyncAlerts(readStoredSyncAlerts());
+  }, []);
+
+  const handleRetryQuarantinedSale = async (sale) => {
+    if (!sale?.id) return;
+    try {
+      const resetPatch = {
+        status: 'pending_sync',
+        syncRetryCount: 0,
+        quarantineReason: null,
+        quarantinedAt: null
+      };
+      if (localDb?.sales) {
+        await localDb.sales.update(sale.id, resetPatch).catch(() => {});
+      }
+      const existing = await primaryDb.getById('sales', sale.id).catch(() => null);
+      if (existing) {
+        await primaryDb.put('sales', { ...existing, ...resetPatch }).catch(() => {});
+      }
+      await loadQuarantineAndAlerts();
+      showToast?.('🔄 Venta reencolada para sincronización');
+      onSyncNow?.();
+    } catch (err) {
+      showToast?.(`Error al reencolar venta: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleDiscardQuarantinedSale = async (saleId) => {
+    if (!saleId) return;
+    try {
+      if (localDb?.sales) {
+        await localDb.sales.delete(saleId).catch(() => {});
+      }
+      await primaryDb.delete('sales', saleId).catch(() => {});
+      await loadQuarantineAndAlerts();
+      window.dispatchEvent(new CustomEvent('sync-queue-updated', { detail: { count: 1 } }));
+      showToast?.('🗑️ Registro de cuarentena descartado');
+    } catch (err) {
+      showToast?.(`Error al descartar registro: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleRetryQueueItem = async (item) => {
+    if (!item?.id) return;
+    try {
+      await primaryDb.put('syncQueue', {
+        ...item,
+        status: 'pending',
+        failedPermanent: false,
+        retryCount: 0,
+        lastError: null
+      });
+      await loadQuarantineAndAlerts();
+      showToast?.('🔄 Operación reencolada');
+      onSyncNow?.();
+    } catch (err) {
+      showToast?.(`Error al reintentar operación: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleDiscardQueueItem = async (itemId) => {
+    if (!itemId) return;
+    try {
+      await primaryDb.delete('syncQueue', itemId);
+      await loadQuarantineAndAlerts();
+      window.dispatchEvent(new CustomEvent('sync-queue-updated', { detail: { count: 1 } }));
+      showToast?.('🗑️ Operación descartada de la cola');
+    } catch (err) {
+      showToast?.(`Error al descartar operación: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleClearSyncAlerts = () => {
+    try {
+      sessionStorage.removeItem(SYNC_ALERTS_STORAGE_KEY);
+    } catch {
+      // Ignorar si sessionStorage falla
+    }
+    setSyncAlerts([]);
+  };
 
   const handleRefreshCloudRate = async () => {
     setIsUpdatingRate(true);
@@ -61,6 +185,16 @@ export default function MobileSyncCenterView({
   useEffect(() => {
     otaUpdateService.getCurrentVersion().then((v) => setAppVersion(v));
     setOtaUpdateReady(otaUpdateService.isUpdateReady());
+    loadQuarantineAndAlerts();
+
+    const handleSyncEvents = () => {
+      loadQuarantineAndAlerts();
+    };
+    window.addEventListener('sync-queue-conflict', handleSyncEvents);
+    window.addEventListener('sync-queue-error', handleSyncEvents);
+    window.addEventListener('lan-stock-deficit-detected', handleSyncEvents);
+    window.addEventListener('sync-queue-updated', handleSyncEvents);
+    window.addEventListener('offline-sales-synced', handleSyncEvents);
 
     // Iniciar y suscribirse al servicio de sincronización automática 24/7 en tiempo real
     cloudRateSyncService.init();
@@ -76,8 +210,15 @@ export default function MobileSyncCenterView({
       }
     });
 
-    return () => unsub();
-  }, [showToast]);
+    return () => {
+      unsub();
+      window.removeEventListener('sync-queue-conflict', handleSyncEvents);
+      window.removeEventListener('sync-queue-error', handleSyncEvents);
+      window.removeEventListener('lan-stock-deficit-detected', handleSyncEvents);
+      window.removeEventListener('sync-queue-updated', handleSyncEvents);
+      window.removeEventListener('offline-sales-synced', handleSyncEvents);
+    };
+  }, [showToast, loadQuarantineAndAlerts]);
 
   const handleCheckOtaUpdate = async () => {
     setIsUpdatingOta(true);
@@ -258,6 +399,103 @@ export default function MobileSyncCenterView({
             <span>Descargar Catálogo Fresco</span>
           </button>
         </div>
+
+        {/* PANEL DE CUARENTENA Y ALERTAS DE SINCRONIZACIÓN */}
+        {(quarantinedSales.length > 0 || failedQueueItems.length > 0 || syncAlerts.length > 0) && (
+          <div className={`p-4 rounded-xl ${T.subPanelBg} border border-rose-500/40 space-y-3`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-rose-500">
+                <AlertTriangle size={16} />
+                <h3 className="text-xs font-bold uppercase tracking-wider">
+                  Cuarentena y Alertas ({quarantinedSales.length + failedQueueItems.length + syncAlerts.length})
+                </h3>
+              </div>
+              {syncAlerts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearSyncAlerts}
+                  className="text-[10px] font-bold text-slate-400 hover:text-rose-400 underline cursor-pointer"
+                >
+                  Limpiar avisos
+                </button>
+              )}
+            </div>
+
+            {quarantinedSales.map((sale) => (
+              <div key={sale.id} className={`p-3 rounded-lg border ${T.border} ${T.modalSubCard} space-y-2`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className={`text-xs font-bold ${T.textPrimary} truncate`}>
+                      Venta en Cuarentena #{String(sale.invoiceNumber || sale.id).slice(-8)}
+                    </p>
+                    <p className="text-[11px] text-rose-400 break-words">
+                      {sale.quarantineReason || sale.lastSyncError || 'Rechazada por el servidor durante la sincronización'}
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-amber-400 shrink-0">
+                    ${Number(sale.totalUSD || sale.total || 0).toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleRetryQuarantinedSale(sale)}
+                    className="flex-1 min-h-[36px] rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Reintentar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDiscardQuarantinedSale(sale.id)}
+                    className="px-3 min-h-[36px] rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                    <span>Descartar</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {failedQueueItems.map((item) => (
+              <div key={item.id} className={`p-3 rounded-lg border ${T.border} ${T.modalSubCard} space-y-2`}>
+                <div className="min-w-0">
+                  <p className={`text-xs font-bold ${T.textPrimary} truncate`}>
+                    Acción fallida: {(item.method || 'POST').toUpperCase()} {item.endpoint}
+                  </p>
+                  <p className="text-[11px] text-rose-400 break-words">
+                    {item.lastError || `Error HTTP ${item.lastHttpStatus || '4xx'}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleRetryQueueItem(item)}
+                    className="flex-1 min-h-[36px] rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Reintentar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDiscardQueueItem(item.id)}
+                    className="px-3 min-h-[36px] rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                    <span>Descartar</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {syncAlerts.map((al) => (
+              <div key={al.id} className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-[11px] space-y-0.5">
+                <p className="font-bold text-amber-400">{al.title}</p>
+                <p className={T.textSecondary}>{al.message}</p>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* SECCIÓN TASA DE CAMBIO 24/7 EN LA NUBE */}
         <div className={`p-4 rounded-xl ${T.subPanelBg} border ${T.border} space-y-3`}>

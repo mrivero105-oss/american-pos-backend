@@ -381,14 +381,18 @@ const verifyToken = async (req, res, next) => {
         const timestamp = req.headers['x-sync-timestamp'];
         const signature = req.headers['x-sync-signature'];
 
-        const authHeader = req.headers['authorization'];
-        const extractedToken = extractBearerToken(authHeader);
+        const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+        const extractedToken = extractBearerToken(authHeader) || (req.cookies && req.cookies.authToken);
         if (extractedToken) {
             try {
-                const decoded = jwt.verify(extractedToken, FINAL_SECRET, { algorithms: ['HS256'] });
+                const decoded = verifyJwtResilient(extractedToken);
                 req.user = decoded;
-                if (!req.user.companyId) {
+                if (!req.user.companyId || req.user.companyId === 'admin') {
                     req.user.companyId = companyId || 'default';
+                }
+                const ctxRes = await applyUserAuthContext(req, decoded);
+                if (!ctxRes.ok) {
+                    return res.status(ctxRes.status).json({ error: ctxRes.error });
                 }
                 return wrapTenantNext(req, next);
             } catch (e) {

@@ -52,6 +52,7 @@ const SETTINGS_TABS = [
 export default function Settings() {
     const { user } = useAuth();
     const isOwnerUser = ['owner', 'dueño', 'dueno', 'superadmin'].includes((user?.role || '').toLowerCase());
+    const isElectronDesktop = typeof window !== 'undefined' && Boolean(window.electronAPI);
     const [searchParams, setSearchParams] = useSearchParams();
     const tabFromUrl = searchParams.get('tab');
     const [loading, setLoading] = useState(true);
@@ -988,13 +989,16 @@ export default function Settings() {
                                     onExport={handleExportFullDatabase}
                                     onMaintenance={handleRunAutoMaintenance}
                                     runningMaintenance={runningMaintenance}
-                                    onExploreFolder={handleExploreBackupFolder}
+                                    onExploreFolder={isElectronDesktop ? handleExploreBackupFolder : undefined}
                                     onRefreshBackups={fetchPgBackups}
+                                    isDesktopElectron={isElectronDesktop}
                                 />
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-                                    <StartupSettings />
-                                    <GithubUpdaterSettings />
-                                </div>
+                                {isElectronDesktop && (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
+                                        <StartupSettings />
+                                        <GithubUpdaterSettings />
+                                    </div>
+                                )}
                                 <VoiceSoundSettings />
                                 {offlineSales.length > 0 && (
                                     <OfflineSalesSettings

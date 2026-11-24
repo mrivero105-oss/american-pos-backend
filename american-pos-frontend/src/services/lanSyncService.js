@@ -18,7 +18,42 @@ class LANSyncService {
     this.pollInterval = null;
     this.isListeningNetwork = false;
     this.printedSaleIds = new Set();
+    this._socketBaseUrl = null;
+    this._socketAuthToken = null;
   }
+
+  _resolveBaseUrl() {
+    const isAndroidCap = typeof window !== 'undefined' && ((window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform()) || window.location.protocol === 'capacitor:');
+    const isLocalLoopback = typeof window !== 'undefined' && !isAndroidCap && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && localStorage.getItem('isaac_pos_node_role') !== 'client';
+    const localHost = (typeof window !== 'undefined' && window.location.hostname === 'localhost') ? 'localhost' : '127.0.0.1';
+    const currentPort = typeof window !== 'undefined' ? window.location.port : '';
+    const devPorts = ['5173', '5174', '5175'];
+    const targetLocalPort = (devPorts.includes(currentPort) || !currentPort) ? '3005' : currentPort;
+    return isLocalLoopback
+      ? `http://${localHost}:${targetLocalPort}`
+      : (api.defaults.baseURL || (isAndroidCap ? '' : `${window.location.protocol}//${window.location.hostname}:${targetLocalPort}`));
+  }
+
+  handleServerUrlChange = () => {
+    const nextUrl = this._resolveBaseUrl();
+    if (!nextUrl) {
+      if (this.socket) {
+        try { this.socket.disconnect(); } catch { /* Canal o socket ya cerrado previamente */ }
+        this.socket = null;
+        this.isConnecting = false;
+        this._socketBaseUrl = null;
+      }
+      return;
+    }
+    if (this._socketBaseUrl !== nextUrl || !this.socket) {
+      if (this.socket) {
+        try { this.socket.disconnect(); } catch { /* Canal o socket ya cerrado previamente */ }
+        this.socket = null;
+        this.isConnecting = false;
+      }
+      this.connectSocket();
+    }
+  };
 
   markSalePrintedLocally(saleId) {
     if (!saleId) return;
@@ -39,10 +74,12 @@ class LANSyncService {
       return;
     }
 
+    const nextBaseUrl = this._resolveBaseUrl();
     const tokenChanged = this.socket && this._socketAuthToken !== currentAuthToken;
-    if (this.socket && (this.socket.connected || this.socket.active || this.isConnecting) && !tokenChanged) return;
+    const urlChanged = this.socket && this._socketBaseUrl !== nextBaseUrl;
+    if (this.socket && (this.socket.connected || this.socket.active || this.isConnecting) && !tokenChanged && !urlChanged) return;
 
-    if (tokenChanged) {
+    if (tokenChanged || urlChanged) {
       try { this.socket.disconnect(); } catch { /* Canal o socket ya cerrado previamente */ }
       this.socket = null;
       this.isConnecting = false;
@@ -51,6 +88,8 @@ class LANSyncService {
     if (!this.isListeningNetwork) {
       window.addEventListener('online', this.handleNetworkChange);
       window.addEventListener('offline', this.handleNetworkChange);
+      window.addEventListener('server-discovered', this.handleServerUrlChange);
+      window.addEventListener('api-base-url-changed', this.handleServerUrlChange);
       this.isListeningNetwork = true;
     }
 
@@ -92,15 +131,7 @@ class LANSyncService {
         this.socket = null;
       }
       this.isConnecting = true;
-      const isAndroidCap = typeof window !== 'undefined' && ((window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform()) || window.location.protocol === 'capacitor:');
-      const isLocalLoopback = typeof window !== 'undefined' && !isAndroidCap && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && localStorage.getItem('isaac_pos_node_role') !== 'client';
-      const localHost = (typeof window !== 'undefined' && window.location.hostname === 'localhost') ? 'localhost' : '127.0.0.1';
-      const currentPort = typeof window !== 'undefined' ? window.location.port : '';
-      const devPorts = ['5173', '5174', '5175'];
-      const targetLocalPort = (devPorts.includes(currentPort) || !currentPort) ? '3005' : currentPort;
-      let baseUrl = isLocalLoopback
-        ? `http://${localHost}:${targetLocalPort}`
-        : (api.defaults.baseURL || (isAndroidCap ? '' : `${window.location.protocol}//${window.location.hostname}:${targetLocalPort}`));
+      const baseUrl = this._resolveBaseUrl();
       if (!baseUrl) {
         this.isConnecting = false;
         return;
@@ -112,6 +143,7 @@ class LANSyncService {
         return;
       }
       this._socketAuthToken = authToken || null;
+      this._socketBaseUrl = baseUrl;
       this.socket = io(baseUrl, {
         auth: {
           token: authToken || undefined,
@@ -172,13 +204,19 @@ class LANSyncService {
         }
       });
 
-      // Escuchar actualizaciones de stock instantáneas propagadas por otras cajas
+      // Escuchar actualizaciones de stock instantáneas propagadas por otras cajas (ignorando eco propio para evitar descuento 2x)
       this.socket.on('lan_stock_update', async (payload) => {
-        if (payload && Array.isArray(payload.items)) {
-          console.log('[LAN_SYNC] 📦 Actualización P2P de stock recibida:', payload.items.length, 'ítems');
-          await this.applyLocalStockUpdate(payload.items);
-          window.dispatchEvent(new CustomEvent('lan-stock-update-received', { detail: payload.items }));
+        if (!payload || !Array.isArray(payload.items)) return;
+        const myTerminalId = typeof window !== 'undefined' ? (localStorage.getItem('pos_terminal_id') || 'Caja 1') : 'Caja 1';
+        if (
+          (payload.sourceSocketId && this.socket?.id && payload.sourceSocketId === this.socket.id) ||
+          (payload.sourceTerminalId && payload.sourceTerminalId === myTerminalId)
+        ) {
+          return;
         }
+        console.log('[LAN_SYNC] 📦 Actualización P2P de stock recibida:', payload.items.length, 'ítems');
+        await this.applyLocalStockUpdate(payload.items);
+        window.dispatchEvent(new CustomEvent('lan-stock-update-received', { detail: payload.items }));
       });
 
       // Escuchar notificación de cuarentena resuelta
@@ -353,7 +391,9 @@ class LANSyncService {
       try {
         const rawId = item.productId || item.producto_id || item.id;
         const qty = Number(item.quantity || item.qty || 0);
-        if (!rawId || qty <= 0) continue;
+        const factor = Math.max(1, Number(item.factorConversion || item.unitsMultiplier || 1));
+        const deductUnits = qty * factor;
+        if (!rawId || deductUnits <= 0) continue;
 
         const strId = String(rawId).trim();
         const numId = Number(strId);
@@ -395,7 +435,7 @@ class LANSyncService {
           if (prod) {
             const prodKey = prod.id !== undefined && prod.id !== null ? prod.id : (hasValidNumId ? numId : strId);
             const currentStock = Number(prod.stockQuantity ?? prod.stock ?? 0);
-            const updatedStock = Math.max(0, currentStock - qty);
+            const updatedStock = Math.max(0, Number((currentStock - deductUnits).toFixed(3)));
             try {
               // localDb delega a primaryDb (UnifiedDB); actualizar una sola vez para evitar doble descuento 2x
               await db.products.update(prodKey, {
@@ -431,26 +471,32 @@ class LANSyncService {
   broadcastSale(sale) {
     if (!this.socket || !this.socket.connected || !sale) return;
     try {
-      const userStr = localStorage.getItem('pos_user') || sessionStorage.getItem('pos_user');
-      let companyId = null;
-      if (userStr) {
+      const cachedProfile = secureMobileStorage.getUserProfile();
+      const userStr = !cachedProfile ? (localStorage.getItem('pos_user') || sessionStorage.getItem('pos_user')) : null;
+      let companyId = cachedProfile?.companyId || null;
+      if (!companyId && userStr) {
         try { companyId = JSON.parse(userStr)?.companyId; } catch (err) { console.warn('[LAN_SYNC] Error leyendo companyId:', err?.message); }
       }
+      const sourceTerminalId = localStorage.getItem('pos_terminal_id') || 'Caja 1';
 
       this.socket.emit('lan_sale_sync', {
         companyId,
-        sourceTerminalId: localStorage.getItem('pos_terminal_id') || 'Caja 1',
+        sourceTerminalId,
         sale
       });
 
-      // También emitir actualización de stock para ítems vendidos
+      // También emitir actualización de stock para ítems vendidos con factor de conversión (bultos/presentaciones) y marca de origen
       const items = Array.isArray(sale.items) ? sale.items : (Array.isArray(sale.SaleItems) ? sale.SaleItems : []);
       if (items.length > 0) {
         this.socket.emit('lan_stock_update', {
           companyId,
+          sourceTerminalId,
+          sourceSocketId: this.socket.id || null,
           items: items.map(it => ({
-            productId: it.productId || it.id,
-            quantity: Number(it.quantity || 1)
+            productId: String(it.productId || it.id || '').replace(/__bulk$|__mid$|__pres_.*$/, ''),
+            barcode: it.barcode || it.codigo_barras || undefined,
+            quantity: Number(it.quantity || 1),
+            factorConversion: Math.max(1, Number(it.factorConversion || it.unitsMultiplier || (it.isBulk ? it.unitsPerBulk : (it.isMidBulk ? it.unitsPerMidBulk : 1)) || 1))
           }))
         });
       }
@@ -462,11 +508,15 @@ class LANSyncService {
   stop() {
     window.removeEventListener('online', this.handleNetworkChange);
     window.removeEventListener('offline', this.handleNetworkChange);
+    window.removeEventListener('server-discovered', this.handleServerUrlChange);
+    window.removeEventListener('api-base-url-changed', this.handleServerUrlChange);
+    this.isListeningNetwork = false;
     if (this.pollInterval) clearInterval(this.pollInterval);
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
     }
+    this._socketBaseUrl = null;
     this.listeners.clear();
   }
 }

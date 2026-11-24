@@ -20,6 +20,7 @@ router.post('/public-sync', require('../middleware/auth').verifyToken, async (re
         const { Sale } = require('../database/models');
         const { Op } = require('sequelize');
         const results = { success: [], errors: [] };
+        const inventoryWarnings = [];
         const CHUNK_SIZE = 25;
 
         for (let i = 0; i < sales.length; i += CHUNK_SIZE) {
@@ -68,6 +69,10 @@ router.post('/public-sync', require('../middleware/auth').verifyToken, async (re
                         bypassShiftCheck: true,
                         isOfflineSync: true
                     });
+                    const saleWarnings = processed?.getDataValue?.('inventoryWarnings') || processed?.inventoryWarnings || [];
+                    if (Array.isArray(saleWarnings) && saleWarnings.length > 0) {
+                        inventoryWarnings.push(...saleWarnings);
+                    }
                     console.log(`[SYNC] Éxito: Venta ${saleData.id} registrada en DB con ID ${processed.id}`);
                     results.success.push({ id: saleData.id, dbId: processed.id });
 
@@ -99,7 +104,13 @@ router.post('/public-sync', require('../middleware/auth').verifyToken, async (re
                 }
         }
         }
-        res.json({ success: true, synced: results.success.length, errors: results.errors.length, details: results });
+        res.json({
+            success: true,
+            synced: results.success.length,
+            errors: results.errors.length,
+            details: results,
+            inventoryWarnings
+        });
     } catch (error) {
         console.error('Mobile sales sync error:', error);
         res.status(500).json({ error: 'Error interno en sincronización de ventas' });

@@ -48,7 +48,7 @@ const ACTION_TYPE_LABELS = {
     CREDIT_UNBLOCKED: 'Rehabilitación de Crédito'
 };
 
-export default function AssetsAndCollections() {
+export default function AssetsAndCollections({ initialTab = null } = {}) {
     const exchangeRate = useBusinessSettingsStore((s) => s.rate);
     const { hasPermission } = useAuth();
     const { confirm, confirmDialog } = useConfirmDialog();
@@ -58,23 +58,33 @@ export default function AssetsAndCollections() {
     const canCollections = hasPermission ? hasPermission('customers.collections') : true;
     const canAssets = hasPermission ? hasPermission('management.assets') : true;
 
-    // Determine whether the user entered via "Radar de Cobranza" (?tab=collections) or "Activos Fijos" (?tab=assets)
+    // Determine whether the user entered via "Radar de Cobranza" (?tab=collections o initialTab="collections") or "Activos Fijos"
     const isCollectionsModule = useMemo(() => {
+        if (initialTab === 'collections') return true;
+        if (initialTab === 'assets' || initialTab === 'depreciation') return false;
         const params = new URLSearchParams(location.search);
         const tabParam = params.get('tab');
         if (tabParam === 'collections') return true;
         if (tabParam === 'assets' || tabParam === 'depreciation') return false;
         return canCollections && !canAssets;
-    }, [location.search, canCollections, canAssets]);
+    }, [initialTab, location.search, canCollections, canAssets]);
 
-    const [assetSubTab, setAssetSubTab] = useState('assets'); // 'assets' | 'depreciation'
+    const [assetSubTab, setAssetSubTab] = useState(initialTab === 'depreciation' ? 'depreciation' : 'assets'); // 'assets' | 'depreciation'
 
     useEffect(() => {
+        if (initialTab === 'depreciation') {
+            setAssetSubTab('depreciation');
+            return;
+        }
+        if (initialTab === 'assets') {
+            setAssetSubTab('assets');
+            return;
+        }
         const params = new URLSearchParams(location.search);
         const tabParam = params.get('tab');
         if (tabParam === 'depreciation') setAssetSubTab('depreciation');
         else if (tabParam === 'assets') setAssetSubTab('assets');
-    }, [location.search]);
+    }, [initialTab, location.search]);
 
     // =========================================================================
     // STATE: RADAR DE COBRANZA & ANTIGÜEDAD DE CARTERA (AGING MATRIX)
