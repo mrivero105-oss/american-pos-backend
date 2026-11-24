@@ -7,11 +7,12 @@ function canonicalizePaymentMethodId(methodId) {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase()
+        .replace(/[^a-z0-9\s_]+/g, '')
         .trim()
         .replace(/\s+/g, '_');
-    if (['efectivo_bs', 'cash_bs', 'cash_ves', 'ves', 'bs'].includes(key)) return 'cash_bs';
+    if (['efectivo_bs', 'cash_bs', 'cash_ves', 'ves', 'bs', 'bolivares'].includes(key)) return 'cash_bs';
     if (['efectivo_usd', 'cash_usd', 'cash', 'efectivo'].includes(key)) return 'cash';
-    if (['card', 'tarjeta', 'punto', 'punto_de_venta', 'debito', 'debit'].includes(key)) return 'debit';
+    if (['card', 'tarjeta', 'punto', 'punto_de_venta', 'punto_venta', 'debito', 'debit'].includes(key)) return 'debit';
     if (['pagomovil', 'mobile', 'pago_movil'].includes(key)) return 'pago_movil';
     if (['binance', 'binance_pay', 'binance_usdt', 'usdt'].includes(key)) return 'binance_usdt';
     if (['transferencia', 'transfer_bs', 'transfer'].includes(key)) return 'transfer';
@@ -27,6 +28,7 @@ function isVesPaymentMethod(methodId, pMethods = []) {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase()
+        .replace(/[^a-z0-9\s_]+/g, '')
         .trim()
         .replace(/\s+/g, '_');
     

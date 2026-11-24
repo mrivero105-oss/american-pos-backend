@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { AuthContext } from '../hooks/AuthContext';
 import api from '../services/api';
 import syncService from '../services/syncService';
@@ -9,7 +9,51 @@ import { normalizeTerminalId, validateLicenseKeyLocally } from '../utils/clientL
 import { IDLE_LOCK_CHANGED_EVENT, getIdleLockTimeoutMs } from '../utils/idleLockSettings';
 
 const OFFLINE_VERIFIERS_KEY = 'isaac_pos_offline_verifiers';
-const OFFLINE_BIO_HASHES_KEY = 'isaac_pos_offline_bio_hashes';
+const LEGACY_OFFLINE_BIO_HASHES_KEY = 'isaac_pos_offline_bio_hashes';
+const OFFLINE_LOGIN_LOCKOUT_KEY = 'isaac_pos_offline_login_attempts';
+const MAX_OFFLINE_LOGIN_ATTEMPTS = 5;
+const OFFLINE_LOGIN_LOCK_MS = 5 * 60 * 1000;
+let memoryOfflineAttempts = { count: 0, lockUntil: 0 };
+
+function getOfflineLoginLockState() {
+    let state = { ...memoryOfflineAttempts };
+    try {
+        if (typeof sessionStorage !== 'undefined') {
+            const raw = sessionStorage.getItem(OFFLINE_LOGIN_LOCKOUT_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    state = {
+                        count: Math.max(state.count, Number(parsed.count) || 0),
+                        lockUntil: Math.max(state.lockUntil, Number(parsed.lockUntil) || 0)
+                    };
+                }
+            }
+        }
+    } catch (_storageErr) {
+        // Ignorar error de acceso a sessionStorage restringido
+    }
+    if (state.lockUntil > 0 && Date.now() >= state.lockUntil) {
+        state = { count: 0, lockUntil: 0 };
+        saveOfflineLoginLockState(state);
+    }
+    return state;
+}
+
+function saveOfflineLoginLockState(nextState) {
+    memoryOfflineAttempts = { count: Number(nextState?.count) || 0, lockUntil: Number(nextState?.lockUntil) || 0 };
+    try {
+        if (typeof sessionStorage !== 'undefined') {
+            if (memoryOfflineAttempts.count === 0 && memoryOfflineAttempts.lockUntil === 0) {
+                sessionStorage.removeItem(OFFLINE_LOGIN_LOCKOUT_KEY);
+            } else {
+                sessionStorage.setItem(OFFLINE_LOGIN_LOCKOUT_KEY, JSON.stringify(memoryOfflineAttempts));
+            }
+        }
+    } catch (_storageErr) {
+        // Ignorar error de escritura en sessionStorage restringido
+    }
+}
 
 function pureSha256Hex(asciiInput) {
     const rightRotate = (value, amount) => (value >>> amount) | (value << (32 - amount));
@@ -164,49 +208,6 @@ async function verifyOfflinePassword(userObj, rawPassword) {
     }
 }
 
-async function saveOfflineBiometricHash(userId, rawBiometricToken) {
-    if (!userId || !rawBiometricToken || typeof localStorage === 'undefined') return;
-    try {
-        const hashes = JSON.parse(localStorage.getItem(OFFLINE_BIO_HASHES_KEY) || '{}');
-        const salt = generateSaltHex();
-        const kdf = (typeof window !== 'undefined' && window.crypto?.subtle) ? 'pbkdf2' : 'sha256';
-        const hash = kdf === 'pbkdf2'
-            ? await computePbkdf2Hex(`${String(userId)}:${String(rawBiometricToken)}`, salt, OFFLINE_PBKDF2_ITERATIONS)
-            : await computeSha256Hex(`${salt}:${String(rawBiometricToken)}`);
-        hashes[String(userId)] = {
-            ver: kdf === 'pbkdf2' ? 2 : 1,
-            kdf,
-            iterations: kdf === 'pbkdf2' ? OFFLINE_PBKDF2_ITERATIONS : 1,
-            salt,
-            hash
-        };
-        localStorage.setItem(OFFLINE_BIO_HASHES_KEY, JSON.stringify(hashes));
-    } catch (err) {
-        console.warn('[Auth] Error guardando hash biométrico offline:', err?.message);
-    }
-}
-
-async function verifyOfflineBiometricToken(userId, rawBiometricToken) {
-    if (!userId || !rawBiometricToken || typeof localStorage === 'undefined') return false;
-    try {
-        const hashes = JSON.parse(localStorage.getItem(OFFLINE_BIO_HASHES_KEY) || '{}');
-        const entry = hashes[String(userId)];
-        if (!entry?.salt || !entry?.hash) return false;
-        if (entry.ver === 2 && entry.kdf === 'pbkdf2') {
-            const computed = await computePbkdf2Hex(`${String(userId)}:${String(rawBiometricToken)}`, entry.salt, Number(entry.iterations || OFFLINE_PBKDF2_ITERATIONS));
-            return computed === entry.hash;
-        }
-        const computedLegacy = await computeSha256Hex(`${entry.salt}:${String(rawBiometricToken)}`);
-        if (computedLegacy === entry.hash) {
-            await saveOfflineBiometricHash(userId, rawBiometricToken);
-            return true;
-        }
-        return false;
-    } catch (_) {
-        return false;
-    }
-}
-
 const LICENSE_INFO_STORAGE_KEY = 'isaac_pos_license_info';
 
 function readStoredLicenseInfo() {
@@ -251,6 +252,7 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const [isLocked, setIsLocked] = useState(false);
+    const sessionExpiredRef = useRef(false);
     const [licenseInfo, setLicenseInfo] = useState(() => readStoredLicenseInfo());
     const [isActivated, setIsActivated] = useState(() => {
         if (typeof window === 'undefined') return false;
@@ -277,58 +279,62 @@ export const AuthProvider = ({ children }) => {
     const appUnlock = async (password, isBiometric = false) => {
         try {
             if (isBiometric) {
-                const bioToken = typeof password === 'string' ? password.trim() : '';
-                if (!user || !bioToken) {
-                    return { success: false, message: 'Credencial biométrica ausente o inválida.' };
+                if (!user) {
+                    return { success: false, message: 'No hay sesión activa para desbloquear.' };
                 }
                 try {
-                    const bioRes = await api.post('/auth/biometrics/login', {
-                        userId: user.id,
-                        username: user.username,
-                        biometricToken: bioToken
-                    }, { timeout: 3000 });
-                    if (bioRes.data?.token) {
-                        secureMobileStorage.setToken(bioRes.data.token);
+                    const bioData = await biometricService.loginWithBiometrics();
+                    if (bioData?.user?.id && user?.id && String(bioData.user.id) !== String(user.id)) {
+                        return {
+                            success: false,
+                            message: 'La huella registrada pertenece a otro usuario. Ingresa tu PIN o contraseña.'
+                        };
                     }
-                    if (bioRes.data?.user) {
-                        setUser(bioRes.data.user);
+                    if (bioData?.token) {
+                        secureMobileStorage.setToken(bioData.token);
                     }
-                    await saveOfflineBiometricHash(user.id, bioToken);
+                    if (bioData?.user) {
+                        setUser(bioData.user);
+                        secureMobileStorage.setUserProfile(bioData.user);
+                    }
+                    sessionExpiredRef.current = false;
                     setIsLocked(false);
-                    sessionStorage.setItem('isaac_pos_session_active', 'true');
+                    secureMobileStorage.setSessionActive(true);
                     return { success: true };
                 } catch (bioErr) {
-                    if (bioErr.response) {
+                    if (bioErr?.response) {
                         return {
                             success: false,
                             message: bioErr.response.data?.error || bioErr.response.data?.message || 'Huella biométrica inválida o revocada.'
                         };
                     }
-                    const offlineValid = await verifyOfflineBiometricToken(user.id, bioToken);
-                    if (!offlineValid) {
-                        return { success: false, message: 'No se pudo validar la huella sin conexión. Ingresa tu PIN o contraseña.' };
-                    }
-                    setIsLocked(false);
-                    sessionStorage.setItem('isaac_pos_session_active', 'true');
-                    return { success: true, isOffline: true };
+                    return {
+                        success: false,
+                        message: bioErr?.message || 'No se pudo validar la huella en el servidor. Ingresa tu PIN o contraseña.'
+                    };
                 }
             }
 
-            // 1. Intentar desbloqueo ultrarrápido vía /auth/quick-unlock (soporta quickPin, supervisorPin y contraseña)
+            // 1. Si el servidor confirmó 401 (sesión expirada/revocada), omitir /quick-unlock y renovar JWT vía /auth/login
             let isNetworkFailure = false;
-            try {
-                const quickRes = await api.post('/auth/quick-unlock', { pinOrPassword: password });
-                if (quickRes.data?.success) {
-                    setIsLocked(false);
-                    sessionStorage.setItem('isaac_pos_session_active', 'true');
-                    return { success: true };
-                }
-            } catch (quickErr) {
-                if (quickErr.response?.status === 429) {
-                    return { success: false, message: quickErr.response.data?.error || 'Cuenta bloqueada temporalmente' };
-                }
-                if (!quickErr.response) {
-                    isNetworkFailure = true;
+            if (!sessionExpiredRef.current) {
+                try {
+                    const quickRes = await api.post('/auth/quick-unlock', { pinOrPassword: password });
+                    if (quickRes.data?.success) {
+                        setIsLocked(false);
+                        secureMobileStorage.setSessionActive(true);
+                        return { success: true };
+                    }
+                } catch (quickErr) {
+                    if (quickErr.response?.status === 429) {
+                        return { success: false, message: quickErr.response.data?.error || 'Cuenta bloqueada temporalmente' };
+                    }
+                    if (quickErr.response?.status === 401) {
+                        sessionExpiredRef.current = true;
+                    }
+                    if (!quickErr.response) {
+                        isNetworkFailure = true;
+                    }
                 }
             }
 
@@ -340,30 +346,37 @@ export const AuthProvider = ({ children }) => {
                     if (response.data.token) {
                         secureMobileStorage.setToken(response.data.token);
                     }
+                    sessionExpiredRef.current = false;
                     secureMobileStorage.setSessionActive(true);
                     setUser(response.data.user);
+                    secureMobileStorage.setUserProfile(response.data.user);
                     setIsLocked(false);
                     return { success: true };
                 }
                 return { success: false, message: 'PIN o contraseña incorrectos' };
             }
 
-            // 3. Fallback offline verificado por PBKDF2 local (evita atrapar al cajero en LockScreen sin red)
-            if (user) {
+            // 3. Fallback offline verificado por PBKDF2 local (solo si NO hubo 401 de servidor con red activa)
+            if (user && !sessionExpiredRef.current) {
                 const isOfflineValid = await verifyOfflinePassword(user, password);
                 if (isOfflineValid) {
                     setIsLocked(false);
-                    sessionStorage.setItem('isaac_pos_session_active', 'true');
+                    secureMobileStorage.setSessionActive(true);
                     return { success: true, isOffline: true };
                 }
             }
-            return { success: false, message: 'Sin conexión: PIN o contraseña no coinciden con la credencial local verificada.' };
+            return {
+                success: false,
+                message: sessionExpiredRef.current
+                    ? 'Tu sesión expiró en el servidor. Conéctate e ingresa tu contraseña para renovarla.'
+                    : 'Sin conexión: PIN o contraseña no coinciden con la credencial local verificada.'
+            };
         } catch (e) {
-            if (!e?.response && user) {
+            if (!e?.response && user && !sessionExpiredRef.current) {
                 const isOfflineValid = await verifyOfflinePassword(user, password);
                 if (isOfflineValid) {
                     setIsLocked(false);
-                    sessionStorage.setItem('isaac_pos_session_active', 'true');
+                    secureMobileStorage.setSessionActive(true);
                     return { success: true, isOffline: true };
                 }
             }
@@ -603,21 +616,33 @@ export const AuthProvider = ({ children }) => {
                 console.log(`[VersionCheck] Actualizando versión de ${storedVersion} a ${CURRENT_VERSION}. Preservando datos locales.`);
                 localStorage.setItem('app_version', CURRENT_VERSION);
             }
+            // Limpiar restos de biometría v1 offline insegura si existieran
+            try {
+                localStorage.removeItem(LEGACY_OFFLINE_BIO_HASHES_KEY);
+            } catch (_cleanupErr) {
+                // Limpieza best-effort en storage restringido
+            }
 
-            const isSessionActive = secureMobileStorage.isSessionActive();
+            let isSessionActive = secureMobileStorage.isSessionActive();
+            const isNativeCapacitor = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
+
+            // En Android nativo, restaurar el JWT desde Android Keystore (AES-256-GCM) antes de invalidar la sesión
+            if (!isSessionActive && isNativeCapacitor) {
+                const restoredNativeToken = await secureMobileStorage.restoreTokenFromNative();
+                if (restoredNativeToken) {
+                    secureMobileStorage.setSessionActive(true);
+                    isSessionActive = true;
+                }
+            }
 
             if (!isSessionActive) {
                 // Arranque seguro: Al encender la PC o abrir la aplicación, exigir login sin restaurar sesión previa
                 console.log('🔒 Inicio de sistema/app detectado sin sesión activa. Solicitando credenciales de acceso.');
                 secureMobileStorage.removeToken();
-                const isMobileClient = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '');
+                const isMobileClient = isNativeCapacitor || (typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || ''));
                 if (!isMobileClient) {
                     secureMobileStorage.removeUserProfile();
                 }
-                // NO llamar api.post('/auth/logout') aquí — causa race condition:
-                // el logout async puede ejecutarse DESPUÉS del login del usuario,
-                // invalidando la cookie de sesión recién creada.
-                // La cookie es de sesión y se limpia sola al cerrar el navegador/Electron.
                 setUser(null);
                 setLoading(false);
                 await checkLicense();
@@ -633,6 +658,7 @@ export const AuthProvider = ({ children }) => {
                 try {
                     const res = await api.get('/auth/me');
                     if (res.data?.user) {
+                        sessionExpiredRef.current = false;
                         setUser(res.data.user);
                         secureMobileStorage.setUserProfile(res.data.user);
                         if (res.data.user.companyId) {
@@ -641,6 +667,11 @@ export const AuthProvider = ({ children }) => {
                         syncService.autoSyncOnLogin().catch(err => {
                             console.warn('[AuthContext] Background auto-sync notice:', err);
                         });
+                    } else if (res.data?.authenticated === false) {
+                        // El servidor respondió explícitamente que el token expiró o fue revocado
+                        secureMobileStorage.removeToken();
+                        secureMobileStorage.setSessionActive(false);
+                        setUser(null);
                     } else if (savedProfileObj) {
                         setUser({ ...savedProfileObj, isOfflineMode: true });
                     } else {
@@ -718,6 +749,7 @@ export const AuthProvider = ({ children }) => {
     useEffect(() => {
         const handleUnauthorized = () => {
             if (isLocked) return;
+            sessionExpiredRef.current = true;
             const token = secureMobileStorage.getToken();
             if (user && token) {
                 setIsLocked(true);
@@ -773,8 +805,17 @@ export const AuthProvider = ({ children }) => {
         const isDeviceOffline = typeof navigator !== 'undefined' && !navigator.onLine;
         const preferOffline = Boolean(options.preferOffline || isDeviceOffline);
 
-        // Helper para resolver inicio de sesión offline estricto (solo usuarios reales previamente autenticados online)
+        // Helper para resolver inicio de sesión offline estricto con rate-limit progresivo (5 intentos -> 5 min bloqueo)
         const resolveOfflineLogin = async () => {
+            const lockState = getOfflineLoginLockState();
+            if (lockState.lockUntil > Date.now()) {
+                const mins = Math.max(1, Math.ceil((lockState.lockUntil - Date.now()) / 60000));
+                return {
+                    success: false,
+                    message: `Demasiados intentos fallidos sin conexión. Espera ${mins} minuto(s) antes de volver a intentar.`
+                };
+            }
+
             const parsedProfile = secureMobileStorage.getUserProfile();
             let offlineUser = null;
             if (parsedProfile && (parsedProfile.username?.toLowerCase() === username.toLowerCase() || parsedProfile.email?.toLowerCase() === username.toLowerCase())) {
@@ -798,20 +839,31 @@ export const AuthProvider = ({ children }) => {
             }
 
             if (!offlineUser || offlineUser.status === 'inactive') {
+                const nextCount = lockState.count + 1;
+                const nextLockUntil = nextCount >= MAX_OFFLINE_LOGIN_ATTEMPTS ? (Date.now() + OFFLINE_LOGIN_LOCK_MS) : 0;
+                saveOfflineLoginLockState({ count: nextCount, lockUntil: nextLockUntil });
                 return {
                     success: false,
-                    message: 'Usuario no autenticado previamente en este equipo. Inicia sesión con conexión al servidor.'
+                    message: nextLockUntil
+                        ? 'Acceso offline bloqueado temporalmente por 5 minutos tras 5 intentos fallidos.'
+                        : 'Usuario no autenticado previamente en este equipo. Inicia sesión con conexión al servidor.'
                 };
             }
 
             const isPasswordValid = await verifyOfflinePassword(offlineUser, password);
             if (!isPasswordValid) {
+                const nextCount = lockState.count + 1;
+                const nextLockUntil = nextCount >= MAX_OFFLINE_LOGIN_ATTEMPTS ? (Date.now() + OFFLINE_LOGIN_LOCK_MS) : 0;
+                saveOfflineLoginLockState({ count: nextCount, lockUntil: nextLockUntil });
                 return {
                     success: false,
-                    message: 'Contraseña incorrecta o sesión offline no verificada previamente online.'
+                    message: nextLockUntil
+                        ? 'Acceso offline bloqueado temporalmente por 5 minutos tras 5 intentos fallidos.'
+                        : `Contraseña incorrecta o sesión offline no verificada previamente online (${MAX_OFFLINE_LOGIN_ATTEMPTS - nextCount} intento(s) restantes).`
                 };
             }
 
+            saveOfflineLoginLockState({ count: 0, lockUntil: 0 });
             console.log('⚡ Acceso verificado MODO OFFLINE:', offlineUser.name);
             const userWithOffline = { ...offlineUser, isOfflineMode: true };
             secureMobileStorage.setSessionActive(true);
@@ -835,10 +887,8 @@ export const AuthProvider = ({ children }) => {
             if (token) {
                 secureMobileStorage.setToken(token);
             }
-            const enrolledCred = biometricService.getEnrolledCredential();
-            if (userData?.id && enrolledCred?.biometricToken && (!enrolledCred.userId || String(enrolledCred.userId) === String(userData.id))) {
-                await saveOfflineBiometricHash(userData.id, enrolledCred.biometricToken);
-            }
+            sessionExpiredRef.current = false;
+            saveOfflineLoginLockState({ count: 0, lockUntil: 0 });
             if (userData) {
                 await saveOfflinePasswordVerifier(userData, password);
                 secureMobileStorage.setUserProfile(userData);
@@ -884,10 +934,8 @@ export const AuthProvider = ({ children }) => {
             if (token) {
                 secureMobileStorage.setToken(token);
             }
-            const enrolledCred = biometricService.getEnrolledCredential();
-            if (userData?.id && enrolledCred?.biometricToken && (!enrolledCred.userId || String(enrolledCred.userId) === String(userData.id))) {
-                await saveOfflineBiometricHash(userData.id, enrolledCred.biometricToken);
-            }
+            sessionExpiredRef.current = false;
+            saveOfflineLoginLockState({ count: 0, lockUntil: 0 });
             if (userData) {
                 secureMobileStorage.setUserProfile(userData);
                 if (userData.companyId) {
@@ -919,11 +967,7 @@ export const AuthProvider = ({ children }) => {
 
     const registerBiometrics = useCallback(async (deviceName) => {
         if (!user) throw new Error('No hay usuario autenticado');
-        const res = await biometricService.registerBiometrics(user, deviceName);
-        if (res?.credential?.biometricToken && user?.id) {
-            await saveOfflineBiometricHash(user.id, res.credential.biometricToken);
-        }
-        return res;
+        return await biometricService.registerBiometrics(user, deviceName);
     }, [user]);
 
     const revokeBiometrics = useCallback(async () => {

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import {
     AlertCircle,
     Check,
@@ -37,6 +38,17 @@ export default function MobilePOSLoginScreen({
     handleAutoDiscoverServer,
     handleTestAndSaveServer
 }) {
+    // Blindaje anti-captura (FLAG_SECURE) mientras se muestran credenciales de inicio de sesión
+    useEffect(() => {
+        const plugin = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.()
+            ? window.Capacitor?.Plugins?.PosNativeHardware
+            : null;
+        if (!plugin?.setScreenSecure) return undefined;
+        plugin.setScreenSecure({ secure: true }).catch(() => {});
+        return () => {
+            plugin.setScreenSecure({ secure: false }).catch(() => {});
+        };
+    }, []);
     return (
         <div className={`flex-1 flex flex-col items-center justify-center p-4 ${T.appBg}`}>
             <div className={`w-full max-w-sm ${T.modalCard} rounded-xl p-6 sm:p-7 shadow-2xl space-y-4`}>

@@ -880,6 +880,41 @@ export default function MobilePOSSimulator() {
     );
   }, [user?.role, hasPermission]);
 
+  const canCreateProductsMobile = useMemo(() => {
+    const role = String(user?.role || '').toLowerCase();
+    return Boolean(
+      hasPermission('canCreateProducts') ||
+      hasPermission('canManageInventory') ||
+      ['superadmin', 'owner', 'dueño', 'dueno', 'admin', 'supervisor', 'master'].includes(role)
+    );
+  }, [user?.role, hasPermission]);
+
+  const canDeleteProductsMobile = useMemo(() => {
+    const role = String(user?.role || '').toLowerCase();
+    return Boolean(
+      hasPermission('canDeleteProducts') ||
+      hasPermission('canManageInventory') ||
+      ['superadmin', 'owner', 'dueño', 'dueno', 'admin', 'master'].includes(role)
+    );
+  }, [user?.role, hasPermission]);
+
+  const canAdjustStockMobile = useMemo(() => {
+    const role = String(user?.role || '').toLowerCase();
+    return Boolean(
+      hasPermission('canAdjustStock') ||
+      hasPermission('canManageInventory') ||
+      ['superadmin', 'owner', 'dueño', 'dueno', 'admin', 'supervisor', 'master'].includes(role)
+    );
+  }, [user?.role, hasPermission]);
+
+  const canViewCostsMobile = useMemo(() => {
+    const role = String(user?.role || '').toLowerCase();
+    return Boolean(
+      hasPermission('canViewCosts') ||
+      ['superadmin', 'owner', 'dueño', 'dueno', 'admin', 'master'].includes(role)
+    );
+  }, [user?.role, hasPermission]);
+
   // Manejadores de Gesto de Presión Prolongada (Long-Press / Haptic Touch)
 
 
@@ -1897,6 +1932,10 @@ export default function MobilePOSSimulator() {
 
   // Abrir Modal de Creación Rápida de Producto
   const openCreateProduct = (initialBarcode = '') => {
+    if (!canCreateProductsMobile) {
+      showToast('No tienes permisos para crear productos', 'error');
+      return;
+    }
     const rawBarcode = typeof initialBarcode === 'string' ? initialBarcode.trim() : '';
     setProductFormData({
       id: null,
@@ -2030,11 +2069,21 @@ export default function MobilePOSSimulator() {
   // Guardar Cambios de Producto (Servidor PC + Espejo + Fallback Offline)
   const handleSaveProduct = async (e) => {
     e?.preventDefault();
+    if (productFormData.isNew && !canCreateProductsMobile) {
+      showToast('⛔ No tienes permisos para crear productos', 'error');
+      return;
+    }
+    if (!productFormData.isNew && !canEditCatalogMobile) {
+      showToast('⛔ No tienes permisos para editar productos', 'error');
+      return;
+    }
     const name = productFormData.name.trim();
     const price = parseFloat(productFormData.priceUSD);
     const stock = parseFloat(productFormData.stock);
-    const cost = parseFloat(productFormData.costUSD) || 0;
-    const margin = parseFloat(productFormData.margin) || (cost > 0 && price > 0 ? Number((((price - cost) / cost) * 100).toFixed(2)) : 0);
+    const cost = canViewCostsMobile ? (parseFloat(productFormData.costUSD) || 0) : undefined;
+    const margin = canViewCostsMobile
+      ? (parseFloat(productFormData.margin) || (cost > 0 && price > 0 ? Number((((price - cost) / cost) * 100).toFixed(2)) : 0))
+      : undefined;
     const barcode = productFormData.barcode.trim();
 
     if (!name) {
@@ -2065,9 +2114,7 @@ export default function MobilePOSSimulator() {
       price,
       precio: price,
       priceBs: price * exchangeRate,
-      cost,
-      costo: cost,
-      margin,
+      ...(canViewCostsMobile ? { cost, costo: cost, margin } : {}),
       stockQuantity: stock,
       stock: stock,
       minStock: parseFloat(productFormData.minStock) || 0,
@@ -2083,7 +2130,7 @@ export default function MobilePOSSimulator() {
       bulkPrice: bp,
       bulkPriceBs: bp > 0 ? (bp * exchangeRate) : 0,
       bulkBarcode: productFormData.bulkBarcode ? productFormData.bulkBarcode.trim() : null,
-      bulkCost: parseFloat(productFormData.bulkCost) || (cost * upb),
+      ...(canViewCostsMobile ? { bulkCost: parseFloat(productFormData.bulkCost) || ((cost || 0) * upb) } : {}),
       // Media caja
       midBulkUnitName: productFormData.midBulkUnitName || 'Media Caja',
       unitsPerMidBulk: upmb,
@@ -2126,6 +2173,12 @@ export default function MobilePOSSimulator() {
 
       setIsQuickProductModalOpen(false);
     } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.message || err?.response?.data?.error || `Operación rechazada por el servidor (${httpStatus})`;
+        showToast(`⛔ ${msg}`);
+        return;
+      }
       console.warn('Error al guardar en servidor PC, aplicando fallback local:', err);
       const fallbackId = productFormData.isNew ? `off_prod_${Date.now()}` : productFormData.id;
       const fallbackProd = { ...payload, id: fallbackId };
@@ -3200,6 +3253,7 @@ export default function MobilePOSSimulator() {
           showToast={showToast}
           setIsManualItemModalOpen={setIsManualItemModalOpen}
           openCreateProduct={openCreateProduct}
+          canCreateProducts={canCreateProductsMobile}
           heldSales={heldSales}
           setIsHeldSalesModalOpen={setIsHeldSalesModalOpen}
         />
@@ -3249,6 +3303,11 @@ export default function MobilePOSSimulator() {
                 T={T}
                 isLight={isLight}
                 user={user}
+                canCreateProducts={canCreateProductsMobile}
+                canManageInventory={canEditCatalogMobile}
+                canDeleteProducts={canDeleteProductsMobile}
+                canAdjustStock={canAdjustStockMobile}
+                canViewCosts={canViewCostsMobile}
                 onBackToPOS={() => setActiveModule('pos')}
                 onProductUpdated={(upd) => {
                   setProducts(prev => prev.map(p => String(p.id) === String(upd.id) ? { ...p, ...upd } : p));
@@ -3743,6 +3802,8 @@ export default function MobilePOSSimulator() {
         handleBarcodeScanned={handleBarcodeScanned}
         openCreateProduct={openCreateProduct}
         openEditProduct={openEditProduct}
+        canCreateProducts={canCreateProductsMobile}
+        canViewCosts={canViewCostsMobile}
         isQuickProductModalOpen={isQuickProductModalOpen}
         setIsQuickProductModalOpen={setIsQuickProductModalOpen}
         productFormData={productFormData}

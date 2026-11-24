@@ -519,6 +519,7 @@ const startServer = (ports, userDataPath = null) => {
             app.use('/auth/login', authLimiter);
             app.use('/auth/register', authLimiter);
             app.use('/auth/quick-unlock', authLimiter);
+            app.use('/auth/biometrics/challenge', authLimiter);
             app.use('/auth/biometrics/login', authLimiter);
             app.use('/auth/supervisor-authorize', authLimiter);
             app.use('/auth/supervisor_authorize', authLimiter);

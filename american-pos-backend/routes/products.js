@@ -249,9 +249,9 @@ router.get('/public-catalog', require('../middleware/auth').verifyToken, async (
 });
 
 /**
- * POST /public-sync - Sync local mobile products to server (Protected)
+ * POST /public-sync - Sync local mobile products to server (Protected + RBAC)
  */
-router.post('/public-sync', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/public-sync', require('../middleware/auth').verifyToken, requirePermission(['canCreateProducts', 'canManageInventory']), async (req, res) => {
     try {
         const { products } = req.body;
         if (!Array.isArray(products)) return res.status(400).json({ error: 'Formato inválido' });
@@ -787,6 +787,7 @@ router.get('/:id', async (req, res) => {
             totalPhysicalStock = p.BranchStocks.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
         }
         p.stockQuantity = Number(totalPhysicalStock > 0 ? totalPhysicalStock : (p.stockQuantity || p.stock || 0));
+        ProductService.sanitizeProductForUser(p, ProductService.canUserViewCosts(req.user));
         
         res.json(p);
     } catch (error) {

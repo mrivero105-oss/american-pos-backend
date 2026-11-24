@@ -16,33 +16,34 @@ const {
 const { CashShift, User } = require('../database/models');
 const { Op } = require('sequelize');
 
+const applyBlindClosureFilter = (req, shiftData) => {
+    if (!shiftData) return shiftData;
+    const { readJson, getUserSettings } = require('../utils/helpers');
+    const { SETTINGS_FILE } = require('../config/paths');
+    const allSettings = readJson(SETTINGS_FILE);
+    const userSettings = getUserSettings(allSettings, req.user.companyId);
+    const isBlindClosureMode = userSettings?.cashClosureMode === 'BLIND';
+    const isSupervisorOrAdmin = ['admin', 'superadmin', 'owner', 'dueño', 'supervisor'].includes(String(req.user.role || '').toLowerCase());
+
+    if (isBlindClosureMode && !isSupervisorOrAdmin) {
+        shiftData.expectedAmount = null;
+        shiftData.theoreticalTotalUsd = null;
+        shiftData.expectedCashUsd = null;
+        shiftData.expectedCashBs = null;
+        shiftData.expectedBreakdown = null;
+        shiftData.isBlindClose = true;
+    } else {
+        shiftData.isBlindClose = false;
+    }
+    return shiftData;
+};
+
 // GET /current - Get current open shift with stats
 router.get('/current', async (req, res) => {
     try {
         const registerId = req.query.registerId || '1';
         const shiftData = await cashService.getCurrentShift(req.user.id, req.user.companyId, registerId);
-        
-        // REGLA DE AUDITORÍA: ARQUEO CIEGO (BLIND CLOSE)
-        // Solo si la empresa tiene configurado explícitamente el modo BLIND y el usuario no es supervisor/admin,
-        // se oculta el saldo teórico esperado para forzar el arqueo a ciegas.
-        const { readJson, getUserSettings } = require('../utils/helpers');
-        const { SETTINGS_FILE } = require('../config/paths');
-        const allSettings = readJson(SETTINGS_FILE);
-        const userSettings = getUserSettings(allSettings, req.user.companyId);
-        const isBlindClosureMode = userSettings?.cashClosureMode === 'BLIND';
-        const isSupervisorOrAdmin = ['admin', 'superadmin', 'owner', 'supervisor'].includes(String(req.user.role || '').toLowerCase());
-
-        if (isBlindClosureMode && !isSupervisorOrAdmin && shiftData) {
-            shiftData.expectedAmount = null;
-            shiftData.theoreticalTotalUsd = null;
-            shiftData.expectedCashUsd = null;
-            shiftData.expectedCashBs = null;
-            shiftData.expectedBreakdown = null;
-            shiftData.isBlindClose = true;
-        } else if (shiftData) {
-            shiftData.isBlindClose = false;
-        }
-
+        applyBlindClosureFilter(req, shiftData);
         res.json(shiftData);
     } catch (error) {
         console.error('Error in GET /cash/current:', error);
@@ -193,7 +194,7 @@ router.get('/active-shifts', isAdmin, async (req, res) => {
 });
 
 // POST /open - Open a new shift
-router.post('/open', validate(openShiftSchema), async (req, res) => {
+router.post('/open', requirePermission('canManageCashShift'), validate(openShiftSchema), async (req, res) => {
     try {
         const newShift = await cashService.openShift(req.user, req.body);
         
@@ -219,7 +220,7 @@ router.post('/open', validate(openShiftSchema), async (req, res) => {
 });
 
 // POST /close - Close the current shift
-router.post('/close', validate(closeShiftSchema), async (req, res) => {
+router.post('/close', requirePermission('canManageCashShift'), validate(closeShiftSchema), async (req, res) => {
     try {
         const closedShift = await cashService.closeShift(req.user, req.body);
         
@@ -252,7 +253,7 @@ router.post('/close', validate(closeShiftSchema), async (req, res) => {
 });
 
 // POST /close-blind - Cierre Ciego de Turno (Auditoría Antifraude)
-router.post('/close-blind', validate(closeShiftSchema), async (req, res) => {
+router.post('/close-blind', requirePermission('canManageCashShift'), validate(closeShiftSchema), async (req, res) => {
     try {
         const result = await cashService.closeShiftBlind(req.user, req.body);
         
@@ -387,7 +388,7 @@ router.get('/audit-daily-report', async (req, res) => {
 });
 
 // POST /movement - Add a cash movement (in/out/expense)
-router.post('/movement', validate(cashMovementSchema), async (req, res) => {
+router.post('/movement', requirePermission('canManageCashShift'), validate(cashMovementSchema), async (req, res) => {
     try {
         const movement = await cashService.addMovement(req.user, req.body);
         
@@ -415,7 +416,7 @@ router.post('/movement', validate(cashMovementSchema), async (req, res) => {
 });
 
 // GET /history - Get closed shifts history
-router.get('/history', async (req, res) => {
+router.get('/history', requirePermission(['canManageCashShift', 'canViewReports', 'canAccessAudit']), async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
         let whereClause = {
@@ -447,12 +448,12 @@ router.get('/history', async (req, res) => {
 });
 
 // GET /x-report - Quick X Report for current shift
-router.get('/x-report', async (req, res) => {
+router.get('/x-report', requirePermission(['canManageCashShift', 'canViewReports', 'canAccessAudit']), async (req, res) => {
     try {
         const registerId = req.query.registerId || '1';
         const shiftData = await cashService.getCurrentShift(req.user.id, req.user.companyId, registerId);
         if (!shiftData) return res.status(200).json(null);
-        
+        applyBlindClosureFilter(req, shiftData);
         res.json(shiftData);
     } catch (error) {
         console.error('X-Report error:', error);
@@ -493,7 +494,7 @@ router.post('/drawer-open-event', validate(drawerOpenEventSchema), async (req, r
 });
 
 // GET /shift-products-summary/:shiftId - Resumen de mercancía vendida y stock remanente
-router.get('/shift-products-summary/:shiftId', async (req, res) => {
+router.get('/shift-products-summary/:shiftId', requirePermission(['canManageCashShift', 'canViewReports', 'canAccessAudit']), async (req, res) => {
     try {
         const { shiftId } = req.params;
         const items = await cashService.getShiftProductsSummary(shiftId, req.user.companyId);

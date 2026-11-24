@@ -40,12 +40,35 @@ const {
     buildPublicRegionMetadata
 } = require('../constants/regionPresets');
 
+const SENSITIVE_SETTINGS_KEY_RE = /(password|pass|secret|apikey|api_key|servicekey|service_key|privatekey|private_key|accesstoken|access_token|refreshtoken|refresh_token|bottoken|bot_token|webhooktoken|webhook_token|synckey|sync_key|authkey|auth_key|smtppass|smtp_pass)/i;
+
+const sanitizeSettingsForNonAdmin = (value) => {
+    if (Array.isArray(value)) {
+        return value.map(item => sanitizeSettingsForNonAdmin(item));
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    const clean = {};
+    for (const [k, v] of Object.entries(value)) {
+        if (SENSITIVE_SETTINGS_KEY_RE.test(k)) {
+            continue;
+        }
+        clean[k] = sanitizeSettingsForNonAdmin(v);
+    }
+    return clean;
+};
+
 router.get('/', verifyToken, async (req, res) => {
     try {
         const allSettings = getCachedSettings();
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
-        const userSettings = getUserSettings(allSettings, companyId);
-        res.json(userSettings || {});
+        const userSettings = getUserSettings(allSettings, companyId) || {};
+        const role = String(req.user?.role || '').toLowerCase();
+        const isPrivilegedSettingsReader =
+            ['admin', 'superadmin', 'owner', 'dueño', 'master'].includes(role) ||
+            req.user?.permissions?.canManageSettings === true;
+        res.json(isPrivilegedSettingsReader ? userSettings : sanitizeSettingsForNonAdmin(userSettings));
     } catch (err) {
         console.error('Error in GET /settings:', err);
         res.status(500).json({ error: 'Error obteniendo configuración' });

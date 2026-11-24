@@ -140,6 +140,8 @@ export default function MobileSimulatorModals(props) {
     handleBarcodeScanned,
     openCreateProduct,
     openEditProduct,
+    canCreateProducts = true,
+    canViewCosts = true,
     isQuickProductModalOpen,
     setIsQuickProductModalOpen,
     productFormData,
@@ -446,6 +448,7 @@ export default function MobileSimulatorModals(props) {
           selectableCategories={selectableCategories}
           exchangeRate={exchangeRate}
           triggerHaptic={triggerHaptic}
+          canViewCosts={canViewCosts}
         />
       )}
 
@@ -497,16 +500,18 @@ export default function MobileSimulatorModals(props) {
               <Copy size={12} />
               <span>Copiar Código</span>
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                openCreateProduct(unregisteredBarcodeNotice.barcode);
-              }}
-              className="flex-1 py-1.5 px-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all shadow-md"
-            >
-              <Plus size={12} />
-              <span>Crear Producto</span>
-            </button>
+            {canCreateProducts && (
+              <button
+                type="button"
+                onClick={() => {
+                  openCreateProduct(unregisteredBarcodeNotice.barcode);
+                }}
+                className="flex-1 py-1.5 px-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all shadow-md"
+              >
+                <Plus size={12} />
+                <span>Crear Producto</span>
+              </button>
+            )}
           </div>
         </div>
       )}

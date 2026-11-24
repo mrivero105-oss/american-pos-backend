@@ -406,8 +406,14 @@ export default function MobileCashView({
       setMovementAmount('');
       setMovementReason('');
       fetchCurrentShift();
-    } catch (_err) {
-      // Offline fallback: actualizar turno en curso e insertar en cola de sincronización
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.message || err?.response?.data?.error || `Operación rechazada por el servidor (${httpStatus})`;
+        showToast(`⛔ ${msg}`);
+        return;
+      }
+      // Offline fallback: solo ante fallo de red / 5xx actualizar turno en curso e insertar en cola de sincronización
       setCurrentShift(prev => {
         const baseShift = prev || {
           id: `shift_off_${Date.now()}`,

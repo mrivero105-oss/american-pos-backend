@@ -4,6 +4,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { getBaseUrl } from './api';
 import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
+import { OTA_PUBLIC_KEY_PEM } from '../config/otaPublicKey';
 import { computeSha256Hex, verifyRsaSha256Bytes } from '../utils/clientLicenseValidator';
 
 let isChecking = false;
@@ -11,9 +12,39 @@ let updateReady = false;
 let newVersionDownloaded = null;
 
 /**
- * Verifica integridad criptográfica de un paquete OTA descargado (ArrayBuffer/Uint8Array).
- * - Valida checksum SHA-256 si viene en el manifiesto.
- * - Valida firma RSA-SHA256 contra la clave pública embebida si viene otaSignature.
+ * Compara dos versiones numéricas/semver separadas por punto (ej. "24.4.3.1795365711").
+ * Retorna:
+ *  > 0 si remoteVer > localVer (actualización válida)
+ *    0 si son equivalentes
+ *  < 0 si remoteVer < localVer (downgrade — debe rechazarse)
+ */
+export function compareOtaVersions(remoteVer, localVer) {
+    const parseParts = (v) => String(v || '')
+        .trim()
+        .replace(/^v/i, '')
+        .split('.')
+        .map((seg) => {
+            const m = seg.match(/^\d+/);
+            return m ? Number(m[0]) : 0;
+        });
+
+    const a = parseParts(remoteVer);
+    const b = parseParts(localVer);
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+        const av = a[i] || 0;
+        const bv = b[i] || 0;
+        if (av > bv) return 1;
+        if (av < bv) return -1;
+    }
+    return 0;
+}
+
+/**
+ * Verifica integridad criptográfica estricta (fallo cerrado) de un paquete OTA descargado.
+ * - Exige checksum SHA-256 válido (64 hex chars) y coincidencia exacta con los bytes descargados.
+ * - Exige firma digital RSA-SHA256 obligatoria contra la clave pública OTA dedicada embebida.
+ * - Si el manifiesto incluye otaManifestSignature, valida también version|checksum|buildTime.
  */
 export async function verifyOtaPackageIntegrity(bundleBytes, remoteManifest, options = {}) {
     if (!bundleBytes) {
@@ -28,30 +59,43 @@ export async function verifyOtaPackageIntegrity(bundleBytes, remoteManifest, opt
     }
 
     const expectedChecksum = String(remoteManifest?.checksum || '').trim().toLowerCase();
-    if (expectedChecksum) {
-        const actualChecksum = (await computeSha256Hex(bytes)).toLowerCase();
-        if (actualChecksum !== expectedChecksum) {
-            throw new Error('Integridad SHA-256 del paquete OTA inválida. Actualización rechazada.');
-        }
+    if (!/^[a-f0-9]{64}$/.test(expectedChecksum)) {
+        throw new Error('Manifiesto OTA sin checksum SHA-256 válido. Actualización rechazada.');
     }
 
+    const actualChecksum = (await computeSha256Hex(bytes)).toLowerCase();
+    if (actualChecksum !== expectedChecksum) {
+        throw new Error('Integridad SHA-256 del paquete OTA inválida. Actualización rechazada.');
+    }
+
+    const publicKeyPem = options.publicKeyPem || OTA_PUBLIC_KEY_PEM;
     const signature = String(remoteManifest?.otaSignature || '').trim();
-    if (signature) {
-        const isSignatureValid = await verifyRsaSha256Bytes(bytes, signature, options.publicKeyPem);
-        if (!isSignatureValid) {
-            throw new Error('Firma criptográfica RSA-SHA256 del paquete OTA inválida. Actualización rechazada.');
-        }
-        return { verified: true, mode: 'rsa-sha256' };
+    if (!signature) {
+        throw new Error('Paquete OTA sin firma digital RSA-SHA256 obligatoria. Actualización rechazada.');
     }
 
-    return { verified: true, mode: 'sha256-only' };
+    const isSignatureValid = await verifyRsaSha256Bytes(bytes, signature, publicKeyPem);
+    if (!isSignatureValid) {
+        throw new Error('Firma criptográfica RSA-SHA256 del paquete OTA inválida. Actualización rechazada.');
+    }
+
+    if (remoteManifest?.otaManifestSignature && remoteManifest?.version && remoteManifest?.buildTime) {
+        const canonical = `${remoteManifest.version}|${expectedChecksum}|${remoteManifest.buildTime}`;
+        const manifestBytes = new TextEncoder().encode(canonical);
+        const isManifestValid = await verifyRsaSha256Bytes(
+            manifestBytes,
+            String(remoteManifest.otaManifestSignature).trim(),
+            publicKeyPem
+        );
+        if (!isManifestValid) {
+            throw new Error('Firma criptográfica del manifiesto OTA inválida. Actualización rechazada.');
+        }
+    }
+
+    return { verified: true, mode: 'rsa-sha256', checksum: actualChecksum };
 }
 
 export const otaUpdateService = {
-    /**
-     * Inicializa el servicio OTA en la app nativa.
-     * Marca el bundle actual como funcional para prevenir rollbacks automáticos de Capacitor.
-     */
     async init() {
         if (!Capacitor.isNativePlatform()) {
             return;
@@ -64,7 +108,6 @@ export const otaUpdateService = {
             console.warn('[OTA_UPDATE] Advertencia en notifyAppReady:', e?.message || e);
         }
 
-        // Buscar actualizaciones silenciosamente tras iniciar la app
         setTimeout(() => {
             this.checkForUpdates({ silent: true }).catch((err) => {
                 console.warn('[OTA_UPDATE] Error en verificación inicial:', err?.message || err);
@@ -72,9 +115,6 @@ export const otaUpdateService = {
         }, 3500);
     },
 
-    /**
-     * Retorna la versión actual registrada o la nativa por defecto.
-     */
     async getCurrentVersion() {
         if (!Capacitor.isNativePlatform()) {
             return 'Web / Localhost';
@@ -88,18 +128,11 @@ export const otaUpdateService = {
     },
 
     /**
-     * Consulta el servidor LAN / Cloud por nuevas versiones empaquetadas.
-     * Política híbrida:
-     * - Si el manifiesto incluye `otaSignature`: descarga y valida firma RSA-SHA256 + SHA-256
-     *   antes de aplicar el paquete con CapacitorUpdater.
-     * - Si el manifiesto no incluye `otaSignature` (builds LAN sin llave privada): mantiene
-     *   la verificación por checksum SHA-256 sin interrumpir el flujo LAN.
-     *
-     * @param {Object} options
-     * @param {boolean} options.silent - Si es true, no muestra toasts a menos que haya descarga
-     * @param {boolean} options.immediate - Si es true, recarga la app inmediatamente al completar
-     * @param {Function} options.onProgress - Callback con porcentaje (0 - 100)
-     * @param {string} [options.publicKeyPem] - Clave pública RSA SPKI opcional (tests/overrides)
+     * Consulta el servidor Cloud / LAN por nuevas versiones empaquetadas.
+     * Política estricta (Fallo Cerrado):
+     * - Anti-downgrade: exige remote.version > currentVer.
+     * - Firma RSA-SHA256 + SHA-256 obligatorios contra OTA_PUBLIC_KEY_PEM antes de instalar.
+     * - Pasa el checksum SHA-256 firmado y verificado de forma obligatoria a CapacitorUpdater.download.
      */
     async checkForUpdates(options = { silent: true, immediate: false, onProgress: null }) {
         if (!Capacitor.isNativePlatform()) {
@@ -120,9 +153,6 @@ export const otaUpdateService = {
         try {
             baseUrl = getBaseUrl() || '';
 
-            // Consultar manifiesto de versión:
-            // 1. Prioridad: Supabase Cloud Storage (24/7 con datos móviles en Internet)
-            // 2. Fallback: Servidor local de la PC (Wi-Fi)
             let res = null;
             try {
                 const cloudManifestUrl = getSupabaseStoragePublicUrl('app-updates', 'version.json');
@@ -154,36 +184,43 @@ export const otaUpdateService = {
             const currentVer = await this.getCurrentVersion();
             console.log(`[OTA_UPDATE] Versión actual: ${currentVer} | Remota en servidor: ${remote.version}`);
 
-            if (remote.version === currentVer) {
+            // Protección anti-downgrade monotónica
+            const cmp = compareOtaVersions(remote.version, currentVer);
+            if (cmp <= 0) {
+                if (cmp < 0) {
+                    console.warn(`[OTA_UPDATE] 🛡️ Downgrade bloqueado: remota ${remote.version} < actual ${currentVer}`);
+                }
                 if (toastId) toast.success('La aplicación ya está en la última versión.', { id: toastId });
-                return { updateAvailable: false, currentVersion: currentVer };
+                return { updateAvailable: false, currentVersion: currentVer, downgradeBlocked: cmp < 0 };
+            }
+
+            // Fail-closed antes de descargar: exigir firma RSA-SHA256 y checksum SHA-256 en manifiesto
+            if (!String(remote.otaSignature || '').trim()) {
+                throw new Error('Paquete OTA sin firma digital RSA-SHA256 obligatoria. Actualización rechazada.');
+            }
+            if (!/^[a-f0-9]{64}$/i.test(String(remote.checksum || '').trim())) {
+                throw new Error('Manifiesto OTA sin checksum SHA-256 válido. Actualización rechazada.');
             }
 
             const downloadUrl = remote.bundleUrl.startsWith('http')
                 ? remote.bundleUrl
                 : `${baseUrl}${remote.bundleUrl}`;
 
-            // Política Híbrida Inteligente RSA-SHA256:
-            // Si el servidor firmó el paquete con otaSignature, verificamos el binario antes de instalarlo.
-            let verificationMode = 'sha256-only';
-            if (remote.otaSignature) {
-                if (toastId) {
-                    toast.loading('Verificando firma digital RSA-SHA256...', { id: toastId });
-                }
-                const zipRes = await axios.get(downloadUrl, {
-                    responseType: 'arraybuffer',
-                    timeout: 60000
-                });
-                const verification = await verifyOtaPackageIntegrity(zipRes.data, remote, {
-                    publicKeyPem: options.publicKeyPem
-                });
-                verificationMode = verification.mode;
-                console.log('[OTA_UPDATE] 🔐 Firma criptográfica RSA-SHA256 y checksum SHA-256 verificados correctamente.');
+            if (toastId) {
+                toast.loading('Verificando firma digital RSA-SHA256...', { id: toastId });
             }
 
-            // Hay una versión nueva verificada: Preparar instalación en CapacitorUpdater
+            const zipRes = await axios.get(downloadUrl, {
+                responseType: 'arraybuffer',
+                timeout: 60000
+            });
+            const verification = await verifyOtaPackageIntegrity(zipRes.data, remote, {
+                publicKeyPem: options.publicKeyPem
+            });
+            console.log('[OTA_UPDATE] 🔐 Firma criptográfica RSA-SHA256 y checksum SHA-256 verificados correctamente.');
+
             if (toastId) {
-                toast.loading(`Descargando actualización v${remote.version.split('.').slice(-1)[0] || ''}...`, { id: toastId });
+                toast.loading(`Instalando actualización v${remote.version.split('.').slice(-1)[0] || ''}...`, { id: toastId });
             }
 
             let progressListener = null;
@@ -194,20 +231,19 @@ export const otaUpdateService = {
                 });
             }
 
-            console.log(`[OTA_UPDATE] 📥 Descargando bundle desde: ${downloadUrl}`);
+            console.log(`[OTA_UPDATE] 📥 Descargando bundle verificado desde: ${downloadUrl}`);
             const bundle = await CapacitorUpdater.download({
                 url: downloadUrl,
                 version: remote.version,
-                checksum: remote.checksum || ''
+                checksum: verification.checksum
             });
 
             if (progressListener) {
                 progressListener.remove();
             }
 
-            console.log('[OTA_UPDATE] ✅ Bundle descargado:', bundle.id);
+            console.log('[OTA_UPDATE] ✅ Bundle verificado listo:', bundle.id);
 
-            // Registrar nuevo bundle como el activo
             await CapacitorUpdater.set(bundle);
             localStorage.setItem('isaac_pos_ota_version', remote.version);
             updateReady = true;
@@ -221,7 +257,7 @@ export const otaUpdateService = {
                     await CapacitorUpdater.reload();
                 }, 1500);
             } else {
-                toast.success('✨ ¡Actualización OTA descargada! Se aplicará al reiniciar la aplicación.', {
+                toast.success('✨ ¡Actualización OTA verificada! Se aplicará al reiniciar la aplicación.', {
                     duration: 8000,
                     icon: '🚀'
                 });
@@ -231,7 +267,7 @@ export const otaUpdateService = {
                 updateAvailable: true,
                 newVersion: remote.version,
                 bundleId: bundle.id,
-                verificationMode
+                verificationMode: verification.mode
             };
         } catch (err) {
             console.error('[OTA_UPDATE] Error durante la actualización OTA:', err);

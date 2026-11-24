@@ -30,6 +30,7 @@ export default function MobilePOSHeader({
     showToast,
     setIsManualItemModalOpen,
     openCreateProduct,
+    canCreateProducts = true,
     heldSales,
     setIsHeldSalesModalOpen
 }) {
@@ -187,22 +188,24 @@ export default function MobilePOSHeader({
                         <span className="hidden xs:inline">Libre</span>
                     </button>
 
-                    {/* Botón Rápido: Nuevo Producto */}
-                    <button
-                        type="button"
-                        onClick={() => {
-                            triggerHaptic(10);
-                            openCreateProduct();
-                        }}
-                        className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition-transform cursor-pointer ${
-                            isLight
-                                ? 'bg-slate-100 text-slate-700 border-slate-200'
-                                : 'bg-[#131924] text-emerald-400 border-[#232d3f]'
-                        }`}
-                        title="Crear nuevo producto en catálogo"
-                    >
-                        <PlusCircle size={15} />
-                    </button>
+                    {/* Botón Rápido: Nuevo Producto (solo con permiso de creación/inventario) */}
+                    {canCreateProducts && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                triggerHaptic(10);
+                                openCreateProduct();
+                            }}
+                            className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition-transform cursor-pointer ${
+                                isLight
+                                    ? 'bg-slate-100 text-slate-700 border-slate-200'
+                                    : 'bg-[#131924] text-emerald-400 border-[#232d3f]'
+                            }`}
+                            title="Crear nuevo producto en catálogo"
+                        >
+                            <PlusCircle size={15} />
+                        </button>
+                    )}
 
                     {Array.isArray(heldSales) && heldSales.length > 0 && (
                         <button

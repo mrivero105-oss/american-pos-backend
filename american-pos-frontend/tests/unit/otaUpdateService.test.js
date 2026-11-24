@@ -2,176 +2,211 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 
-const mocks = vi.hoisted(() => ({
-    isNative: true,
-    current: vi.fn(),
-    download: vi.fn(),
-    set: vi.fn(),
-    reload: vi.fn(),
-    notifyAppReady: vi.fn(),
-    addListener: vi.fn(),
-    axiosGet: vi.fn()
+const mockUpdater = vi.hoisted(() => ({
+  notifyAppReady: vi.fn().mockResolvedValue(undefined),
+  current: vi.fn().mockResolvedValue({ bundle: { version: '24.4.0.100' } }),
+  download: vi.fn().mockResolvedValue({ id: 'bundle-new-200' }),
+  set: vi.fn().mockResolvedValue(undefined),
+  reload: vi.fn().mockResolvedValue(undefined),
+  addListener: vi.fn().mockResolvedValue({ remove: vi.fn() })
 }));
 
+const mockAxiosGet = vi.hoisted(() => vi.fn());
+
 vi.mock('@capacitor/core', () => ({
-    Capacitor: {
-        isNativePlatform: () => mocks.isNative
-    }
+  Capacitor: {
+    isNativePlatform: () => true
+  }
 }));
 
 vi.mock('@capgo/capacitor-updater', () => ({
-    CapacitorUpdater: {
-        current: mocks.current,
-        download: mocks.download,
-        set: mocks.set,
-        reload: mocks.reload,
-        notifyAppReady: mocks.notifyAppReady,
-        addListener: mocks.addListener
-    }
+  CapacitorUpdater: mockUpdater
 }));
 
 vi.mock('axios', () => ({
-    default: {
-        get: mocks.axiosGet
-    }
+  default: {
+    get: mockAxiosGet
+  }
 }));
 
-vi.mock('react-hot-toast', () => ({
-    default: Object.assign(vi.fn(), {
-        loading: vi.fn(() => 'toast-1'),
-        success: vi.fn(),
-        error: vi.fn(),
-        dismiss: vi.fn()
-    })
-}));
+vi.mock('react-hot-toast', () => {
+  const fn = vi.fn();
+  fn.loading = vi.fn(() => 'toast-1');
+  fn.success = vi.fn();
+  fn.error = vi.fn();
+  fn.dismiss = vi.fn();
+  return { default: fn };
+});
 
 vi.mock('../../src/services/api', () => ({
-    getBaseUrl: () => 'http://192.168.1.2:3005'
+  getBaseUrl: () => 'http://192.168.1.2:3005'
 }));
 
 vi.mock('../../src/config/supabaseConfig', () => ({
-    getSupabaseStoragePublicUrl: () => null
+  getSupabaseStoragePublicUrl: () => null
 }));
 
-import { otaUpdateService, verifyOtaPackageIntegrity } from '../../src/services/otaUpdateService';
+import {
+  otaUpdateService,
+  verifyOtaPackageIntegrity,
+  compareOtaVersions
+} from '../../src/services/otaUpdateService';
 
-describe('Fase 2 — OTA Update Service (Verificación Híbrida RSA-SHA256 + SHA-256)', () => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
-        modulusLength: 2048,
-        publicKeyEncoding: { type: 'spki', format: 'pem' },
-        privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Downgrade)', () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+
+  const sampleZipBytes = new Uint8Array(Buffer.from('PK\x03\x04isaac-pos-ota-bundle-valid-payload'));
+  const validSha256 = crypto.createHash('sha256').update(sampleZipBytes).digest('hex');
+  const validSignature = crypto.sign('sha256', Buffer.from(sampleZipBytes), privateKey).toString('base64');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it('compara versiones monotónicamente para prevenir downgrades', () => {
+    expect(compareOtaVersions('24.4.0.200', '24.4.0.100')).toBeGreaterThan(0);
+    expect(compareOtaVersions('24.4.0.100', '24.4.0.100')).toBe(0);
+    expect(compareOtaVersions('24.4.0.99', '24.4.0.100')).toBeLessThan(0);
+    expect(compareOtaVersions('24.3.9.999', '24.4.0.1')).toBeLessThan(0);
+  });
+
+  it('acepta paquete OTA firmado con RSA-SHA256 válida, firma de manifiesto y checksum SHA-256 correcto', async () => {
+    const buildTime = '2026-11-24T05:00:00.000Z';
+    const manifestCanonical = `24.4.0.200|${validSha256}|${buildTime}`;
+    const otaManifestSignature = crypto.sign('sha256', Buffer.from(manifestCanonical, 'utf8'), privateKey).toString('base64');
+
+    mockAxiosGet.mockImplementation(async (url) => {
+      if (String(url).includes('/version.json')) {
+        return {
+          data: {
+            version: '24.4.0.200',
+            buildTime,
+            bundleUrl: '/dist.zip',
+            checksum: validSha256,
+            otaSignature: validSignature,
+            otaManifestSignature
+          }
+        };
+      }
+      if (String(url).includes('/dist.zip')) {
+        return { data: sampleZipBytes.buffer };
+      }
+      throw new Error(`URL inesperada: ${url}`);
     });
 
-    const sampleZipBytes = Buffer.from('PK\x03\x04isaac-pos-ota-bundle-payload-2026-test');
-    const validSha256 = crypto.createHash('sha256').update(sampleZipBytes).digest('hex');
-    const validSignature = crypto.sign('sha256', sampleZipBytes, privateKey).toString('base64');
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-        mocks.isNative = true;
-        mocks.current.mockResolvedValue({ bundle: { version: '24.4.0.100' } });
-        mocks.download.mockResolvedValue({ id: 'bundle-new-200', version: '24.4.0.200' });
-        mocks.set.mockResolvedValue();
-        localStorage.clear();
+    const result = await otaUpdateService.checkForUpdates({
+      silent: true,
+      publicKeyPem: publicKey
     });
 
-    it('acepta paquete OTA firmado con RSA-SHA256 válida y checksum SHA-256 correcto', async () => {
-        const res = await verifyOtaPackageIntegrity(
-            sampleZipBytes,
-            { checksum: validSha256, otaSignature: validSignature },
-            { publicKeyPem: publicKey }
-        );
-        expect(res).toEqual({ verified: true, mode: 'rsa-sha256' });
+    expect(result.updateAvailable).toBe(true);
+    expect(result.verificationMode).toBe('rsa-sha256');
+    expect(mockUpdater.download).toHaveBeenCalledWith(expect.objectContaining({
+      version: '24.4.0.200',
+      checksum: validSha256
+    }));
+    expect(mockUpdater.set).toHaveBeenCalledTimes(1);
+  });
 
-        mocks.axiosGet
-            .mockResolvedValueOnce({
-                data: {
-                    version: '24.4.0.200',
-                    bundleUrl: '/dist.zip',
-                    checksum: validSha256,
-                    otaSignature: validSignature
-                }
-            })
-            .mockResolvedValueOnce({
-                data: sampleZipBytes.buffer.slice(sampleZipBytes.byteOffset, sampleZipBytes.byteOffset + sampleZipBytes.byteLength)
-            });
+  it('rechaza paquete OTA si la firma RSA-SHA256 está adulterada y bloquea CapacitorUpdater', async () => {
+    const tamperedBytes = new Uint8Array(Buffer.from('PK\x03\x04paquete-modificado-por-tercero'));
+    const tamperedSha256 = crypto.createHash('sha256').update(tamperedBytes).digest('hex');
 
-        const updateRes = await otaUpdateService.checkForUpdates({
-            silent: true,
-            immediate: false,
-            publicKeyPem: publicKey
-        });
-
-        expect(updateRes.updateAvailable).toBe(true);
-        expect(updateRes.verificationMode).toBe('rsa-sha256');
-        expect(mocks.download).toHaveBeenCalledTimes(1);
-        expect(mocks.set).toHaveBeenCalledWith({ id: 'bundle-new-200', version: '24.4.0.200' });
+    mockAxiosGet.mockImplementation(async (url) => {
+      if (String(url).includes('/version.json')) {
+        return {
+          data: {
+            version: '24.4.0.201',
+            bundleUrl: '/dist.zip',
+            checksum: tamperedSha256,
+            otaSignature: validSignature
+          }
+        };
+      }
+      if (String(url).includes('/dist.zip')) {
+        return { data: tamperedBytes.buffer };
+      }
+      throw new Error(`URL inesperada: ${url}`);
     });
 
-    it('rechaza paquete OTA si la firma RSA-SHA256 está adulterada y bloquea CapacitorUpdater', async () => {
-        const tamperedSig = Buffer.from(validSignature, 'base64');
-        tamperedSig[0] ^= 0xff;
-        const badSignature = tamperedSig.toString('base64');
-
-        mocks.axiosGet
-            .mockResolvedValueOnce({
-                data: {
-                    version: '24.4.0.201',
-                    bundleUrl: '/dist.zip',
-                    checksum: validSha256,
-                    otaSignature: badSignature
-                }
-            })
-            .mockResolvedValueOnce({
-                data: sampleZipBytes.buffer.slice(sampleZipBytes.byteOffset, sampleZipBytes.byteOffset + sampleZipBytes.byteLength)
-            });
-
-        const updateRes = await otaUpdateService.checkForUpdates({
-            silent: true,
-            immediate: false,
-            publicKeyPem: publicKey
-        });
-
-        expect(updateRes.updateAvailable).toBe(false);
-        expect(updateRes.error?.message).toMatch(/Firma criptográfica RSA-SHA256/i);
-        expect(mocks.download).not.toHaveBeenCalled();
-        expect(mocks.set).not.toHaveBeenCalled();
+    const result = await otaUpdateService.checkForUpdates({
+      silent: true,
+      publicKeyPem: publicKey
     });
 
-    it('rechaza paquete OTA si los bytes no coinciden con el checksum SHA-256 declarado', async () => {
-        const corruptedBytes = Buffer.from('PK\x03\x04corrupted-zip-data');
-        await expect(
-            verifyOtaPackageIntegrity(
-                corruptedBytes,
-                { checksum: validSha256, otaSignature: validSignature },
-                { publicKeyPem: publicKey }
-            )
-        ).rejects.toThrow(/SHA-256/i);
-    });
+    expect(result.updateAvailable).toBe(false);
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error.message).toContain('Firma criptográfica RSA-SHA256');
+    expect(mockUpdater.download).not.toHaveBeenCalled();
+    expect(mockUpdater.set).not.toHaveBeenCalled();
+  });
 
-    it('mantiene el fallback LAN por SHA-256 cuando version.json no incluye otaSignature', async () => {
-        mocks.axiosGet.mockResolvedValueOnce({
-            data: {
-                version: '24.4.0.202',
-                bundleUrl: '/dist.zip',
-                checksum: validSha256
-            }
-        });
-
-        const updateRes = await otaUpdateService.checkForUpdates({
-            silent: true,
-            immediate: false
-        });
-
-        expect(updateRes.updateAvailable).toBe(true);
-        expect(updateRes.verificationMode).toBe('sha256-only');
-        // No descarga doble en LAN sin firma RSA: delega directo a CapacitorUpdater con checksum SHA-256
-        expect(mocks.axiosGet).toHaveBeenCalledTimes(1);
-        expect(mocks.download).toHaveBeenCalledWith({
-            url: 'http://192.168.1.2:3005/dist.zip',
+  it('falla cerrado y rechaza manifiesto sin otaSignature (cierra bypass MITM en LAN HTTP)', async () => {
+    mockAxiosGet.mockImplementation(async (url) => {
+      if (String(url).includes('/version.json')) {
+        return {
+          data: {
             version: '24.4.0.202',
+            bundleUrl: '/dist.zip',
             checksum: validSha256
-        });
-        expect(mocks.set).toHaveBeenCalledTimes(1);
+          }
+        };
+      }
+      throw new Error(`No debió descargar bundle sin firma: ${url}`);
     });
+
+    const result = await otaUpdateService.checkForUpdates({
+      silent: true,
+      publicKeyPem: publicKey
+    });
+
+    expect(result.updateAvailable).toBe(false);
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error.message).toContain('sin firma digital RSA-SHA256 obligatoria');
+    expect(mockUpdater.download).not.toHaveBeenCalled();
+    expect(mockUpdater.set).not.toHaveBeenCalled();
+  });
+
+  it('bloquea downgrade cuando la versión remota es menor a la instalada', async () => {
+    mockAxiosGet.mockResolvedValueOnce({
+      data: {
+        version: '24.4.0.50',
+        bundleUrl: '/dist.zip',
+        checksum: validSha256,
+        otaSignature: validSignature
+      }
+    });
+
+    const result = await otaUpdateService.checkForUpdates({
+      silent: true,
+      publicKeyPem: publicKey
+    });
+
+    expect(result.updateAvailable).toBe(false);
+    expect(result.downgradeBlocked).toBe(true);
+    expect(mockUpdater.download).not.toHaveBeenCalled();
+  });
+
+  it('verifyOtaPackageIntegrity rechaza checksum SHA-256 corrupto o ausente', async () => {
+    await expect(
+      verifyOtaPackageIntegrity(
+        sampleZipBytes,
+        { checksum: '0'.repeat(64), otaSignature: validSignature },
+        { publicKeyPem: publicKey }
+      )
+    ).rejects.toThrow(/Integridad SHA-256/i);
+
+    await expect(
+      verifyOtaPackageIntegrity(
+        sampleZipBytes,
+        { checksum: '', otaSignature: validSignature },
+        { publicKeyPem: publicKey }
+      )
+    ).rejects.toThrow(/checksum SHA-256 válido/i);
+  });
 });

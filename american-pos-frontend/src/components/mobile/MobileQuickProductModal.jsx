@@ -40,7 +40,8 @@ export default function MobileQuickProductModal({
   setIsCustomCategoryMode = () => {},
   selectableCategories = ['General'],
   exchangeRate = 1,
-  triggerHaptic = () => {}
+  triggerHaptic = () => {},
+  canViewCosts = true
 }) {
   const [activeTab, setActiveTab] = useState('general'); // 'general' | 'bulk' | 'advanced'
   const imageFileInputRef = useRef(null);
@@ -328,7 +329,8 @@ export default function MobileQuickProductModal({
                 </div>
               </div>
 
-              {/* Costo USD y Margen de Ganancia (%) */}
+              {/* Costo USD y Margen de Ganancia (%) - Solo usuarios con permiso canViewCosts */}
+              {canViewCosts && (
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Costo ($)</label>
@@ -388,6 +390,7 @@ export default function MobileQuickProductModal({
                   </div>
                 </div>
               </div>
+              )}
 
               {/* Precios: USD y Bs */}
               <div className="grid grid-cols-2 gap-2.5">

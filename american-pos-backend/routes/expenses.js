@@ -28,7 +28,7 @@ const emitExpensesChanged = (req, payload = {}) => {
 };
 
 // GET / - Search and list expenses
-router.get('/', requirePermission('canManageExpenses', 'canViewReports', 'canManageCashShift'), async (req, res) => {
+router.get('/', requirePermission(['canManageExpenses', 'canViewReports', 'canManageCashShift']), async (req, res) => {
     try {
         const expenses = await expenseService.getAllExpenses(req.user.companyId, req.query);
         res.json(expenses);
@@ -39,7 +39,7 @@ router.get('/', requirePermission('canManageExpenses', 'canViewReports', 'canMan
 });
 
 // GET /summary - Get total expenses amount
-router.get('/summary', requirePermission('canManageExpenses', 'canViewReports', 'canManageCashShift'), async (req, res) => {
+router.get('/summary', requirePermission(['canManageExpenses', 'canViewReports', 'canManageCashShift']), async (req, res) => {
     try {
         const result = await expenseService.getSummary(req.user.companyId, req.query);
         res.json(result);

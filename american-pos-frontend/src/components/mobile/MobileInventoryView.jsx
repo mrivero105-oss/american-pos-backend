@@ -36,6 +36,11 @@ export default function MobileInventoryView({
   exchangeRate = 950,
   T,
   isLight,
+  canCreateProducts = true,
+  canManageInventory = true,
+  canDeleteProducts = true,
+  canAdjustStock = true,
+  canViewCosts = true,
   onBackToPOS,
   onProductUpdated,
   onProductCreated,
@@ -297,11 +302,21 @@ export default function MobileInventoryView({
   // Guardar Cambios de Producto (Crear o Actualizar)
   const handleSaveProduct = async (e) => {
     e?.preventDefault();
+    if (!editingProduct && !canCreateProducts) {
+      showToast?.('⛔ No tienes permisos para crear productos');
+      return;
+    }
+    if (editingProduct && !canManageInventory) {
+      showToast?.('⛔ No tienes permisos para editar productos');
+      return;
+    }
     const name = productFormData.name.trim();
     const price = parseFloat(productFormData.priceUSD);
     const stock = parseFloat(productFormData.stock);
-    const cost = parseFloat(productFormData.costUSD) || 0;
-    const margin = parseFloat(productFormData.margin) || (cost > 0 && price > 0 ? Number((((price - cost) / cost) * 100).toFixed(2)) : 0);
+    const cost = canViewCosts ? (parseFloat(productFormData.costUSD) || 0) : undefined;
+    const margin = canViewCosts
+      ? (parseFloat(productFormData.margin) || (cost > 0 && price > 0 ? Number((((price - cost) / cost) * 100).toFixed(2)) : 0))
+      : undefined;
     const barcode = productFormData.barcode.trim();
     const minStock = parseFloat(productFormData.minStock) || 0;
 
@@ -341,9 +356,7 @@ export default function MobileInventoryView({
       price,
       precio: price,
       priceBs: price * exchangeRate,
-      cost,
-      costo: cost,
-      margin,
+      ...(canViewCosts ? { cost, costo: cost, margin } : {}),
       stockQuantity: stock,
       stock: stock,
       minStock,
@@ -401,6 +414,12 @@ export default function MobileInventoryView({
       setIsProductModalOpen(false);
       setEditingProduct(null);
     } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.message || err?.response?.data?.error || `Operación rechazada por el servidor (${httpStatus})`;
+        showToast?.(`⛔ ${msg}`);
+        return;
+      }
       console.warn('Servidor PC inaccesible, guardando producto offline:', err);
       const fallbackId = editingProduct ? editingProduct.id : `off_prod_${Date.now()}`;
       const fallbackProd = { ...payload, id: fallbackId };
@@ -418,6 +437,7 @@ export default function MobileInventoryView({
         await primaryDb.put('products', fallbackProd);
         await primaryDb.put('syncQueue', {
           id: `prod_sync_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          tempLocalId: fallbackId,
           endpoint: editingProduct ? `/products/${fallbackId}` : '/products',
           method: editingProduct ? 'PUT' : 'POST',
           payload,
@@ -625,34 +645,38 @@ export default function MobileInventoryView({
 
         {/* Acciones del Header: Botón + Nuevo y Botón Conteo */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            onClick={handleOpenCreateProduct}
-            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
-          >
-            <Plus size={14} />
-            <span>+ Nuevo</span>
-          </button>
+          {canCreateProducts && (
+            <button
+              type="button"
+              onClick={handleOpenCreateProduct}
+              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+            >
+              <Plus size={14} />
+              <span>+ Nuevo</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic(20);
-              setIsAuditMode(prev => !prev);
-              if (!isAuditMode) {
-                setTimeout(() => auditInputRef.current?.focus(), 200);
-              }
-            }}
-            className={`px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 transition-all cursor-pointer whitespace-nowrap ${
-              isAuditMode 
-                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20' 
-                : `${T.btnGhost} text-amber-500 hover:bg-amber-500/10`
-            }`}
-            title="Toma de Inventario / Conteo Físico"
-          >
-            <ClipboardList size={14} />
-            <span className="hidden sm:inline">{isAuditMode ? 'Terminar' : 'Conteo'}</span>
-          </button>
+          {canAdjustStock && (
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic(20);
+                setIsAuditMode(prev => !prev);
+                if (!isAuditMode) {
+                  setTimeout(() => auditInputRef.current?.focus(), 200);
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 transition-all cursor-pointer whitespace-nowrap ${
+                isAuditMode 
+                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20' 
+                  : `${T.btnGhost} text-amber-500 hover:bg-amber-500/10`
+              }`}
+              title="Toma de Inventario / Conteo Físico"
+            >
+              <ClipboardList size={14} />
+              <span className="hidden sm:inline">{isAuditMode ? 'Terminar' : 'Conteo'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -852,8 +876,8 @@ export default function MobileInventoryView({
                         )}
                       </div>
 
-                      {/* Información de Costo y Margen de Ganancia */}
-                      {(costUSD > 0 || margin !== null) && (
+                      {/* Información de Costo y Margen de Ganancia (solo con permiso canViewCosts) */}
+                      {canViewCosts && (costUSD > 0 || margin !== null) && (
                         <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400 font-semibold">
                           {costUSD > 0 && <span>Costo: ${costUSD.toFixed(2)}</span>}
                           {margin !== null && (
@@ -923,24 +947,28 @@ export default function MobileInventoryView({
                         {p.taxStatus === 'exento' ? 'Exento' : 'Gravable'}
                       </span>
 
-                      {/* Botones de Acción: Editar y Eliminar */}
+                      {/* Botones de Acción: Editar y Eliminar según permisos granulares */}
                       <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => handleRequestDelete(p)}
-                          className={`p-2 rounded-xl ${T.btnGhost} text-rose-500 hover:bg-rose-500/15 transition-all flex items-center justify-center cursor-pointer`}
-                          title="Eliminar Producto"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        {canDeleteProducts && (
+                          <button
+                            onClick={() => handleRequestDelete(p)}
+                            className={`p-2 rounded-xl ${T.btnGhost} text-rose-500 hover:bg-rose-500/15 transition-all flex items-center justify-center cursor-pointer`}
+                            title="Eliminar Producto"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
 
-                        <button
-                          onClick={() => handleOpenEditProduct(p)}
-                          className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer shadow-sm"
-                          title="Editar Producto Completo"
-                        >
-                          <Edit3 size={13} />
-                          <span>Editar</span>
-                        </button>
+                        {canManageInventory && (
+                          <button
+                            onClick={() => handleOpenEditProduct(p)}
+                            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer shadow-sm"
+                            title="Editar Producto Completo"
+                          >
+                            <Edit3 size={13} />
+                            <span>Editar</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1143,7 +1171,8 @@ export default function MobileInventoryView({
                 </div>
               </div>
 
-              {/* COSTO Y MARGEN DE GANANCIA (BIDIRECCIONAL INTELIGENTE) */}
+              {/* COSTO Y MARGEN DE GANANCIA (BIDIRECCIONAL INTELIGENTE - solo canViewCosts) */}
+              {canViewCosts && (
               <div className="p-3 rounded-2xl border border-blue-500/20 bg-blue-500/5 space-y-2">
                 <div className="flex items-center gap-1.5 text-blue-500 text-xs font-black">
                   <Percent size={14} />
@@ -1210,6 +1239,7 @@ export default function MobileInventoryView({
                   </div>
                 </div>
               </div>
+              )}
 
               {/* Precios: USD y Bs */}
               <div className="grid grid-cols-2 gap-2.5">
@@ -1598,7 +1628,7 @@ export default function MobileInventoryView({
 
               {/* Botones del Formulario: Guardar y Eliminar */}
               <div className="pt-2 flex items-center gap-2">
-                {editingProduct && (
+                {editingProduct && canDeleteProducts && (
                   <button
                     type="button"
                     onClick={() => handleRequestDelete(editingProduct)}

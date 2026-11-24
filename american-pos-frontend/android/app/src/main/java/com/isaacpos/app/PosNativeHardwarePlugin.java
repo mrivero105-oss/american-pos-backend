@@ -53,9 +53,15 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import android.content.SharedPreferences;
 import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyPermanentlyInvalidatedException;
 import android.security.keystore.KeyProperties;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.Signature;
+import java.security.spec.ECGenParameterSpec;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -389,17 +395,34 @@ public class PosNativeHardwarePlugin extends Plugin {
         }
     }
 
+    private static final String DEFAULT_BIOMETRIC_KEY_ALIAS = "isaac_pos_bio_ecdsa_v2";
+
+    private String sanitizeBiometricAlias(String rawAlias) {
+        if (rawAlias == null) return DEFAULT_BIOMETRIC_KEY_ALIAS;
+        String clean = rawAlias.trim().replaceAll("[^a-zA-Z0-9_.-]", "");
+        return clean.isEmpty() ? DEFAULT_BIOMETRIC_KEY_ALIAS : clean;
+    }
+
+    private void deleteKeystoreEntryQuietly(String alias) {
+        try {
+            KeyStore ks = KeyStore.getInstance(KEYSTORE_PROVIDER);
+            ks.load(null);
+            if (ks.containsAlias(alias)) {
+                ks.deleteEntry(alias);
+            }
+        } catch (Exception ignored) {}
+    }
+
     @PluginMethod
     public void isBiometricAvailable(PluginCall call) {
         try {
             BiometricManager biometricManager = BiometricManager.from(getContext());
-            int canAuth = biometricManager.canAuthenticate(
-                BiometricManager.Authenticators.BIOMETRIC_STRONG | BiometricManager.Authenticators.BIOMETRIC_WEAK
-            );
+            int canAuth = biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG);
             boolean available = (canAuth == BiometricManager.BIOMETRIC_SUCCESS);
             JSObject res = new JSObject();
             res.put("available", available);
             res.put("statusCode", canAuth);
+            res.put("strength", "BIOMETRIC_STRONG");
             call.resolve(res);
         } catch (Exception e) {
             JSObject res = new JSObject();
@@ -411,14 +434,23 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @PluginMethod
     public void authenticateBiometric(PluginCall call) {
-        getActivity().runOnUiThread(() -> {
+        Activity rawActivity = getActivity();
+        if (rawActivity == null || rawActivity.isFinishing() || rawActivity.isDestroyed() || !(rawActivity instanceof FragmentActivity)) {
+            call.reject("Actividad no disponible para autenticación biométrica");
+            return;
+        }
+        FragmentActivity activity = (FragmentActivity) rawActivity;
+        activity.runOnUiThread(() -> {
+            if (activity.isFinishing() || activity.isDestroyed()) {
+                call.reject("Actividad cerrada antes de iniciar biometría");
+                return;
+            }
             try {
-                String title = call.getString("title", "Autorización de Supervisor");
-                String subtitle = call.getString("subtitle", "Usa tu huella o rostro para autorizar");
+                String title = call.getString("title", "Autorización Biométrica");
+                String subtitle = call.getString("subtitle", "Usa tu huella dactilar fuerte para continuar");
                 String cancelText = call.getString("cancelText", "Cancelar");
 
                 Executor executor = ContextCompat.getMainExecutor(getContext());
-                FragmentActivity activity = (FragmentActivity) getActivity();
 
                 BiometricPrompt biometricPrompt = new BiometricPrompt(activity, executor, new BiometricPrompt.AuthenticationCallback() {
                     @Override
@@ -432,7 +464,7 @@ public class PosNativeHardwarePlugin extends Plugin {
                         super.onAuthenticationSucceeded(result);
                         JSObject res = new JSObject();
                         res.put("success", true);
-                        res.put("method", "BIOMETRIC_HARDWARE");
+                        res.put("method", "BIOMETRIC_STRONG_HARDWARE");
                         call.resolve(res);
                     }
 
@@ -446,7 +478,7 @@ public class PosNativeHardwarePlugin extends Plugin {
                         .setTitle(title)
                         .setSubtitle(subtitle)
                         .setNegativeButtonText(cancelText)
-                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG | BiometricManager.Authenticators.BIOMETRIC_WEAK)
+                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                         .build();
 
                 biometricPrompt.authenticate(promptInfo);
@@ -454,6 +486,223 @@ public class PosNativeHardwarePlugin extends Plugin {
                 call.reject("Error iniciando autenticación biométrica nativa: " + e.getMessage());
             }
         });
+    }
+
+    @PluginMethod
+    public void registerBiometricKey(PluginCall call) {
+        final String alias = sanitizeBiometricAlias(call.getString("alias", DEFAULT_BIOMETRIC_KEY_ALIAS));
+        final String title = call.getString("title", "Vincular Huella Dactilar");
+        final String subtitle = call.getString("subtitle", "Coloca tu huella para proteger la llave criptográfica");
+        final String cancelText = call.getString("cancelText", "Cancelar");
+
+        Activity rawActivity = getActivity();
+        if (rawActivity == null || rawActivity.isFinishing() || rawActivity.isDestroyed() || !(rawActivity instanceof FragmentActivity)) {
+            call.reject("Actividad no disponible para enrolamiento biométrico");
+            return;
+        }
+
+        BiometricManager biometricManager = BiometricManager.from(getContext());
+        if (biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) != BiometricManager.BIOMETRIC_SUCCESS) {
+            call.reject("Este dispositivo no cuenta con biometría fuerte (Clase 3) configurada.", "BIOMETRIC_UNAVAILABLE");
+            return;
+        }
+
+        final FragmentActivity activity = (FragmentActivity) rawActivity;
+        try {
+            deleteKeystoreEntryQuietly(alias);
+
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, KEYSTORE_PROVIDER);
+            KeyGenParameterSpec.Builder specBuilder = new KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_SIGN
+            )
+                .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setUserAuthenticationRequired(true);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                specBuilder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG);
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                specBuilder.setInvalidatedByBiometricEnrollment(true);
+            }
+
+            kpg.initialize(specBuilder.build());
+            KeyPair keyPair = kpg.generateKeyPair();
+            final String publicKeySpki = Base64.encodeToString(keyPair.getPublic().getEncoded(), Base64.NO_WRAP);
+
+            Signature verifySignature = Signature.getInstance("SHA256withECDSA");
+            verifySignature.initSign(keyPair.getPrivate());
+            BiometricPrompt.CryptoObject cryptoObject = new BiometricPrompt.CryptoObject(verifySignature);
+
+            activity.runOnUiThread(() -> {
+                if (activity.isFinishing() || activity.isDestroyed()) {
+                    deleteKeystoreEntryQuietly(alias);
+                    call.reject("Actividad cerrada durante registro biométrico");
+                    return;
+                }
+                try {
+                    Executor executor = ContextCompat.getMainExecutor(getContext());
+                    BiometricPrompt prompt = new BiometricPrompt(activity, executor, new BiometricPrompt.AuthenticationCallback() {
+                        @Override
+                        public void onAuthenticationError(int errorCode, CharSequence errString) {
+                            super.onAuthenticationError(errorCode, errString);
+                            deleteKeystoreEntryQuietly(alias);
+                            call.reject(errString.toString(), String.valueOf(errorCode));
+                        }
+
+                        @Override
+                        public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                            super.onAuthenticationSucceeded(result);
+                            try {
+                                BiometricPrompt.CryptoObject unlocked = result.getCryptoObject();
+                                if (unlocked == null || unlocked.getSignature() == null) {
+                                    deleteKeystoreEntryQuietly(alias);
+                                    call.reject("No se recibió CryptoObject válido al registrar biometría");
+                                    return;
+                                }
+                                // Prueba de firma en caliente para verificar llave operativa en TEE/StrongBox
+                                unlocked.getSignature().update("isaac-pos-biometric-enroll-check".getBytes(StandardCharsets.UTF_8));
+                                unlocked.getSignature().sign();
+
+                                JSObject res = new JSObject();
+                                res.put("success", true);
+                                res.put("alias", alias);
+                                res.put("publicKeySpki", publicKeySpki);
+                                res.put("algorithm", "ECDSA_P256_SHA256");
+                                call.resolve(res);
+                            } catch (Exception signErr) {
+                                deleteKeystoreEntryQuietly(alias);
+                                call.reject("Fallo verificando firma en hardware seguro: " + signErr.getMessage());
+                            }
+                        }
+                    });
+
+                    BiometricPrompt.PromptInfo promptInfo = new BiometricPrompt.PromptInfo.Builder()
+                        .setTitle(title)
+                        .setSubtitle(subtitle)
+                        .setNegativeButtonText(cancelText)
+                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                        .build();
+
+                    prompt.authenticate(promptInfo, cryptoObject);
+                } catch (Exception promptErr) {
+                    deleteKeystoreEntryQuietly(alias);
+                    call.reject("Error mostrando prompt biométrico de registro: " + promptErr.getMessage());
+                }
+            });
+        } catch (Exception e) {
+            deleteKeystoreEntryQuietly(alias);
+            call.reject("Error generando clave ECDSA biométrica en AndroidKeyStore: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void signBiometricChallenge(PluginCall call) {
+        final String alias = sanitizeBiometricAlias(call.getString("alias", DEFAULT_BIOMETRIC_KEY_ALIAS));
+        final String challenge = call.getString("challenge");
+        final String title = call.getString("title", "Iniciar Sesión");
+        final String subtitle = call.getString("subtitle", "Coloca tu huella para firmar el acceso");
+        final String cancelText = call.getString("cancelText", "Cancelar");
+
+        if (challenge == null || challenge.trim().isEmpty()) {
+            call.reject("El reto criptográfico (challenge) es obligatorio");
+            return;
+        }
+
+        Activity rawActivity = getActivity();
+        if (rawActivity == null || rawActivity.isFinishing() || rawActivity.isDestroyed() || !(rawActivity instanceof FragmentActivity)) {
+            call.reject("Actividad no disponible para firma biométrica");
+            return;
+        }
+
+        final FragmentActivity activity = (FragmentActivity) rawActivity;
+        try {
+            KeyStore ks = KeyStore.getInstance(KEYSTORE_PROVIDER);
+            ks.load(null);
+            if (!ks.containsAlias(alias)) {
+                call.reject("BIOMETRIC_KEY_INVALIDATED: No existe clave biométrica registrada en este equipo.", "BIOMETRIC_KEY_INVALIDATED");
+                return;
+            }
+            PrivateKey privateKey = (PrivateKey) ks.getKey(alias, null);
+            if (privateKey == null) {
+                deleteKeystoreEntryQuietly(alias);
+                call.reject("BIOMETRIC_KEY_INVALIDATED: Clave privada biométrica no encontrada.", "BIOMETRIC_KEY_INVALIDATED");
+                return;
+            }
+
+            Signature signature = Signature.getInstance("SHA256withECDSA");
+            try {
+                signature.initSign(privateKey);
+            } catch (KeyPermanentlyInvalidatedException invErr) {
+                deleteKeystoreEntryQuietly(alias);
+                call.reject("BIOMETRIC_KEY_INVALIDATED: Las huellas del dispositivo cambiaron.", "BIOMETRIC_KEY_INVALIDATED");
+                return;
+            }
+
+            BiometricPrompt.CryptoObject cryptoObject = new BiometricPrompt.CryptoObject(signature);
+            activity.runOnUiThread(() -> {
+                if (activity.isFinishing() || activity.isDestroyed()) {
+                    call.reject("Actividad cerrada antes de firmar reto biométrico");
+                    return;
+                }
+                try {
+                    Executor executor = ContextCompat.getMainExecutor(getContext());
+                    BiometricPrompt prompt = new BiometricPrompt(activity, executor, new BiometricPrompt.AuthenticationCallback() {
+                        @Override
+                        public void onAuthenticationError(int errorCode, CharSequence errString) {
+                            super.onAuthenticationError(errorCode, errString);
+                            call.reject(errString.toString(), String.valueOf(errorCode));
+                        }
+
+                        @Override
+                        public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                            super.onAuthenticationSucceeded(result);
+                            try {
+                                BiometricPrompt.CryptoObject unlocked = result.getCryptoObject();
+                                if (unlocked == null || unlocked.getSignature() == null) {
+                                    call.reject("CryptoObject ausente tras verificación biométrica");
+                                    return;
+                                }
+                                Signature unlockedSig = unlocked.getSignature();
+                                unlockedSig.update(challenge.getBytes(StandardCharsets.UTF_8));
+                                byte[] derSignature = unlockedSig.sign();
+
+                                JSObject res = new JSObject();
+                                res.put("success", true);
+                                res.put("alias", alias);
+                                res.put("signature", Base64.encodeToString(derSignature, Base64.NO_WRAP));
+                                call.resolve(res);
+                            } catch (Exception signErr) {
+                                call.reject("Error firmando reto biométrico: " + signErr.getMessage());
+                            }
+                        }
+                    });
+
+                    BiometricPrompt.PromptInfo promptInfo = new BiometricPrompt.PromptInfo.Builder()
+                        .setTitle(title)
+                        .setSubtitle(subtitle)
+                        .setNegativeButtonText(cancelText)
+                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                        .build();
+
+                    prompt.authenticate(promptInfo, cryptoObject);
+                } catch (Exception promptErr) {
+                    call.reject("Error iniciando prompt de firma biométrica: " + promptErr.getMessage());
+                }
+            });
+        } catch (Exception e) {
+            call.reject("Error accediendo a clave biométrica en AndroidKeyStore: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void deleteBiometricKey(PluginCall call) {
+        final String alias = sanitizeBiometricAlias(call.getString("alias", DEFAULT_BIOMETRIC_KEY_ALIAS));
+        deleteKeystoreEntryQuietly(alias);
+        JSObject res = new JSObject();
+        res.put("success", true);
+        call.resolve(res);
     }
 
     @PluginMethod

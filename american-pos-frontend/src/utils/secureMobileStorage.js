@@ -182,6 +182,9 @@ export const secureMobileStorage = {
         sessionStorage.removeItem(TOKEN_KEY);
         sessionStorage.removeItem(SESSION_ACTIVE_KEY);
       }
+      if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.removeSecureSecret) {
+        window.Capacitor.Plugins.PosNativeHardware.removeSecureSecret({ key: TOKEN_KEY }).catch(() => {});
+      }
     } catch (err) {
       console.warn('[SecureStorage] Error limpiando sesión:', err?.message);
     }

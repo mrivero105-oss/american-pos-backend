@@ -11,16 +11,48 @@ export const PosNativeHardware = (typeof window !== 'undefined' && window.__posN
         return plugin;
     })();
 
-// Helper to ensure URL has port (defaults to 3005 for plain http/IP) while preserving explicit https:// (default 443)
+/**
+ * Verifica si un host pertenece a red privada local (RFC1918 / loopback / link-local / mDNS .local).
+ * Solo a estos hosts se les permite transporte HTTP sin cifrar (servidor POS en LAN).
+ * Cualquier dominio o IP pública exige HTTPS obligatorio para evitar fuga de JWT/credenciales.
+ */
+export const isPrivateLanOrLocalHost = (rawHost) => {
+    if (!rawHost || typeof rawHost !== 'string') return false;
+    const host = rawHost.trim().toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host) return false;
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) {
+        return true;
+    }
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!ipv4) return false;
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
+    const c = Number(ipv4[3]);
+    const d = Number(ipv4[4]);
+    if ([a, b, c, d].some(n => Number.isNaN(n) || n < 0 || n > 255)) return false;
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+};
+
+// Helper to ensure URL has port (defaults to 3005 for private LAN http/IP) while enforcing HTTPS on public hosts
 export const formatServerUrl = (input) => {
     if (!input || !input.trim()) return '';
-    let clean = input.trim().replace(/:517[34]/, '').replace(/\/+$/, '');
-    const isHttps = clean.toLowerCase().startsWith('https://');
-    const protocol = isHttps ? 'https://' : 'http://';
-    const hasProtocol = clean.toLowerCase().startsWith('http://') || isHttps;
-    const urlWithoutProto = hasProtocol ? clean.replace(/^https?:\/\//i, '') : clean;
-    const hasPort = urlWithoutProto.includes(':');
-    const finalHost = (hasPort || isHttps) ? urlWithoutProto : `${urlWithoutProto}:3005`;
+    const clean = input.trim().replace(/:517[34]/, '').replace(/\/+$/, '');
+    const explicitHttps = clean.toLowerCase().startsWith('https://');
+    const explicitHttp = clean.toLowerCase().startsWith('http://');
+    const urlWithoutProto = (explicitHttp || explicitHttps) ? clean.replace(/^https?:\/\//i, '') : clean;
+    const hostAndPort = urlWithoutProto.split('/')[0];
+    const hostOnly = hostAndPort.startsWith('[')
+        ? hostAndPort.replace(/^\[([^\]]+)\].*$/, '$1')
+        : hostAndPort.split(':')[0];
+    const isPrivateHost = isPrivateLanOrLocalHost(hostOnly);
+    const useHttps = explicitHttps || !isPrivateHost;
+    const protocol = useHttps ? 'https://' : 'http://';
+    const hasPort = hostAndPort.includes(':') && !hostAndPort.endsWith(']');
+    const finalHost = (hasPort || useHttps) ? urlWithoutProto : `${urlWithoutProto}:3005`;
     return `${protocol}${finalHost.replace(/\/+$/, '')}`;
 };
 
@@ -475,7 +507,7 @@ export const autoDiscoverServer = async () => {
     return null;
 };
 
-// Interceptor: Attach baseURL fallback + Authorization Bearer token + LAN Sync Key
+// Interceptor: Attach baseURL fallback + RFC1918/HTTPS guard + Authorization Bearer token + LAN Sync Key
 api.interceptors.request.use((config) => {
     if (!config.baseURL && !config.url?.startsWith('http')) {
         const fallbackUrl = getBaseUrl();
@@ -483,6 +515,17 @@ api.interceptors.request.use((config) => {
             config.baseURL = fallbackUrl;
         } else {
             return Promise.reject(new Error('Sin servidor configurado'));
+        }
+    }
+    const targetUrl = config.url?.startsWith('http') ? config.url : (config.baseURL || '');
+    if (targetUrl.toLowerCase().startsWith('http://')) {
+        try {
+            const parsedTarget = new URL(targetUrl);
+            if (!isPrivateLanOrLocalHost(parsedTarget.hostname)) {
+                return Promise.reject(new Error(`Conexión HTTP insegura bloqueada hacia host público (${parsedTarget.hostname}). Usa HTTPS.`));
+            }
+        } catch (_) {
+            return Promise.reject(new Error('URL de servidor inválida o insegura.'));
         }
     }
     const token = secureMobileStorage.getToken();

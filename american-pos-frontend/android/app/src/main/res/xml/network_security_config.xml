@@ -1,8 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!-- Compatibilidad con servidores POS PC en LAN RFC1918 (Android no admite CIDR en domain-config);
+         la validación estricta de IPs privadas vs hosts públicos se refuerza en MainActivity y api.js. -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+
+    <!-- Tráfico en nube e Internet pública: HTTPS obligatorio (cero HTTP en texto plano) -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">supabase.co</domain>
+        <domain includeSubdomains="true">supabase.in</domain>
+        <domain includeSubdomains="true">bcv.org.ve</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">google.com</domain>
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">githubusercontent.com</domain>
+        <domain includeSubdomains="true">railway.app</domain>
+        <domain includeSubdomains="true">wa.me</domain>
+        <domain includeSubdomains="true">whatsapp.com</domain>
+    </domain-config>
 </network-security-config>
