@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
 import axios from 'axios';
 import toast from 'react-hot-toast';
-import { getBaseUrl } from './api';
+import { getBaseUrl, isPrivateLanOrLocalHost } from './api';
 import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
 import { OTA_PUBLIC_KEY_PEM } from '../config/otaPublicKey';
 import { computeSha256Hex, verifyRsaSha256Bytes } from '../utils/clientLicenseValidator';
@@ -105,6 +105,29 @@ export function selectBestOtaCandidate(candidates = []) {
         if (cmp !== 0) return cmp;
         return sourcePriority(b.source) - sourcePriority(a.source);
     })[0];
+}
+
+/**
+ * Valida la política de transporte de descarga OTA (fallo cerrado):
+ * - En Internet pública exige HTTPS obligatorio.
+ * - Solo permite HTTP sin TLS para servidores POS PC en red privada local (RFC1918 / loopback / .local),
+ *   donde la integridad y autenticidad se garantizan mediante firma criptográfica RSA-SHA256 + SHA-256.
+ */
+export function assertSafeOtaDownloadUrl(rawUrl) {
+    let parsed;
+    try {
+        parsed = new URL(String(rawUrl || '').trim());
+    } catch {
+        throw new Error('URL de descarga OTA inválida. Actualización rechazada.');
+    }
+
+    if (parsed.protocol === 'https:') {
+        return parsed.toString();
+    }
+    if (parsed.protocol === 'http:' && isPrivateLanOrLocalHost(parsed.hostname)) {
+        return parsed.toString();
+    }
+    throw new Error('URL de descarga OTA insegura: solo se permite HTTPS en Internet o HTTP en red local privada.');
 }
 
 /**
@@ -331,9 +354,10 @@ export const otaUpdateService = {
             }
 
             const effectiveBase = selected.baseUrl || baseUrl;
-            const downloadUrl = remote.bundleUrl.startsWith('http')
+            const rawDownloadUrl = remote.bundleUrl.startsWith('http')
                 ? remote.bundleUrl
                 : `${effectiveBase}${remote.bundleUrl}`;
+            const downloadUrl = assertSafeOtaDownloadUrl(rawDownloadUrl);
 
             if (toastId) {
                 toast.loading('Verificando firma digital RSA-SHA256...', { id: toastId });
@@ -407,6 +431,8 @@ export const otaUpdateService = {
                 userMsg = 'Servidor PC no disponible temporalmente (503). Reintenta en unos instantes.';
             } else if (err.code === 'ECONNABORTED' || err.message?.includes('Network')) {
                 userMsg = `Sin conexión con la PC principal (${baseUrl}). Verifica la IP en Conexión PC.`;
+            } else if (err.message?.includes('Failed to download from: http://')) {
+                userMsg = 'No se pudo descargar el paquete OTA por HTTP local. Verifica la conexión Wi-Fi con la PC o instala el APK actualizado.';
             } else if (err.message) {
                 userMsg = `Aviso de actualización: ${err.message}`;
             }

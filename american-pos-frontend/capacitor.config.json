@@ -14,7 +14,10 @@
   },
   "plugins": {
     "CapacitorUpdater": {
-      "autoUpdate": false
+      "autoUpdate": false,
+      "httpsOnly": false,
+      "resetWhenUpdate": true,
+      "statsUrl": ""
     }
   }
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
+import capCfg from '../../capacitor.config.json';
 
 const mockUpdater = vi.hoisted(() => ({
   notifyAppReady: vi.fn().mockResolvedValue(undefined),
@@ -17,7 +18,8 @@ const mockAxiosGet = vi.hoisted(() => vi.fn());
 vi.mock('@capacitor/core', () => ({
   Capacitor: {
     isNativePlatform: () => true
-  }
+  },
+  registerPlugin: vi.fn(() => ({}))
 }));
 
 vi.mock('@capgo/capacitor-updater', () => ({
@@ -26,7 +28,16 @@ vi.mock('@capgo/capacitor-updater', () => ({
 
 vi.mock('axios', () => ({
   default: {
-    get: mockAxiosGet
+    get: mockAxiosGet,
+    create: vi.fn(() => ({
+      defaults: { baseURL: '', headers: { common: {} } },
+      interceptors: {
+        request: { use: vi.fn() },
+        response: { use: vi.fn() }
+      },
+      get: mockAxiosGet,
+      post: vi.fn()
+    }))
   }
 }));
 
@@ -39,9 +50,13 @@ vi.mock('react-hot-toast', () => {
   return { default: fn };
 });
 
-vi.mock('../../src/services/api', () => ({
-  getBaseUrl: () => 'http://192.168.1.2:3005'
-}));
+vi.mock('../../src/services/api', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getBaseUrl: () => 'http://192.168.1.2:3005'
+  };
+});
 
 vi.mock('../../src/config/supabaseConfig', () => ({
   getSupabaseStoragePublicUrl: () => null
@@ -51,7 +66,8 @@ import {
   otaUpdateService,
   verifyOtaPackageIntegrity,
   compareOtaVersions,
-  selectBestOtaCandidate
+  selectBestOtaCandidate,
+  assertSafeOtaDownloadUrl
 } from '../../src/services/otaUpdateService';
 
 describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Downgrade)', () => {
@@ -302,5 +318,20 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
       version: '24.4.0.300'
     }));
     unsub();
+  });
+
+  it('assertSafeOtaDownloadUrl permite HTTP en LAN privada RFC1918 y HTTPS público, pero rechaza HTTP público', () => {
+    expect(assertSafeOtaDownloadUrl('http://192.168.1.2:3005/dist.zip')).toBe('http://192.168.1.2:3005/dist.zip');
+    expect(assertSafeOtaDownloadUrl('http://10.0.0.5:3005/dist.zip')).toBe('http://10.0.0.5:3005/dist.zip');
+    expect(assertSafeOtaDownloadUrl('https://demo.supabase.co/storage/v1/object/public/app-updates/dist.zip'))
+      .toBe('https://demo.supabase.co/storage/v1/object/public/app-updates/dist.zip');
+    expect(() => assertSafeOtaDownloadUrl('http://atacante.example.com/dist.zip')).toThrow(/insegura/i);
+    expect(() => assertSafeOtaDownloadUrl('javascript:alert(1)')).toThrow(/insegura/i);
+  });
+
+  it('capacitor.config.json mantiene httpsOnly=false en CapacitorUpdater para permitir OTA desde PC LAN', () => {
+    expect(capCfg?.plugins?.CapacitorUpdater?.httpsOnly).toBe(false);
+    expect(capCfg?.plugins?.CapacitorUpdater?.statsUrl).toBe('');
+    expect(capCfg?.plugins?.CapacitorUpdater?.resetWhenUpdate).toBe(true);
   });
 });
