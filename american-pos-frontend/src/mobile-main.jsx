@@ -12,10 +12,10 @@ import ErrorBoundary from './components/ErrorBoundary';
 // 🛡️ Blindaje de Almacenamiento Persistente en Android / iOS / PWA
 ensureStoragePersistence().catch(() => {});
 
-// Redirección directa al entorno móvil
+// Redirección directa al entorno móvil (in-place sin recargar el documento ni romper Capgo notifyAppReady)
 if (typeof window !== 'undefined' && window.location) {
   if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
-    window.location.replace(window.location.origin + '/#/mobile');
+    window.location.hash = '#/mobile';
   }
 }
 

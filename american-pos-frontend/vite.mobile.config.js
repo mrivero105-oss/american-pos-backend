@@ -117,10 +117,43 @@ function readAndroidApkVersionCode() {
   return '0';
 }
 
+function readMobileBaseVersion() {
+  try {
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.version) {
+        return pkg.version.replace(/^(\d+)\.0*(\d+)/, '$1.$2');
+      }
+    }
+  } catch {
+    // Fallback silencioso
+  }
+  return '24.4.0';
+}
+
+function writeBuildVersionMarkerPlugin(buildVersion) {
+  return {
+    name: 'isaac-pos-mobile-build-version-marker',
+    closeBundle() {
+      try {
+        const markerPath = path.resolve(process.cwd(), 'dist-mobile', '.build-version');
+        fs.writeFileSync(markerPath, JSON.stringify({ version: buildVersion, createdAt: Date.now() }), 'utf8');
+      } catch (err) {
+        console.warn('[vite.mobile] No se pudo escribir .build-version:', err?.message);
+      }
+    }
+  };
+}
+
 export default defineConfig(({ command }) => {
   const apkVersionCode = readAndroidApkVersionCode();
+  const mobileBuildVersion =
+    process.env.MOBILE_BUILD_VERSION ||
+    `${readMobileBaseVersion()}.${Math.floor(Date.now() / 1000)}`;
   const baseDefine = {
     'import.meta.env.VITE_APK_VERSION_CODE': JSON.stringify(apkVersionCode),
+    'import.meta.env.VITE_MOBILE_BUILD_VERSION': JSON.stringify(mobileBuildVersion),
     ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
       ? {
           'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),
@@ -135,7 +168,8 @@ export default defineConfig(({ command }) => {
     react(),
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
-    webViewColorFixPlugin()
+    webViewColorFixPlugin(),
+    ...(command === 'build' ? [writeBuildVersionMarkerPlugin(mobileBuildVersion)] : [])
   ],
   resolve: {
     dedupe: ['react', 'react-dom'],

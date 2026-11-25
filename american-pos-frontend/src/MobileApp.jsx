@@ -68,6 +68,7 @@ export default function MobileApp() {
   const {
     isLocked,
     user,
+    loading: authLoading,
     appUnlock,
     logout,
     isActivated,
@@ -231,10 +232,12 @@ export default function MobileApp() {
         </div>
       )}
 
-      {licenseLoading ? (
+      {licenseLoading || authLoading ? (
         <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center gap-4">
           <RefreshCw className="animate-spin text-blue-500" size={40} />
-          <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-[10px]">Verificando Licencia...</p>
+          <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-[10px]">
+            {licenseLoading ? 'Verificando Licencia...' : 'Verificando Sesión...'}
+          </p>
         </div>
       ) : !isActivated ? (
         <ActivationPortal

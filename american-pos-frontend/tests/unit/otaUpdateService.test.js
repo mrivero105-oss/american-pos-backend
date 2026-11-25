@@ -5,8 +5,10 @@ import capCfg from '../../capacitor.config.json';
 
 const mockUpdater = vi.hoisted(() => ({
   notifyAppReady: vi.fn().mockResolvedValue(undefined),
-  current: vi.fn().mockResolvedValue({ bundle: { id: 'builtin', version: '24.4.0.100' }, native: '24.4.0' }),
-  download: vi.fn().mockResolvedValue({ id: 'bundle-new-200' }),
+  current: vi.fn().mockResolvedValue({ bundle: { id: 'bundle-100', version: '24.4.0.100' }, native: '24.4.0' }),
+  getNextBundle: vi.fn().mockResolvedValue(null),
+  download: vi.fn().mockResolvedValue({ id: 'bundle-new-200', version: '24.4.0.200' }),
+  next: vi.fn().mockResolvedValue({ id: 'bundle-new-200', version: '24.4.0.200' }),
   set: vi.fn().mockResolvedValue(undefined),
   reload: vi.fn().mockResolvedValue(undefined),
   reset: vi.fn().mockResolvedValue(undefined),
@@ -84,6 +86,10 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
+    delete globalThis.__ISAAC_MOBILE_BUILD_VERSION__;
+    mockUpdater.current.mockResolvedValue({ bundle: { id: 'bundle-100', version: '24.4.0.100' }, native: '24.4.0' });
+    mockUpdater.getNextBundle.mockResolvedValue(null);
   });
 
   it('compara versiones monotónicamente para prevenir downgrades', () => {
@@ -128,7 +134,8 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
       version: '24.4.0.200',
       checksum: validSha256
     }));
-    expect(mockUpdater.set).toHaveBeenCalledTimes(1);
+    expect(mockUpdater.next).toHaveBeenCalledWith({ id: 'bundle-new-200' });
+    expect(mockUpdater.set).not.toHaveBeenCalled();
   });
 
   it('rechaza paquete OTA si la firma RSA-SHA256 está adulterada y bloquea CapacitorUpdater', async () => {
@@ -333,5 +340,52 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
     expect(capCfg?.plugins?.CapacitorUpdater?.httpsOnly).toBe(false);
     expect(capCfg?.plugins?.CapacitorUpdater?.statsUrl).toBe('');
     expect(capCfg?.plugins?.CapacitorUpdater?.resetWhenUpdate).toBe(true);
+  });
+
+  it('getCurrentVersion ignora centinela builtin y evita que un APK recién instalado descargue su propio OTA', async () => {
+    globalThis.__ISAAC_MOBILE_BUILD_VERSION__ = '24.4.0.1795609017';
+    mockUpdater.current.mockResolvedValue({
+      bundle: { id: 'builtin', version: 'builtin' },
+      native: '24.4.0'
+    });
+
+    const ver = await otaUpdateService.getCurrentVersion();
+    expect(ver).toBe('24.4.0.1795609017');
+
+    mockAxiosGet.mockResolvedValueOnce({
+      data: {
+        version: '24.4.0.1795609017',
+        bundleUrl: '/dist.zip',
+        checksum: validSha256,
+        otaSignature: validSignature
+      }
+    });
+
+    const res = await otaUpdateService.checkForUpdates({ silent: true, publicKeyPem: publicKey });
+    expect(res.updateAvailable).toBe(false);
+    expect(mockUpdater.download).not.toHaveBeenCalled();
+    expect(mockUpdater.next).not.toHaveBeenCalled();
+    expect(mockUpdater.set).not.toHaveBeenCalled();
+  });
+
+  it('no redescarga en bucle si la versión remota ya está en cola (getNextBundle)', async () => {
+    mockUpdater.getNextBundle.mockResolvedValueOnce({
+      id: 'bundle-staged-301',
+      version: '24.4.0.301'
+    });
+    mockAxiosGet.mockResolvedValueOnce({
+      data: {
+        version: '24.4.0.301',
+        bundleUrl: '/dist.zip',
+        checksum: validSha256,
+        otaSignature: validSignature
+      }
+    });
+
+    const res = await otaUpdateService.checkForUpdates({ silent: true, publicKeyPem: publicKey });
+    expect(res.updateAvailable).toBe(true);
+    expect(res.alreadyStaged).toBe(true);
+    expect(mockUpdater.download).not.toHaveBeenCalled();
+    expect(mockUpdater.set).not.toHaveBeenCalled();
   });
 });

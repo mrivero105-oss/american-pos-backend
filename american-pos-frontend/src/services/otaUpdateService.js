@@ -9,8 +9,10 @@ import { computeSha256Hex, verifyRsaSha256Bytes } from '../utils/clientLicenseVa
 
 const NATIVE_APK_VERSION_CODE_KEY = 'isaac_pos_native_apk_version_code';
 const OTA_READY_EVENT = 'isaac-ota-update-ready';
+const OTA_STAGED_SESSION_KEY = 'isaac_pos_ota_staged_version';
 
 let isChecking = false;
+let isInitialized = false;
 let updateReady = false;
 let newVersionDownloaded = null;
 const updateReadyListeners = new Set();
@@ -25,6 +27,26 @@ function getEmbeddedNativeApkVersionCode() {
     } catch {
         return 0;
     }
+}
+
+function getEmbeddedMobileBuildVersion() {
+    try {
+        if (typeof globalThis !== 'undefined' && globalThis.__ISAAC_MOBILE_BUILD_VERSION__) {
+            return String(globalThis.__ISAAC_MOBILE_BUILD_VERSION__).trim();
+        }
+        const envVer = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_MOBILE_BUILD_VERSION : '';
+        return String(envVer || '').trim();
+    } catch {
+        return '';
+    }
+}
+
+function isUsableVersionString(ver) {
+    const clean = String(ver || '').trim().toLowerCase();
+    if (!clean || clean === 'builtin' || clean === 'unknown' || clean === 'default') {
+        return false;
+    }
+    return /^v?\d+(\.\d+)*/.test(clean);
 }
 
 function notifyUpdateReadyListeners(version) {
@@ -197,18 +219,22 @@ export const otaUpdateService = {
         }
         try {
             const embeddedCode = options.embeddedVersionCode ?? getEmbeddedNativeApkVersionCode();
+            const embeddedBuildVer = options.embeddedBuildVersion ?? getEmbeddedMobileBuildVersion();
             const storedCode = Number(localStorage.getItem(NATIVE_APK_VERSION_CODE_KEY) || '0') || 0;
             const current = await CapacitorUpdater.current().catch(() => null);
             const activeBundleId = current?.bundle?.id || 'builtin';
-            const activeBundleVer = current?.bundle?.version || '';
-            const nativeVer = current?.native || '';
+            const activeBundleVer = isUsableVersionString(current?.bundle?.version) ? current.bundle.version : '';
+            const nativeVer = isUsableVersionString(current?.native) ? current.native : '';
+            const effectiveBuiltinVer = (isUsableVersionString(embeddedBuildVer) && (!nativeVer || compareOtaVersions(embeddedBuildVer, nativeVer) >= 0))
+                ? embeddedBuildVer
+                : nativeVer;
 
             const apkUpgradedByCode = embeddedCode > 0 && storedCode > 0 && embeddedCode > storedCode;
             const apkNewerThanOtaBundle =
                 activeBundleId !== 'builtin' &&
-                Boolean(nativeVer) &&
+                Boolean(effectiveBuiltinVer) &&
                 Boolean(activeBundleVer) &&
-                compareOtaVersions(nativeVer, activeBundleVer) > 0;
+                compareOtaVersions(effectiveBuiltinVer, activeBundleVer) > 0;
 
             if (embeddedCode > 0) {
                 localStorage.setItem(NATIVE_APK_VERSION_CODE_KEY, String(embeddedCode));
@@ -217,6 +243,9 @@ export const otaUpdateService = {
             if ((apkUpgradedByCode && activeBundleId !== 'builtin') || apkNewerThanOtaBundle) {
                 console.log('[OTA_UPDATE] 🧹 APK más reciente detectado; purgando bundle OTA antiguo:', activeBundleId, activeBundleVer);
                 localStorage.removeItem('isaac_pos_ota_version');
+                if (typeof sessionStorage !== 'undefined') {
+                    sessionStorage.removeItem(OTA_STAGED_SESSION_KEY);
+                }
                 if (typeof CapacitorUpdater.reset === 'function') {
                     await CapacitorUpdater.reset();
                 }
@@ -234,6 +263,10 @@ export const otaUpdateService = {
         if (!Capacitor.isNativePlatform()) {
             return;
         }
+        if (isInitialized) {
+            return;
+        }
+        isInitialized = true;
 
         try {
             await CapacitorUpdater.notifyAppReady();
@@ -242,24 +275,60 @@ export const otaUpdateService = {
             console.warn('[OTA_UPDATE] Advertencia en notifyAppReady:', e?.message || e);
         }
 
-        await this.reconcileBuiltinApkVersion();
+        const reconciled = await this.reconcileBuiltinApkVersion();
+        if (reconciled?.purged) {
+            return;
+        }
+
+        // Si ya existe un bundle OTA en cola esperando reinicio, mostrar banner sin volver a descargar
+        try {
+            if (typeof CapacitorUpdater.getNextBundle === 'function') {
+                const pendingNext = await CapacitorUpdater.getNextBundle();
+                if (pendingNext && pendingNext.id && pendingNext.id !== 'builtin' && isUsableVersionString(pendingNext.version)) {
+                    updateReady = true;
+                    newVersionDownloaded = pendingNext.version;
+                    notifyUpdateReadyListeners(pendingNext.version);
+                }
+            }
+        } catch {
+            // Ignorar error consultando nextBundle
+        }
 
         setTimeout(() => {
             this.checkForUpdates({ silent: true }).catch((err) => {
                 console.warn('[OTA_UPDATE] Error en verificación inicial:', err?.message || err);
             });
-        }, 3500);
+        }, 4500);
     },
 
     async getCurrentVersion() {
         if (!Capacitor.isNativePlatform()) {
             return 'Web / Localhost';
         }
+        const embeddedBuildVer = getEmbeddedMobileBuildVersion();
+        const storedOtaVer = localStorage.getItem('isaac_pos_ota_version') || '';
         try {
             const current = await CapacitorUpdater.current();
-            return current?.bundle?.version || current?.native || localStorage.getItem('isaac_pos_ota_version') || '1.0.0';
+            const isBuiltin = !current?.bundle?.id || current.bundle.id === 'builtin';
+            const bundleVer = !isBuiltin && isUsableVersionString(current?.bundle?.version) ? current.bundle.version : '';
+            const nativeVer = isUsableVersionString(current?.native) ? current.native : '';
+
+            if (bundleVer) {
+                if (isUsableVersionString(embeddedBuildVer) && compareOtaVersions(embeddedBuildVer, bundleVer) > 0) {
+                    return embeddedBuildVer;
+                }
+                return bundleVer;
+            }
+            if (isUsableVersionString(embeddedBuildVer)) {
+                return (!nativeVer || compareOtaVersions(embeddedBuildVer, nativeVer) >= 0) ? embeddedBuildVer : nativeVer;
+            }
+            if (nativeVer) {
+                return nativeVer;
+            }
+            return isUsableVersionString(storedOtaVer) ? storedOtaVer : '1.0.0';
         } catch {
-            return localStorage.getItem('isaac_pos_ota_version') || '1.0.0';
+            if (isUsableVersionString(embeddedBuildVer)) return embeddedBuildVer;
+            return isUsableVersionString(storedOtaVer) ? storedOtaVer : '1.0.0';
         }
     },
 
@@ -345,6 +414,37 @@ export const otaUpdateService = {
                 return { updateAvailable: false, currentVersion: currentVer, downgradeBlocked: cmp < 0, source: selected.source };
             }
 
+            // Evitar redescargar en bucle si esta versión ya está en cola (staged) esperando reinicio
+            const stagedInSession = typeof sessionStorage !== 'undefined'
+                ? sessionStorage.getItem(OTA_STAGED_SESSION_KEY)
+                : null;
+            let alreadyStaged = stagedInSession === remote.version;
+            if (!alreadyStaged && typeof CapacitorUpdater.getNextBundle === 'function') {
+                try {
+                    const nextBundle = await CapacitorUpdater.getNextBundle();
+                    if (nextBundle?.id && nextBundle.id !== 'builtin' && nextBundle.version === remote.version) {
+                        alreadyStaged = true;
+                    }
+                } catch {
+                    // Ignorar si getNextBundle no está disponible
+                }
+            }
+            if (alreadyStaged) {
+                updateReady = true;
+                newVersionDownloaded = remote.version;
+                notifyUpdateReadyListeners(remote.version);
+                if (toastId) toast.dismiss(toastId);
+                if (options.immediate) {
+                    toast.success('¡Actualización lista! Reiniciando...', { duration: 1500 });
+                    setTimeout(async () => {
+                        await CapacitorUpdater.reload();
+                    }, 900);
+                } else if (!options.silent) {
+                    toast.success('✨ ¡Actualización ya descargada! Toca "Reiniciar y aplicar".', { duration: 5000, icon: '🚀' });
+                }
+                return { updateAvailable: true, alreadyStaged: true, newVersion: remote.version, source: selected.source };
+            }
+
             // Fail-closed antes de descargar: exigir firma RSA-SHA256 y checksum SHA-256 en manifiesto
             if (!String(remote.otaSignature || '').trim()) {
                 throw new Error('Paquete OTA sin firma digital RSA-SHA256 obligatoria. Actualización rechazada.');
@@ -397,8 +497,16 @@ export const otaUpdateService = {
 
             console.log('[OTA_UPDATE] ✅ Bundle verificado listo:', bundle.id);
 
-            await CapacitorUpdater.set(bundle);
-            localStorage.setItem('isaac_pos_ota_version', remote.version);
+            // Programar con next() para NO recargar el WebView en medio del login o de una venta.
+            // Solo si options.immediate es true (acción explícita del usuario) se aplica y reinicia de inmediato.
+            if (typeof CapacitorUpdater.next === 'function') {
+                await CapacitorUpdater.next({ id: bundle.id });
+            } else {
+                await CapacitorUpdater.set(bundle);
+            }
+            if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem(OTA_STAGED_SESSION_KEY, remote.version);
+            }
             updateReady = true;
             newVersionDownloaded = remote.version;
             notifyUpdateReadyListeners(remote.version);
@@ -406,10 +514,10 @@ export const otaUpdateService = {
             if (toastId) toast.dismiss(toastId);
 
             if (options.immediate) {
-                toast.success('¡Actualización instalada! Reiniciando...', { duration: 2000 });
+                toast.success('¡Actualización instalada! Reiniciando...', { duration: 1800 });
                 setTimeout(async () => {
                     await CapacitorUpdater.reload();
-                }, 1500);
+                }, 1200);
             } else {
                 toast.success('✨ ¡Actualización lista! Toca "Reiniciar y aplicar" en la barra superior.', {
                     duration: 7000,

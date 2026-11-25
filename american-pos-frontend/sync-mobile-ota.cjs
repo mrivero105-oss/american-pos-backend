@@ -13,15 +13,25 @@ try {
   }
 } catch (_) {}
 
-const buildTimestamp = Math.floor(Date.now() / 1000);
-const fullVersion = `${baseVersion}.${buildTimestamp}`;
-const buildTimeIso = new Date().toISOString();
-
 const srcDir = path.resolve(__dirname, 'dist-mobile');
 if (!fs.existsSync(srcDir)) {
   console.error('[MOBILE OTA SYNC] Error: No existe el directorio dist-mobile. Ejecute vite build --config vite.mobile.config.js primero.');
   process.exit(1);
 }
+
+// Reutilizar exactamente la misma versión incrustada en el bundle Vite (evita que el APK recién instalado descargue su propio OTA)
+const buildTimestamp = Math.floor(Date.now() / 1000);
+let fullVersion = `${baseVersion}.${buildTimestamp}`;
+const buildMarkerPath = path.join(srcDir, '.build-version');
+try {
+  if (fs.existsSync(buildMarkerPath)) {
+    const marker = JSON.parse(fs.readFileSync(buildMarkerPath, 'utf8'));
+    if (marker && typeof marker.version === 'string' && marker.version.trim()) {
+      fullVersion = marker.version.trim();
+    }
+  }
+} catch (_) {}
+const buildTimeIso = new Date().toISOString();
 
 // 1. Actualizar versión de caché en dist-mobile/sw.js
 try {
@@ -35,13 +45,13 @@ try {
   console.warn('[MOBILE OTA SYNC] Aviso actualizando sw.js:', swErr.message);
 }
 
-// 2. Comprimir dist-mobile/ para paquete OTA (.zip) excluyendo .apk y version.json (evita desfase de checksum)
+// 2. Comprimir dist-mobile/ para paquete OTA (.zip) excluyendo .apk, version.json y .build-version
 console.log('[MOBILE OTA SYNC] Empaquetando dist-mobile en dist.zip para actualizaciones OTA...');
 const zip = new AdmZip();
 zip.addLocalFolder(srcDir, '', (filename) => {
   const lower = filename.toLowerCase();
   const base = path.basename(lower);
-  return !lower.endsWith('.apk') && base !== 'version.json';
+  return !lower.endsWith('.apk') && base !== 'version.json' && base !== '.build-version';
 });
 const zipBuffer = zip.toBuffer();
 const checksum = crypto.createHash('sha256').update(zipBuffer).digest('hex');

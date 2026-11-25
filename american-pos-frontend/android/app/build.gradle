@@ -13,7 +13,7 @@ android {
         applicationId "com.isaacpos.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 240402
+        versionCode 240403
         versionName "24.4.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         ndk {
