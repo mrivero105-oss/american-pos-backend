@@ -1,10 +1,10 @@
 {
-  "version": "24.4.0.1795523567",
-  "buildTime": "2026-11-24T12:32:47.467Z",
+  "version": "24.4.0.1795571421",
+  "buildTime": "2026-11-25T01:50:21.430Z",
   "bundleUrl": "/dist.zip",
-  "checksum": "68fdeb14e2405f165278ff0eb572119c46367a51f51e011cfd6142523b5513d5",
-  "otaSignature": "fnSMrmlwiJBRPpFaEizxBuGqkG4xaw9gFT4nybl/Gt43QH1o8Gt+1RRX24/Tkdy3MC383qboPJpYCp7Shh5b7hnHBONB2qS3l29wNg468y8PQZVx8wydCPIqckueXlnUIQsNIoGxIrf1wH+ZG//kFEWZwSmGaRUZW0oJwzSeOyBPs0GbUFHQQ4K0p0jyyUOqoQZs4nTqoeDpjynOwflVgFAD3kK7iNI8+jh23rDlEL6Fs8Ts9ZPhGyn6XnitXzXEDgqMCyMcq8TFjzF55nWOdqjrnWZ17ofdyUGEP7Vlj5dnOaezP2S6E5SZmEc+1HHwxMLbIhqQODvycrQ4vPgXNA==",
-  "otaManifestSignature": "fi9buT0hekeKNWsUGkUlsGSZpx+/ozKbpTssuObcX3yhZAZ9nQPNLZsdywWn6/5416bZBiDJG4Q2F09kQOg4Cm+PuFiflI0T+VtnJ7tVIm3IWatDv0TtNhxg0gpGMmfr5S1nhvWXJyyNvTaEdMacZhgoXlPLCKhtFqHIZHly51c88gm++LvyIcS7ob+nIT90+DY5V98XM36eVLVZWLvzOQ73qODsjhEbA4Kyg6smRAKMau4H/GvxxOeX4rcjnUjc1CtVzDERP911qK5lIFF/ajO4WwUL2BI3oPWqMcWOKFEm77TFQqdVHxs7JOSYOXAeVPpnCNI4f3c/ERb5MkvBuA==",
+  "checksum": "30f55c3d8c21cdec60b5f4f376df0f3ea62edc1f1fa75abc82eac3c43d274281",
+  "otaSignature": "Mk6JPeGRRGP5qDyLvLvjvWxA8UJZhMoTLCBfbUYFZ71k2lzchbkYVtYAw5WLcBEbi+MkWHPEvtRefvNjGlb6kI07CQWiHen8JzN+O4hQBmNGHN08dMU20ezuNkatZC6Dsv7Q/hEWvd1atXbhG+eZn9V28ojRpT25UsGkpTDcgkXnFPI9T1eTzU0LcRyrbTzOtilw0YGzGPIKJYOKytSW7tXmwB1n6RbLte+xVkafIhcpSZRzbiNF+T0qG5Ty1R+A6dEZzL2Zq64wl0ZMAdeXvFfgRyu6wvAvssmVOmeqloq17S/453ZRTRT+YbtKY20ovHG4AekQm+yAvPbAlw3pKA==",
+  "otaManifestSignature": "cptDaSM4rNCfKi+einzH6Ng5a0ChcIBFr9VS30WgkPiMdxvFoOxt9vqPIEOyoetsp/YfJ7SWcE/Mcb/XTNQlMDJmyhOuwZu1G6aW3AjVdQfu/KrQ+IPUC0HASe05/HRXAhnISL4DS8ebZzbFsiaUyQuU5WHw/m4YBuita0HBf15dMCjyBNH94BTbWbsBiPyeZe49Aa7Q60H15qUCbXunXA/twGZ9gtzmKPlyUIqfAsiRvC8ta/pLEGZ/n1c6lXwM1Ac46MXray4JN0rjWVsrOmjPN9YsF1i42Vm6qX9sHSX30+GWf9VmqJD99zhvQYaAoq7scMNtX4xFkJtCQP/zVQ==",
   "otaSignatureAlg": "RSA-SHA256",
   "apkUrl": "/Isaac-POS-Mobile.apk"
 }

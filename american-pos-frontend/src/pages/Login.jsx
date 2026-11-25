@@ -677,11 +677,18 @@ export default function Login() {
                                 <input
                                     ref={usernameInputRef}
                                     type="text"
+                                    enterKeyHint="next"
                                     name="pos_terminal_cashier"
                                     id="pos_terminal_cashier"
                                     value={username}
                                     onChange={(e) => setUsername(e.target.value)}
-                                    className="w-full h-12 pl-10 pr-3.5 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.keyCode === 13) {
+                                            e.preventDefault();
+                                            passwordInputRef.current?.focus();
+                                        }
+                                    }}
+                                    className="w-full h-12 pl-10 pr-3.5 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-base sm:text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all"
                                     placeholder="Nombre de usuario"
                                     autoComplete="one-time-code"
                                     autoCorrect="off"
@@ -709,11 +716,12 @@ export default function Login() {
                                 <input
                                     ref={passwordInputRef}
                                     type={showPassword ? 'text' : 'password'}
+                                    enterKeyHint="go"
                                     name="pos_terminal_credential"
                                     id="pos_terminal_credential"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
-                                    className="w-full h-12 pl-10 pr-11 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all [&::-ms-reveal]:hidden [&::-ms-clear]:hidden"
+                                    className="w-full h-12 pl-10 pr-11 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-base sm:text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all [&::-ms-reveal]:hidden [&::-ms-clear]:hidden"
                                     placeholder="••••••••"
                                     autoComplete="new-password"
                                     autoCorrect="off"

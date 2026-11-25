@@ -10,6 +10,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.Toast;
 import androidx.activity.OnBackPressedCallback;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -26,8 +29,29 @@ public class MainActivity extends BridgeActivity {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } catch (Exception ignored) {}
 
+        applyImeAndSystemBarInsets();
         configurePosWebView();
         registerPredictiveBackHandler();
+    }
+
+    private void applyImeAndSystemBarInsets() {
+        // En Android 15+ (API 35+), Edge-to-Edge es obligatorio y adjustResize no encoge el WebView por sí solo;
+        // en API <= 34 adjustResize ya redimensiona la ventana nativamente (evita doble padding).
+        if (Build.VERSION.SDK_INT < 35) {
+            return;
+        }
+        View contentView = findViewById(android.R.id.content);
+        if (contentView == null) {
+            return;
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(contentView, (view, windowInsets) -> {
+            boolean imeVisible = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
+            Insets sysBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets imeInsets = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
+            int extraImeBottom = imeVisible ? Math.max(0, imeInsets.bottom - sysBars.bottom) : 0;
+            view.setPadding(0, 0, 0, extraImeBottom);
+            return windowInsets;
+        });
     }
 
     private void configurePosWebView() {
