@@ -6,15 +6,32 @@ const FOCUSABLE_FIELD_SELECTOR = [
   'textarea:not([disabled]):not([readonly])'
 ].join(', ');
 
+const NATIVE_KEYBOARD_EVENT = 'isaac-native-keyboard';
+
+function readNativeKeyboardSnapshot() {
+  if (typeof window === 'undefined') {
+    return { visible: false, heightPx: 0 };
+  }
+  const snap = window.__ISAAC_NATIVE_KEYBOARD__;
+  if (!snap || typeof snap !== 'object') {
+    return { visible: false, heightPx: 0 };
+  }
+  const heightPx = Math.max(0, Math.round(Number(snap.heightPx) || 0));
+  return {
+    visible: Boolean(snap.visible) && heightPx > 0,
+    heightPx
+  };
+}
+
 /**
- * Desplaza suavemente un campo de formulario al centro visible del contenedor
- * para que el teclado virtual de Android/iOS nunca tape el input activo.
+ * Desplaza suavemente un campo de formulario al área visible del contenedor
+ * en doble pulso (110ms + 360ms) para sobrevivir a la animación de subida del teclado Android/iOS.
  */
 export function scrollElementIntoComfortView(targetEl, delayMs = 110) {
   if (!targetEl || typeof targetEl.scrollIntoView !== 'function') return () => {};
-  const timerId = setTimeout(() => {
+  const runScroll = () => {
     try {
-      targetEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      targetEl.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
     } catch {
       try {
         targetEl.scrollIntoView();
@@ -22,8 +39,13 @@ export function scrollElementIntoComfortView(targetEl, delayMs = 110) {
         // Entornos jsdom/antiguos sin scrollIntoView completo
       }
     }
-  }, delayMs);
-  return () => clearTimeout(timerId);
+  };
+  const firstTimer = setTimeout(runScroll, delayMs);
+  const secondTimer = setTimeout(runScroll, Math.max(360, delayMs + 240));
+  return () => {
+    clearTimeout(firstTimer);
+    clearTimeout(secondTimer);
+  };
 }
 
 /**
@@ -118,10 +140,13 @@ export function handleMobileFormEnterAdvance(event, options = {}) {
 export function useMobileKeyboardViewport({ enabled = true, compactThresholdPx = 520 } = {}) {
   const [viewportState, setViewportState] = useState(() => {
     const initialHeight = typeof window !== 'undefined' ? (window.visualViewport?.height || window.innerHeight || 0) : 0;
+    const nativeSnap = readNativeKeyboardSnapshot();
     return {
-      imeExtraBottomPx: 0,
-      isKeyboardOpen: false,
-      visibleViewportHeight: initialHeight
+      imeExtraBottomPx: nativeSnap.visible ? nativeSnap.heightPx : 0,
+      isKeyboardOpen: nativeSnap.visible,
+      nativeKeyboardVisible: nativeSnap.visible,
+      keyboardHeightPx: nativeSnap.heightPx,
+      visibleViewportHeight: Math.max(200, Math.round(initialHeight - (nativeSnap.visible ? nativeSnap.heightPx : 0)))
     };
   });
 
@@ -132,6 +157,11 @@ export function useMobileKeyboardViewport({ enabled = true, compactThresholdPx =
     pendingScrollCleanupsRef.current = [];
   }, []);
 
+  const scrollFieldIntoView = useCallback((targetEl, delayMs = 110) => {
+    const cancel = scrollElementIntoComfortView(targetEl, delayMs);
+    pendingScrollCleanupsRef.current.push(cancel);
+  }, []);
+
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') {
       return undefined;
@@ -139,52 +169,101 @@ export function useMobileKeyboardViewport({ enabled = true, compactThresholdPx =
 
     const vv = window.visualViewport;
     let baselineHeight = window.innerHeight || 0;
+    let nativeKb = readNativeKeyboardSnapshot();
+
+    const applyRootOverlapVar = (overlapPx) => {
+      try {
+        document.documentElement.style.setProperty('--isaac-keyboard-overlap', `${Math.max(0, Math.round(overlapPx))}px`);
+      } catch {
+        // Entornos sin documentElement.style
+      }
+    };
 
     const updateMetrics = () => {
       const innerH = window.innerHeight || 0;
-      if (innerH > baselineHeight) baselineHeight = innerH;
+      if (!nativeKb.visible && innerH > baselineHeight) {
+        baselineHeight = innerH;
+      }
       const visibleH = vv ? vv.height : innerH;
       const offsetTop = vv ? vv.offsetTop : 0;
-      const occludedBottom = Math.max(0, Math.round(innerH - visibleH - offsetTop));
+
+      // Cuánto ya encogió nativamente el WebView (adjustResize / SystemBars)
+      const windowResizedDelta = Math.max(0, baselineHeight - innerH);
+      // Porción del teclado nativo que NO fue absorbida por el redimensionamiento del WebView
+      const nativeUnabsorbedOverlap = nativeKb.visible
+        ? Math.max(0, Math.round(nativeKb.heightPx - windowResizedDelta))
+        : 0;
+      const vvOccludedBottom = Math.max(0, Math.round(innerH - visibleH - offsetTop));
+      const occludedBottom = Math.max(vvOccludedBottom, nativeUnabsorbedOverlap);
+
+      const effectiveVisible = Math.max(
+        200,
+        Math.round(Math.min(visibleH || innerH, Math.max(0, innerH - nativeUnabsorbedOverlap)))
+      );
       const keyboardLikelyOpen =
-        occludedBottom > 90 ||
-        (baselineHeight - visibleH > 120) ||
-        (visibleH > 0 && visibleH < compactThresholdPx);
+        nativeKb.visible ||
+        occludedBottom > 80 ||
+        windowResizedDelta > 110 ||
+        (effectiveVisible > 0 && effectiveVisible < compactThresholdPx);
+
+      const estimatedKeyboardHeight = nativeKb.visible
+        ? nativeKb.heightPx
+        : Math.max(occludedBottom, windowResizedDelta);
+
+      applyRootOverlapVar(occludedBottom);
 
       setViewportState((prev) => {
-        const roundedVisible = Math.round(visibleH);
         if (
           prev.imeExtraBottomPx === occludedBottom &&
           prev.isKeyboardOpen === keyboardLikelyOpen &&
-          prev.visibleViewportHeight === roundedVisible
+          prev.nativeKeyboardVisible === nativeKb.visible &&
+          prev.keyboardHeightPx === estimatedKeyboardHeight &&
+          prev.visibleViewportHeight === effectiveVisible
         ) {
           return prev;
         }
         return {
           imeExtraBottomPx: occludedBottom,
           isKeyboardOpen: keyboardLikelyOpen,
-          visibleViewportHeight: roundedVisible
+          nativeKeyboardVisible: nativeKb.visible,
+          keyboardHeightPx: estimatedKeyboardHeight,
+          visibleViewportHeight: effectiveVisible
         };
       });
     };
 
+    const handleNativeKeyboardEvent = (evt) => {
+      const detail = evt?.detail || readNativeKeyboardSnapshot();
+      const heightPx = Math.max(0, Math.round(Number(detail.heightPx) || 0));
+      const visible = Boolean(detail.visible) && heightPx > 0;
+      const wasVisible = nativeKb.visible;
+      nativeKb = { visible, heightPx };
+      updateMetrics();
+
+      if (visible && !wasVisible && typeof document !== 'undefined') {
+        const active = document.activeElement;
+        const tag = active?.tagName?.toUpperCase?.();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+          scrollFieldIntoView(active, 70);
+        }
+      }
+    };
+
     updateMetrics();
     window.addEventListener('resize', updateMetrics);
+    window.addEventListener(NATIVE_KEYBOARD_EVENT, handleNativeKeyboardEvent);
     vv?.addEventListener('resize', updateMetrics);
     vv?.addEventListener('scroll', updateMetrics);
 
     return () => {
       window.removeEventListener('resize', updateMetrics);
+      window.removeEventListener(NATIVE_KEYBOARD_EVENT, handleNativeKeyboardEvent);
       vv?.removeEventListener('resize', updateMetrics);
       vv?.removeEventListener('scroll', updateMetrics);
+      applyRootOverlapVar(0);
       clearPendingScrolls();
     };
-  }, [enabled, compactThresholdPx, clearPendingScrolls]);
-
-  const scrollFieldIntoView = useCallback((targetEl, delayMs = 110) => {
-    const cancel = scrollElementIntoComfortView(targetEl, delayMs);
-    pendingScrollCleanupsRef.current.push(cancel);
-  }, []);
+  }, [enabled, compactThresholdPx, clearPendingScrolls, scrollFieldIntoView]);
 
   const handleFieldFocusCapture = useCallback((e) => {
     const tag = e?.target?.tagName?.toUpperCase?.();
@@ -213,6 +292,8 @@ export function useMobileKeyboardViewport({ enabled = true, compactThresholdPx =
   return {
     imeExtraBottomPx: viewportState.imeExtraBottomPx,
     isKeyboardOpen: viewportState.isKeyboardOpen,
+    nativeKeyboardVisible: viewportState.nativeKeyboardVisible,
+    keyboardHeightPx: viewportState.keyboardHeightPx,
     visibleViewportHeight: viewportState.visibleViewportHeight,
     modalOverlayStyle,
     modalCardMaxHeightStyle,

@@ -3272,9 +3272,11 @@ export default function MobilePOSSimulator() {
       }}
       style={{
         paddingLeft: 'env(safe-area-inset-left, 0px)',
-        paddingRight: 'env(safe-area-inset-right, 0px)'
+        paddingRight: 'env(safe-area-inset-right, 0px)',
+        height: 'calc(100dvh - var(--isaac-keyboard-overlap, 0px))',
+        maxHeight: 'calc(100dvh - var(--isaac-keyboard-overlap, 0px))'
       }}
-      className={`h-[100dvh] max-h-[100dvh] w-full ${T.appBg} flex flex-col font-sans antialiased transition-colors overflow-hidden select-none`}
+      className={`w-full ${T.appBg} flex flex-col font-sans antialiased transition-[height,background-color] duration-150 overflow-hidden select-none`}
     >
       
       {/* 1. CABECERA TÁCTICA UNIFICADA "ISAAC TACTICAL OS" (Solo visible cuando hay sesión activa de usuario) */}

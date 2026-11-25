@@ -82,4 +82,47 @@ public final class NativeHardwareUtils {
             return false;
         }
     }
+
+    /**
+     * Calcula la altura útil del teclado virtual (IME) en píxeles CSS (dp) a partir de la geometría
+     * de la ventana Android y/o los insets IME (compatible con API 24-36 y capas OEM como EMUI/MIUI).
+     * Retorna 0 cuando el teclado está oculto o la diferencia corresponde solo a la barra de navegación.
+     */
+    public static int computeKeyboardHeightCssPx(
+            int decorHeightPx,
+            int visibleBottomPx,
+            int navBarBottomPx,
+            int imeInsetBottomPx,
+            boolean hasExplicitImeInset,
+            boolean imeInsetVisible,
+            float density
+    ) {
+        float safeDensity = density > 0f ? density : 1f;
+        int safeNavBottom = Math.max(0, navBarBottomPx);
+        int rawKeyboardPx = 0;
+
+        if (hasExplicitImeInset && imeInsetVisible && imeInsetBottomPx > 0) {
+            rawKeyboardPx = Math.max(0, imeInsetBottomPx - safeNavBottom);
+        }
+
+        if (rawKeyboardPx == 0 && decorHeightPx > 0 && visibleBottomPx > 0) {
+            int diffPx = decorHeightPx - visibleBottomPx - safeNavBottom;
+            int minKeyboardThresholdPx = Math.round(100f * safeDensity);
+            if (diffPx >= minKeyboardThresholdPx) {
+                rawKeyboardPx = diffPx;
+            }
+        }
+
+        if (hasExplicitImeInset && !imeInsetVisible && rawKeyboardPx > 0) {
+            int strictOemThresholdPx = Math.round(120f * safeDensity);
+            if (rawKeyboardPx < strictOemThresholdPx) {
+                rawKeyboardPx = 0;
+            }
+        }
+
+        if (rawKeyboardPx <= 0) {
+            return 0;
+        }
+        return Math.max(0, Math.round(rawKeyboardPx / safeDensity));
+    }
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Lock, Unlock, LogOut, Fingerprint, Eye, EyeOff } from 'lucide-react';
 import biometricService from '../services/biometricService';
+import { useMobileKeyboardViewport } from '../hooks/useMobileKeyboardViewport';
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_SECONDS = 60;
@@ -14,7 +15,28 @@ const LockScreen = ({ user, onUnlock, onLogout }) => {
   const [lockoutUntil, setLockoutUntil] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [hasBiometrics, setHasBiometrics] = useState(false);
+  const [isWritingPin, setIsWritingPin] = useState(false);
   const inputRef = useRef(null);
+  const prevNativeKbRef = useRef(false);
+  const {
+    isKeyboardOpen,
+    nativeKeyboardVisible,
+    modalOverlayStyle,
+    scrollFieldIntoView
+  } = useMobileKeyboardViewport({ enabled: true });
+
+  const isCompactLockMode = isKeyboardOpen || isWritingPin;
+
+  useEffect(() => {
+    const wasVisible = prevNativeKbRef.current;
+    prevNativeKbRef.current = nativeKeyboardVisible;
+    if (wasVisible && !nativeKeyboardVisible) {
+      setIsWritingPin(false);
+      if (typeof document !== 'undefined' && document.activeElement === inputRef.current) {
+        inputRef.current?.blur?.();
+      }
+    }
+  }, [nativeKeyboardVisible]);
 
   useEffect(() => {
     document.body.dataset.screenLocked = 'true';
@@ -111,30 +133,46 @@ const LockScreen = ({ user, onUnlock, onLogout }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-[10000] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
-      <div className="max-w-sm w-full my-auto bg-white dark:bg-slate-900 rounded-xl shadow-xl p-6 text-center border border-slate-200 dark:border-slate-800 relative overflow-hidden">
+    <div
+      data-lock-compact={isCompactLockMode ? 'true' : 'false'}
+      style={{
+        paddingTop: isCompactLockMode ? 'max(0.75rem, env(safe-area-inset-top, 0px))' : undefined,
+        ...modalOverlayStyle
+      }}
+      className={`fixed inset-0 z-[10000] bg-slate-950/80 backdrop-blur-md flex ${
+        isCompactLockMode ? 'items-start' : 'items-center'
+      } justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain animate-in fade-in duration-200`}
+    >
+      <div className={`max-w-sm w-full ${isCompactLockMode ? 'mt-1 p-4' : 'my-auto p-6'} bg-white dark:bg-slate-900 rounded-xl shadow-xl text-center border border-slate-200 dark:border-slate-800 relative overflow-hidden transition-all duration-150`}>
         <div className="relative z-10">
-          <div className="w-12 h-12 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg flex items-center justify-center mx-auto mb-3 border border-slate-200 dark:border-slate-700">
-            <Lock size={24} />
-          </div>
+          {!isCompactLockMode && (
+            <div className="w-12 h-12 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg flex items-center justify-center mx-auto mb-3 border border-slate-200 dark:border-slate-700">
+              <Lock size={24} />
+            </div>
+          )}
 
-          <h1 className="text-lg font-bold text-slate-900 dark:text-white mb-0.5 tracking-tight">Caja Bloqueada</h1>
-          <p className="text-slate-500 dark:text-slate-400 text-xs mb-4 font-normal">
+          <h1 className={`${isCompactLockMode ? 'text-base' : 'text-lg'} font-bold text-slate-900 dark:text-white mb-0.5 tracking-tight`}>Caja Bloqueada</h1>
+          <p className={`text-slate-500 dark:text-slate-400 text-xs ${isCompactLockMode ? 'mb-2.5' : 'mb-4'} font-normal`}>
             Cajero: <span className="text-slate-800 dark:text-slate-200 font-semibold">{user?.name || user?.username || 'Usuario'}</span>
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-3.5">
+          <form onSubmit={handleSubmit} className={isCompactLockMode ? 'space-y-2.5' : 'space-y-3.5'}>
             <div className="relative">
               <input
                 ref={inputRef}
                 type={showPassword ? 'text' : 'password'}
+                enterKeyHint="go"
                 value={password}
                 onChange={(e) => {
                   setError('');
                   setPassword(e.target.value);
                 }}
+                onFocus={() => {
+                  setIsWritingPin(true);
+                  scrollFieldIntoView(inputRef.current, 100);
+                }}
+                onBlur={() => setIsWritingPin(false)}
                 placeholder="Ingresa tu PIN o clave"
-                autoFocus
                 disabled={isLockedOut}
                 className={`w-full pl-10 pr-10 py-2.5 bg-slate-50 dark:bg-slate-950 border ${
                   error ? 'border-red-500' : 'border-slate-300 dark:border-slate-700'
@@ -142,6 +180,7 @@ const LockScreen = ({ user, onUnlock, onLogout }) => {
               />
               <button
                 type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setShowPassword(p => !p)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 transition-colors cursor-pointer"
                 title={showPassword ? "Ocultar clave" : "Mostrar clave"}

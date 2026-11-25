@@ -1,10 +1,12 @@
 package com.isaacpos.app;
 
 import android.content.Intent;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -18,6 +20,9 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     private long lastBackPressTime = 0;
     private Toast exitToast = null;
+    private ViewTreeObserver.OnGlobalLayoutListener keyboardLayoutListener = null;
+    private int lastReportedKeyboardCssPx = -1;
+    private boolean lastReportedKeyboardVisible = false;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -30,17 +35,31 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception ignored) {}
 
         applyImeAndSystemBarInsets();
+        registerUniversalKeyboardObserver();
         configurePosWebView();
         registerPredictiveBackHandler();
     }
 
+    @Override
+    public void onDestroy() {
+        try {
+            View decorView = getWindow() != null ? getWindow().getDecorView() : null;
+            if (decorView != null && keyboardLayoutListener != null) {
+                decorView.getViewTreeObserver().removeOnGlobalLayoutListener(keyboardLayoutListener);
+                keyboardLayoutListener = null;
+            }
+        } catch (Exception ignored) {}
+        super.onDestroy();
+    }
+
     private void applyImeAndSystemBarInsets() {
-        // En Android 15+ (API 35+), Edge-to-Edge es obligatorio y adjustResize no encoge el WebView por sí solo;
-        // en API <= 34 adjustResize ya redimensiona la ventana nativamente (evita doble padding).
+        // En Android 15+ (API 35+), Edge-to-Edge es obligatorio y adjustResize puede requerir padding IME;
+        // respetar si SystemBars de Capacitor ya aplicó padding en DecorView para evitar doble desplazamiento.
         if (Build.VERSION.SDK_INT < 35) {
             return;
         }
         View contentView = findViewById(android.R.id.content);
+        View decorView = getWindow() != null ? getWindow().getDecorView() : null;
         if (contentView == null) {
             return;
         }
@@ -48,10 +67,79 @@ public class MainActivity extends BridgeActivity {
             boolean imeVisible = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
             Insets sysBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
             Insets imeInsets = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
-            int extraImeBottom = imeVisible ? Math.max(0, imeInsets.bottom - sysBars.bottom) : 0;
+            boolean decorAlreadyHandlesIme = decorView != null && decorView.getPaddingBottom() >= Math.max(0, imeInsets.bottom - sysBars.bottom) && imeInsets.bottom > 0;
+            int extraImeBottom = (imeVisible && !decorAlreadyHandlesIme) ? Math.max(0, imeInsets.bottom - sysBars.bottom) : 0;
             view.setPadding(0, 0, 0, extraImeBottom);
+            notifyKeyboardGeometryToWebView(windowInsets);
             return windowInsets;
         });
+    }
+
+    private void registerUniversalKeyboardObserver() {
+        View decorView = getWindow() != null ? getWindow().getDecorView() : null;
+        if (decorView == null) {
+            return;
+        }
+        keyboardLayoutListener = () -> notifyKeyboardGeometryToWebView(ViewCompat.getRootWindowInsets(decorView));
+        decorView.getViewTreeObserver().addOnGlobalLayoutListener(keyboardLayoutListener);
+    }
+
+    private void notifyKeyboardGeometryToWebView(WindowInsetsCompat rootInsets) {
+        try {
+            View decorView = getWindow() != null ? getWindow().getDecorView() : null;
+            if (decorView == null || getBridge() == null || getBridge().getWebView() == null) {
+                return;
+            }
+            Rect visibleRect = new Rect();
+            decorView.getWindowVisibleDisplayFrame(visibleRect);
+
+            int navBarBottomPx = 0;
+            boolean hasExplicitImeInset = false;
+            boolean imeInsetVisible = false;
+            int imeInsetBottomPx = 0;
+
+            if (rootInsets != null) {
+                navBarBottomPx = rootInsets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    hasExplicitImeInset = true;
+                    imeInsetVisible = rootInsets.isVisible(WindowInsetsCompat.Type.ime());
+                    imeInsetBottomPx = rootInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+                }
+            }
+
+            float density = getResources().getDisplayMetrics().density;
+            int keyboardCssPx = NativeHardwareUtils.computeKeyboardHeightCssPx(
+                decorView.getHeight(),
+                visibleRect.bottom,
+                navBarBottomPx,
+                imeInsetBottomPx,
+                hasExplicitImeInset,
+                imeInsetVisible,
+                density
+            );
+            boolean visible = keyboardCssPx > 0;
+
+            if (visible == lastReportedKeyboardVisible && Math.abs(keyboardCssPx - lastReportedKeyboardCssPx) < 4) {
+                return;
+            }
+            lastReportedKeyboardVisible = visible;
+            lastReportedKeyboardCssPx = keyboardCssPx;
+
+            final WebView webView = getBridge().getWebView();
+            final String js =
+                "(function(){" +
+                "var h=" + keyboardCssPx + ";" +
+                "var v=" + (visible ? "true" : "false") + ";" +
+                "document.documentElement.style.setProperty('--native-keyboard-height',h+'px');" +
+                "window.__ISAAC_NATIVE_KEYBOARD__={visible:v,heightPx:h,updatedAt:Date.now()};" +
+                "window.dispatchEvent(new CustomEvent('isaac-native-keyboard',{detail:{visible:v,heightPx:h}}));" +
+                "})();";
+            webView.post(() -> {
+                try {
+                    webView.evaluateJavascript(js, null);
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
     }
 
     private void configurePosWebView() {

@@ -36,13 +36,19 @@ export default function MobilePOSLoginScreen({
     const usernameInputRef = useRef(null);
     const passwordInputRef = useRef(null);
     const submitBtnRef = useRef(null);
+    const blurDebounceRef = useRef(null);
+    const prevNativeKbVisibleRef = useRef(false);
 
     const [showPassword, setShowPassword] = useState(false);
+    const [isWritingCredentials, setIsWritingCredentials] = useState(false);
     const {
         imeExtraBottomPx,
-        isKeyboardOpen: isCompactKeyboardMode,
+        isKeyboardOpen,
+        nativeKeyboardVisible,
         scrollFieldIntoView: scrollFieldIntoComfortView
     } = useMobileKeyboardViewport({ enabled: true });
+
+    const isCompactMode = isKeyboardOpen || isWritingCredentials;
 
     // Blindaje anti-captura (FLAG_SECURE) mientras se muestran credenciales de inicio de sesión
     useEffect(() => {
@@ -56,11 +62,65 @@ export default function MobilePOSLoginScreen({
         };
     }, []);
 
+    // Limpiar timer de blur al desmontar
+    useEffect(() => () => {
+        if (blurDebounceRef.current) {
+            clearTimeout(blurDebounceRef.current);
+        }
+    }, []);
+
+    // Cuando el usuario cierra el teclado nativo con botón Atrás de Android, restaurar vista centrada completa
+    useEffect(() => {
+        const wasVisible = prevNativeKbVisibleRef.current;
+        prevNativeKbVisibleRef.current = nativeKeyboardVisible;
+        if (wasVisible && !nativeKeyboardVisible) {
+            setIsWritingCredentials(false);
+            const active = typeof document !== 'undefined' ? document.activeElement : null;
+            if (active === usernameInputRef.current || active === passwordInputRef.current) {
+                active?.blur?.();
+            }
+        }
+    }, [nativeKeyboardVisible]);
+
+    const handleCredentialFocus = (targetEl) => {
+        if (blurDebounceRef.current) {
+            clearTimeout(blurDebounceRef.current);
+            blurDebounceRef.current = null;
+        }
+        setIsWritingCredentials(true);
+        if (scrollContainerRef.current && typeof scrollContainerRef.current.scrollTo === 'function') {
+            try {
+                scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+            } catch {
+                scrollContainerRef.current.scrollTop = 0;
+            }
+        }
+        scrollFieldIntoComfortView(targetEl, 120);
+    };
+
+    const handleCredentialBlur = () => {
+        if (blurDebounceRef.current) {
+            clearTimeout(blurDebounceRef.current);
+        }
+        blurDebounceRef.current = setTimeout(() => {
+            const active = typeof document !== 'undefined' ? document.activeElement : null;
+            const stillInCredentials = active === usernameInputRef.current || active === passwordInputRef.current;
+            if (!stillInCredentials) {
+                setIsWritingCredentials(false);
+            }
+        }, 140);
+    };
+
     const focusPasswordField = () => {
         const pwdEl = passwordInputRef.current;
         if (!pwdEl) return;
+        if (blurDebounceRef.current) {
+            clearTimeout(blurDebounceRef.current);
+            blurDebounceRef.current = null;
+        }
+        setIsWritingCredentials(true);
         pwdEl.focus();
-        scrollFieldIntoComfortView(submitBtnRef.current || pwdEl);
+        scrollFieldIntoComfortView(pwdEl, 100);
     };
 
     const handleUsernameKeyDown = (e) => {
@@ -93,73 +153,119 @@ export default function MobilePOSLoginScreen({
     return (
         <div
             ref={scrollContainerRef}
-            className={`flex-1 min-h-0 w-full overflow-y-auto overscroll-contain flex flex-col items-center px-3 sm:px-5 ${T.appBg}`}
+            data-login-compact={isCompactMode ? 'true' : 'false'}
+            className={`flex-1 min-h-0 w-full overflow-y-auto overscroll-contain flex flex-col items-center px-3 sm:px-5 ${
+                isCompactMode ? 'justify-start' : 'justify-center'
+            } ${T.appBg}`}
             style={{
-                paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
-                paddingBottom: `calc(max(1rem, env(safe-area-inset-bottom, 0px)) + ${imeExtraBottomPx}px)`
+                paddingTop: isCompactMode
+                    ? 'max(0.5rem, env(safe-area-inset-top, 0px))'
+                    : 'max(0.75rem, env(safe-area-inset-top, 0px))',
+                paddingBottom: isCompactMode
+                    ? 'max(0.75rem, env(safe-area-inset-bottom, 0px))'
+                    : `calc(max(1rem, env(safe-area-inset-bottom, 0px)) + ${imeExtraBottomPx}px)`
             }}
         >
             <div
                 className={`w-full max-w-[380px] ${
-                    isCompactKeyboardMode ? 'mt-1 mb-4 p-4 space-y-3' : 'my-auto p-5 sm:p-7 space-y-4'
+                    isCompactMode ? 'mt-0.5 mb-2 p-3.5 space-y-2.5' : 'p-5 sm:p-7 space-y-4'
                 } ${T.modalCard} rounded-2xl shadow-2xl border ${T.border} transition-all duration-150`}
             >
-                <div className="text-center space-y-1.5">
-                    <div className={`flex justify-center ${isCompactKeyboardMode ? 'py-0.5' : 'py-1.5 sm:py-2.5'}`}>
-                        <IsaacWebLogo
-                            isLight={isLight}
-                            height={isCompactKeyboardMode ? 'h-10' : 'h-14 sm:h-18'}
-                            imgClassName="max-w-[220px] sm:max-w-[280px] drop-shadow-xs"
-                            className="justify-center"
-                        />
-                    </div>
-                    <h2 className={`text-xs sm:text-sm font-extrabold truncate px-2 ${T.textPrimary}`}>
-                        {businessInfo.name || 'Isaac POS'}
-                    </h2>
-
-                    {/* Indicador interactivo de estado de enlace al servidor PC */}
-                    <div className="flex flex-col items-center">
+                {isCompactMode ? (
+                    <div className="flex items-center justify-between gap-2 pb-1 border-b border-slate-700/20">
+                        <div className="flex items-center gap-2 min-w-0">
+                            <IsaacWebLogo
+                                isLight={isLight}
+                                height="h-7"
+                                imgClassName="max-w-[115px] drop-shadow-xs"
+                                className="justify-start shrink-0"
+                            />
+                            <h2 className={`text-xs font-extrabold truncate ${T.textPrimary}`}>
+                                {businessInfo.name || 'Isaac POS'}
+                            </h2>
+                        </div>
                         <button
                             type="button"
                             onClick={() => {
                                 setShowServerModal(true);
                                 setServerFeedback(null);
                             }}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold cursor-pointer transition-all active:scale-95 max-w-full ${
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[10px] font-bold shrink-0 cursor-pointer ${
                                 serverHealth === true
-                                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                                     : serverHealth === false
-                                        ? 'bg-rose-500/15 border-rose-500/30 text-rose-400 hover:bg-rose-500/25 animate-pulse'
+                                        ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
                                         : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                             }`}
-                            title="Tocar para cambiar la IP del Servidor PC"
+                            title="Configurar IP del Servidor PC"
+                            aria-label="Configurar IP del Servidor PC"
                         >
                             <span
-                                className={`w-2 h-2 rounded-full shrink-0 ${
-                                    serverHealth === true ? 'bg-emerald-400' : serverHealth === false ? 'bg-rose-500' : 'bg-amber-400 animate-ping'
+                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                    serverHealth === true ? 'bg-emerald-400' : serverHealth === false ? 'bg-rose-500' : 'bg-amber-400'
                                 }`}
                             />
-                            <span className="truncate">
-                                {serverHealth === true
-                                    ? (displayServerHost ? `PC Conectada (${displayServerHost})` : 'PC Conectada (LAN)')
-                                    : serverHealth === false
-                                        ? 'Sin conexión a PC • Configurar'
-                                        : 'Verificando enlace...'}
-                            </span>
-                            <Settings size={12} className="opacity-70 ml-0.5 shrink-0" />
+                            <span>{serverHealth === true ? 'LAN' : serverHealth === false ? 'Sin PC' : '...'}</span>
                         </button>
                     </div>
-                </div>
+                ) : (
+                    <div className="text-center space-y-1.5">
+                        <div className="flex justify-center py-1.5 sm:py-2.5">
+                            <IsaacWebLogo
+                                isLight={isLight}
+                                height="h-14 sm:h-18"
+                                imgClassName="max-w-[220px] sm:max-w-[280px] drop-shadow-xs"
+                                className="justify-center"
+                            />
+                        </div>
+                        <h2 className={`text-xs sm:text-sm font-extrabold truncate px-2 ${T.textPrimary}`}>
+                            {businessInfo.name || 'Isaac POS'}
+                        </h2>
+
+                        {/* Indicador interactivo de estado de enlace al servidor PC */}
+                        <div className="flex flex-col items-center">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowServerModal(true);
+                                    setServerFeedback(null);
+                                }}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold cursor-pointer transition-all active:scale-95 max-w-full ${
+                                    serverHealth === true
+                                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                                        : serverHealth === false
+                                            ? 'bg-rose-500/15 border-rose-500/30 text-rose-400 hover:bg-rose-500/25 animate-pulse'
+                                            : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                                }`}
+                                title="Tocar para cambiar la IP del Servidor PC"
+                            >
+                                <span
+                                    className={`w-2 h-2 rounded-full shrink-0 ${
+                                        serverHealth === true ? 'bg-emerald-400' : serverHealth === false ? 'bg-rose-500' : 'bg-amber-400 animate-ping'
+                                    }`}
+                                />
+                                <span className="truncate">
+                                    {serverHealth === true
+                                        ? (displayServerHost ? `PC Conectada (${displayServerHost})` : 'PC Conectada (LAN)')
+                                        : serverHealth === false
+                                            ? 'Sin conexión a PC • Configurar'
+                                            : 'Verificando enlace...'}
+                                </span>
+                                <Settings size={12} className="opacity-70 ml-0.5 shrink-0" />
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {loginError && (
-                    <div className="bg-rose-500/15 border border-rose-500/30 p-2.5 rounded-xl text-rose-500 dark:text-rose-300 text-xs flex items-center gap-2">
+                    <div className="bg-rose-500/15 border border-rose-500/30 p-2 rounded-xl text-rose-500 dark:text-rose-300 text-xs flex items-center gap-2">
                         <AlertCircle size={15} className="shrink-0" />
                         <span className="leading-snug">{loginError}</span>
                     </div>
                 )}
 
                 {/* Acceso Ultrarrápido con Huella Dactilar Móvil (Zero-Trust) */}
-                {enrolledBioUser && !isCompactKeyboardMode && (
+                {enrolledBioUser && !isCompactMode && (
                     <div className="space-y-2.5 pb-0.5">
                         <button
                             type="button"
@@ -194,7 +300,7 @@ export default function MobilePOSLoginScreen({
                     </div>
                 )}
 
-                <form onSubmit={handleFormSubmit} className="space-y-3" noValidate>
+                <form onSubmit={handleFormSubmit} className={isCompactMode ? 'space-y-2' : 'space-y-3'} noValidate>
                     <div>
                         <label htmlFor="mobile_pos_login_user" className={`text-[11px] font-bold ${T.textSecondary} block mb-1`}>
                             Usuario / Cajero
@@ -214,9 +320,10 @@ export default function MobilePOSLoginScreen({
                                 value={loginUsername}
                                 onChange={(e) => setLoginUsername(e.target.value)}
                                 onKeyDown={handleUsernameKeyDown}
-                                onFocus={() => scrollFieldIntoComfortView(usernameInputRef.current)}
+                                onFocus={() => handleCredentialFocus(usernameInputRef.current)}
+                                onBlur={handleCredentialBlur}
                                 placeholder="Ingresa tu usuario"
-                                className={`w-full min-h-[46px] ${T.inputBg} border rounded-xl pl-9 pr-3 py-2.5 text-base sm:text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500/30 transition-shadow select-text`}
+                                className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl pl-9 pr-3 py-2 text-base sm:text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500/30 transition-shadow select-text`}
                             />
                         </div>
                     </div>
@@ -238,13 +345,15 @@ export default function MobilePOSLoginScreen({
                                 spellCheck={false}
                                 value={loginPassword}
                                 onChange={(e) => setLoginPassword(e.target.value)}
-                                onFocus={() => scrollFieldIntoComfortView(submitBtnRef.current || passwordInputRef.current)}
+                                onFocus={() => handleCredentialFocus(passwordInputRef.current)}
+                                onBlur={handleCredentialBlur}
                                 placeholder="••••••••"
-                                className={`w-full min-h-[46px] ${T.inputBg} border rounded-xl pl-9 pr-11 py-2.5 text-base sm:text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500/30 transition-shadow select-text`}
+                                className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl pl-9 pr-11 py-2 text-base sm:text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500/30 transition-shadow select-text`}
                             />
                             <button
                                 type="button"
                                 tabIndex={-1}
+                                onMouseDown={(e) => e.preventDefault()}
                                 onClick={() => setShowPassword((prev) => !prev)}
                                 className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center ${T.textMuted} hover:opacity-100 active:scale-95 cursor-pointer`}
                                 title={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
@@ -259,7 +368,7 @@ export default function MobilePOSLoginScreen({
                         ref={submitBtnRef}
                         type="submit"
                         disabled={isLoggingIn}
-                        className="w-full min-h-[48px] bg-[#0a0d12] hover:bg-[#161c26] active:scale-[0.99] disabled:opacity-50 text-white border border-[#1e242e] font-extrabold py-2.5 rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer mt-2"
+                        className="w-full min-h-[46px] bg-[#0a0d12] hover:bg-[#161c26] active:scale-[0.99] disabled:opacity-50 text-white border border-[#1e242e] font-extrabold py-2.5 rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer mt-1.5"
                     >
                         {isLoggingIn ? (
                             <RefreshCw size={15} className="animate-spin" />
@@ -268,19 +377,21 @@ export default function MobilePOSLoginScreen({
                         )}
                     </button>
 
-                    <div className="pt-0.5 text-center">
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setShowServerModal(true);
-                                setServerFeedback(null);
-                            }}
-                            className={`min-h-[38px] px-3 text-[11px] font-bold ${T.textMuted} hover:opacity-100 inline-flex items-center justify-center gap-1.5 mx-auto cursor-pointer`}
-                        >
-                            <Wifi size={13} />
-                            <span>Configurar IP de Servidor PC</span>
-                        </button>
-                    </div>
+                    {!isCompactMode && (
+                        <div className="pt-0.5 text-center">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowServerModal(true);
+                                    setServerFeedback(null);
+                                }}
+                                className={`min-h-[38px] px-3 text-[11px] font-bold ${T.textMuted} hover:opacity-100 inline-flex items-center justify-center gap-1.5 mx-auto cursor-pointer`}
+                            >
+                                <Wifi size={13} />
+                                <span>Configurar IP de Servidor PC</span>
+                            </button>
+                        </div>
+                    )}
                 </form>
             </div>
         </div>

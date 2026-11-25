@@ -1,5 +1,6 @@
 package com.isaacpos.app;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -53,5 +54,32 @@ public class NativeHardwareUtilsTest {
         assertFalse(NativeHardwareUtils.isAllowedDownloadOrExternalUrl("content://com.isaacpos.app.fileprovider/secret"));
         assertFalse(NativeHardwareUtils.isAllowedDownloadOrExternalUrl("intent://scan/#Intent;end"));
         assertFalse(NativeHardwareUtils.isAllowedDownloadOrExternalUrl(""));
+    }
+
+    @Test
+    public void computeKeyboardHeightCssPx_handlesApi30ImeInsetsAndLegacyOemFallback() {
+        // API 30+ con inset IME explícito (teclado 900px, barra nav 144px, densidad 3.0 -> 252dp)
+        assertEquals(
+            252,
+            NativeHardwareUtils.computeKeyboardHeightCssPx(2340, 1440, 144, 900, true, true, 3.0f)
+        );
+
+        // API 30+ teclado cerrado (solo barra nav visible)
+        assertEquals(
+            0,
+            NativeHardwareUtils.computeKeyboardHeightCssPx(2340, 2196, 144, 0, true, false, 3.0f)
+        );
+
+        // API <= 29 / EMUI sin inset IME explícito: fallback por visibleDisplayFrame (teclado 780px netos @ 3x -> 260dp)
+        assertEquals(
+            260,
+            NativeHardwareUtils.computeKeyboardHeightCssPx(2340, 1416, 144, 0, false, false, 3.0f)
+        );
+
+        // Barra de navegación sola (144px = 48dp < 100dp) jamás debe disparar falso positivo de teclado
+        assertEquals(
+            0,
+            NativeHardwareUtils.computeKeyboardHeightCssPx(2340, 2196, 0, 0, false, false, 3.0f)
+        );
     }
 }
