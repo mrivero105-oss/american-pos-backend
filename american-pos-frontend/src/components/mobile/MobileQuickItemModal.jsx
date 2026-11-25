@@ -1,4 +1,5 @@
 import { Plus, X } from 'lucide-react';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 export default function MobileQuickItemModal({
   isOpen,
@@ -15,16 +16,30 @@ export default function MobileQuickItemModal({
   exchangeRate,
   handleAddManualItem
 }) {
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isOpen });
+
   if (!isOpen) return null;
   return (
-        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-3 animate-fadeIn">
-          <div className={`w-full max-w-sm sm:max-w-md ${T.modalCard} rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 bg-black/85 z-50 flex items-end sm:items-center justify-center p-2 sm:p-3 animate-fadeIn overflow-y-auto"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-sm sm:max-w-md ${T.modalCard} rounded-2xl sm:rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto my-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             <div className={`flex items-center justify-between border-b ${T.border} pb-2.5`}>
               <div className="flex items-center gap-2">
                 <Plus size={18} className="text-emerald-500" />
                 <h3 className={`font-black text-sm ${T.textPrimary}`}>Agregar Ítem Rápido</h3>
               </div>
               <button 
+                type="button"
                 onClick={() => onClose()}
                 className={`${T.textMuted} hover:opacity-100 p-2 rounded-lg cursor-pointer`}
               >
@@ -32,15 +47,21 @@ export default function MobileQuickItemModal({
               </button>
             </div>
 
-            <form onSubmit={handleAddManualItem} className="space-y-3">
+            <form
+              onSubmit={handleAddManualItem}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               <div>
                 <label className={`text-[11px] font-bold ${T.textSecondary} block mb-1`}>Descripción o Concepto</label>
                 <input 
                   type="text" 
+                  enterKeyHint="next"
                   value={manualItemName}
                   onChange={(e) => setManualItemName(e.target.value)}
                   placeholder="Ej: Bolsa plástica, Recarga, Varios..."
-                  className={`w-full ${T.inputBg} border rounded-xl px-3 py-2 text-xs font-bold outline-none`}
+                  className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2 text-base sm:text-sm font-bold outline-none focus:border-emerald-500`}
                   autoFocus
                 />
               </div>
@@ -54,6 +75,8 @@ export default function MobileQuickItemModal({
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-emerald-500">$</span>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.01" 
                       value={manualItemPrice}
                       onChange={(e) => {
@@ -63,7 +86,7 @@ export default function MobileQuickItemModal({
                         setManualItemPriceBS(!isNaN(num) && num > 0 ? (num * exchangeRate).toFixed(2) : '');
                       }}
                       placeholder="0.00"
-                      className={`w-full ${T.inputBg} border rounded-xl pl-6 pr-3 py-2 text-xs font-black outline-none focus:border-emerald-500`}
+                      className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl pl-7 pr-3 py-2 text-base sm:text-sm font-black outline-none focus:border-emerald-500`}
                     />
                   </div>
                 </div>
@@ -76,6 +99,8 @@ export default function MobileQuickItemModal({
                     <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-amber-500">Bs</span>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.1" 
                       value={manualItemPriceBS}
                       onChange={(e) => {
@@ -85,7 +110,7 @@ export default function MobileQuickItemModal({
                         setManualItemPrice(!isNaN(num) && num > 0 && exchangeRate > 0 ? (num / exchangeRate).toFixed(2) : '');
                       }}
                       placeholder="0.00"
-                      className={`w-full ${T.inputBg} border rounded-xl pl-7 pr-3 py-2 text-xs font-black outline-none focus:border-amber-500`}
+                      className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl pl-8 pr-3 py-2 text-base sm:text-sm font-black outline-none focus:border-amber-500`}
                     />
                   </div>
                 </div>
@@ -100,18 +125,20 @@ export default function MobileQuickItemModal({
                       const cur = parseFloat(manualItemQty) || 1;
                       setManualItemQty(String(Math.max(1, cur - 1)));
                     }}
-                    className={`w-10 h-10 rounded-xl border ${T.btnGhost} font-black text-sm flex items-center justify-center shrink-0 cursor-pointer active:scale-95`}
+                    className={`w-11 h-11 rounded-xl border ${T.btnGhost} font-black text-sm flex items-center justify-center shrink-0 cursor-pointer active:scale-95`}
                   >
                     -
                   </button>
                   <input 
                     type="number" 
+                    inputMode="numeric"
+                    enterKeyHint="done"
                     step="1" 
                     min="1"
                     value={manualItemQty}
                     onChange={(e) => setManualItemQty(e.target.value)}
                     placeholder="1"
-                    className={`flex-1 min-w-0 w-full h-10 ${T.inputBg} border rounded-xl px-2 text-xs font-black text-center outline-none`}
+                    className={`flex-1 min-w-0 w-full h-11 ${T.inputBg} border rounded-xl px-2 text-base sm:text-sm font-black text-center outline-none`}
                   />
                   <button
                     type="button"
@@ -119,7 +146,7 @@ export default function MobileQuickItemModal({
                       const cur = parseFloat(manualItemQty) || 1;
                       setManualItemQty(String(cur + 1));
                     }}
-                    className={`w-10 h-10 rounded-xl border ${T.btnGhost} font-black text-sm flex items-center justify-center shrink-0 cursor-pointer active:scale-95`}
+                    className={`w-11 h-11 rounded-xl border ${T.btnGhost} font-black text-sm flex items-center justify-center shrink-0 cursor-pointer active:scale-95`}
                   >
                     +
                   </button>

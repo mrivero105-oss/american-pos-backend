@@ -5,6 +5,7 @@ import { playSuccessSound } from '../../utils/sounds';
 import CachedImage from '../CachedImage';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { getRegionConfig } from '../../utils/regionConfig';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 const stripAccents = (str = '') => String(str).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
@@ -27,6 +28,11 @@ export default function MobilePriceCheckerModal({
   products
 }) {
   const [checkQty, setCheckQty] = useState(1);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture
+  } = useMobileKeyboardViewport({ enabled: isOpen });
 
   // Al seleccionar o cambiar un producto, restablecemos la cantidad de consulta a 1
   useEffect(() => {
@@ -51,12 +57,17 @@ export default function MobilePriceCheckerModal({
   return (
     <AnimatePresence>
       {isOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/90 animate-fadeIn">
+          <div
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 bg-black/90 animate-fadeIn"
+            style={modalOverlayStyle}
+          >
             <motion.div
               initial={{ scale: 0.95, opacity: 0, y: 15 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 15 }}
-              className={`w-full max-w-md ${T.modalCard} rounded-xl p-4 sm:p-5 shadow-2xl border border-amber-500/40 flex flex-col space-y-3.5 max-h-[94dvh] overflow-y-auto`}
+              className={`w-full max-w-md ${T.modalCard} rounded-xl p-4 sm:p-5 shadow-2xl border border-amber-500/40 flex flex-col space-y-3.5 max-h-[94dvh] overflow-y-auto my-auto`}
+              style={modalCardMaxHeightStyle}
+              onFocusCapture={handleFieldFocusCapture}
             >
               {/* Header */}
               <div className="flex items-center justify-between border-b pb-2.5">
@@ -91,11 +102,19 @@ export default function MobilePriceCheckerModal({
                   <Search size={14} className={`absolute left-3 top-1/2 -translate-y-1/2 ${T.textMuted}`} />
                   <input
                     type="text"
+                    enterKeyHint="search"
                     value={priceCheckerSearch}
                     onChange={(e) => setPriceCheckerSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && searchResults.length > 0) {
+                        e.preventDefault();
+                        playSuccessSound();
+                        setPriceCheckerProduct(searchResults[0]);
+                      }
+                    }}
                     placeholder="Escribe o dicta nombre o código..."
                     autoFocus
-                    className={`w-full ${T.inputBg} border rounded-xl pl-9 pr-14 py-2.5 text-xs font-bold outline-none focus:border-amber-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl pl-9 pr-14 py-2 text-base sm:text-sm font-bold outline-none focus:border-amber-500`}
                   />
                   <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
                     {priceCheckerSearch && (

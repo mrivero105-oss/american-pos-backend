@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import { hapticTap, hapticSuccess } from '../utils/haptics';
 import api from '../services/api';
+import { useMobileKeyboardViewport } from '../hooks/useMobileKeyboardViewport';
 import {
     MultiFormatReader,
     BarcodeFormat,
@@ -42,6 +43,7 @@ export default function MobileBarcodeScannerModal({
     onClose,
     onBarcodeScanned,
     initialMode = 'BARCODE',
+    initialBurstMode = false,
     targetMode = 'CART', // 'CART' | 'ASSIGN' | 'LOOKUP'
     title = '',
     subtitle = '',
@@ -50,6 +52,13 @@ export default function MobileBarcodeScannerModal({
     onOcrDetected = null,
     onSaveNewProduct = null
 }) {
+    const manualInputRef = useRef(null);
+    const {
+        isKeyboardOpen,
+        modalOverlayStyle,
+        modalCardMaxHeightStyle,
+        scrollFieldIntoView
+    } = useMobileKeyboardViewport({ enabled: isOpen });
     const videoRef = useRef(null);
     const animationFrameRef = useRef(null);
     const streamRef = useRef(null);
@@ -83,7 +92,12 @@ export default function MobileBarcodeScannerModal({
     const [maxZoom, setMaxZoom] = useState(1);
     const [lastScanned, setLastScanned] = useState('');
     const [lastMatchedProduct, setLastMatchedProduct] = useState(null);
-    const [burstMode, setBurstMode] = useState(false);
+    const [burstMode, setBurstMode] = useState(Boolean(initialBurstMode));
+    useEffect(() => {
+        if (isOpen && initialBurstMode) {
+            setBurstMode(true);
+        }
+    }, [isOpen, initialBurstMode]);
     const [burstCount, setBurstCount] = useState(0);
     const [scanHistory, setScanHistory] = useState([]);
     const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -876,12 +890,16 @@ export default function MobileBarcodeScannerModal({
 
     const modalContent = (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[200000] flex items-center justify-center bg-black/95 backdrop-blur-xl p-3 sm:p-4 pb-safe">
+            <div
+                className="fixed inset-0 z-[200000] flex items-end sm:items-center justify-center bg-black/95 backdrop-blur-xl p-2 sm:p-4 pb-safe overflow-y-auto"
+                style={modalOverlayStyle}
+            >
                 <motion.div
                     initial={{ opacity: 0, scale: 0.94, y: 15 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.94, y: 15 }}
-                    className="relative w-full max-w-md max-h-[92dvh] overflow-y-auto bg-slate-950 rounded-xl border border-slate-800 shadow-2xl flex flex-col z-[200001] custom-scrollbar"
+                    className="relative w-full max-w-md max-h-[92dvh] overflow-y-auto bg-slate-950 rounded-xl border border-slate-800 shadow-2xl flex flex-col z-[200001] custom-scrollbar my-auto"
+                    style={modalCardMaxHeightStyle}
                 >
                     {/* Header */}
                     <div className="p-4 flex items-center justify-between border-b border-white/10 bg-slate-900/80">
@@ -1033,10 +1051,10 @@ export default function MobileBarcodeScannerModal({
                         </button>
                     </div>
 
-                    {/* Viewfinder Window (Centered Full Video Feed) */}
+                    {/* Viewfinder Window (Centered Full Video Feed, responsive a dvh y teclado) */}
                     <div 
                         onClick={triggerAutoFocus}
-                        className="relative w-full aspect-square max-h-[55vh] bg-black overflow-hidden flex items-center justify-center cursor-pointer"
+                        className={`relative w-full aspect-square ${isKeyboardOpen ? 'max-h-[24dvh]' : 'max-h-[46dvh]'} bg-black overflow-hidden flex items-center justify-center cursor-pointer transition-all duration-150`}
                     >
                         {errorMsg ? (
                             <div className="p-6 text-center text-slate-300 space-y-4 max-w-sm z-30">
@@ -1354,11 +1372,17 @@ export default function MobileBarcodeScannerModal({
                         className="px-3.5 py-2.5 bg-slate-900/90 border-t border-white/10 flex items-center gap-2"
                     >
                         <input 
+                            ref={manualInputRef}
                             type="text"
+                            enterKeyHint="done"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
                             value={manualCodeInput}
                             onChange={(e) => setManualCodeInput(e.target.value)}
+                            onFocus={() => scrollFieldIntoView(manualInputRef.current, 120)}
                             placeholder="O escribe el código aquí..."
-                            className="flex-1 px-3 py-2 bg-slate-950 border border-white/15 rounded-xl text-sm sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-primary-500 font-mono"
+                            className="flex-1 min-h-[44px] px-3 py-2 bg-slate-950 border border-white/15 rounded-xl text-base sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-primary-500 font-mono"
                         />
                         <button
                             type="submit"

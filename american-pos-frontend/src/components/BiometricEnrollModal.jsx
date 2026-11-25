@@ -94,13 +94,13 @@ export default function BiometricEnrollModal({ isOpen, onClose, onEnrolledChange
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
                 <motion.div
                     initial={{ opacity: 0, scale: 0.95, y: 10 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: 10 }}
                     transition={{ duration: 0.18 }}
-                    className="w-full max-w-md bg-white dark:bg-[#0f1216] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden"
+                    className="w-full max-w-md max-h-[92dvh] overflow-y-auto my-auto bg-white dark:bg-[#0f1216] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl"
                 >
                     {/* Header */}
                     <div className="px-6 py-4 bg-slate-50 dark:bg-[#14181f] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">

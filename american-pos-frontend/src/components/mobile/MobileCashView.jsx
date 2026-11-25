@@ -15,7 +15,8 @@ import {
   Printer, 
   Coins, 
   Check, 
-  X
+  X,
+  Clock
 } from 'lucide-react';
 import api from '../../services/api';
 import localDb from '../../db/localDb';
@@ -23,6 +24,8 @@ import { db as primaryDb } from '../../services/db';
 import mobilePrinterService from '../../services/mobilePrinterService';
 import { encodeEscPosCp858, ESC_INIT_CP858 } from '../../utils/escposFormatter';
 import SupervisorAuthModal from './SupervisorAuthModal';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
 
 // Helper para normalizar el nombre del método de pago proveniente de la base de datos
 const normalizePaymentMethod = (rawMethod) => {
@@ -88,16 +91,26 @@ export default function MobileCashView({
   T,
   isLight,
   onBackToPOS,
+  onOpenSyncCenter = null,
   showToast
 }) {
   const [currentShift, setCurrentShift] = useState(null);
   const [isLoadingShift, setIsLoadingShift] = useState(true);
+  const { counts: offlineCounts } = useOfflineQueueCounts();
 
   // Modales
   const [isOpenShiftModalOpen, setIsOpenShiftModalOpen] = useState(false);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const [isCloseShiftModalOpen, setIsCloseShiftModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({
+    enabled: isOpenShiftModalOpen || isMovementModalOpen || isCloseShiftModalOpen
+  });
   const [reportType, setReportType] = useState('X'); // 'X' o 'Z'
   const [lastZReportData, setLastZReportData] = useState(null);
 
@@ -755,6 +768,17 @@ export default function MobileCashView({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {offlineCounts.cash > 0 && (
+            <button
+              type="button"
+              onClick={() => onOpenSyncCenter?.()}
+              className="px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-500 text-[10px] font-black flex items-center gap-1 cursor-pointer active:scale-95"
+              title="Registros de caja/ventas pendientes por sincronizar"
+            >
+              <Clock size={11} />
+              <span>{offlineCounts.cash} pend.</span>
+            </button>
+          )}
           <button
             onClick={() => fetchCurrentShift()}
             className={`p-2 rounded-xl ${T.btnGhost} text-slate-400 hover:text-white cursor-pointer active:scale-95`}
@@ -970,8 +994,14 @@ export default function MobileCashView({
 
       {/* MODAL: APERTURA DE TURNO */}
       {isOpenShiftModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
                 <Unlock size={18} className="text-emerald-500" />
@@ -982,7 +1012,12 @@ export default function MobileCashView({
               </button>
             </div>
 
-            <form onSubmit={handleOpenShift} className="space-y-3">
+            <form
+              onSubmit={handleOpenShift}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               <p className={`text-xs ${T.textSecondary}`}>
                 Indica el fondo inicial de cambio recibido en caja al comenzar el turno.
               </p>
@@ -994,11 +1029,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.01"
                     value={openFloatUSD}
                     onChange={(e) => setOpenFloatUSD(e.target.value)}
                     placeholder="0.00"
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
                   />
                 </div>
                 <div>
@@ -1007,11 +1044,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.1"
                     value={openFloatBS}
                     onChange={(e) => setOpenFloatBS(e.target.value)}
                     placeholder="0.00"
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-amber-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-amber-500`}
                   />
                 </div>
               </div>
@@ -1022,10 +1061,11 @@ export default function MobileCashView({
                 </label>
                 <input
                   type="text"
+                  enterKeyHint="done"
                   value={openNotes}
                   onChange={(e) => setOpenNotes(e.target.value)}
                   placeholder="Ej: Turno mañana, billetes de $1 y $5 para cambio"
-                  className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                  className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                 />
               </div>
 
@@ -1044,8 +1084,14 @@ export default function MobileCashView({
 
       {/* MODAL: MOVIMIENTO DE CAJA CHICA (ENTRADA / SALIDA) */}
       {isMovementModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
                 <Coins size={18} className="text-amber-500" />
@@ -1056,7 +1102,12 @@ export default function MobileCashView({
               </button>
             </div>
 
-            <form onSubmit={handleRecordMovement} className="space-y-3">
+            <form
+              onSubmit={handleRecordMovement}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -1090,7 +1141,7 @@ export default function MobileCashView({
                   <select
                     value={movementCurrency}
                     onChange={(e) => setMovementCurrency(e.target.value)}
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                   >
                     <option value="USD">Dólares ($ USD)</option>
                     <option value="VES">Bolívares (Bs)</option>
@@ -1101,12 +1152,14 @@ export default function MobileCashView({
                   <label className={`text-[10px] font-bold ${T.textSecondary} block mb-1`}>Monto *</label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.01"
                     required
                     value={movementAmount}
                     onChange={(e) => setMovementAmount(e.target.value)}
                     placeholder="0.00"
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-amber-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-amber-500`}
                   />
                 </div>
               </div>
@@ -1115,11 +1168,12 @@ export default function MobileCashView({
                 <label className={`text-[10px] font-bold ${T.textSecondary} block mb-1`}>Motivo / Concepto *</label>
                 <input
                   type="text"
+                  enterKeyHint="done"
                   required
                   value={movementReason}
                   onChange={(e) => setMovementReason(e.target.value)}
                   placeholder="Ej: Pago de hielo, compras menores, cambio"
-                  className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                  className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                 />
               </div>
 
@@ -1138,8 +1192,14 @@ export default function MobileCashView({
 
       {/* MODAL: CIERRE DE TURNO (CORTE Z) */}
       {isCloseShiftModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border border-rose-500/30 space-y-4 max-h-[92dvh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border border-rose-500/30 space-y-4 max-h-[92dvh] overflow-y-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
                 <Lock size={18} className="text-rose-500" />
@@ -1150,7 +1210,12 @@ export default function MobileCashView({
               </button>
             </div>
 
-            <form onSubmit={handleCloseShift} className="space-y-3">
+            <form
+              onSubmit={handleCloseShift}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 space-y-1">
                 <p className="text-[11px] font-black uppercase text-rose-600 dark:text-rose-400">
                   Arqueo y Cierre Definitivo
@@ -1168,11 +1233,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.01"
                     required
                     value={countedUSD}
                     onChange={(e) => setCountedUSD(e.target.value)}
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
                   />
                   {(user?.role === 'admin' || user?.role === 'superadmin') ? (
                     <p className={`text-[9px] ${T.textMuted} mt-1`}>
@@ -1191,11 +1258,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.1"
                     required
                     value={countedBS}
                     onChange={(e) => setCountedBS(e.target.value)}
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-amber-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-amber-500`}
                   />
                   {(user?.role === 'admin' || user?.role === 'superadmin') ? (
                     <p className={`text-[9px] ${T.textMuted} mt-1`}>
@@ -1230,10 +1299,11 @@ export default function MobileCashView({
                 </label>
                 <input
                   type="text"
+                  enterKeyHint="done"
                   value={closeNotes}
                   onChange={(e) => setCloseNotes(e.target.value)}
                   placeholder="Ej: Todo cuadrado sin faltantes"
-                  className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                  className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                 />
               </div>
 

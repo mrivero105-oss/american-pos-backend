@@ -103,11 +103,40 @@ export function cleanAscii(str) {
 }
 
 /**
+ * Limpia texto preservando caracteres hispanos soportados por CP858 (ñ, Ñ, tildes, ¿¡, €),
+ * eliminando NBSP, emojis y caracteres fuera de CP858 para que `encodeEscPosCp858` los imprima limpios.
+ */
+export function cleanCp858Text(str) {
+    if (!str) return '';
+    let out = '';
+    const normalized = String(str)
+        .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/[—–]/g, '-')
+        .replace(/•/g, '*');
+    for (let i = 0; i < normalized.length; i++) {
+        const ch = normalized[i];
+        const code = normalized.charCodeAt(i);
+        if (code <= 0x7F || CP858_CHAR_MAP[ch] !== undefined) {
+            out += ch;
+        } else {
+            const stripped = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            for (let j = 0; j < stripped.length; j++) {
+                if (stripped.charCodeAt(j) <= 0x7F) out += stripped[j];
+            }
+        }
+    }
+    return out;
+}
+
+/**
  * Formats a single line with left-aligned and right-aligned text.
  */
-export function formatLine(left, right, width) {
-    const cleanLeft = cleanAscii(left);
-    const cleanRight = cleanAscii(right);
+export function formatLine(left, right, width, options = {}) {
+    const cleaner = options?.preserveCp858 ? cleanCp858Text : cleanAscii;
+    const cleanLeft = cleaner(left);
+    const cleanRight = cleaner(right);
     const spaceCount = width - cleanLeft.length - cleanRight.length;
     
     if (spaceCount > 0) {
@@ -127,8 +156,9 @@ export function formatLine(left, right, width) {
 /**
  * Centers text on a line of a specific column width.
  */
-export function formatCenter(text, width) {
-    const cleanText = cleanAscii(text);
+export function formatCenter(text, width, options = {}) {
+    const cleaner = options?.preserveCp858 ? cleanCp858Text : cleanAscii;
+    const cleanText = cleaner(text);
     if (cleanText.length >= width) {
         return cleanText.substring(0, width);
     }

@@ -7,9 +7,43 @@ import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
 import { OTA_PUBLIC_KEY_PEM } from '../config/otaPublicKey';
 import { computeSha256Hex, verifyRsaSha256Bytes } from '../utils/clientLicenseValidator';
 
+const NATIVE_APK_VERSION_CODE_KEY = 'isaac_pos_native_apk_version_code';
+const OTA_READY_EVENT = 'isaac-ota-update-ready';
+
 let isChecking = false;
 let updateReady = false;
 let newVersionDownloaded = null;
+const updateReadyListeners = new Set();
+
+function getEmbeddedNativeApkVersionCode() {
+    try {
+        if (typeof globalThis !== 'undefined' && globalThis.__ISAAC_APK_VERSION_CODE__) {
+            return Number(globalThis.__ISAAC_APK_VERSION_CODE__) || 0;
+        }
+        const envCode = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_APK_VERSION_CODE : 0;
+        return Number(envCode) || 0;
+    } catch {
+        return 0;
+    }
+}
+
+function notifyUpdateReadyListeners(version) {
+    const payload = { ready: Boolean(updateReady), version: version || newVersionDownloaded };
+    for (const listener of updateReadyListeners) {
+        try {
+            listener(payload);
+        } catch (err) {
+            console.warn('[OTA_UPDATE] Error en listener de UI OTA:', err?.message);
+        }
+    }
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        try {
+            window.dispatchEvent(new CustomEvent(OTA_READY_EVENT, { detail: payload }));
+        } catch {
+            // Entornos sin CustomEvent
+        }
+    }
+}
 
 /**
  * Compara dos versiones numéricas/semver separadas por punto (ej. "24.4.3.1795365711").
@@ -38,6 +72,39 @@ export function compareOtaVersions(remoteVer, localVer) {
         if (av < bv) return -1;
     }
     return 0;
+}
+
+function hasValidManifestSignatureShape(manifest) {
+    if (!manifest || !manifest.version || !manifest.bundleUrl) return false;
+    const hasSig = Boolean(String(manifest.otaSignature || '').trim());
+    const hasSha = /^[a-f0-9]{64}$/i.test(String(manifest.checksum || '').trim());
+    return hasSig && hasSha;
+}
+
+/**
+ * Selecciona el mejor manifiesto OTA entre múltiples orígenes (LAN PC vs Supabase Cloud).
+ * Reglas:
+ * 1. Prioriza candidatos con firma RSA-SHA256 + checksum SHA-256 válidos sobre los no firmados.
+ * 2. Entre los candidatos válidos, elige siempre la versión más alta (compareOtaVersions).
+ * 3. Ante igualdad de versión, prefiere el servidor LAN PC (descarga instantánea sin internet).
+ * 4. Si ninguno tiene firma, retorna el primero disponible para que el flujo principal falle cerrado con error claro.
+ */
+export function selectBestOtaCandidate(candidates = []) {
+    const validStructure = (candidates || []).filter(
+        (c) => c && c.manifest && c.manifest.version && c.manifest.bundleUrl
+    );
+    if (validStructure.length === 0) return null;
+
+    const signed = validStructure.filter((c) => hasValidManifestSignatureShape(c.manifest));
+    const pool = signed.length > 0 ? signed : validStructure;
+
+    const sourcePriority = (src) => (src === 'lan' ? 2 : 1);
+
+    return [...pool].sort((a, b) => {
+        const cmp = compareOtaVersions(b.manifest.version, a.manifest.version);
+        if (cmp !== 0) return cmp;
+        return sourcePriority(b.source) - sourcePriority(a.source);
+    })[0];
 }
 
 /**
@@ -96,6 +163,50 @@ export async function verifyOtaPackageIntegrity(bundleBytes, remoteManifest, opt
 }
 
 export const otaUpdateService = {
+    /**
+     * Detecta si el usuario instaló un APK nativo más reciente que un bundle OTA antiguo
+     * cacheado por CapacitorUpdater y purga el bundle obsoleto para evitar que la UI vieja
+     * oculte las nuevas capacidades nativas (ej. biometría v2 o mejoras de APK).
+     */
+    async reconcileBuiltinApkVersion(options = {}) {
+        if (!Capacitor.isNativePlatform()) {
+            return { purged: false };
+        }
+        try {
+            const embeddedCode = options.embeddedVersionCode ?? getEmbeddedNativeApkVersionCode();
+            const storedCode = Number(localStorage.getItem(NATIVE_APK_VERSION_CODE_KEY) || '0') || 0;
+            const current = await CapacitorUpdater.current().catch(() => null);
+            const activeBundleId = current?.bundle?.id || 'builtin';
+            const activeBundleVer = current?.bundle?.version || '';
+            const nativeVer = current?.native || '';
+
+            const apkUpgradedByCode = embeddedCode > 0 && storedCode > 0 && embeddedCode > storedCode;
+            const apkNewerThanOtaBundle =
+                activeBundleId !== 'builtin' &&
+                Boolean(nativeVer) &&
+                Boolean(activeBundleVer) &&
+                compareOtaVersions(nativeVer, activeBundleVer) > 0;
+
+            if (embeddedCode > 0) {
+                localStorage.setItem(NATIVE_APK_VERSION_CODE_KEY, String(embeddedCode));
+            }
+
+            if ((apkUpgradedByCode && activeBundleId !== 'builtin') || apkNewerThanOtaBundle) {
+                console.log('[OTA_UPDATE] 🧹 APK más reciente detectado; purgando bundle OTA antiguo:', activeBundleId, activeBundleVer);
+                localStorage.removeItem('isaac_pos_ota_version');
+                if (typeof CapacitorUpdater.reset === 'function') {
+                    await CapacitorUpdater.reset();
+                }
+                return { purged: true, previousBundleId: activeBundleId, previousVersion: activeBundleVer };
+            }
+
+            return { purged: false };
+        } catch (err) {
+            console.warn('[OTA_UPDATE] Aviso verificando reconciliación de APK nativo:', err?.message || err);
+            return { purged: false, error: err };
+        }
+    },
+
     async init() {
         if (!Capacitor.isNativePlatform()) {
             return;
@@ -107,6 +218,8 @@ export const otaUpdateService = {
         } catch (e) {
             console.warn('[OTA_UPDATE] Advertencia en notifyAppReady:', e?.message || e);
         }
+
+        await this.reconcileBuiltinApkVersion();
 
         setTimeout(() => {
             this.checkForUpdates({ silent: true }).catch((err) => {
@@ -121,14 +234,15 @@ export const otaUpdateService = {
         }
         try {
             const current = await CapacitorUpdater.current();
-            return current?.bundle?.version || localStorage.getItem('isaac_pos_ota_version') || '1.0.0';
+            return current?.bundle?.version || current?.native || localStorage.getItem('isaac_pos_ota_version') || '1.0.0';
         } catch {
             return localStorage.getItem('isaac_pos_ota_version') || '1.0.0';
         }
     },
 
     /**
-     * Consulta el servidor Cloud / LAN por nuevas versiones empaquetadas.
+     * Consulta la PC principal en LAN primero y Supabase Cloud en paralelo,
+     * eligiendo siempre la versión firmada RSA-SHA256 más alta (con preferencia LAN en empate).
      * Política estricta (Fallo Cerrado):
      * - Anti-downgrade: exige remote.version > currentVer.
      * - Firma RSA-SHA256 + SHA-256 obligatorios contra OTA_PUBLIC_KEY_PEM antes de instalar.
@@ -152,37 +266,51 @@ export const otaUpdateService = {
         let baseUrl = '';
         try {
             baseUrl = getBaseUrl() || '';
+            const cloudManifestUrl = getSupabaseStoragePublicUrl('app-updates', 'version.json');
 
-            let res = null;
-            try {
-                const cloudManifestUrl = getSupabaseStoragePublicUrl('app-updates', 'version.json');
-                if (!cloudManifestUrl) throw new Error('Supabase URL no configurada');
-                res = await axios.get(`${cloudManifestUrl}?_t=${Date.now()}`, { timeout: 5000 });
-                console.log('[OTA_UPDATE] ☁️ Manifiesto de versión obtenido desde Supabase Cloud Storage');
-            } catch (cloudErr) {
-                console.warn('[OTA_UPDATE] Supabase Storage no disponible, intentando servidor local PC:', cloudErr.message);
-                if (baseUrl) {
+            const fetchLanManifest = async () => {
+                if (!baseUrl) return null;
+                try {
+                    const r = await axios.get(`${baseUrl}/version.json?_t=${Date.now()}`, { timeout: 4000 });
+                    return r?.data ? { source: 'lan', baseUrl, manifest: r.data } : null;
+                } catch {
                     try {
-                        res = await axios.get(`${baseUrl}/version.json?_t=${Date.now()}`, { timeout: 4000 });
+                        const rFallback = await axios.get(`${baseUrl}/api/app-update-info`, { timeout: 4000 });
+                        return rFallback?.data ? { source: 'lan', baseUrl, manifest: rFallback.data } : null;
                     } catch {
-                        res = await axios.get(`${baseUrl}/api/app-update-info`, { timeout: 4000 });
+                        return null;
                     }
                 }
-            }
+            };
 
-            if (!res || !res.data) {
+            const fetchCloudManifest = async () => {
+                if (!cloudManifestUrl) return null;
+                try {
+                    const r = await axios.get(`${cloudManifestUrl}?_t=${Date.now()}`, { timeout: 5000 });
+                    return r?.data ? { source: 'cloud', baseUrl: '', manifest: r.data } : null;
+                } catch (cloudErr) {
+                    console.warn('[OTA_UPDATE] Supabase Storage no disponible:', cloudErr?.message);
+                    return null;
+                }
+            };
+
+            const settled = await Promise.all([fetchLanManifest(), fetchCloudManifest()]);
+            const candidates = settled.filter(Boolean);
+
+            if (candidates.length === 0) {
                 if (toastId) toast.dismiss(toastId);
                 return { updateAvailable: false };
             }
 
-            const remote = res.data;
+            const selected = selectBestOtaCandidate(candidates);
+            const remote = selected?.manifest || null;
             if (!remote || !remote.version || !remote.bundleUrl) {
                 if (toastId) toast.error('Respuesta inválida del servidor.');
                 return { updateAvailable: false };
             }
 
             const currentVer = await this.getCurrentVersion();
-            console.log(`[OTA_UPDATE] Versión actual: ${currentVer} | Remota en servidor: ${remote.version}`);
+            console.log(`[OTA_UPDATE] Origen elegido: ${selected.source.toUpperCase()} | Actual: ${currentVer} | Remota: ${remote.version}`);
 
             // Protección anti-downgrade monotónica
             const cmp = compareOtaVersions(remote.version, currentVer);
@@ -191,7 +319,7 @@ export const otaUpdateService = {
                     console.warn(`[OTA_UPDATE] 🛡️ Downgrade bloqueado: remota ${remote.version} < actual ${currentVer}`);
                 }
                 if (toastId) toast.success('La aplicación ya está en la última versión.', { id: toastId });
-                return { updateAvailable: false, currentVersion: currentVer, downgradeBlocked: cmp < 0 };
+                return { updateAvailable: false, currentVersion: currentVer, downgradeBlocked: cmp < 0, source: selected.source };
             }
 
             // Fail-closed antes de descargar: exigir firma RSA-SHA256 y checksum SHA-256 en manifiesto
@@ -202,9 +330,10 @@ export const otaUpdateService = {
                 throw new Error('Manifiesto OTA sin checksum SHA-256 válido. Actualización rechazada.');
             }
 
+            const effectiveBase = selected.baseUrl || baseUrl;
             const downloadUrl = remote.bundleUrl.startsWith('http')
                 ? remote.bundleUrl
-                : `${baseUrl}${remote.bundleUrl}`;
+                : `${effectiveBase}${remote.bundleUrl}`;
 
             if (toastId) {
                 toast.loading('Verificando firma digital RSA-SHA256...', { id: toastId });
@@ -248,6 +377,7 @@ export const otaUpdateService = {
             localStorage.setItem('isaac_pos_ota_version', remote.version);
             updateReady = true;
             newVersionDownloaded = remote.version;
+            notifyUpdateReadyListeners(remote.version);
 
             if (toastId) toast.dismiss(toastId);
 
@@ -257,8 +387,8 @@ export const otaUpdateService = {
                     await CapacitorUpdater.reload();
                 }, 1500);
             } else {
-                toast.success('✨ ¡Actualización OTA verificada! Se aplicará al reiniciar la aplicación.', {
-                    duration: 8000,
+                toast.success('✨ ¡Actualización lista! Toca "Reiniciar y aplicar" en la barra superior.', {
+                    duration: 7000,
                     icon: '🚀'
                 });
             }
@@ -267,7 +397,8 @@ export const otaUpdateService = {
                 updateAvailable: true,
                 newVersion: remote.version,
                 bundleId: bundle.id,
-                verificationMode: verification.mode
+                verificationMode: verification.mode,
+                source: selected.source
             };
         } catch (err) {
             console.error('[OTA_UPDATE] Error durante la actualización OTA:', err);
@@ -292,6 +423,21 @@ export const otaUpdateService = {
 
     getNewVersion() {
         return newVersionDownloaded;
+    },
+
+    subscribeUpdateReady(callback) {
+        if (typeof callback !== 'function') return () => {};
+        updateReadyListeners.add(callback);
+        if (updateReady) {
+            try {
+                callback({ ready: true, version: newVersionDownloaded });
+            } catch {
+                // Ignorar error de callback inicial
+            }
+        }
+        return () => {
+            updateReadyListeners.delete(callback);
+        };
     },
 
     async applyAndReload() {

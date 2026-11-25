@@ -18,12 +18,15 @@ import {
   Mail, 
   MapPin, 
   FileText, 
-  Archive
+  Archive,
+  Clock
 } from 'lucide-react';
 import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
 import localDb from '../../db/localDb';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
 
 const stripAccents = (str = '') => String(str).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
@@ -31,15 +34,23 @@ export default function MobileCustomersView({
   onSelectCustomerForSale,
   T,
   onBackToPOS,
+  onOpenSyncCenter = null,
   showToast
 }) {
   const [customers, setCustomers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all'); // 'all' | 'debt' | 'credit' | 'vip' | 'inactive'
   const [isLoading, setIsLoading] = useState(false);
+  const { counts: offlineCounts } = useOfflineQueueCounts();
 
   // Modal para Crear / Editar Cliente
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isFormModalOpen });
   const [editingCustomer, setEditingCustomer] = useState(null); // null = Crear, obj = Editar
   const [formData, setFormData] = useState({
     name: '',
@@ -414,13 +425,26 @@ export default function MobileCustomersView({
           </div>
         </div>
 
-        <button
-          onClick={handleOpenCreate}
-          className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
-        >
-          <UserPlus size={14} />
-          <span>+ Nuevo</span>
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {offlineCounts.customers > 0 && (
+            <button
+              type="button"
+              onClick={() => onOpenSyncCenter?.()}
+              className="px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-500 text-[10px] font-black flex items-center gap-1 cursor-pointer active:scale-95"
+              title="Clientes pendientes por sincronizar"
+            >
+              <Clock size={11} />
+              <span>{offlineCounts.customers} pend.</span>
+            </button>
+          )}
+          <button
+            onClick={handleOpenCreate}
+            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+          >
+            <UserPlus size={14} />
+            <span>+ Nuevo</span>
+          </button>
+        </div>
       </div>
 
       {/* 2. BUSCADOR */}
@@ -429,10 +453,11 @@ export default function MobileCustomersView({
           <Search size={14} className={T.textMuted} />
           <input 
             type="text"
+            enterKeyHint="search"
             placeholder="Buscar o dictar nombre, cédula, teléfono..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className={`bg-transparent flex-1 text-xs outline-none ${T.textPrimary} font-medium`}
+            className={`bg-transparent flex-1 text-base sm:text-sm outline-none ${T.textPrimary} font-medium`}
           />
           {searchQuery && (
             <button onClick={() => setSearchQuery('')} className={T.textMuted}>
@@ -687,8 +712,14 @@ export default function MobileCustomersView({
 
       {/* 4. MODAL: CREAR / EDITAR CLIENTE (COMPLETO Y RESPONSIVO) */}
       {isFormModalOpen && (
-        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar`}>
+        <div
+          className="fixed inset-0 bg-black/85 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md ${T.modalCard} rounded-2xl sm:rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar my-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             {/* Header del modal */}
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
@@ -707,6 +738,7 @@ export default function MobileCustomersView({
                 </div>
               </div>
               <button 
+                type="button"
                 onClick={() => setIsFormModalOpen(false)} 
                 className={`p-1 rounded-lg ${T.btnGhost} text-slate-400 hover:text-rose-500`}
               >
@@ -715,7 +747,12 @@ export default function MobileCustomersView({
             </div>
 
             {/* Formulario */}
-            <form onSubmit={handleSaveCustomer} className="space-y-3">
+            <form
+              onSubmit={handleSaveCustomer}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               {/* Nombre Completo */}
               <div className="space-y-1">
                 <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
@@ -723,10 +760,11 @@ export default function MobileCustomersView({
                 </label>
                 <input 
                   type="text"
+                  enterKeyHint="next"
                   placeholder="Ej. Juan Pérez"
                   value={formData.name}
                   onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                   required
                 />
               </div>
@@ -739,10 +777,11 @@ export default function MobileCustomersView({
                   </label>
                   <input 
                     type="text"
+                    enterKeyHint="next"
                     placeholder="Ej. V-12345678"
                     value={formData.idDocument}
                     onChange={(e) => setFormData(prev => ({ ...prev, idDocument: e.target.value }))}
-                    className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                   />
                 </div>
 
@@ -752,10 +791,12 @@ export default function MobileCustomersView({
                   </label>
                   <input 
                     type="tel"
+                    inputMode="tel"
+                    enterKeyHint="next"
                     placeholder="Ej. 04241234567"
                     value={formData.phone}
                     onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-                    className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                   />
                 </div>
               </div>
@@ -767,10 +808,12 @@ export default function MobileCustomersView({
                 </label>
                 <input 
                   type="email"
+                  inputMode="email"
+                  enterKeyHint="next"
                   placeholder="cliente@ejemplo.com"
                   value={formData.email}
                   onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-medium outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-medium outline-none`}
                 />
               </div>
 
@@ -781,10 +824,11 @@ export default function MobileCustomersView({
                 </label>
                 <input 
                   type="text"
+                  enterKeyHint="next"
                   placeholder="Ej. Av. Principal, Local 4, Maturín"
                   value={formData.address}
                   onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-medium outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-medium outline-none`}
                 />
               </div>
 
@@ -796,12 +840,14 @@ export default function MobileCustomersView({
                   </label>
                   <input 
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     placeholder="0.00"
                     step="0.01"
                     min="0"
                     value={formData.creditLimit}
                     onChange={(e) => setFormData(prev => ({ ...prev, creditLimit: e.target.value }))}
-                    className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                   />
                 </div>
 
@@ -829,7 +875,7 @@ export default function MobileCustomersView({
                   placeholder="Detalles sobre el cliente, preferencias, etc."
                   value={formData.notes}
                   onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-medium outline-none resize-none`}
+                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-medium outline-none resize-none`}
                 />
               </div>
 

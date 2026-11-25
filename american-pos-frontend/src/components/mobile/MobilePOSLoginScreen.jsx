@@ -11,6 +11,7 @@ import {
     Wifi
 } from 'lucide-react';
 import IsaacWebLogo from '../IsaacWebLogo';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 export default function MobilePOSLoginScreen({
     T,
@@ -37,8 +38,11 @@ export default function MobilePOSLoginScreen({
     const submitBtnRef = useRef(null);
 
     const [showPassword, setShowPassword] = useState(false);
-    const [imeExtraBottomPx, setImeExtraBottomPx] = useState(0);
-    const [isCompactKeyboardMode, setIsCompactKeyboardMode] = useState(false);
+    const {
+        imeExtraBottomPx,
+        isKeyboardOpen: isCompactKeyboardMode,
+        scrollFieldIntoView: scrollFieldIntoComfortView
+    } = useMobileKeyboardViewport({ enabled: true });
 
     // Blindaje anti-captura (FLAG_SECURE) mientras se muestran credenciales de inicio de sesión
     useEffect(() => {
@@ -51,48 +55,6 @@ export default function MobilePOSLoginScreen({
             plugin.setScreenSecure({ secure: false }).catch(() => {});
         };
     }, []);
-
-    // Adaptación dinámica al teclado virtual (VisualViewport API para Android WebView / iOS / Chrome Mobile)
-    useEffect(() => {
-        if (typeof window === 'undefined') return undefined;
-        const vv = window.visualViewport;
-        let baselineHeight = window.innerHeight || 0;
-
-        const handleViewportResize = () => {
-            const innerH = window.innerHeight || 0;
-            if (innerH > baselineHeight) baselineHeight = innerH;
-            const visibleH = vv ? vv.height : innerH;
-            const offsetTop = vv ? vv.offsetTop : 0;
-            // Si el contenedor nativo no redujo innerHeight (ej. Edge-to-Edge), compensar el alto oculto del teclado
-            const occludedBottom = Math.max(0, Math.round(innerH - visibleH - offsetTop));
-            const keyboardLikelyOpen = occludedBottom > 90 || (baselineHeight - visibleH > 120) || visibleH < 520;
-
-            setImeExtraBottomPx(occludedBottom);
-            setIsCompactKeyboardMode(keyboardLikelyOpen);
-        };
-
-        handleViewportResize();
-        window.addEventListener('resize', handleViewportResize);
-        vv?.addEventListener('resize', handleViewportResize);
-        vv?.addEventListener('scroll', handleViewportResize);
-
-        return () => {
-            window.removeEventListener('resize', handleViewportResize);
-            vv?.removeEventListener('resize', handleViewportResize);
-            vv?.removeEventListener('scroll', handleViewportResize);
-        };
-    }, []);
-
-    const scrollFieldIntoComfortView = (targetEl) => {
-        if (!targetEl) return;
-        setTimeout(() => {
-            try {
-                targetEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            } catch {
-                targetEl.scrollIntoView();
-            }
-        }, 120);
-    };
 
     const focusPasswordField = () => {
         const pwdEl = passwordInputRef.current;

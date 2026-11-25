@@ -566,6 +566,7 @@ export default function MobilePOSSimulator() {
   const [previewProductImage, setPreviewProductImage] = useState(null);
   const [isImageSearchModalOpen, setIsImageSearchModalOpen] = useState(false);
   const [isThermalPrinterModalOpen, setIsThermalPrinterModalOpen] = useState(false);
+  const [isExchangeRateModalOpen, setIsExchangeRateModalOpen] = useState(false);
   const [scannerTarget, setScannerTarget] = useState('cart'); // 'cart' | 'product_barcode'
   const [unregisteredBarcodeNotice, setUnregisteredBarcodeNotice] = useState(null); // { barcode }
   const [posMode, setPosMode] = useState('SALE'); // 'SALE' | 'PRICE_CHECKER'
@@ -705,6 +706,7 @@ export default function MobilePOSSimulator() {
     isManualItemModalOpen ||
     isQuickProductModalOpen ||
     isThermalPrinterModalOpen ||
+    isExchangeRateModalOpen ||
     isImageSearchModalOpen ||
     previewProductImage ||
     selectedProductForVariant ||
@@ -732,6 +734,7 @@ export default function MobilePOSSimulator() {
     if (isManualItemModalOpen) { setIsManualItemModalOpen(false); return 'handled'; }
     if (isQuickProductModalOpen) { setIsQuickProductModalOpen(false); return 'handled'; }
     if (isThermalPrinterModalOpen) { setIsThermalPrinterModalOpen(false); return 'handled'; }
+    if (isExchangeRateModalOpen) { setIsExchangeRateModalOpen(false); return 'handled'; }
     if (isImageSearchModalOpen) { setIsImageSearchModalOpen(false); return 'handled'; }
     if (previewProductImage) { setPreviewProductImage(null); return 'handled'; }
     if (selectedProductForVariant) { setSelectedProductForVariant(null); return 'handled'; }
@@ -915,6 +918,14 @@ export default function MobilePOSSimulator() {
     const role = String(user?.role || '').toLowerCase();
     return Boolean(
       hasPermission('canViewCosts') ||
+      ['superadmin', 'owner', 'dueño', 'dueno', 'admin', 'master'].includes(role)
+    );
+  }, [user?.role, hasPermission]);
+
+  const canManageSettingsMobile = useMemo(() => {
+    const role = String(user?.role || '').toLowerCase();
+    return Boolean(
+      hasPermission('canManageSettings') ||
       ['superadmin', 'owner', 'dueño', 'dueno', 'admin', 'master'].includes(role)
     );
   }, [user?.role, hasPermission]);
@@ -3342,6 +3353,7 @@ export default function MobilePOSSimulator() {
                 canAdjustStock={canAdjustStockMobile}
                 canViewCosts={canViewCostsMobile}
                 onBackToPOS={() => setActiveModule('pos')}
+                onOpenSyncCenter={() => setActiveModule('sync')}
                 onProductUpdated={(upd) => {
                   setProducts(prev => prev.map(p => String(p.id) === String(upd.id) ? { ...p, ...upd } : p));
                 }}
@@ -3434,6 +3446,7 @@ export default function MobilePOSSimulator() {
                 isLight={isLight}
                 user={user}
                 onBackToPOS={() => setActiveModule('pos')}
+                onOpenSyncCenter={() => setActiveModule('sync')}
                 showToast={showToast}
               />
             </Suspense>
@@ -3456,6 +3469,7 @@ export default function MobilePOSSimulator() {
                 T={T}
                 isLight={isLight}
                 onBackToPOS={() => setActiveModule('pos')}
+                onOpenSyncCenter={() => setActiveModule('sync')}
                 showToast={showToast}
               />
             </Suspense>
@@ -3476,6 +3490,7 @@ export default function MobilePOSSimulator() {
                 T={T}
                 isLight={isLight}
                 onBackToPOS={() => setActiveModule('pos')}
+                onOpenSyncCenter={() => setActiveModule('sync')}
                 showToast={showToast}
               />
             </Suspense>
@@ -3894,6 +3909,11 @@ export default function MobilePOSSimulator() {
         setActiveModule={setActiveModule}
         setIsBiometricsModalOpen={setIsBiometricsModalOpen}
         isBiometricsModalOpen={isBiometricsModalOpen}
+        canManageSettings={canManageSettingsMobile}
+        isExchangeRateModalOpen={isExchangeRateModalOpen}
+        setIsExchangeRateModalOpen={setIsExchangeRateModalOpen}
+        activeCurrencyMode={activeCurrencyMode}
+        onExchangeRateUpdated={() => loadSettings()}
         setEnrolledBioUser={setEnrolledBioUser}
         isAudioMuted={isAudioMuted}
         setIsAudioMuted={setIsAudioMuted}

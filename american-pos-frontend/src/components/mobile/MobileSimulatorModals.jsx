@@ -2,8 +2,10 @@ import { Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertCircle, AlertTriangle, Check, CheckCircle, Copy, Plus, Printer, RefreshCw, Wifi, X, Zap } from 'lucide-react';
 import MobileSideNav from './MobileSideNav';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 const BiometricEnrollModal = lazy(() => import('../BiometricEnrollModal'));
+const ExchangeRateModal = lazy(() => import('../ExchangeRateModal'));
 const SupervisorAuthModal = lazy(() => import('./SupervisorAuthModal'));
 const MobileCheckoutModal = lazy(() => import('./MobileCheckoutModal'));
 const MobileReceiptModal = lazy(() => import('./MobileReceiptModal'));
@@ -201,6 +203,11 @@ export default function MobileSimulatorModals(props) {
     setActiveModule,
     setIsBiometricsModalOpen,
     isBiometricsModalOpen,
+    canManageSettings = false,
+    isExchangeRateModalOpen = false,
+    setIsExchangeRateModalOpen = () => {},
+    activeCurrencyMode = 'USD',
+    onExchangeRateUpdated = () => {},
     setEnrolledBioUser,
     isAudioMuted,
     setIsAudioMuted,
@@ -229,6 +236,12 @@ export default function MobileSimulatorModals(props) {
     handleSaveNewCustomer,
     isSavingCustomer
   } = props;
+
+  const {
+    modalOverlayStyle: serverModalOverlayStyle,
+    modalCardMaxHeightStyle: serverModalCardStyle,
+    handleFieldFocusCapture: handleServerFocusCapture
+  } = useMobileKeyboardViewport({ enabled: Boolean(showServerModal) });
 
   return (
     <>
@@ -607,6 +620,8 @@ export default function MobileSimulatorModals(props) {
         pendingSalesCount={pendingSalesCount}
         businessInfo={businessInfo}
         exchangeRate={exchangeRate}
+        canManageSettings={canManageSettings}
+        onOpenExchangeRateModal={() => setIsExchangeRateModalOpen(true)}
         user={user}
         drawerSearch={drawerSearch}
         setDrawerSearch={setDrawerSearch}
@@ -728,6 +743,7 @@ export default function MobileSimulatorModals(props) {
             whatsAppModalData={whatsAppModalData}
             onClose={() => setWhatsAppModalData(null)}
             T={T}
+            businessInfo={businessInfo}
             whatsAppPhoneInput={whatsAppPhoneInput}
             setWhatsAppPhoneInput={setWhatsAppPhoneInput}
             exchangeRate={exchangeRate}
@@ -798,10 +814,29 @@ export default function MobileSimulatorModals(props) {
         </Suspense>
       )}
 
+      {isExchangeRateModalOpen && (
+        <Suspense fallback={null}>
+          <ExchangeRateModal
+            isOpen={isExchangeRateModalOpen}
+            onClose={() => setIsExchangeRateModalOpen(false)}
+            currentRate={exchangeRate}
+            currencyMode={activeCurrencyMode}
+            onRateUpdated={onExchangeRateUpdated}
+          />
+        </Suspense>
+      )}
+
       {/* Modal Global de Configuración de IP de Servidor PC (accesible tanto desde Login como desde Sincronización PC) */}
       {showServerModal && (
-        <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 animate-fadeIn">
-          <div className={`w-full max-w-xs ${T.modalCard} rounded-2xl p-5 border ${T.border} shadow-2xl space-y-4 max-h-[90dvh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 z-[100] bg-black/80 flex items-end sm:items-center justify-center p-3 sm:p-4 animate-fadeIn overflow-y-auto"
+          style={serverModalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-xs ${T.modalCard} rounded-2xl p-5 border ${T.border} shadow-2xl space-y-4 max-h-[90dvh] overflow-y-auto my-auto`}
+            style={serverModalCardStyle}
+            onFocusCapture={handleServerFocusCapture}
+          >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Wifi className="text-blue-500" size={18} />
@@ -824,10 +859,20 @@ export default function MobileSimulatorModals(props) {
               <label className={`text-[10px] font-bold uppercase tracking-wider ${T.textMuted} block mb-1`}>IP / Puerto</label>
               <input
                 type="text"
+                enterKeyHint="go"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={mobileServerIp}
                 onChange={(e) => setMobileServerIp(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !isTestingServer && String(mobileServerIp || '').trim()) {
+                    e.preventDefault();
+                    handleTestAndSaveServer(mobileServerIp);
+                  }
+                }}
                 placeholder="192.168.1.30:3005"
-                className={`w-full ${T.inputBg} border rounded-xl px-3 py-2.5 text-xs font-mono font-bold outline-none`}
+                className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2.5 text-base sm:text-sm font-mono font-bold outline-none focus:border-blue-500`}
               />
             </div>
 

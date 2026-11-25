@@ -4,10 +4,11 @@ import { Buffer } from 'node:buffer';
 
 const mockUpdater = vi.hoisted(() => ({
   notifyAppReady: vi.fn().mockResolvedValue(undefined),
-  current: vi.fn().mockResolvedValue({ bundle: { version: '24.4.0.100' } }),
+  current: vi.fn().mockResolvedValue({ bundle: { id: 'builtin', version: '24.4.0.100' }, native: '24.4.0' }),
   download: vi.fn().mockResolvedValue({ id: 'bundle-new-200' }),
   set: vi.fn().mockResolvedValue(undefined),
   reload: vi.fn().mockResolvedValue(undefined),
+  reset: vi.fn().mockResolvedValue(undefined),
   addListener: vi.fn().mockResolvedValue({ remove: vi.fn() })
 }));
 
@@ -49,7 +50,8 @@ vi.mock('../../src/config/supabaseConfig', () => ({
 import {
   otaUpdateService,
   verifyOtaPackageIntegrity,
-  compareOtaVersions
+  compareOtaVersions,
+  selectBestOtaCandidate
 } from '../../src/services/otaUpdateService';
 
 describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Downgrade)', () => {
@@ -208,5 +210,97 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
         { publicKeyPem: publicKey }
       )
     ).rejects.toThrow(/checksum SHA-256 válido/i);
+  });
+
+  it('selectBestOtaCandidate prioriza LAN PC cuando tiene mayor versión o empate y descarta manifiesto Cloud sin firma', () => {
+    const unsignedCloud = {
+      source: 'cloud',
+      baseUrl: '',
+      manifest: {
+        version: '24.4.0.999',
+        bundleUrl: 'https://cloud.example/dist.zip',
+        checksum: validSha256
+      }
+    };
+    const signedLan = {
+      source: 'lan',
+      baseUrl: 'http://192.168.1.2:3005',
+      manifest: {
+        version: '24.4.0.250',
+        bundleUrl: '/dist.zip',
+        checksum: validSha256,
+        otaSignature: validSignature
+      }
+    };
+    const signedCloudOlder = {
+      source: 'cloud',
+      baseUrl: '',
+      manifest: {
+        version: '24.4.0.200',
+        bundleUrl: 'https://cloud.example/dist.zip',
+        checksum: validSha256,
+        otaSignature: validSignature
+      }
+    };
+    const signedCloudSame = {
+      source: 'cloud',
+      baseUrl: '',
+      manifest: {
+        version: '24.4.0.250',
+        bundleUrl: 'https://cloud.example/dist.zip',
+        checksum: validSha256,
+        otaSignature: validSignature
+      }
+    };
+
+    expect(selectBestOtaCandidate([unsignedCloud, signedLan]).source).toBe('lan');
+    expect(selectBestOtaCandidate([signedCloudOlder, signedLan]).manifest.version).toBe('24.4.0.250');
+    expect(selectBestOtaCandidate([signedCloudSame, signedLan]).source).toBe('lan');
+  });
+
+  it('reconcileBuiltinApkVersion purga bundle OTA antiguo cuando se instala un APK nativo más reciente', async () => {
+    localStorage.setItem('isaac_pos_native_apk_version_code', '240400');
+    localStorage.setItem('isaac_pos_ota_version', '24.4.0.100');
+    mockUpdater.current.mockResolvedValueOnce({
+      bundle: { id: 'old-ota-bundle-100', version: '24.4.0.100' },
+      native: '24.4.0'
+    });
+
+    const result = await otaUpdateService.reconcileBuiltinApkVersion({ embeddedVersionCode: 240401 });
+
+    expect(result.purged).toBe(true);
+    expect(mockUpdater.reset).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('isaac_pos_ota_version')).toBeNull();
+    expect(localStorage.getItem('isaac_pos_native_apk_version_code')).toBe('240401');
+  });
+
+  it('subscribeUpdateReady notifica a la UI para mostrar el botón Reiniciar y aplicar', async () => {
+    const listener = vi.fn();
+    const unsub = otaUpdateService.subscribeUpdateReady(listener);
+
+    mockAxiosGet.mockImplementation(async (url) => {
+      if (String(url).includes('/version.json')) {
+        return {
+          data: {
+            version: '24.4.0.300',
+            bundleUrl: '/dist.zip',
+            checksum: validSha256,
+            otaSignature: validSignature
+          }
+        };
+      }
+      if (String(url).includes('/dist.zip')) {
+        return { data: sampleZipBytes.buffer };
+      }
+      throw new Error(`URL inesperada: ${url}`);
+    });
+
+    await otaUpdateService.checkForUpdates({ silent: true, publicKeyPem: publicKey });
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+      ready: true,
+      version: '24.4.0.300'
+    }));
+    unsub();
   });
 });

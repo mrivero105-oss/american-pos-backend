@@ -20,8 +20,10 @@ import { updateApiBaseUrl, checkServerHealth, autoDiscoverServer, formatServerUr
 import { syncService } from '../services/syncService';
 import { getTerminalId } from '../utils/terminalIdentity';
 import IsaacWebLogo from './IsaacWebLogo';
+import { useMobileKeyboardViewport } from '../hooks/useMobileKeyboardViewport';
 
 export default function MobileInitialSyncWizard({ onComplete }) {
+    const { imeExtraBottomPx, handleFieldFocusCapture } = useMobileKeyboardViewport({ enabled: true });
     const [step, setStep] = useState(1); // 1: Connection, 2: Syncing, 3: Completed
     const [serverIp, setServerIp] = useState(() => 
         localStorage.getItem('isaac_pos_server_ip') || 
@@ -163,7 +165,14 @@ export default function MobileInitialSyncWizard({ onComplete }) {
     };
 
     return (
-        <div className="fixed inset-0 z-[99999] bg-slate-950 text-white flex flex-col justify-between p-4 sm:p-6 overflow-y-auto font-sans">
+        <div
+            className="fixed inset-0 z-[99999] bg-slate-950 text-white flex flex-col justify-between p-4 sm:p-6 overflow-y-auto font-sans"
+            style={{
+                paddingTop: 'max(1rem, env(safe-area-inset-top, 0px))',
+                paddingBottom: `calc(max(1rem, env(safe-area-inset-bottom, 0px)) + ${imeExtraBottomPx}px)`
+            }}
+            onFocusCapture={handleFieldFocusCapture}
+        >
             {/* Header */}
             <header className="relative z-10 w-full max-w-xl mx-auto flex items-center justify-between py-2">
                 <IsaacWebLogo isLight={false} height="h-7 sm:h-8" />
@@ -216,13 +225,23 @@ export default function MobileInitialSyncWizard({ onComplete }) {
                                         </div>
                                         <input
                                             type="text"
+                                            enterKeyHint="go"
+                                            autoCapitalize="none"
+                                            autoCorrect="off"
+                                            spellCheck={false}
                                             value={serverIp}
                                             onChange={(e) => {
                                                 setServerIp(e.target.value);
                                                 setConnectionStatus(null);
                                             }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && serverIp.trim() && !isTesting) {
+                                                    e.preventDefault();
+                                                    handleTestConnection();
+                                                }
+                                            }}
                                             placeholder="192.168.1.100"
-                                            className="w-full h-10 pl-9 pr-3 bg-slate-900 border border-slate-700 rounded-lg text-white font-mono text-xs sm:text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
+                                            className="w-full min-h-[44px] pl-9 pr-3 bg-slate-900 border border-slate-700 rounded-lg text-white font-mono text-base sm:text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
                                         />
                                     </div>
                                 </div>

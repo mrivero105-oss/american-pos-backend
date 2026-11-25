@@ -103,15 +103,33 @@ function webViewColorFixPlugin() {
   };
 }
 
-export default defineConfig(({ command }) => ({
-  ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
-    ? {
-        define: {
+function readAndroidApkVersionCode() {
+  try {
+    const gradlePath = path.resolve(process.cwd(), 'android', 'app', 'build.gradle');
+    if (fs.existsSync(gradlePath)) {
+      const content = fs.readFileSync(gradlePath, 'utf8');
+      const match = content.match(/\bversionCode\s+(\d+)/);
+      if (match) return match[1];
+    }
+  } catch {
+    // Fallback silencioso
+  }
+  return '0';
+}
+
+export default defineConfig(({ command }) => {
+  const apkVersionCode = readAndroidApkVersionCode();
+  const baseDefine = {
+    'import.meta.env.VITE_APK_VERSION_CODE': JSON.stringify(apkVersionCode),
+    ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
+      ? {
           'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),
           'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('')
         }
-      }
-    : {}),
+      : {})
+  };
+  return {
+  define: baseDefine,
   plugins: [
     mobileEntrypointHtmlPlugin(),
     react(),
@@ -205,4 +223,5 @@ export default defineConfig(({ command }) => ({
     include: ['react', 'react-dom', 'react-router-dom', 'zustand']
   },
   base: './'
-}));
+  };
+});

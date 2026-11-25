@@ -17,6 +17,8 @@ import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
 import localDb from '../../db/localDb';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
 
 const LOCAL_EXPENSES_KEY = 'isaac_pos_mobile_expenses';
 
@@ -64,15 +66,23 @@ export default function MobileExpensesView({
   user,
   T,
   onBackToPOS,
+  onOpenSyncCenter = null,
   showToast
 }) {
   const [expenses, setExpenses] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todos');
+  const { counts: offlineCounts } = useOfflineQueueCounts();
 
   // Modal para Crear / Editar Gasto
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isFormModalOpen });
   const [editingExpense, setEditingExpense] = useState(null); // null = crear, obj = editar
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
@@ -396,13 +406,26 @@ export default function MobileExpensesView({
           </div>
         </div>
 
-        <button
-          onClick={handleOpenCreate}
-          className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer whitespace-nowrap"
-        >
-          <Plus size={14} />
-          <span>+ Gasto</span>
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {offlineCounts.expenses > 0 && (
+            <button
+              type="button"
+              onClick={() => onOpenSyncCenter?.()}
+              className="px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-500 text-[10px] font-black flex items-center gap-1 cursor-pointer active:scale-95"
+              title="Gastos pendientes por sincronizar"
+            >
+              <Clock size={11} />
+              <span>{offlineCounts.expenses} pend.</span>
+            </button>
+          )}
+          <button
+            onClick={handleOpenCreate}
+            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer whitespace-nowrap"
+          >
+            <Plus size={14} />
+            <span>+ Gasto</span>
+          </button>
+        </div>
       </div>
 
       {/* 2. TARJETAS DE RESUMEN Y TOTALES */}
@@ -438,10 +461,11 @@ export default function MobileExpensesView({
           <Search size={14} className={T.textMuted} />
           <input 
             type="text"
+            enterKeyHint="search"
             placeholder="Buscar por concepto, categoría o responsable..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className={`bg-transparent flex-1 text-xs outline-none ${T.textPrimary} font-medium`}
+            className={`bg-transparent flex-1 text-base sm:text-sm outline-none ${T.textPrimary} font-medium`}
           />
           {searchQuery && (
             <button onClick={() => setSearchQuery('')} className={T.textMuted}>
@@ -586,8 +610,14 @@ export default function MobileExpensesView({
 
       {/* 4. MODAL: CREAR / EDITAR GASTO */}
       {isFormModalOpen && (
-        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-sm ${T.modalCard} rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar`}>
+        <div
+          className="fixed inset-0 bg-black/85 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-sm ${T.modalCard} rounded-2xl sm:rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar my-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             {/* Header del Modal */}
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
@@ -606,6 +636,7 @@ export default function MobileExpensesView({
                 </div>
               </div>
               <button 
+                type="button"
                 onClick={() => setIsFormModalOpen(false)} 
                 className={`p-1 rounded-lg ${T.btnGhost} text-slate-400 hover:text-rose-500`}
               >
@@ -613,24 +644,31 @@ export default function MobileExpensesView({
               </button>
             </div>
 
-            <form onSubmit={handleSaveExpense} className="space-y-3">
+            <form
+              onSubmit={handleSaveExpense}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               {/* Monto y Selector de Moneda */}
               <div className="space-y-1">
                 <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
                   Monto del Gasto *
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <div className={`flex-1 flex items-center px-3 py-2 rounded-xl ${T.inputBg} border ${T.border}`}>
+                  <div className={`flex-1 flex items-center px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} min-h-[44px]`}>
                     <span className="text-rose-500 font-bold text-sm mr-1.5">
                       {currency === 'USD' ? '$' : 'Bs'}
                     </span>
                     <input 
                       type="number"
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.01"
                       placeholder="0.00"
                       value={amount}
                       onChange={(e) => setAmount(e.target.value)}
-                      className={`bg-transparent flex-1 text-sm font-black ${T.textPrimary} outline-none`}
+                      className={`bg-transparent flex-1 text-base sm:text-sm font-black ${T.textPrimary} outline-none`}
                       required
                       autoFocus
                     />
@@ -669,10 +707,11 @@ export default function MobileExpensesView({
                 </label>
                 <input 
                   type="text"
+                  enterKeyHint="next"
                   placeholder="Ej. Compra de bolsas, hielo, flete..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                   required
                 />
               </div>
@@ -685,7 +724,7 @@ export default function MobileExpensesView({
                 <select 
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none cursor-pointer`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none cursor-pointer`}
                 >
                   <option value="Operativo">Operativo</option>
                   <option value="Suministros">Suministros & Empaque</option>
@@ -706,7 +745,7 @@ export default function MobileExpensesView({
                 <select 
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none cursor-pointer`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none cursor-pointer`}
                 >
                   <option value="Efectivo USD">Efectivo USD</option>
                   <option value="Efectivo Bs">Efectivo Bs</option>
@@ -724,10 +763,11 @@ export default function MobileExpensesView({
                 </label>
                 <input 
                   type="text"
+                  enterKeyHint="done"
                   placeholder="Nº de factura, proveedor, etc."
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-lg ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-medium outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-lg ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-medium outline-none`}
                 />
               </div>
 

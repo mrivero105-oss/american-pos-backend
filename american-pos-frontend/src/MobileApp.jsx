@@ -79,9 +79,20 @@ export default function MobileApp() {
   } = useAuth();
 
   const [showSplash, setShowSplash] = useState(true);
+  const [otaReadyVersion, setOtaReadyVersion] = useState(() => (
+    otaUpdateService.isUpdateReady() ? (otaUpdateService.getNewVersion() || 'nueva') : null
+  ));
+  const [otaBannerDismissed, setOtaBannerDismissed] = useState(false);
+  const [isApplyingOta, setIsApplyingOta] = useState(false);
 
   useEffect(() => {
     otaUpdateService.init();
+    const unsubOta = otaUpdateService.subscribeUpdateReady(({ ready, version }) => {
+      if (ready) {
+        setOtaReadyVersion(version || 'nueva');
+        setOtaBannerDismissed(false);
+      }
+    });
 
     // Garantizar una única interfaz en Online y Offline dentro del APK nativo:
     // Desregistrar cualquier Service Worker heredado que sirva shells antiguos en modo sin red.
@@ -101,6 +112,9 @@ export default function MobileApp() {
         }
       }).catch(() => {});
     }
+    return () => {
+      unsubOta();
+    };
   }, []);
 
   useEffect(() => {
@@ -174,6 +188,48 @@ export default function MobileApp() {
       </Toaster>
 
       {showSplash && <SplashScreen onFinished={() => setShowSplash(false)} minDuration={650} />}
+
+      {/* Banner persistente de Actualización OTA verificada lista para aplicar */}
+      {otaReadyVersion && !otaBannerDismissed && !showSplash && (
+        <div
+          className="fixed left-3 right-3 z-[2147483640] flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-emerald-600 text-white shadow-2xl border border-emerald-400/50 max-w-md mx-auto"
+          style={{ top: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}
+          role="status"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-black leading-tight truncate">
+              🚀 Actualización lista (v{String(otaReadyVersion).split('.').slice(-1)[0] || otaReadyVersion})
+            </p>
+            <p className="text-[10px] text-emerald-100 leading-tight truncate">
+              Firma verificada • Aplica al instante
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={isApplyingOta}
+            onClick={async () => {
+              setIsApplyingOta(true);
+              try {
+                await otaUpdateService.applyAndReload();
+              } catch {
+                setIsApplyingOta(false);
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg bg-white text-emerald-900 hover:bg-emerald-50 font-black text-[11px] uppercase tracking-wider shrink-0 cursor-pointer active:scale-95 transition-transform disabled:opacity-60 flex items-center gap-1"
+          >
+            {isApplyingOta && <RefreshCw size={12} className="animate-spin" />}
+            <span>Reiniciar y aplicar</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setOtaBannerDismissed(true)}
+            aria-label="Posponer actualización"
+            className="p-1 rounded-lg text-emerald-100 hover:text-white hover:bg-white/15 cursor-pointer shrink-0"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
 
       {licenseLoading ? (
         <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center gap-4">

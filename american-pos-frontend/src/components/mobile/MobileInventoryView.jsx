@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
+import { useState, useEffect, useMemo, useRef, useDeferredValue, lazy, Suspense, useCallback } from 'react';
 import {
   Search, 
   ArrowLeft, 
@@ -14,7 +14,8 @@ import {
   Trash2, 
   Camera, 
   Percent, 
-  Package
+  Package,
+  Clock
 } from 'lucide-react';
 import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
@@ -27,6 +28,10 @@ import { normalizeProductImage } from '../../utils/imageProcess';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { useFuzzySearch } from '../../hooks/useFuzzySearch';
 import VirtualProductList from '../common/VirtualProductList';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
+
+const MobileBarcodeScannerModal = lazy(() => import('../MobileBarcodeScannerModal'));
 
 const MOBILE_INVENTORY_COLUMNS = { default: 1, md: 2, xl: 3 };
 
@@ -42,6 +47,7 @@ export default function MobileInventoryView({
   canAdjustStock = true,
   canViewCosts = true,
   onBackToPOS,
+  onOpenSyncCenter = null,
   onProductUpdated,
   onProductCreated,
   onProductDeleted,
@@ -49,9 +55,17 @@ export default function MobileInventoryView({
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCat, setSelectedCat] = useState('Todos');
+  const [stockFilter, setStockFilter] = useState('all'); // 'all' | 'low' | 'out'
+  const { counts: offlineCounts } = useOfflineQueueCounts();
 
   // --- MODAL DE CREACIÓN Y EDICIÓN COMPLETA DE PRODUCTO ---
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isProductModalOpen });
   const [editingProduct, setEditingProduct] = useState(null); // null = nuevo, obj = editar
   const [productFormData, setProductFormData] = useState({
     name: '',
@@ -81,6 +95,7 @@ export default function MobileInventoryView({
   const [auditCounts, setAuditCounts] = useState({}); // { [productId]: countedQty }
   const [auditScanInput, setAuditScanInput] = useState('');
   const [isApplyingAudit, setIsApplyingAudit] = useState(false);
+  const [isAuditScannerOpen, setIsAuditScannerOpen] = useState(false);
   const auditInputRef = useRef(null);
 
   // Lista de categorías normalizadas y seleccionables
@@ -108,10 +123,22 @@ export default function MobileInventoryView({
     enableSemantic: false
   });
 
-  // Orden reactivo (disponibles primero, agotados al final)
+  // Orden reactivo + filtro rápido de Stock Bajo / Agotados
   const filteredProducts = useMemo(() => {
     const hasQuery = Boolean(deferredSearchQuery && deferredSearchQuery.trim());
-    return [...fuzzyInventoryProducts].sort((a, b) => {
+    const byStock = stockFilter === 'all'
+      ? fuzzyInventoryProducts
+      : fuzzyInventoryProducts.filter((p) => {
+          const isService = Boolean(p.isService || String(p.category || p.categoria || '').trim().toLowerCase() === 'servicios');
+          if (isService) return false;
+          const st = Number(p.stockQuantity ?? p.stock ?? 0);
+          const lowThreshold = Math.max(1, Number(p.minStock ?? 5) || 5);
+          if (stockFilter === 'out') return st <= 0;
+          if (stockFilter === 'low') return st > 0 && st <= lowThreshold;
+          return true;
+        });
+
+    return [...byStock].sort((a, b) => {
       const isServiceA = Boolean(a.isService || String(a.category || a.categoria || '').trim().toLowerCase() === 'servicios');
       const isServiceB = Boolean(b.isService || String(b.category || b.categoria || '').trim().toLowerCase() === 'servicios');
       const stockA = Number(a.stockQuantity ?? a.stock ?? 0);
@@ -124,22 +151,25 @@ export default function MobileInventoryView({
       const nameB = (b.name || b.nombre || '').toLowerCase();
       return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
     });
-  }, [fuzzyInventoryProducts, deferredSearchQuery]);
+  }, [fuzzyInventoryProducts, deferredSearchQuery, stockFilter]);
 
   useEffect(() => {
     if (inventoryScrollRef.current) {
       inventoryScrollRef.current.scrollTop = 0;
     }
-  }, [deferredSearchQuery, selectedCat]);
+  }, [deferredSearchQuery, selectedCat, stockFilter]);
 
-  // Métricas rápidas de inventario
+  // Métricas rápidas de inventario (consistentes con los chips de filtro)
   const stats = useMemo(() => {
     let outCount = 0;
     let lowCount = 0;
     products.forEach(p => {
+      const isService = Boolean(p.isService || String(p.category || p.categoria || '').trim().toLowerCase() === 'servicios');
+      if (isService) return;
       const st = Number(p.stockQuantity ?? p.stock ?? 0);
+      const lowThreshold = Math.max(1, Number(p.minStock ?? 5) || 5);
       if (st <= 0) outCount++;
-      else if (st <= 5) lowCount++;
+      else if (st <= lowThreshold) lowCount++;
     });
     return { total: products.length, outOfStock: outCount, lowStock: lowCount };
   }, [products]);
@@ -501,40 +531,48 @@ export default function MobileInventoryView({
     }
   };
 
-  // Registrar escaneo en Modo Conteo Físico
-  const handleAuditScanSubmit = (e) => {
-    e?.preventDefault();
-    const query = auditScanInput.trim();
-    if (!query) return;
+  // Registrar escaneo en Modo Conteo Físico (soporta lector manual, pistola BT y cámara en ráfaga)
+  const processAuditBarcode = useCallback((rawCode) => {
+    const query = String(rawCode || '').trim();
+    if (!query) return false;
+    const qLower = query.toLowerCase();
 
     const found = products.find(p => 
-      (p.barcode && p.barcode.toLowerCase() === query.toLowerCase()) ||
-      (p.codigo_barras && p.codigo_barras.toLowerCase() === query.toLowerCase()) ||
-      (p.name && p.name.toLowerCase() === query.toLowerCase()) ||
-      (p.nombre && p.nombre.toLowerCase() === query.toLowerCase())
+      (p.barcode && String(p.barcode).toLowerCase() === qLower) ||
+      (p.codigo_barras && String(p.codigo_barras).toLowerCase() === qLower) ||
+      (p.bulkBarcode && String(p.bulkBarcode).toLowerCase() === qLower) ||
+      (p.name && p.name.toLowerCase() === qLower) ||
+      (p.nombre && p.nombre.toLowerCase() === qLower)
     ) || products.find(p =>
-      (p.name && p.name.toLowerCase().includes(query.toLowerCase())) ||
-      (p.nombre && p.nombre.toLowerCase().includes(query.toLowerCase()))
+      (p.name && p.name.toLowerCase().includes(qLower)) ||
+      (p.nombre && p.nombre.toLowerCase().includes(qLower))
     );
 
     if (found) {
       triggerHaptic(25);
       const prodId = String(found.id);
       const currentTheoretical = Number(found.stockQuantity ?? found.stock ?? 0);
-      const currentCount = auditCounts[prodId] !== undefined ? auditCounts[prodId] : currentTheoretical;
-      const nextCount = currentCount + 1;
-
-      setAuditCounts(prev => ({
-        ...prev,
-        [prodId]: nextCount
-      }));
-
-      showToast?.(`+1 ${found.name || found.nombre} (Contado: ${nextCount})`);
+      setAuditCounts((prev) => {
+        const currentCount = prev[prodId] !== undefined ? Number(prev[prodId]) : currentTheoretical;
+        const nextCount = currentCount + 1;
+        showToast?.(`+1 ${found.name || found.nombre} (Contado: ${nextCount})`);
+        return {
+          ...prev,
+          [prodId]: nextCount
+        };
+      });
       setAuditScanInput('');
-    } else {
-      triggerHaptic(60);
-      showToast?.(`Producto no encontrado para el código: ${query}`);
+      return true;
     }
+
+    triggerHaptic(60);
+    showToast?.(`Producto no encontrado para el código: ${query}`);
+    return false;
+  }, [products, showToast]);
+
+  const handleAuditScanSubmit = (e) => {
+    e?.preventDefault();
+    processAuditBarcode(auditScanInput);
   };
 
   // Modificar conteo manual de un producto en auditoría
@@ -643,8 +681,19 @@ export default function MobileInventoryView({
           </div>
         </div>
 
-        {/* Acciones del Header: Botón + Nuevo y Botón Conteo */}
+        {/* Acciones del Header: Badge pendientes + Botón + Nuevo + Botón Conteo */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {offlineCounts.inventory > 0 && (
+            <button
+              type="button"
+              onClick={() => onOpenSyncCenter?.()}
+              className="px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-500 text-[10px] font-black flex items-center gap-1 cursor-pointer active:scale-95"
+              title="Cambios de inventario pendientes por sincronizar"
+            >
+              <Clock size={11} />
+              <span>{offlineCounts.inventory}</span>
+            </button>
+          )}
           {canCreateProducts && (
             <button
               type="button"
@@ -702,16 +751,17 @@ export default function MobileInventoryView({
             </div>
           </div>
 
-          <form onSubmit={handleAuditScanSubmit} className="flex items-center gap-2">
-            <div className={`flex-1 flex items-center gap-2 px-3 py-2 rounded-xl ${T.inputBg} border border-amber-500/30`}>
+          <form onSubmit={handleAuditScanSubmit} className="flex items-center gap-1.5">
+            <div className={`flex-1 flex items-center gap-2 px-3 py-2 rounded-xl ${T.inputBg} border border-amber-500/30 min-h-[44px]`}>
               <Scan size={15} className="text-amber-400 shrink-0" />
               <input 
                 ref={auditInputRef}
                 type="text"
-                placeholder="Escanear código de barra para contar (+1)..."
+                enterKeyHint="done"
+                placeholder="Escanear código para contar (+1)..."
                 value={auditScanInput}
                 onChange={(e) => setAuditScanInput(e.target.value)}
-                className={`bg-transparent flex-1 text-xs outline-none ${T.textPrimary} font-bold`}
+                className={`bg-transparent flex-1 text-base sm:text-sm outline-none ${T.textPrimary} font-bold`}
               />
               {auditScanInput && (
                 <button type="button" onClick={() => setAuditScanInput('')} className={T.textMuted}>
@@ -720,8 +770,20 @@ export default function MobileInventoryView({
               )}
             </div>
             <button
+              type="button"
+              onClick={() => {
+                triggerHaptic(15);
+                setIsAuditScannerOpen(true);
+              }}
+              title="Abrir cámara para conteo físico (+1)"
+              aria-label="Escanear con cámara para conteo"
+              className="min-w-[44px] min-h-[44px] px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 border border-amber-500/40 font-black text-xs flex items-center justify-center gap-1 cursor-pointer shadow-md transition-all active:scale-95 shrink-0"
+            >
+              <Camera size={16} />
+            </button>
+            <button
               type="submit"
-              className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-md transition-all active:scale-95"
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-md transition-all active:scale-95 shrink-0"
             >
               Contar
             </button>
@@ -753,13 +815,14 @@ export default function MobileInventoryView({
           <Search size={14} className={T.textMuted} />
           <input 
             type="text"
+            enterKeyHint="search"
             autoComplete="on"
             autoCorrect="on"
             spellCheck={true}
             placeholder="Buscar o dictar producto o código..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className={`bg-transparent flex-1 text-xs outline-none ${T.textPrimary} font-medium select-text`}
+            className={`bg-transparent flex-1 text-base sm:text-sm outline-none ${T.textPrimary} font-medium select-text`}
           />
           {searchQuery && (
             <button onClick={() => setSearchQuery('')} className={T.textMuted}>
@@ -772,6 +835,52 @@ export default function MobileInventoryView({
             onResult={(spokenText) => setSearchQuery(spokenText)}
             onError={(errMsg) => showToast?.(`🎤 ${errMsg}`)}
           />
+        </div>
+
+        {/* Filtros Rápidos de Stock: Todos | Stock Bajo | Agotados */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic(8);
+              setStockFilter('all');
+            }}
+            className={`px-2.5 py-1 rounded-xl text-[11px] font-black whitespace-nowrap transition-all cursor-pointer border ${
+              stockFilter === 'all'
+                ? 'bg-blue-600 text-white border-blue-500 shadow-xs'
+                : `${T.btnGhost} ${T.border} ${T.textMuted}`
+            }`}
+          >
+            Todos ({stats.total})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic(8);
+              setStockFilter(prev => (prev === 'low' ? 'all' : 'low'));
+            }}
+            className={`px-2.5 py-1 rounded-xl text-[11px] font-black whitespace-nowrap transition-all cursor-pointer border ${
+              stockFilter === 'low'
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-xs'
+                : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
+            }`}
+          >
+            Stock Bajo ({stats.lowStock})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic(8);
+              setStockFilter(prev => (prev === 'out' ? 'all' : 'out'));
+            }}
+            className={`px-2.5 py-1 rounded-xl text-[11px] font-black whitespace-nowrap transition-all cursor-pointer border ${
+              stockFilter === 'out'
+                ? 'bg-rose-600 text-white border-rose-500 shadow-xs'
+                : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30 hover:bg-rose-500/20'
+            }`}
+          >
+            Agotados ({stats.outOfStock})
+          </button>
         </div>
 
         {/* Chips de Categorías */}
@@ -981,8 +1090,14 @@ export default function MobileInventoryView({
 
       {/* 5. MODAL: CREAR / EDITAR PRODUCTO COMPLETO */}
       {isProductModalOpen && (
-        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-md sm:max-w-lg ${T.modalCard} rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar`}>
+        <div
+          className="fixed inset-0 bg-black/85 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md sm:max-w-lg ${T.modalCard} rounded-2xl sm:rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar my-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             {/* Header del Modal */}
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
@@ -1001,6 +1116,7 @@ export default function MobileInventoryView({
                 </div>
               </div>
               <button 
+                type="button"
                 onClick={() => setIsProductModalOpen(false)} 
                 className={`p-1 rounded-lg ${T.btnGhost} text-slate-400 hover:text-rose-500`}
               >
@@ -1008,7 +1124,12 @@ export default function MobileInventoryView({
               </button>
             </div>
 
-            <form onSubmit={handleSaveProduct} className="space-y-3">
+            <form
+              onSubmit={handleSaveProduct}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               {/* Foto del Producto */}
               <div className="flex items-center gap-3">
                 <div className="relative shrink-0">
@@ -1103,11 +1224,12 @@ export default function MobileInventoryView({
                 </label>
                 <input 
                   type="text" 
+                  enterKeyHint="next"
                   required
                   value={productFormData.name}
                   onChange={(e) => setProductFormData(p => ({ ...p, name: e.target.value }))}
                   placeholder="Ej: Aceite Amanecer 500 ml"
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                 />
               </div>
 
@@ -1128,10 +1250,11 @@ export default function MobileInventoryView({
                   </div>
                   <input 
                     type="text" 
+                    enterKeyHint="next"
                     value={productFormData.barcode}
                     onChange={(e) => setProductFormData(p => ({ ...p, barcode: e.target.value }))}
                     placeholder="Escanear o escribir..."
-                    className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-mono font-bold outline-none`}
+                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-mono font-bold outline-none`}
                   />
                 </div>
 
@@ -1151,17 +1274,18 @@ export default function MobileInventoryView({
                   {isCustomCategoryMode ? (
                     <input 
                       type="text" 
+                      enterKeyHint="next"
                       value={productFormData.category}
                       onChange={(e) => setProductFormData(p => ({ ...p, category: e.target.value }))}
                       placeholder="Nueva categoría..."
                       autoFocus
-                      className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                      className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                     />
                   ) : (
                     <select
                       value={productFormData.category || 'General'}
                       onChange={(e) => setProductFormData(p => ({ ...p, category: e.target.value }))}
-                      className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none cursor-pointer`}
+                      className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none cursor-pointer`}
                     >
                       {selectableCategories.map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
@@ -1188,6 +1312,8 @@ export default function MobileInventoryView({
                       <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold ${T.textMuted}`}>$</span>
                       <input 
                         type="number" 
+                        inputMode="decimal"
+                        enterKeyHint="next"
                         step="0.01" 
                         value={productFormData.costUSD}
                         onChange={(e) => {
@@ -1204,7 +1330,7 @@ export default function MobileInventoryView({
                           });
                         }}
                         placeholder="0.00"
-                        className={`w-full pl-6 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                        className={`w-full min-h-[44px] pl-6 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                       />
                     </div>
                   </div>
@@ -1216,6 +1342,8 @@ export default function MobileInventoryView({
                     <div className="relative">
                       <input 
                         type="number" 
+                        inputMode="decimal"
+                        enterKeyHint="next"
                         step="0.1" 
                         value={productFormData.margin ?? ''}
                         onChange={(e) => {
@@ -1232,7 +1360,7 @@ export default function MobileInventoryView({
                           });
                         }}
                         placeholder="30"
-                        className={`w-full pl-3 pr-6 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                        className={`w-full min-h-[44px] pl-3 pr-6 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                       />
                       <span className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold ${T.textMuted}`}>%</span>
                     </div>
@@ -1251,6 +1379,8 @@ export default function MobileInventoryView({
                     <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-500`}>$</span>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.01" 
                       required
                       value={productFormData.priceUSD}
@@ -1271,7 +1401,7 @@ export default function MobileInventoryView({
                         });
                       }}
                       placeholder="0.00"
-                      className={`w-full pl-6 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-black outline-none`}
+                      className={`w-full min-h-[44px] pl-6 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-black outline-none`}
                     />
                   </div>
                 </div>
@@ -1284,6 +1414,8 @@ export default function MobileInventoryView({
                     <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold ${T.textMuted}`}>Bs</span>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.1" 
                       value={productFormData.priceBS}
                       onChange={(e) => {
@@ -1304,7 +1436,7 @@ export default function MobileInventoryView({
                         });
                       }}
                       placeholder="0.00"
-                      className={`w-full pl-7 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                      className={`w-full min-h-[44px] pl-7 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                     />
                   </div>
                 </div>
@@ -1318,11 +1450,13 @@ export default function MobileInventoryView({
                   </label>
                   <input 
                     type="number" 
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="any" 
                     value={productFormData.stock}
                     onChange={(e) => setProductFormData(p => ({ ...p, stock: e.target.value }))}
                     placeholder="0"
-                    className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-black outline-none`}
+                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-black outline-none`}
                   />
                 </div>
 
@@ -1735,6 +1869,24 @@ export default function MobileInventoryView({
           }}
           T={T}
         />
+      )}
+
+      {/* ESCÁNER DE CÁMARA DIRECTO PARA CONTEO FÍSICO (+1 EN RÁFAGA) */}
+      {isAuditScannerOpen && (
+        <Suspense fallback={null}>
+          <MobileBarcodeScannerModal
+            isOpen={isAuditScannerOpen}
+            onClose={() => setIsAuditScannerOpen(false)}
+            initialBurstMode={true}
+            targetMode="LOOKUP"
+            title="Conteo Físico por Cámara"
+            subtitle="Escanea productos continuamente (+1 por lectura)"
+            products={products}
+            onBarcodeScanned={(code) => {
+              processAuditBarcode(code);
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );

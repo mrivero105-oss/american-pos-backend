@@ -185,6 +185,9 @@ export default function MobileSyncCenterView({
   useEffect(() => {
     otaUpdateService.getCurrentVersion().then((v) => setAppVersion(v));
     setOtaUpdateReady(otaUpdateService.isUpdateReady());
+    const unsubOtaReady = otaUpdateService.subscribeUpdateReady(({ ready }) => {
+      if (ready) setOtaUpdateReady(true);
+    });
     loadQuarantineAndAlerts();
 
     const handleSyncEvents = () => {
@@ -212,6 +215,7 @@ export default function MobileSyncCenterView({
 
     return () => {
       unsub();
+      unsubOtaReady();
       window.removeEventListener('sync-queue-conflict', handleSyncEvents);
       window.removeEventListener('sync-queue-error', handleSyncEvents);
       window.removeEventListener('lan-stock-deficit-detected', handleSyncEvents);
