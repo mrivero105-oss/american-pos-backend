@@ -30,6 +30,68 @@ class MobilePrinterService {
     }
 
     /**
+     * Devuelve un resumen de la impresora activa configurada (Wi-Fi TCP 9100, Bluetooth o RawBT)
+     * para reimpresión en 1 toque y feedback visual en el POS móvil.
+     */
+    getActivePrinterSummary() {
+        try {
+            let savedCfg = {};
+            const rawCfg = typeof localStorage !== 'undefined' ? localStorage.getItem('pos_printer_config') : null;
+            if (rawCfg) savedCfg = JSON.parse(rawCfg) || {};
+
+            if (savedCfg.type === 'network' && savedCfg.ip && String(savedCfg.ip).trim()) {
+                const ip = String(savedCfg.ip).trim();
+                const port = Number(savedCfg.port) || 9100;
+                return {
+                    configured: true,
+                    mode: 'network',
+                    label: `LAN: ${ip}:${port}`,
+                    target: ip,
+                    port
+                };
+            }
+
+            const btAddress = String(
+                savedCfg.btAddress ||
+                (typeof localStorage !== 'undefined' ? (localStorage.getItem('pos_mobile_bt_printer') || localStorage.getItem('pos_mobile_bt_printer_last')) : '') ||
+                ''
+            ).trim();
+            if (btAddress) {
+                const btName = String(
+                    savedCfg.btName ||
+                    (typeof localStorage !== 'undefined' ? localStorage.getItem('pos_mobile_bt_printer_name') : '') ||
+                    ''
+                ).trim();
+                return {
+                    configured: true,
+                    mode: 'bluetooth',
+                    label: `BT: ${btName || btAddress}`,
+                    target: btAddress,
+                    name: btName || btAddress
+                };
+            }
+
+            const mobileMode = typeof localStorage !== 'undefined' ? localStorage.getItem('pos_mobile_print_mode') : '';
+            if (mobileMode === 'RAWBT') {
+                return {
+                    configured: true,
+                    mode: 'rawbt',
+                    label: 'RawBT Android',
+                    target: 'rawbt'
+                };
+            }
+        } catch {
+            // Ignorar errores de parseo en localStorage restringido
+        }
+        return {
+            configured: false,
+            mode: null,
+            label: 'Sin impresora configurada',
+            target: null
+        };
+    }
+
+    /**
      * Convert string or Uint8Array to raw CP858 Uint8Array bytes
      */
     toEscPosBytes(escPosData) {

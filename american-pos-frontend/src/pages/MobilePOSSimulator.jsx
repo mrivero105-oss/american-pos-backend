@@ -625,6 +625,12 @@ export default function MobilePOSSimulator() {
           canCreateProducts={canCreateProductsMobile}
           heldSales={heldSales}
           setIsHeldSalesModalOpen={modalSetters.setIsHeldSalesModalOpen}
+          isOfflineBannerVisible={Boolean(!syncDomain.isOnline || !syncDomain.socketConnected || syncDomain.serverHealth === false)}
+          isSearchingServer={syncDomain.isTestingServer}
+          onAutoDiscoverServer={syncDomain.handleAutoDiscoverServer}
+          onOpenServerConfig={() => modalSetters.setShowServerModal(true)}
+          lastSaleReceipt={syncDomain.salesHistory?.[0] || null}
+          onReprintLastSale={(sale) => checkoutFlow.handlePrintBluetoothReceipt(sale)}
         />
       )}
 

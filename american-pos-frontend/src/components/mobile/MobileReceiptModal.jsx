@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Printer, Settings, Share2, CheckCircle2, X } from 'lucide-react';
 import { getRegionConfig } from '../../utils/regionConfig';
+import mobilePrinterService from '../../services/mobilePrinterService';
 
 export default function MobileReceiptModal({
   receipt,
@@ -21,6 +22,9 @@ export default function MobileReceiptModal({
   const taxLabel = businessInfo?.taxConfig?.taxLabel || businessInfo?.taxLabel || regionCfg.taxLabel || 'IVA';
   const taxRate = Number(businessInfo?.taxConfig?.ivaRate ?? businessInfo?.ivaRate ?? regionCfg.defaultTaxRate);
   const taxEnabled = businessInfo?.taxConfig?.ivaEnabled !== undefined ? Boolean(businessInfo.taxConfig.ivaEnabled) : (businessInfo?.ivaEnabled !== false);
+  const activePrinter = typeof mobilePrinterService.getActivePrinterSummary === 'function'
+    ? mobilePrinterService.getActivePrinterSummary()
+    : { configured: false, label: '' };
 
   return (
     <AnimatePresence>
@@ -162,9 +166,12 @@ export default function MobileReceiptModal({
                 triggerHaptic(15);
                 onPrintBluetooth(printedReceipt);
               }}
-              className="w-full bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
+              className="w-full bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
             >
-              <Printer size={14} /> Imprimir Térmica Bluetooth
+              <Printer size={14} className="shrink-0" />
+              <span className="truncate">
+                {activePrinter?.configured ? `Imprimir (${activePrinter.label})` : 'Imprimir Térmica Bluetooth'}
+              </span>
             </button>
             <button
               type="button"

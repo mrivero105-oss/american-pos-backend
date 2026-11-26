@@ -490,6 +490,19 @@ export function useMobileCheckoutFlow({
   const handlePrintBluetoothReceipt = useCallback(async (sale) => {
     if (!sale) return;
     try {
+      const activePrinter = typeof mobilePrinterService.getActivePrinterSummary === 'function'
+        ? mobilePrinterService.getActivePrinterSummary()
+        : null;
+      const isNative = typeof mobilePrinterService.isNativePlatform === 'function'
+        && mobilePrinterService.isNativePlatform();
+
+      if (isNative && activePrinter && !activePrinter.configured) {
+        triggerHaptic(20);
+        showToast('⚙️ Selecciona tu impresora Bluetooth o Wi-Fi primero');
+        setIsThermalPrinterModalOpen(true);
+        return;
+      }
+
       const paperWidth = localStorage.getItem('pos_mobile_paper_width') || '58mm';
       mobilePrinterService.enqueueSalePrint({
         sale,
@@ -502,7 +515,11 @@ export function useMobileCheckoutFlow({
       });
       triggerHaptic(15);
       playScanSound();
-      showToast('🖨️ Enviado a la cola de impresión térmica');
+      showToast(
+        activePrinter?.configured
+          ? `🖨️ Imprimiendo en ${activePrinter.label}`
+          : '🖨️ Enviado a la cola de impresión térmica'
+      );
     } catch (printErr) {
       showToast(`❌ Error al imprimir por Bluetooth: ${printErr?.message || 'Impresora no disponible'}`);
       setIsThermalPrinterModalOpen(true);

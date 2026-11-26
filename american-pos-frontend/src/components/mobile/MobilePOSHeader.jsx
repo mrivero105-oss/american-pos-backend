@@ -3,9 +3,12 @@ import {
     PauseCircle,
     Plus,
     PlusCircle,
+    Printer,
+    RefreshCw,
     Search,
     Tag,
     Utensils,
+    WifiOff,
     X
 } from 'lucide-react';
 import IsaacWebLogo from '../IsaacWebLogo';
@@ -32,7 +35,13 @@ export default function MobilePOSHeader({
     openCreateProduct,
     canCreateProducts = true,
     heldSales,
-    setIsHeldSalesModalOpen
+    setIsHeldSalesModalOpen,
+    isOfflineBannerVisible = false,
+    isSearchingServer = false,
+    onAutoDiscoverServer,
+    onOpenServerConfig,
+    lastSaleReceipt = null,
+    onReprintLastSale
 }) {
     return (
         <header className={`app-main-header ${T.headerBg} flex flex-col shrink-0 z-30 transition-colors w-full border-b ${T.border}`}>
@@ -92,6 +101,25 @@ export default function MobilePOSHeader({
                                     <span className="text-[10.5px] font-extrabold max-w-[58px] truncate">
                                         {selectedTable ? selectedTable.replace('Mesa ', 'M.') : 'Mesa'}
                                     </span>
+                                </button>
+                            )}
+
+                            {lastSaleReceipt && onReprintLastSale && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        triggerHaptic(15);
+                                        onReprintLastSale(lastSaleReceipt);
+                                    }}
+                                    aria-label="Reimprimir último ticket"
+                                    className={`w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition-transform cursor-pointer ${
+                                        isLight
+                                            ? 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                                            : 'bg-[#131924] text-emerald-400 border-[#232d3f] hover:bg-[#1a2230]'
+                                    }`}
+                                    title={`Reimprimir último ticket (${lastSaleReceipt.invoiceNumber || lastSaleReceipt.code || 'Reciente'})`}
+                                >
+                                    <Printer size={14} />
                                 </button>
                             )}
 
@@ -223,6 +251,56 @@ export default function MobilePOSHeader({
                             </span>
                         </button>
                     )}
+                </div>
+            )}
+
+            {/* Tira compacta de reconexión DHCP (solo visible cuando la PC servidor está desconectada; 0px online) */}
+            {user && isOfflineBannerVisible && (
+                <div
+                    role="status"
+                    className={`px-3 py-1.5 border-t flex items-center justify-between gap-2 text-[10.5px] font-bold ${
+                        isLight
+                            ? 'bg-amber-50 border-amber-200 text-amber-900'
+                            : 'bg-amber-500/12 border-amber-500/25 text-amber-200'
+                    }`}
+                >
+                    <div className="flex items-center gap-1.5 min-w-0">
+                        <WifiOff size={12} className="text-amber-500 shrink-0" />
+                        <span className="truncate">PC desconectada • Modo Offline</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        {onAutoDiscoverServer && (
+                            <button
+                                type="button"
+                                disabled={isSearchingServer}
+                                onClick={() => {
+                                    triggerHaptic(12);
+                                    onAutoDiscoverServer();
+                                }}
+                                className="px-2 py-0.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] flex items-center gap-1 cursor-pointer active:scale-95 disabled:opacity-60"
+                            >
+                                <RefreshCw size={10} className={isSearchingServer ? 'animate-spin' : ''} />
+                                <span>{isSearchingServer ? 'Buscando...' : 'Buscar PC'}</span>
+                            </button>
+                        )}
+                        {onOpenServerConfig && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    triggerHaptic(10);
+                                    onOpenServerConfig();
+                                }}
+                                className={`px-2 py-0.5 rounded-lg border font-extrabold text-[10px] cursor-pointer active:scale-95 ${
+                                    isLight
+                                        ? 'bg-white border-amber-300 text-amber-900 hover:bg-amber-100'
+                                        : 'bg-slate-900/70 border-amber-500/35 text-amber-200 hover:bg-slate-900'
+                                }`}
+                                title="Configurar dirección IP manualmente"
+                            >
+                                IP
+                            </button>
+                        )}
+                    </div>
                 </div>
             )}
         </header>

@@ -142,4 +142,38 @@ describe('Fase M3 — Hardware Móvil: ESC/POS CP858, BLE y Impresión de Red/Re
             window.Capacitor = prevCap;
         }
     });
+
+    it('getActivePrinterSummary detecta LAN TCP 9100, Bluetooth, RawBT o estado sin configurar', () => {
+        expect(mobilePrinterService.getActivePrinterSummary().configured).toBe(false);
+
+        localStorage.setItem('pos_printer_config', JSON.stringify({
+            type: 'network',
+            ip: '192.168.1.55',
+            port: 9100
+        }));
+        expect(mobilePrinterService.getActivePrinterSummary()).toMatchObject({
+            configured: true,
+            mode: 'network',
+            label: 'LAN: 192.168.1.55:9100'
+        });
+
+        localStorage.setItem('pos_printer_config', JSON.stringify({
+            type: 'bluetooth',
+            btAddress: '00:11:22:33:44:55',
+            btName: 'XP-58-Caja'
+        }));
+        expect(mobilePrinterService.getActivePrinterSummary()).toMatchObject({
+            configured: true,
+            mode: 'bluetooth',
+            label: 'BT: XP-58-Caja'
+        });
+
+        localStorage.removeItem('pos_printer_config');
+        localStorage.setItem('pos_mobile_print_mode', 'RAWBT');
+        expect(mobilePrinterService.getActivePrinterSummary()).toMatchObject({
+            configured: true,
+            mode: 'rawbt',
+            label: 'RawBT Android'
+        });
+    });
 });

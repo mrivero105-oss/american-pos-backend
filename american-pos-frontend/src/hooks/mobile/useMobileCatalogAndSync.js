@@ -159,22 +159,26 @@ export function useMobileCatalogAndSync({
   const handleAutoDiscoverServer = useCallback(async () => {
     setIsTestingServer(true);
     setServerFeedback({ ok: true, msg: 'Buscando servidor en la red Wi-Fi...' });
+    showToast?.('🔍 Buscando servidor PC en la red...');
     try {
       const found = await autoDiscoverServer();
       if (found) {
         setMobileServerIp(found);
         setServerHealth(true);
         setServerFeedback({ ok: true, msg: `¡Servidor detectado en ${found}!` });
+        showToast?.(`✅ Servidor PC conectado en ${found}`);
         setTimeout(() => setShowServerModal(false), 1200);
       } else {
         setServerFeedback({ ok: false, msg: 'No se encontró el servidor automáticamente. Escribe la IP manualmente.' });
+        showToast?.('⚠️ No se encontró la PC en la red. Toca "IP" para escribirla.');
       }
     } catch {
       setServerFeedback({ ok: false, msg: 'Error buscando servidor.' });
+      showToast?.('❌ Error buscando servidor PC en red');
     } finally {
       setIsTestingServer(false);
     }
-  }, [setShowServerModal]);
+  }, [setShowServerModal, showToast]);
 
   // WakeLock + Auto-Healing IP DHCP
   useEffect(() => {

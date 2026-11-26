@@ -6,6 +6,7 @@ import MobileSideNav from '../../src/components/mobile/MobileSideNav';
 import MobileThermalPrinterModal from '../../src/components/mobile/MobileThermalPrinterModal';
 import MobileWhatsAppReceiptModal from '../../src/components/mobile/MobileWhatsAppReceiptModal';
 import MobileInventoryView from '../../src/components/mobile/MobileInventoryView';
+import MobilePOSHeader from '../../src/components/mobile/MobilePOSHeader';
 import mobilePrinterService from '../../src/services/mobilePrinterService';
 
 const BASE_THEME = {
@@ -337,5 +338,60 @@ describe('Pulido Integral App Móvil (Ramas 1 a 5)', () => {
     HTMLCanvasElement.prototype.getContext = origGetContext;
     HTMLCanvasElement.prototype.toDataURL = origToDataUrl;
     openSpy.mockRestore();
+  });
+
+  it('Pulido Caja: MobilePOSHeader muestra tira offline (Buscar PC / IP) solo desconectado y botón Reimprimir 1 toque', () => {
+    const onAutoDiscoverServer = vi.fn();
+    const onOpenServerConfig = vi.fn();
+    const onReprintLastSale = vi.fn();
+    const lastSale = { id: 's-1', invoiceNumber: 'FAC-9901', totalUSD: 12.5 };
+
+    const baseProps = {
+      T: { ...BASE_THEME, headerBg: 'bg-slate-950' },
+      isLight: false,
+      activeModule: 'pos',
+      user: { name: 'Cajero', role: 'cashier' },
+      setIsSideNavOpen: vi.fn(),
+      isRestaurantBusiness: false,
+      selectedTable: null,
+      setIsTableSelectModalOpen: vi.fn(),
+      posMode: 'SALE',
+      setIsPriceCheckerModalOpen: vi.fn(),
+      searchInputRef: { current: null },
+      searchQuery: '',
+      setActiveModule: vi.fn(),
+      setSearchQuery: vi.fn(),
+      showToast: vi.fn(),
+      setIsManualItemModalOpen: vi.fn(),
+      openCreateProduct: vi.fn(),
+      canCreateProducts: false,
+      heldSales: [],
+      setIsHeldSalesModalOpen: vi.fn(),
+      onAutoDiscoverServer,
+      onOpenServerConfig,
+      onReprintLastSale
+    };
+
+    // 1. Online sin ventas previas: 0 tira offline, 0 botón reimprimir
+    const { rerender } = render(
+      <MobilePOSHeader {...baseProps} isOfflineBannerVisible={false} lastSaleReceipt={null} />
+    );
+    expect(screen.queryByText(/PC desconectada/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Reimprimir último ticket/i })).not.toBeInTheDocument();
+
+    // 2. Offline + con última venta: muestra tira compacta (Buscar PC + IP) y botón reimprimir en 1 toque
+    rerender(
+      <MobilePOSHeader {...baseProps} isOfflineBannerVisible={true} lastSaleReceipt={lastSale} />
+    );
+    expect(screen.getByText(/PC desconectada • Modo Offline/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Buscar PC/i }));
+    expect(onAutoDiscoverServer).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /^IP$/i }));
+    expect(onOpenServerConfig).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Reimprimir último ticket/i }));
+    expect(onReprintLastSale).toHaveBeenCalledWith(lastSale);
   });
 });
