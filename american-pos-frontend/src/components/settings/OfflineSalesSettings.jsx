@@ -52,7 +52,25 @@ export default function OfflineSalesSettings({ offlineSales = [], syncing = fals
                         </div>
                     </div>
 
-                    <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+                    {/* Tarjetas táctiles móviles (< 768px) */}
+                    <div className="md:hidden space-y-2.5">
+                        {offlineSales.map((sale) => (
+                            <div key={sale.id} className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-xs font-bold text-slate-900 dark:text-white truncate">{sale.customerName || 'Cliente Ocasional'}</p>
+                                    <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate mt-0.5">{sale.id}</p>
+                                </div>
+                                <div className="text-right shrink-0">
+                                    <p className="text-sm font-mono font-bold text-slate-900 dark:text-white">${Number(sale.total || 0).toFixed(2)}</p>
+                                    <span className="inline-flex items-center px-2 py-0.5 mt-1 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 text-[10px] font-semibold rounded-md border border-amber-200 dark:border-amber-800/40">
+                                        Pendiente
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="hidden md:block overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
                         <div className="overflow-x-auto">
                             <table className="w-full text-left min-w-[550px]">
                                 <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800">

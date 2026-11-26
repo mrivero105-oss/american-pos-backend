@@ -13,7 +13,7 @@ android {
         applicationId "com.isaacpos.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 240405
+        versionCode 240406
         versionName "24.4.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
@@ -67,6 +67,8 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation "androidx.biometric:biometric:1.1.0"
     implementation "com.google.android.gms:play-services-mlkit-text-recognition:19.0.1"
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.8.22"))
+    androidTestImplementation(platform("org.jetbrains.kotlin:kotlin-bom:1.8.22"))
     implementation "com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1"
     def cameraxVersion = "1.4.2"
     implementation "androidx.camera:camera-core:$cameraxVersion"

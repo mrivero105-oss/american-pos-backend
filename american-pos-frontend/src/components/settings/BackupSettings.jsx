@@ -473,7 +473,65 @@ export default function BackupSettings({
                         </div>
 
                         <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-                            <div className="overflow-x-auto">
+                            {/* Tarjetas táctiles móviles (< 768px) */}
+                            <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-800">
+                                {currentBackups.length > 0 ? currentBackups.map((b, i) => {
+                                    const isZip = b.name.endsWith('.zip');
+                                    const extLabel = isZip ? 'ZIP' : b.name.endsWith('.json') ? 'JSON' : b.name.endsWith('.sql') ? 'SQL' : b.name.endsWith('.enc') ? 'AES-256' : 'PG';
+                                    return (
+                                        <div key={b.name || i} className="p-3.5 space-y-2.5">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                                            {isZip ? 'Copia Integral' : 'Instantánea Servidor'}
+                                                        </span>
+                                                        <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold uppercase bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                                            {extLabel}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate mt-0.5">{b.name}</p>
+                                                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                                        {formatBackupDate(b.date)} • {((b.size || 0) / 1024 / 1024).toFixed(2)} MB
+                                                    </p>
+                                                </div>
+                                                {b.inCloudMirror ? (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300 border border-sky-200 dark:border-sky-800/40 shrink-0">
+                                                        <CheckCircle2 size={11} /> Cloud
+                                                    </span>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleSyncCloudNow(b.name)}
+                                                        disabled={syncingSingleFile === b.name}
+                                                        className="inline-flex items-center gap-1 px-2 py-1 min-h-[32px] rounded-md text-[10px] font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0 cursor-pointer"
+                                                    >
+                                                        {syncingSingleFile === b.name ? <Loader2 size={11} className="animate-spin" /> : <Cloud size={11} />}
+                                                        <span>Cloud</span>
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-1.5">
+                                                <button type="button" onClick={() => onDownload(b.name)} className="min-h-[38px] px-2 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium flex items-center justify-center gap-1 cursor-pointer">
+                                                    <Download size={13} /> Bajar
+                                                </button>
+                                                <button type="button" onClick={() => onRestore(b.name)} disabled={saving} className="min-h-[38px] px-2 py-1.5 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 rounded-lg border border-amber-200 dark:border-amber-800/40 text-xs font-medium flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50">
+                                                    <RefreshCcw size={12} className={saving ? 'animate-spin' : ''} /> Restaurar
+                                                </button>
+                                                <button type="button" onClick={() => onDelete(b.name)} disabled={saving} className="min-h-[38px] px-2 py-1.5 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 rounded-lg border border-red-200 dark:border-red-800/40 text-xs font-medium flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50">
+                                                    <Trash2 size={13} /> Borrar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                }) : (
+                                    <p className="px-4 py-8 text-center text-xs text-slate-400">
+                                        No se registran copias de seguridad en la bóveda
+                                    </p>
+                                )}
+                            </div>
+
+                            <div className="hidden md:block overflow-x-auto">
                                 <table className="w-full text-left min-w-[650px]">
                                     <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800">
                                         <tr>

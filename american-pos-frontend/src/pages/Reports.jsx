@@ -248,7 +248,7 @@ export default function Reports() {
                     </button>
 
                     <div className="relative">
-                        <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-lg border border-slate-200 dark:border-slate-700 gap-1">
+                        <div className="flex flex-wrap items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-lg border border-slate-200 dark:border-slate-700 gap-1">
                             {[
                                 { id: 'today', label: 'Hoy' },
                                 { id: '7d', label: '7 Días' },

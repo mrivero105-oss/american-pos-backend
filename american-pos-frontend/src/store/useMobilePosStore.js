@@ -214,6 +214,26 @@ export const useMobilePosStore = create((set, get) => ({
       activeModule: typeof mod === 'function' ? mod(state.activeModule) : mod
     })),
 
+  // Preservación de posición de scroll por pestaña/módulo (Venta, Stock, Caja, ERP)
+  moduleScrollPositions: {},
+  setModuleScrollPosition: (moduleId, scrollTop) => {
+    if (!moduleId) return;
+    const safeTop = Math.max(0, Number(scrollTop) || 0);
+    set((state) => {
+      if (state.moduleScrollPositions[moduleId] === safeTop) return state;
+      return {
+        moduleScrollPositions: {
+          ...state.moduleScrollPositions,
+          [moduleId]: safeTop
+        }
+      };
+    });
+  },
+  getModuleScrollPosition: (moduleId) => {
+    if (!moduleId) return 0;
+    return Number(get().moduleScrollPositions[moduleId] || 0);
+  },
+
   cart: loadInitialCart(),
   setCart: (updater) => {
     hasUserMutatedCart = true;
