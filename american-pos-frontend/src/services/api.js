@@ -565,15 +565,22 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
+const HEAVY_LATENCY_URL_PATTERN = /\/(ai|catalog|import|parse|reparse|scanners?|backup|restore|reports?|export|pdf|upload|whatsapp|vision|ocr)/i;
+
 // Response Interceptor: Handle 401 Unauthorized & 403 License Required globally
 api.interceptors.response.use(
     (response) => {
         const startTs = response?.config?.__isaacStartTs;
-        if (typeof startTs === 'number') {
+        const reqMethod = String(response?.config?.method || 'get').toLowerCase();
+        const reqUrl = String(response?.config?.url || '');
+        if (typeof startTs === 'number' && reqMethod === 'get' && !HEAVY_LATENCY_URL_PATTERN.test(reqUrl)) {
             const nowTs = (typeof performance !== 'undefined' && typeof performance.now === 'function')
                 ? performance.now()
                 : Date.now();
-            recordNetworkLatency(nowTs - startTs);
+            const elapsedMs = nowTs - startTs;
+            if (elapsedMs >= 0 && elapsedMs <= 15000) {
+                recordNetworkLatency(elapsedMs);
+            }
         }
         return response;
     },

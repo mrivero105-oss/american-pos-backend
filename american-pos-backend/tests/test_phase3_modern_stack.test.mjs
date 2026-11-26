@@ -61,28 +61,16 @@ function buildMinimalPdf(lines = []) {
 }
 
 test('Fase 3 — Stack Modern Node 24 (Express 5 + @google/genai 3 + pdf-parse 2)', async (t) => {
-    await t.test('1. geminiClientAdapter traduce generateContent, multimodal inlineData y createChat a @google/genai v3', async () => {
-        const calls = { generate: [], chatCreate: [], chatSend: [] };
+    await t.test('1. geminiClientAdapter usa Interactions API v1beta (store:false, PDF/imagen, JSON, step_list) y remapea modelos deprecados', async () => {
+        const calls = { ctor: [], interactions: [] };
 
         class MockGoogleGenAI {
-            constructor({ apiKey }) {
-                this.apiKey = apiKey;
-                this.models = {
-                    generateContent: async (params) => {
-                        calls.generate.push(params);
-                        return { text: '{"ok":true,"source":"genai-v3"}' };
-                    }
-                };
-                this.chats = {
-                    create: (params) => {
-                        calls.chatCreate.push(params);
-                        return {
-                            sendMessage: async (msgParams) => {
-                                calls.chatSend.push(msgParams);
-                                return { text: 'Respuesta de chat mockeada' };
-                            },
-                            getHistory: () => params.history || []
-                        };
+            constructor(opts) {
+                calls.ctor.push(opts);
+                this.interactions = {
+                    create: async (params) => {
+                        calls.interactions.push(params);
+                        return { output_text: '{"ok":true,"source":"interactions-v1beta"}' };
                     }
                 };
             }
@@ -93,7 +81,10 @@ test('Fase 3 — Stack Modern Node 24 (Express 5 + @google/genai 3 + pdf-parse 2
             defaultModel: 'gemini-2.5-flash-lite'
         });
 
-        // Texto + JSON mode + systemInstruction
+        assert.equal(calls.ctor[0].apiVersion, 'v1beta');
+        assert.equal(client.defaultModel, 'gemini-3.5-flash-lite');
+
+        // Texto + PDF + JSON mode + systemInstruction + eliminación automática de temperature deprecado
         const genRes = await client.generateContent({
             model: 'gemini-2.5-flash',
             contents: [
@@ -104,39 +95,46 @@ test('Fase 3 — Stack Modern Node 24 (Express 5 + @google/genai 3 + pdf-parse 2
             generationConfig: { responseMimeType: 'application/json', temperature: 0.1 }
         });
 
-        assert.equal(genRes.text, '{"ok":true,"source":"genai-v3"}');
-        assert.equal(genRes.response.text(), '{"ok":true,"source":"genai-v3"}');
-        assert.equal(calls.generate.length, 1);
-        assert.equal(calls.generate[0].model, 'gemini-2.5-flash');
-        assert.equal(calls.generate[0].config.responseMimeType, 'application/json');
-        assert.equal(calls.generate[0].config.systemInstruction, 'Responde en JSON');
-        assert.deepEqual(calls.generate[0].contents, [
-            { text: 'Analiza la factura' },
-            { inlineData: { data: 'QUJD', mimeType: 'application/pdf' } }
+        assert.equal(genRes.text, '{"ok":true,"source":"interactions-v1beta"}');
+        assert.equal(genRes.response.text(), '{"ok":true,"source":"interactions-v1beta"}');
+        assert.equal(calls.interactions.length, 1);
+        assert.equal(calls.interactions[0].model, 'gemini-3.5-flash-lite');
+        assert.equal(calls.interactions[0].store, false);
+        assert.equal(calls.interactions[0].system_instruction, 'Responde en JSON');
+        assert.deepEqual(calls.interactions[0].response_format, { type: 'text', mime_type: 'application/json' });
+        assert.equal(calls.interactions[0].generation_config, undefined);
+        assert.deepEqual(calls.interactions[0].input, [
+            { type: 'text', text: 'Analiza la factura' },
+            { type: 'document', data: 'QUJD', mime_type: 'application/pdf' }
         ]);
 
-        // Chat + sendMessage
+        // Chat multi-turno vía step_list + imagen
         const chat = client.createChat({
-            model: 'gemini-2.5-flash-lite',
+            model: 'gemini-3.5-flash-lite',
             systemInstruction: 'Asistente POS',
             history: [{ role: 'user', parts: [{ text: 'Hola' }] }],
             generationConfig: { maxOutputTokens: 512 }
         });
         const chatRes = await chat.sendMessage(['Dame el precio', { inlineData: { data: 'XYZ', mimeType: 'image/jpeg' } }]);
-        assert.equal(chatRes.text, 'Respuesta de chat mockeada');
-        assert.equal(calls.chatCreate.length, 1);
-        assert.equal(calls.chatSend.length, 1);
-        assert.deepEqual(calls.chatSend[0], {
-            message: [
-                { text: 'Dame el precio' },
-                { inlineData: { data: 'XYZ', mimeType: 'image/jpeg' } }
-            ]
-        });
+        assert.equal(chatRes.text, '{"ok":true,"source":"interactions-v1beta"}');
+        assert.equal(calls.interactions.length, 2);
+        assert.deepEqual(calls.interactions[1].input, [
+            { type: 'user_input', content: [{ type: 'text', text: 'Hola' }] },
+            {
+                type: 'user_input',
+                content: [
+                    { type: 'text', text: 'Dame el precio' },
+                    { type: 'image', data: 'XYZ', mime_type: 'image/jpeg' }
+                ]
+            }
+        ]);
+        assert.deepEqual(calls.interactions[1].generation_config, { max_output_tokens: 512 });
 
         // Compatibilidad getGenerativeModel
-        const model = client.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+        const model = client.getGenerativeModel({ model: 'gemini-4-hydrogen' });
         const compatRes = await model.generateContent('Prompt simple');
-        assert.equal(compatRes.response.text(), '{"ok":true,"source":"genai-v3"}');
+        assert.equal(compatRes.response.text(), '{"ok":true,"source":"interactions-v1beta"}');
+        assert.equal(calls.interactions[2].model, 'gemini-4-hydrogen');
     });
 
     await t.test('2. PDFService.parseCatalog extrae catálogo real usando pdf-parse@2.4.5 sin fallback IA', async () => {

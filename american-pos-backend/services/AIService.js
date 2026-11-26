@@ -185,11 +185,12 @@ class AIService {
         process.env.GEMINI_API_KEY = apiKey;
 
         try {
-            this.modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+            this.modelName = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
             this.genAI = createGeminiClient(apiKey, { defaultModel: this.modelName });
+            this.modelName = this.genAI.defaultModel;
             this.model = this.genAI.getGenerativeModel({ model: this.modelName });
             this.initialized = true;
-            console.log(`[ISAAC AI] Cerebro Master configurado (@google/genai): ${this.modelName}`);
+            console.log(`[ISAAC AI] Cerebro Master configurado (@google/genai Interactions): ${this.modelName}`);
         } catch (error) {
             console.error("[ISAAC AI] Error al inicializar Gemini:", error);
         }
@@ -1671,7 +1672,7 @@ ${matchedCatalogText || 'Ningún producto filtrado por texto previo.'}
                 }
 
                 const chat = this.genAI.createChat({
-                    model: this.modelName || process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
+                    model: this.modelName || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
                     systemInstruction: systemPrompt,
                     history: validHistory,
                     generationConfig: { maxOutputTokens: 1024 }

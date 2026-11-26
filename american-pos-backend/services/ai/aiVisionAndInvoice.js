@@ -215,7 +215,7 @@ Responde ÚNICAMENTE con un objeto JSON válido con esta estructura exacta (usa 
                 result = await aiService.genAI.generateContent({
                     model: modelName,
                     contents,
-                    generationConfig: { responseMimeType: 'application/json', temperature: 0.1 }
+                    generationConfig: { responseMimeType: 'application/json' }
                 });
                 if (result && result.response) {
                     console.log(`[ISAAC AI] Extracción exitosa con modelo: ${modelName}`);

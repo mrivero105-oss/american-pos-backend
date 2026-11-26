@@ -37,17 +37,17 @@ function httpGet(url, headers = {}) {
 }
 
 test('IA — getCandidateModels, withTimeout y generateContentStream', async (t) => {
-    await t.test('1. getCandidateModels elimina duplicados y nunca incluye modelos legacy o inexistentes', () => {
+    await t.test('1. getCandidateModels elimina duplicados, remapea modelos deprecados y prioriza gemini-3.5-flash-lite + gemini-4-hydrogen', () => {
         const textModels = getCandidateModels({ preferred: 'gemini-2.5-flash-lite' });
-        assert.ok(textModels.includes('gemini-2.5-flash-lite'));
-        assert.ok(textModels.includes('gemini-2.5-flash'));
+        assert.equal(textModels[0], 'gemini-3.5-flash-lite');
+        assert.ok(textModels.includes('gemini-4-hydrogen'));
         assert.equal(new Set(textModels).size, textModels.length, 'No debe haber duplicados');
-        assert.ok(!textModels.includes('gemini-2.0-flash'));
-        assert.ok(!textModels.some((m) => /gemini-3\.[5-8]/.test(m)));
+        assert.ok(!textModels.some((m) => /gemini-(?:1\.5|2\.0|2\.5)-/.test(m)), 'Nunca debe devolver modelos legacy/deprecados');
 
         const visionModels = getCandidateModels({ vision: true });
-        assert.equal(visionModels[0], process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash');
-        assert.ok(!visionModels.includes('gemini-2.0-flash'));
+        assert.equal(visionModels[0], 'gemini-3.5-flash-lite');
+        assert.ok(visionModels.includes('gemini-4-hydrogen'));
+        assert.ok(!visionModels.some((m) => /gemini-(?:1\.5|2\.0|2\.5)-/.test(m)));
     });
 
     await t.test('2. withTimeout resuelve a tiempo y rechaza al vencer el límite', async () => {
@@ -60,22 +60,21 @@ test('IA — getCandidateModels, withTimeout y generateContentStream', async (t)
         );
     });
 
-    await t.test('3. generateContentStream entrega chunks progresivos con @google/genai', async () => {
+    await t.test('3. generateContentStream entrega chunks progresivos con Interactions API (step.delta)', async () => {
         class FakeGenAI {
             constructor() {
-                this.models = {
-                    async generateContent() {
-                        return { text: 'fallback' };
-                    },
-                    async generateContentStream() {
-                        return (async function* () {
-                            yield { text: 'Hola ' };
-                            yield { text: 'Isaac ' };
-                            yield { text: 'POS' };
-                        })();
+                this.interactions = {
+                    async create(params) {
+                        if (params.stream) {
+                            return (async function* () {
+                                yield { event_type: 'step.delta', delta: { type: 'text', text: 'Hola ' } };
+                                yield { event_type: 'step.delta', delta: { type: 'text', text: 'Isaac ' } };
+                                yield { event_type: 'step.delta', delta: { type: 'text', text: 'POS' } };
+                            })();
+                        }
+                        return { output_text: 'fallback' };
                     }
                 };
-                this.chats = { create: () => ({ sendMessage: async () => ({ text: '' }) }) };
             }
         }
 
