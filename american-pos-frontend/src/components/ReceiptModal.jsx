@@ -7,9 +7,13 @@ import { escapeHtml } from '../utils/escapeHtml';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import JsBarcode from 'jsbarcode';
-import html2canvas from 'html2canvas-pro';
 
 import mobilePrinterService from '../services/mobilePrinterService';
+
+async function loadHtml2Canvas() {
+    const mod = await import('html2canvas-pro');
+    return mod.default || mod;
+}
 
 export default function ReceiptModal({ isOpen, onClose, sale, businessSettings = {}, exchangeRate = 1, currencyMode = 'BOTH', paymentMethods = [], onRefund = null }) {
     const [showEmailPrompt, setShowEmailPrompt] = useState(false);
@@ -583,6 +587,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                 .catch(() => setBotStatus('DISCONNECTED'));
 
             // Renderizar ticket como imagen PNG nítida (escala 2x para calidad retina)
+            const html2canvas = await loadHtml2Canvas();
             const canvas = await html2canvas(printRef.current, {
                 scale: 2,
                 backgroundColor: '#ffffff',
@@ -622,6 +627,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
         setCapturingImage(true);
         try {
             // Renderizar ticket como imagen PNG nítida (escala 2x para calidad retina)
+            const html2canvas = await loadHtml2Canvas();
             const canvas = await html2canvas(printRef.current, {
                 scale: 2,
                 backgroundColor: '#ffffff',

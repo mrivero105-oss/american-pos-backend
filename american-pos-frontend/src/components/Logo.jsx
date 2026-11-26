@@ -1,7 +1,7 @@
-import logoLight from '../assets/isaac-logo-horizontal.png';
-import logoDark from '../assets/isaac-logo-horizontal-dark.png';
-import emblemLight from '../assets/isaac-emblem.png';
-import emblemDark from '../assets/isaac-emblem-dark.png';
+import logoLight from '../assets/isaac-logo-horizontal.webp';
+import logoDark from '../assets/isaac-logo-horizontal-dark.webp';
+import emblemLight from '../assets/isaac-emblem.webp';
+import emblemDark from '../assets/isaac-emblem-dark.webp';
 
 /**
  * Logo Oficial de Isaac POS (isaacventas.com)

@@ -3521,6 +3521,7 @@ export default function MobilePOSSimulator() {
                 onBackToPOS={() => setActiveModule('pos')}
                 showToast={showToast}
                 onOpenServerConfig={() => setShowServerModal(true)}
+                canManageSettings={canManageSettingsMobile}
               />
             </Suspense>
           </ErrorBoundary>

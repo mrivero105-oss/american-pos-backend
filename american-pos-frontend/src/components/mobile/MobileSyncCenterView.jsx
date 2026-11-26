@@ -14,13 +14,23 @@ import {
   Landmark,
   AlertTriangle,
   RotateCcw,
-  Trash2
+  Trash2,
+  Bug,
+  Copy,
+  Share2
 } from 'lucide-react';
 import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
 import localDb from '../../db/localDb';
 import otaUpdateService from '../../services/otaUpdateService';
 import cloudRateSyncService from '../../services/cloudRateSyncService';
+import {
+  getDiagnosticEvents,
+  clearDiagnosticEvents,
+  subscribeDiagnosticEvents,
+  collectDeviceHealthSnapshot,
+  buildDiagnosticReportText
+} from '../../services/mobileDiagnosticsService';
 
 const SYNC_ALERTS_STORAGE_KEY = 'pos_mobile_sync_alerts_v1';
 
@@ -44,7 +54,8 @@ export default function MobileSyncCenterView({
   T,
   onBackToPOS,
   showToast,
-  onOpenServerConfig
+  onOpenServerConfig,
+  canManageSettings = false
 }) {
   const [latencyMs, setLatencyMs] = useState(null);
   const [isTestingPing, setIsTestingPing] = useState(false);
@@ -61,6 +72,10 @@ export default function MobileSyncCenterView({
   const [quarantinedSales, setQuarantinedSales] = useState([]);
   const [failedQueueItems, setFailedQueueItems] = useState([]);
   const [syncAlerts, setSyncAlerts] = useState(() => readStoredSyncAlerts());
+  const [diagEvents, setDiagEvents] = useState(() => (canManageSettings ? getDiagnosticEvents({ limit: 80 }) : []));
+  const [diagFilter, setDiagFilter] = useState('all'); // 'all' | 'error' | 'warn' | 'ota'
+  const [diagHealth, setDiagHealth] = useState(null);
+  const [diagExpanded, setDiagExpanded] = useState(false);
 
   const loadQuarantineAndAlerts = useCallback(async () => {
     try {
@@ -199,6 +214,17 @@ export default function MobileSyncCenterView({
     window.addEventListener('sync-queue-updated', handleSyncEvents);
     window.addEventListener('offline-sales-synced', handleSyncEvents);
 
+    let unsubDiag = () => {};
+    if (canManageSettings) {
+      setDiagEvents(getDiagnosticEvents({ limit: 80 }));
+      collectDeviceHealthSnapshot({ appVersion: otaUpdateService.getNewVersion?.() || undefined })
+        .then((snap) => setDiagHealth(snap))
+        .catch(() => {});
+      unsubDiag = subscribeDiagnosticEvents(() => {
+        setDiagEvents(getDiagnosticEvents({ limit: 80 }));
+      });
+    }
+
     // Iniciar y suscribirse al servicio de sincronización automática 24/7 en tiempo real
     cloudRateSyncService.init();
     const unsub = cloudRateSyncService.subscribe((data) => {
@@ -216,13 +242,75 @@ export default function MobileSyncCenterView({
     return () => {
       unsub();
       unsubOtaReady();
+      unsubDiag();
       window.removeEventListener('sync-queue-conflict', handleSyncEvents);
       window.removeEventListener('sync-queue-error', handleSyncEvents);
       window.removeEventListener('lan-stock-deficit-detected', handleSyncEvents);
       window.removeEventListener('sync-queue-updated', handleSyncEvents);
       window.removeEventListener('offline-sales-synced', handleSyncEvents);
     };
-  }, [showToast, loadQuarantineAndAlerts]);
+  }, [showToast, loadQuarantineAndAlerts, canManageSettings]);
+
+  const handleCopyDiagnostics = async () => {
+    try {
+      const report = await buildDiagnosticReportText({
+        appVersion,
+        socketConnected,
+        pendingSalesCount,
+        productsCount,
+        latencyMs
+      });
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(report);
+        showToast?.('📋 Reporte diagnóstico copiado al portapapeles');
+      } else {
+        showToast?.('Portapapeles no disponible en este dispositivo', 'error');
+      }
+    } catch (err) {
+      showToast?.(`Error al copiar diagnóstico: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleShareDiagnostics = async () => {
+    try {
+      const report = await buildDiagnosticReportText({
+        appVersion,
+        socketConnected,
+        pendingSalesCount,
+        productsCount,
+        latencyMs
+      });
+      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        const file = typeof File !== 'undefined'
+          ? new File([report], `isaac-pos-diagnostico-${Date.now()}.json`, { type: 'application/json' })
+          : null;
+        if (file && navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ title: 'Diagnóstico Isaac POS Móvil', files: [file] });
+          return;
+        }
+        await navigator.share({ title: 'Diagnóstico Isaac POS Móvil', text: report.slice(0, 3500) });
+        return;
+      }
+      const blob = new Blob([report], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `isaac-pos-diagnostico-${Date.now()}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      showToast?.('📥 Reporte diagnóstico descargado (.json)');
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        showToast?.(`Error al compartir diagnóstico: ${err?.message || 'desconocido'}`, 'error');
+      }
+    }
+  };
+
+  const handleClearDiagnostics = () => {
+    clearDiagnosticEvents();
+    setDiagEvents([]);
+    showToast?.('🧹 Historial diagnóstico limpiado');
+  };
 
   const handleCheckOtaUpdate = async () => {
     setIsUpdatingOta(true);
@@ -602,6 +690,140 @@ export default function MobileSyncCenterView({
             </button>
           )}
         </div>
+
+        {/* PANEL DIAGNÓSTICO DEL TERMINAL — CAJA NEGRA SANITIZADA (SOLO ADMINISTRADORES / canManageSettings) */}
+        {canManageSettings && (
+          <div className={`p-4 rounded-xl ${T.subPanelBg} border ${T.border} space-y-3`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/25 shrink-0">
+                  <Bug size={16} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className={`text-xs font-bold ${T.textPrimary} truncate`}>Diagnóstico del Terminal (Caja Negra)</h3>
+                  <p className={`text-[10px] ${T.textMuted}`}>
+                    {diagEvents.filter((e) => e.level === 'error').length} errores • {diagEvents.filter((e) => e.level === 'warn').length} avisos • Solo Admin
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDiagExpanded((prev) => !prev)}
+                className={`px-2.5 py-1.5 rounded-lg ${T.btnGhost} border ${T.border} text-[11px] font-bold ${T.textPrimary} shrink-0 cursor-pointer active:scale-95`}
+              >
+                {diagExpanded ? 'Ocultar' : 'Ver eventos'}
+              </button>
+            </div>
+
+            {diagHealth && (
+              <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>APK Code: </span>
+                  <span className={T.textPrimary}>{String(diagHealth.apkVersionCode)}</span>
+                </div>
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>WebView: </span>
+                  <span className={T.textPrimary}>{diagHealth.webViewVersion || 'N/A'}</span>
+                </div>
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>Pantalla: </span>
+                  <span className={T.textPrimary}>{diagHealth.viewport}</span>
+                </div>
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>Storage: </span>
+                  <span className={T.textPrimary}>
+                    {diagHealth.storage ? `${diagHealth.storage.usedMB} MB` : 'N/A'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={handleCopyDiagnostics}
+                className={`min-h-[40px] rounded-lg ${T.btnGhost} border ${T.border} text-[11px] font-bold ${T.textPrimary} flex items-center justify-center gap-1.5 cursor-pointer active:scale-95`}
+              >
+                <Copy size={13} />
+                <span>Copiar</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleShareDiagnostics}
+                className="min-h-[40px] rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <Share2 size={13} />
+                <span>Compartir</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleClearDiagnostics}
+                className={`min-h-[40px] rounded-lg ${T.btnGhost} border ${T.border} text-[11px] font-bold text-rose-400 flex items-center justify-center gap-1.5 cursor-pointer active:scale-95`}
+              >
+                <Trash2 size={13} />
+                <span>Limpiar</span>
+              </button>
+            </div>
+
+            {diagExpanded && (
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                  {[
+                    { id: 'all', label: 'Todos' },
+                    { id: 'error', label: 'Errores' },
+                    { id: 'warn', label: 'Avisos' },
+                    { id: 'ota', label: 'OTA' }
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setDiagFilter(tab.id)}
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-bold border shrink-0 cursor-pointer ${
+                        diagFilter === tab.id
+                          ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                          : `${T.btnGhost} ${T.border} ${T.textMuted}`
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className={`max-h-56 overflow-y-auto rounded-lg border ${T.border} ${T.appBg} divide-y divide-slate-800/60`}>
+                  {(() => {
+                    const filtered = diagEvents.filter((ev) => {
+                      if (diagFilter === 'all') return true;
+                      if (diagFilter === 'ota') return ev.category === 'ota';
+                      return ev.level === diagFilter;
+                    });
+                    if (filtered.length === 0) {
+                      return (
+                        <p className={`p-3 text-center text-[11px] ${T.textMuted}`}>
+                          Sin eventos registrados para este filtro.
+                        </p>
+                      );
+                    }
+                    return filtered.slice(0, 40).map((ev) => (
+                      <div key={ev.id} className="p-2 text-[10px] space-y-0.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`font-black uppercase ${
+                            ev.level === 'error' ? 'text-rose-400' : ev.level === 'warn' ? 'text-amber-400' : 'text-sky-400'
+                          }`}>
+                            [{ev.category}] {ev.level}
+                          </span>
+                          <span className={`font-mono text-[9px] ${T.textMuted}`}>
+                            {new Date(ev.ts).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <p className={`${T.textSecondary} break-words leading-snug`}>{ev.message}</p>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* GARANTÍAS DE SEGURIDAD Y RENDIMIENTO */}
         <div className={`p-3.5 rounded-xl ${T.subPanelBg} border ${T.border} space-y-2`}>

@@ -6,14 +6,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { hapticTap, hapticSuccess } from '../utils/haptics';
 import api from '../services/api';
 import { useMobileKeyboardViewport } from '../hooks/useMobileKeyboardViewport';
-import {
-    MultiFormatReader,
-    BarcodeFormat,
-    DecodeHintType,
-    RGBLuminanceSource,
-    BinaryBitmap,
-    HybridBinarizer
-} from '@zxing/library';
+
+// Carga lazy bajo demanda de @zxing/library (~440 KB): solo se descarga si no hay ML Kit nativo o como fallback web
+let cachedZxingPromise = null;
+async function loadZxingLibrary() {
+    if (!cachedZxingPromise) {
+        cachedZxingPromise = import('@zxing/library').catch((err) => {
+            cachedZxingPromise = null;
+            throw err;
+        });
+    }
+    return cachedZxingPromise;
+}
 
 // Singleton AudioContext for instant, zero-latency cashier beep
 let sharedAudioCtx = null;
@@ -65,6 +69,8 @@ export default function MobileBarcodeScannerModal({
     const canvasRef = useRef(null);
     const ctxRef = useRef(null);
     const readerRef = useRef(null);
+    const zxingModRef = useRef(null);
+    const mlKitUnavailableRef = useRef(false);
     const nativeDetectorRef = useRef(null);
     const nativeTextDetectorRef = useRef(null);
     const visionWorkerRef = useRef(null);
@@ -316,7 +322,6 @@ export default function MobileBarcodeScannerModal({
                 const video = videoRef.current;
                 const canvas = canvasRef.current;
                 const ctx = ctxRef.current;
-                const reader = readerRef.current;
                 const nativeDetector = nativeDetectorRef.current;
 
                 if (video && video.readyState >= 2 && !isProcessingFrame) {
@@ -363,7 +368,7 @@ export default function MobileBarcodeScannerModal({
                                         ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropW, cropH);
 
                                         let detectedByMlKit = false;
-                                        if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.scanBarcode) {
+                                        if (typeof window !== 'undefined' && !mlKitUnavailableRef.current && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.scanBarcode) {
                                             try {
                                                 const base64Crop = canvas.toDataURL('image/jpeg', 0.82);
                                                 const mlRes = await window.Capacitor.Plugins.PosNativeHardware.scanBarcode({ imageBase64: base64Crop });
@@ -371,20 +376,48 @@ export default function MobileBarcodeScannerModal({
                                                     detectedByMlKit = true;
                                                     handleValidBarcodeRef.current?.(mlRes.rawValue);
                                                 }
-                                            } catch (caughtErr) { console.warn('[MobileBarcodeScannerModal] Error en módulo auxiliar de visión/OCR:', caughtErr?.message || caughtErr); }
+                                            } catch (caughtErr) {
+                                                const msg = String(caughtErr?.message || caughtErr || '');
+                                                if (/play services|unavailable|module|not installed/i.test(msg)) {
+                                                    mlKitUnavailableRef.current = true;
+                                                }
+                                                console.warn('[MobileBarcodeScannerModal] Error en módulo auxiliar de visión/OCR:', msg);
+                                            }
                                         }
 
-                                        if (!detectedByMlKit && reader) {
-                                            const imgData = ctx.getImageData(0, 0, cropW, cropH);
-                                            try {
-                                                const luminanceSource = new RGBLuminanceSource(imgData.data, cropW, cropH);
-                                                const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
-                                                const result = reader.decode(binaryBitmap);
-                                                if (result && result.getText()) {
-                                                    handleValidBarcodeRef.current?.(result.getText());
+                                        if (!detectedByMlKit) {
+                                            if (!readerRef.current && (!window.Capacitor?.isNativePlatform?.() || mlKitUnavailableRef.current)) {
+                                                try {
+                                                    const zxing = await loadZxingLibrary();
+                                                    zxingModRef.current = zxing;
+                                                    const h = new Map();
+                                                    h.set(zxing.DecodeHintType.POSSIBLE_FORMATS, [
+                                                        zxing.BarcodeFormat.EAN_13, zxing.BarcodeFormat.EAN_8,
+                                                        zxing.BarcodeFormat.CODE_128, zxing.BarcodeFormat.CODE_39,
+                                                        zxing.BarcodeFormat.CODE_93, zxing.BarcodeFormat.UPC_A,
+                                                        zxing.BarcodeFormat.UPC_E, zxing.BarcodeFormat.ITF,
+                                                        zxing.BarcodeFormat.QR_CODE, zxing.BarcodeFormat.DATA_MATRIX
+                                                    ]);
+                                                    h.set(zxing.DecodeHintType.TRY_HARDER, true);
+                                                    const fallbackReader = new zxing.MultiFormatReader();
+                                                    fallbackReader.setHints(h);
+                                                    readerRef.current = fallbackReader;
+                                                } catch { /* fallback software no disponible */ }
+                                            }
+                                            const activeReader = readerRef.current;
+                                            const zxingMod = zxingModRef.current;
+                                            if (activeReader && zxingMod) {
+                                                const imgData = ctx.getImageData(0, 0, cropW, cropH);
+                                                try {
+                                                    const luminanceSource = new zxingMod.RGBLuminanceSource(imgData.data, cropW, cropH);
+                                                    const binaryBitmap = new zxingMod.BinaryBitmap(new zxingMod.HybridBinarizer(luminanceSource));
+                                                    const result = activeReader.decode(binaryBitmap);
+                                                    if (result && result.getText()) {
+                                                        handleValidBarcodeRef.current?.(result.getText());
+                                                    }
+                                                } catch (_e) {
+                                                    activeReader.reset();
                                                 }
-                                            } catch (_e) {
-                                                reader.reset();
                                             }
                                         }
                                     }
@@ -491,17 +524,19 @@ export default function MobileBarcodeScannerModal({
                                     }
 
                                     // Vía C: ZXing Software Fallback si no hay detector nativo o no detectó
-                                    if (!codeFound && reader && ocrWorkerRef.current) {
+                                    const activeOcrReader = readerRef.current;
+                                    const activeZxingMod = zxingModRef.current;
+                                    if (!codeFound && activeOcrReader && activeZxingMod && ocrWorkerRef.current) {
                                         try {
                                             const imgData = ctx.getImageData(0, 0, cropW, cropH);
-                                            const luminanceSource = new RGBLuminanceSource(imgData.data, cropW, cropH);
-                                            const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
-                                            const result = reader.decode(binaryBitmap);
+                                            const luminanceSource = new activeZxingMod.RGBLuminanceSource(imgData.data, cropW, cropH);
+                                            const binaryBitmap = new activeZxingMod.BinaryBitmap(new activeZxingMod.HybridBinarizer(luminanceSource));
+                                            const result = activeOcrReader.decode(binaryBitmap);
                                             if (result && result.getText()) {
                                                 ocrWorkerRef.current.postMessage({ type: 'PARSE_TEXT', text: result.getText() });
                                             }
                                         } catch (_e) {
-                                            reader.reset();
+                                            activeOcrReader.reset();
                                         }
                                     }
                                 }
@@ -764,26 +799,40 @@ export default function MobileBarcodeScannerModal({
                 }
             }
 
-            // 2. Initialize ZXing Software Reader as high-speed multi-pass fallback
-            const hints = new Map();
-            const formats = [
-                BarcodeFormat.EAN_13,
-                BarcodeFormat.EAN_8,
-                BarcodeFormat.CODE_128,
-                BarcodeFormat.CODE_39,
-                BarcodeFormat.CODE_93,
-                BarcodeFormat.UPC_A,
-                BarcodeFormat.UPC_E,
-                BarcodeFormat.ITF,
-                BarcodeFormat.QR_CODE,
-                BarcodeFormat.DATA_MATRIX
-            ];
-            hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
-            hints.set(DecodeHintType.TRY_HARDER, true);
+            // 2. Inicializar ZXing Software Reader de forma lazy (440 KB) solo si no hay ML Kit nativo ni BarcodeDetector
+            const hasNativeMlKit = Boolean(
+                typeof window !== 'undefined' &&
+                !mlKitUnavailableRef.current &&
+                window.Capacitor?.isNativePlatform?.() &&
+                window.Capacitor?.Plugins?.PosNativeHardware?.scanBarcode
+            );
+            readerRef.current = null;
+            if (!hasNativeMlKit && !nativeDetectorRef.current) {
+                loadZxingLibrary().then((zxing) => {
+                    zxingModRef.current = zxing;
+                    const hints = new Map();
+                    const formats = [
+                        zxing.BarcodeFormat.EAN_13,
+                        zxing.BarcodeFormat.EAN_8,
+                        zxing.BarcodeFormat.CODE_128,
+                        zxing.BarcodeFormat.CODE_39,
+                        zxing.BarcodeFormat.CODE_93,
+                        zxing.BarcodeFormat.UPC_A,
+                        zxing.BarcodeFormat.UPC_E,
+                        zxing.BarcodeFormat.ITF,
+                        zxing.BarcodeFormat.QR_CODE,
+                        zxing.BarcodeFormat.DATA_MATRIX
+                    ];
+                    hints.set(zxing.DecodeHintType.POSSIBLE_FORMATS, formats);
+                    hints.set(zxing.DecodeHintType.TRY_HARDER, true);
 
-            const reader = new MultiFormatReader();
-            reader.setHints(hints);
-            readerRef.current = reader;
+                    const reader = new zxing.MultiFormatReader();
+                    reader.setHints(hints);
+                    readerRef.current = reader;
+                }).catch(() => {
+                    readerRef.current = null;
+                });
+            }
 
             // Offscreen Canvas for high-res frame capture
             const canvas = document.createElement('canvas');

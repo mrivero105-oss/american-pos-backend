@@ -7,7 +7,11 @@ import { ThemeProvider } from './providers/ThemeProvider';
 import { AuthProvider } from './providers/AuthProvider';
 import { SocketProvider } from './providers/SocketProvider';
 import { ensureStoragePersistence } from './services/storagePersistence';
+import { installGlobalErrorHooks } from './services/mobileDiagnosticsService';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// 🖤 Instalar Caja Negra de diagnóstico sanitizada desde el milisegundo 0
+installGlobalErrorHooks();
 
 // 🛡️ Blindaje de Almacenamiento Persistente en Android / iOS / PWA
 ensureStoragePersistence().catch(() => {});

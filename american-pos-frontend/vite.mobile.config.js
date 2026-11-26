@@ -24,12 +24,26 @@ function mobileEntrypointHtmlPlugin() {
       }
     },
     closeBundle() {
-      const nestedApk = path.resolve(process.cwd(), 'dist-mobile', 'Isaac-POS-Mobile.apk');
-      if (fs.existsSync(nestedApk)) {
-        try {
-          fs.unlinkSync(nestedApk);
-        } catch (err) {
-          console.warn('[vite.mobile] No se pudo limpiar APK anidado:', err?.message);
+      const distDir = path.resolve(process.cwd(), 'dist-mobile');
+      // Limpiar APK anidado y duplicados de public/ innecesarios en el APK/OTA (logos importados como WebP vía src/assets)
+      const redundantMobileFiles = [
+        'Isaac-POS-Mobile.apk',
+        'isaac-logo-horizontal.png',
+        'isaac-logo-horizontal-dark.png',
+        'isaac-emblem.png',
+        'isaac-emblem-dark.png',
+        'favicon.ico',
+        'splash.html',
+        path.join('assets', 'icon.png')
+      ];
+      for (const rel of redundantMobileFiles) {
+        const target = path.join(distDir, rel);
+        if (fs.existsSync(target)) {
+          try {
+            fs.unlinkSync(target);
+          } catch (err) {
+            console.warn(`[vite.mobile] No se pudo limpiar ${rel}:`, err?.message);
+          }
         }
       }
     }
@@ -236,10 +250,7 @@ export default defineConfig(({ command }) => {
           const rules = [
             ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/', '/node_modules/zustand/']],
             ['vendor-icons', ['/node_modules/lucide-react/']],
-            ['vendor-docs', ['/node_modules/jspdf/', '/node_modules/html2canvas-pro/']],
-            ['vendor-charts', ['/node_modules/recharts/']],
             ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
-            ['vendor-zxing', ['/node_modules/@zxing/library/']],
             ['vendor-realtime', ['/node_modules/socket.io-client/', '/node_modules/engine.io-client/', '/node_modules/socket.io-parser/']],
             ['vendor-capacitor', ['/node_modules/@capacitor/core/', '/node_modules/@capacitor/clipboard/', '/node_modules/@capgo/capacitor-updater/']],
             ['vendor-qr', ['/node_modules/qrcode/', '/node_modules/jsbarcode/']],

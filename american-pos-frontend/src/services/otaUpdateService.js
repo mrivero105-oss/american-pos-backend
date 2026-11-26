@@ -6,6 +6,7 @@ import { getBaseUrl, isPrivateLanOrLocalHost } from './api';
 import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
 import { OTA_PUBLIC_KEY_PEM } from '../config/otaPublicKey';
 import { computeSha256Hex, verifyRsaSha256Bytes } from '../utils/clientLicenseValidator';
+import { recordDiagnosticEvent } from './mobileDiagnosticsService';
 
 const NATIVE_APK_VERSION_CODE_KEY = 'isaac_pos_native_apk_version_code';
 const OTA_READY_EVENT = 'isaac-ota-update-ready';
@@ -471,6 +472,11 @@ export const otaUpdateService = {
                 publicKeyPem: options.publicKeyPem
             });
             console.log('[OTA_UPDATE] 🔐 Firma criptográfica RSA-SHA256 y checksum SHA-256 verificados correctamente.');
+            recordDiagnosticEvent('info', 'ota', `Firma RSA-SHA256 verificada para v${remote.version}`, {
+                source: selected.source,
+                currentVer,
+                remoteVer: remote.version
+            });
 
             if (toastId) {
                 toast.loading(`Instalando actualización v${remote.version.split('.').slice(-1)[0] || ''}...`, { id: toastId });
@@ -507,6 +513,11 @@ export const otaUpdateService = {
             if (typeof sessionStorage !== 'undefined') {
                 sessionStorage.setItem(OTA_STAGED_SESSION_KEY, remote.version);
             }
+            recordDiagnosticEvent('info', 'ota', `Bundle OTA v${remote.version} en cola (nextBundle)`, {
+                bundleId: bundle.id,
+                source: selected.source,
+                immediate: Boolean(options.immediate)
+            });
             updateReady = true;
             newVersionDownloaded = remote.version;
             notifyUpdateReadyListeners(remote.version);
@@ -534,6 +545,10 @@ export const otaUpdateService = {
             };
         } catch (err) {
             console.error('[OTA_UPDATE] Error durante la actualización OTA:', err);
+            recordDiagnosticEvent('error', 'ota', err?.message || 'Error durante actualización OTA', {
+                code: err?.code,
+                status: err?.response?.status
+            });
             let userMsg = 'Error al verificar actualización.';
             if (err.response?.status === 503) {
                 userMsg = 'Servidor PC no disponible temporalmente (503). Reintenta en unos instantes.';

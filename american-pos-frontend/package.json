@@ -12,7 +12,8 @@
     "dev:mobile": "vite --config vite.mobile.config.js --port 5174 --host",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
-    "test:all": "node ../american-pos-backend/scripts/run_all_tests.cjs"
+    "test:all": "node ../american-pos-backend/scripts/run_all_tests.cjs",
+    "verify:mobile": "node ../scripts/verify_mobile_release.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.2",
