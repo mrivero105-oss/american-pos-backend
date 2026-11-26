@@ -232,7 +232,7 @@ export function installGlobalErrorHooks() {
       insideConsoleHook = true;
       try {
         const text = args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === 'object' ? JSON.stringify(redactSensitiveData(a)) : String(a))).join(' ');
-        const cat = /\[OTA_UPDATE\]/i.test(text) ? 'ota'
+        const cat = /\[OTA_UPDATE\]|\[CapgoUpdater\]|CapacitorUpdater/i.test(text) ? 'ota'
           : /\[SyncManager\]|\[LAN_SYNC\]/i.test(text) ? 'sync'
             : /printer|bluetooth|escpos/i.test(text) ? 'printer'
               : /\[Auth\]|biometric/i.test(text) ? 'auth'
@@ -253,7 +253,7 @@ export function installGlobalErrorHooks() {
       insideConsoleHook = true;
       try {
         const text = args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === 'object' ? JSON.stringify(redactSensitiveData(a)) : String(a))).join(' ');
-        const cat = /\[OTA_UPDATE\]/i.test(text) ? 'ota'
+        const cat = /\[OTA_UPDATE\]|\[CapgoUpdater\]|CapacitorUpdater/i.test(text) ? 'ota'
           : /\[SyncManager\]|\[LAN_SYNC\]/i.test(text) ? 'sync'
             : /printer|bluetooth/i.test(text) ? 'printer'
               : 'runtime';

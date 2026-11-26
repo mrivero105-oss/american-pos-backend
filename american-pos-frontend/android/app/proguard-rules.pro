@@ -19,5 +19,7 @@
 -keep class com.google.mlkit.** { *; }
 -dontwarn com.google.mlkit.**
 
-# AndroidX Biometric
+# AndroidX Biometric & CameraX
 -keep class androidx.biometric.** { *; }
+-keep class com.isaacpos.app.NativeVisionScannerActivity { *; }
+-dontwarn androidx.camera.**

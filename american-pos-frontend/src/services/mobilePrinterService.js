@@ -157,19 +157,46 @@ class MobilePrinterService {
         return true;
     }
 
+    getNativePlugin() {
+        if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.PosNativeHardware) {
+            return window.Capacitor.Plugins.PosNativeHardware;
+        }
+        return PosNativeHardware;
+    }
+
     /**
-     * Print binary ESC/POS data to a LAN/Wi-Fi thermal printer (TCP 9100) via PC backend relay
+     * Print binary ESC/POS data to a LAN/Wi-Fi thermal printer (TCP 9100).
+     * En Android nativo intenta primero socket TCP directo anti-SSRF (funciona incluso con la PC apagada)
+     * y hace fallback transparente al relay backend /settings/print-network-raw.
      */
     async printNetwork(ip, port = 9100, escPosData) {
         const cleanIp = String(ip || '').trim();
         if (!cleanIp) {
             throw new Error('IP de impresora de red no configurada.');
         }
+        const safePort = Number(port) || 9100;
         const bytes = this.toEscPosBytes(escPosData);
         const dataBase64 = this.toBase64(bytes);
+
+        const nativePlugin = this.getNativePlugin();
+        if (this.isNativePlatform() && typeof nativePlugin?.printNetworkTcp === 'function') {
+            try {
+                const nativeRes = await nativePlugin.printNetworkTcp({
+                    ip: cleanIp,
+                    port: safePort,
+                    data: dataBase64
+                });
+                if (nativeRes?.success) {
+                    return true;
+                }
+            } catch (tcpErr) {
+                console.warn('[NativePrinter] TCP directo falló, intentando relay PC:', tcpErr?.message || tcpErr);
+            }
+        }
+
         const res = await api.post('/settings/print-network-raw', {
             ip: cleanIp,
-            port: Number(port) || 9100,
+            port: safePort,
             dataBase64
         }, { timeout: 6000 });
         if (!res.data?.success) {
@@ -211,18 +238,21 @@ class MobilePrinterService {
             return await this.printNetwork(printerCfg.ip, printerCfg.port || 9100, bytes);
         }
 
-        // 2. Nativo Capacitor Android RFCOMM SPP
+        // 2. Nativo Capacitor Android (RFCOMM SPP + BLE GATT automático)
         if (this.isNativePlatform()) {
             const targetMac = options.address ||
                 printerCfg.btAddress ||
                 printerCfg.address ||
                 localStorage.getItem('pos_mobile_bt_printer') ||
                 localStorage.getItem('pos_mobile_bt_printer_last') || '';
+            const rawTransport = String(options.transport || printerCfg.btTransport || localStorage.getItem('pos_mobile_bt_transport') || 'auto').toLowerCase();
+            const transport = rawTransport === 'ble' ? 'ble' : (rawTransport === 'classic' ? 'classic' : 'auto');
 
             if (targetMac) {
-                const res = await PosNativeHardware.printBluetooth({
+                const res = await this.getNativePlugin().printBluetooth({
                     address: targetMac,
-                    data: this.toBase64(bytes)
+                    data: this.toBase64(bytes),
+                    transport
                 });
                 if (res?.success) return true;
             }
@@ -306,7 +336,7 @@ class MobilePrinterService {
     async getPairedPrinters() {
         if (this.isNativePlatform()) {
             try {
-                const res = await PosNativeHardware.getPairedPrinters();
+                const res = await this.getNativePlugin().getPairedPrinters();
                 return res?.printers || [];
             } catch (err) {
                 console.warn('[NativePrinter] Error getting paired printers:', err);
@@ -314,6 +344,21 @@ class MobilePrinterService {
             }
         }
         return [];
+    }
+
+    /**
+     * Active Bluetooth Classic + BLE Discovery (Android 12+ BLUETOOTH_SCAN sin GPS)
+     */
+    async discoverBluetoothPrinters({ durationMs = 4500 } = {}) {
+        if (!this.isNativePlatform()) {
+            return [];
+        }
+        const nativePlugin = this.getNativePlugin();
+        if (typeof nativePlugin?.discoverBluetoothPrinters === 'function') {
+            const res = await nativePlugin.discoverBluetoothPrinters({ durationMs });
+            return res?.printers || [];
+        }
+        return await this.getPairedPrinters();
     }
 
     /**
@@ -360,19 +405,28 @@ class MobilePrinterService {
             }
         } catch { /* Continuar a Bluetooth/Fallback */ }
 
-        // 3. Direct Native Capacitor Android Hardware Plugin (RFCOMM SPP)
+        // 3. Direct Native Capacitor Android Hardware Plugin (RFCOMM SPP + BLE GATT auto)
         if (this.isNativePlatform()) {
             try {
+                let savedCfg = {};
+                try {
+                    savedCfg = JSON.parse(localStorage.getItem('pos_printer_config') || '{}');
+                } catch { /* Sin config JSON previa */ }
+
                 const targetMac = businessSettings?.printerMac ||
+                    savedCfg.btAddress ||
                     localStorage.getItem('pos_mobile_bt_printer') ||
                     localStorage.getItem('pos_mobile_bt_printer_last') || '';
+                const rawTransport = String(savedCfg.btTransport || localStorage.getItem('pos_mobile_bt_transport') || 'auto').toLowerCase();
+                const transport = rawTransport === 'ble' ? 'ble' : (rawTransport === 'classic' ? 'classic' : 'auto');
 
                 if (targetMac) {
                     const base64Data = this.toBase64(escPosContent);
-                    console.log('[NativePrinter] Direct SPP socket print to:', targetMac);
-                    const result = await PosNativeHardware.printBluetooth({
+                    console.log('[NativePrinter] Direct BT print to:', targetMac, 'transport:', transport);
+                    const result = await this.getNativePlugin().printBluetooth({
                         address: targetMac,
-                        data: base64Data
+                        data: base64Data,
+                        transport
                     });
                     if (result?.success) {
                         localStorage.setItem('pos_mobile_bt_printer_last', targetMac);

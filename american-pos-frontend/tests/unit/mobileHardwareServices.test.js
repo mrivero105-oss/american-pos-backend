@@ -89,4 +89,57 @@ describe('Fase M3 — Hardware Móvil: ESC/POS CP858, BLE y Impresión de Red/Re
         expect(typeof body.dataBase64).toBe('string');
         expect(body.dataBase64.length).toBeGreaterThan(10);
     });
+
+    it('Bloque 2: discoverBluetoothPrinters delega en PosNativeHardware y printNetwork prioriza TCP 9100 directo offline', async () => {
+        const mockNativePlugin = {
+            discoverBluetoothPrinters: vi.fn().mockResolvedValue({
+                printers: [
+                    { name: 'POS-58-BLE', address: 'AA:BB:CC:DD:EE:01', bonded: true, transport: 'BLE', rssi: -48 },
+                    { name: 'Xprinter XP-P300', address: 'AA:BB:CC:DD:EE:02', bonded: false, transport: 'CLASSIC', rssi: -62 }
+                ]
+            }),
+            printNetworkTcp: vi.fn().mockResolvedValue({ success: true, transport: 'TCP_DIRECT' }),
+            printBluetooth: vi.fn().mockResolvedValue({ success: true, transport: 'BLE_GATT' })
+        };
+        const prevCap = window.Capacitor;
+        window.Capacitor = {
+            isNativePlatform: () => true,
+            Plugins: { PosNativeHardware: mockNativePlugin }
+        };
+        vi.spyOn(mobilePrinterService, 'isNativePlatform').mockReturnValue(true);
+        const postSpy = vi.spyOn(api, 'post').mockResolvedValue({ data: { success: true } });
+
+        try {
+            const list = await mobilePrinterService.discoverBluetoothPrinters({ durationMs: 3000 });
+            expect(list).toHaveLength(2);
+            expect(list[0].transport).toBe('BLE');
+
+            // 1. TCP directo nativo exitoso NO necesita relay al backend PC
+            const tcpOk = await mobilePrinterService.printNetwork('192.168.1.210', 9100, 'Ticket Directo');
+            expect(tcpOk).toBe(true);
+            expect(mockNativePlugin.printNetworkTcp).toHaveBeenCalledTimes(1);
+            expect(postSpy).not.toHaveBeenCalled();
+
+            // 2. Si TCP directo falla, hace fallback automático al relay PC
+            mockNativePlugin.printNetworkTcp.mockRejectedValueOnce(new Error('No route to host'));
+            const fallbackOk = await mobilePrinterService.printNetwork('192.168.1.210', 9100, 'Ticket Relay');
+            expect(fallbackOk).toBe(true);
+            expect(postSpy).toHaveBeenCalledTimes(1);
+
+            // 3. Impresión BLE nativa pasa transport: 'ble'
+            localStorage.setItem('pos_printer_config', JSON.stringify({
+                type: 'bluetooth',
+                btAddress: 'AA:BB:CC:DD:EE:01',
+                btTransport: 'ble'
+            }));
+            const bleOk = await mobilePrinterService.printRawEscPosText('PRUEBA BLE');
+            expect(bleOk).toBe(true);
+            expect(mockNativePlugin.printBluetooth).toHaveBeenCalledWith(expect.objectContaining({
+                address: 'AA:BB:CC:DD:EE:01',
+                transport: 'ble'
+            }));
+        } finally {
+            window.Capacitor = prevCap;
+        }
+    });
 });

@@ -53,6 +53,9 @@ export default function MobileThermalPrinterModal({
   const [selectedName, setSelectedName] = useState(() => {
     return initialCfg.btName || localStorage.getItem('pos_mobile_bt_printer_name') || '';
   });
+  const [selectedTransport, setSelectedTransport] = useState(() => {
+    return initialCfg.btTransport || localStorage.getItem('pos_mobile_bt_transport') || 'auto';
+  });
   const [paperWidth, setPaperWidth] = useState(() => {
     return localStorage.getItem('pos_mobile_paper_width') || '58mm';
   });
@@ -60,6 +63,7 @@ export default function MobileThermalPrinterModal({
     return localStorage.getItem('pos_mobile_auto_print') === 'true';
   });
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [isScanningNearby, setIsScanningNearby] = useState(false);
   const [isPrintingTest, setIsPrintingTest] = useState(false);
   const [testResult, setTestResult] = useState(null);
 
@@ -78,7 +82,8 @@ export default function MobileThermalPrinterModal({
       ip: String(patch.ip ?? networkIp).trim(),
       port: Number(patch.port ?? networkPort) || 9100,
       btAddress: patch.btAddress ?? selectedAddress,
-      btName: patch.btName ?? selectedName
+      btName: patch.btName ?? selectedName,
+      btTransport: patch.btTransport ?? selectedTransport
     };
     try {
       localStorage.setItem('pos_printer_config', JSON.stringify(next));
@@ -86,7 +91,7 @@ export default function MobileThermalPrinterModal({
       // Almacenamiento opcional
     }
     return next;
-  }, [printerMode, networkIp, networkPort, selectedAddress, selectedName]);
+  }, [printerMode, networkIp, networkPort, selectedAddress, selectedName, selectedTransport]);
 
   // Cargar lista de impresoras emparejadas en el sistema Android
   const loadPairedDevices = useCallback(async () => {
@@ -140,13 +145,36 @@ export default function MobileThermalPrinterModal({
   };
 
   const handleSelectPrinter = (device) => {
+    const devTransport = String(device.transport || 'auto').toUpperCase() === 'BLE' ? 'ble' : 'auto';
     setSelectedAddress(device.address);
     setSelectedName(device.name);
+    setSelectedTransport(devTransport);
     localStorage.setItem('pos_mobile_bt_printer_last', device.address);
     localStorage.setItem('pos_mobile_bt_printer', device.address);
     localStorage.setItem('pos_mobile_bt_printer_name', device.name);
-    persistPrinterConfig({ type: 'bluetooth', btAddress: device.address, btName: device.name });
-    showToast?.(`Impresora seleccionada: ${device.name}`);
+    localStorage.setItem('pos_mobile_bt_transport', devTransport);
+    persistPrinterConfig({ type: 'bluetooth', btAddress: device.address, btName: device.name, btTransport: devTransport });
+    showToast?.(`Impresora seleccionada: ${device.name}${devTransport === 'ble' ? ' (BLE)' : ''}`);
+  };
+
+  const handleDiscoverNearbyBluetooth = async () => {
+    setIsScanningNearby(true);
+    setTestResult(null);
+    try {
+      const devices = await mobilePrinterService.discoverBluetoothPrinters({ durationMs: 4500 });
+      setPairedPrinters(devices || []);
+      if (devices && devices.length > 0) {
+        showToast?.(`📡 ${devices.length} dispositivo(s) Bluetooth/BLE detectados`);
+      } else {
+        showToast?.('No se detectaron impresoras Bluetooth cercanas encendidas');
+      }
+    } catch (err) {
+      const msg = err?.message || 'Error buscando dispositivos Bluetooth cercanos';
+      setTestResult({ success: false, message: msg });
+      showToast?.(`⚠️ ${msg}`);
+    } finally {
+      setIsScanningNearby(false);
+    }
   };
 
   const handlePairWebBluetooth = async () => {
@@ -230,12 +258,14 @@ export default function MobileThermalPrinterModal({
         const PosNativeHardware = registerPlugin('PosNativeHardware');
         const res = await PosNativeHardware.printBluetooth({
           address: selectedAddress || '',
-          data: base64Data
+          data: base64Data,
+          transport: selectedTransport || 'auto'
         });
 
         if (res?.success) {
-          setTestResult({ success: true, message: 'Ticket de prueba CP858 impreso por Bluetooth.' });
-          showToast?.('✅ Ticket de prueba enviado a la impresora');
+          const via = res.transport === 'BLE_GATT' ? 'BLE GATT nativo' : 'Bluetooth SPP';
+          setTestResult({ success: true, message: `Ticket de prueba CP858 impreso por ${via}.` });
+          showToast?.(`✅ Ticket de prueba enviado (${via})`);
         } else {
           setTestResult({ success: false, message: 'La impresora no respondió. Verifica que esté encendida.' });
         }
@@ -424,41 +454,62 @@ export default function MobileThermalPrinterModal({
               </p>
             </div>
           ) : (
-            /* Lista de Dispositivos Emparejados en Android */
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
+            /* Lista de Dispositivos Bluetooth (Emparejados + Descubrimiento Classic/BLE) */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
                 <label className={`text-[11px] font-bold ${T?.textSecondary || 'text-slate-300'}`}>
-                  Dispositivos Bluetooth Disponibles
+                  Impresoras Bluetooth / BLE ({pairedPrinters.length})
                 </label>
-                <span className="text-[10px] text-slate-500">
-                  {pairedPrinters.length} detectados
-                </span>
+                {mobilePrinterService.isNativePlatform() && (
+                  <button
+                    type="button"
+                    onClick={handleDiscoverNearbyBluetooth}
+                    disabled={isScanningNearby || isLoadingDevices}
+                    className="px-2.5 py-1.5 min-h-[34px] rounded-lg bg-blue-600/20 text-blue-300 border border-blue-500/30 text-[11px] font-bold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={isScanningNearby ? 'animate-spin' : ''} />
+                    {isScanningNearby ? 'Buscando (4.5s)...' : 'Buscar Cercanas (BT/BLE)'}
+                  </button>
+                )}
               </div>
 
               {pairedPrinters.length === 0 ? (
                 <div className={`p-4 rounded-xl border border-dashed ${T?.border || 'border-slate-800'} text-center space-y-2`}>
                   <p className={`text-[11px] ${T?.textMuted || 'text-slate-400'}`}>
-                    No hay impresoras emparejadas en Android.
+                    No hay impresoras Bluetooth detectadas aún.
                   </p>
                   <p className="text-[10px] text-slate-500">
-                    Enciende tu impresora térmica, ve a <b>Ajustes de Android &gt; Bluetooth</b> y vincúlala con el PIN 0000 o 1234.
+                    Enciende tu impresora térmica y pulsa <b>Buscar Cercanas</b> (soporta Bluetooth Classic y BLE nativo sin pedir GPS).
                   </p>
-                  <button
-                    type="button"
-                    onClick={handlePairWebBluetooth}
-                    className="px-3 py-1.5 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-semibold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                  >
-                    <Bluetooth size={13} />
-                    Buscar con Web Bluetooth
-                  </button>
+                  {mobilePrinterService.isNativePlatform() ? (
+                    <button
+                      type="button"
+                      onClick={handleDiscoverNearbyBluetooth}
+                      disabled={isScanningNearby}
+                      className="px-3.5 py-2 min-h-[40px] rounded-lg bg-blue-600/20 text-blue-300 border border-blue-500/30 text-xs font-semibold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <Bluetooth size={14} />
+                      {isScanningNearby ? 'Escaneando impresoras...' : 'Buscar Impresoras BT / BLE'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handlePairWebBluetooth}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-semibold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <Bluetooth size={13} />
+                      Buscar con Web Bluetooth
+                    </button>
+                  )}
                 </div>
               ) : (
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
                   {pairedPrinters.map((dev, idx) => {
                     const isSelected = selectedAddress === dev.address;
+                    const transportTag = String(dev.transport || 'CLASSIC').toUpperCase();
                     return (
                       <button
-                        key={idx}
+                        key={dev.address || idx}
                         type="button"
                         onClick={() => handleSelectPrinter(dev)}
                         className={`w-full p-2.5 rounded-lg border flex items-center justify-between text-left transition-colors cursor-pointer ${
@@ -468,11 +519,27 @@ export default function MobileThermalPrinterModal({
                         }`}
                       >
                         <div className="min-w-0 pr-2">
-                          <p className="font-bold text-xs truncate">
-                            {dev.name || 'Impresora Bluetooth'}
-                          </p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-bold text-xs truncate">
+                              {dev.name || 'Impresora Bluetooth'}
+                            </p>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
+                              transportTag === 'BLE'
+                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                : transportTag === 'DUAL'
+                                  ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                                  : 'bg-slate-700/70 text-slate-300'
+                            }`}>
+                              {transportTag}
+                            </span>
+                            {dev.bonded === false && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                Cercana
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[9px] font-mono opacity-70">
-                            {dev.address}
+                            {dev.address}{typeof dev.rssi === 'number' ? ` • ${dev.rssi} dBm` : ''}
                           </p>
                         </div>
                         {isSelected ? (

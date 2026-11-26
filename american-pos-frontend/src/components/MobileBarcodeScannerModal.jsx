@@ -110,6 +110,9 @@ export default function MobileBarcodeScannerModal({
     const [copiedCode, setCopiedCode] = useState('');
     const [manualCodeInput, setManualCodeInput] = useState('');
     const [isVideoFeedReady, setIsVideoFeedReady] = useState(false);
+    const [nativeScannerActive, setNativeScannerActive] = useState(false);
+    const [preferWebScanner, setPreferWebScanner] = useState(false);
+    const nativeSessionCodesRef = useRef(new Set());
 
     const lastScanTimeRef = useRef(0);
     const lastScanCodeRef = useRef('');
@@ -701,12 +704,12 @@ export default function MobileBarcodeScannerModal({
         toast.success(`📋 Código copiado: ${text}`);
     };
 
-    const handleValidBarcode = (code) => {
+    const handleValidBarcode = (code, { fromNativeScanner = false } = {}) => {
         const cleanCode = String(code || '').replace(/[\r\n\t]+/g, '').trim();
         if (!cleanCode) return;
         const now = Date.now();
-        // Debounce: Ignore identical code within 1.5s
-        if (cleanCode === lastScanCodeRef.current && (now - lastScanTimeRef.current) < 1500) {
+        // Debounce: Ignore identical code within 1.5s (en modo nativo BurstScanGate ya controla el anti-rebote)
+        if (!fromNativeScanner && cleanCode === lastScanCodeRef.current && (now - lastScanTimeRef.current) < 1500) {
             return;
         }
 
@@ -737,14 +740,20 @@ export default function MobileBarcodeScannerModal({
             return [{ code: cleanCode, productName: matched?.name || null, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }, ...filtered].slice(0, 20);
         });
 
-        playCashierBeep();
-        hapticSuccess();
+        if (!fromNativeScanner) {
+            playCashierBeep();
+            hapticSuccess();
+        }
 
         // Transmitir en tiempo real al servidor (para que la PC Principal reciba el código instantáneamente)
-        api.post('/remote-scan', { barcode: cleanCode, source: 'scanner_modal' }).catch(() => {});
+        api.post('/remote-scan', { barcode: cleanCode, source: fromNativeScanner ? 'native_camerax_scanner' : 'scanner_modal' }).catch(() => {});
 
         if (typeof onBarcodeScanned === 'function') {
             onBarcodeScanned(cleanCode);
+        }
+
+        if (fromNativeScanner) {
+            return;
         }
 
         if (targetMode === 'ASSIGN') {
@@ -760,8 +769,96 @@ export default function MobileBarcodeScannerModal({
 
     handleValidBarcodeRef.current = handleValidBarcode;
 
+    // Resetear preferencia web cada vez que el modal se cierra
     useEffect(() => {
-        if (isOpen) {
+        if (!isOpen) {
+            setPreferWebScanner(false);
+            setNativeScannerActive(false);
+        }
+    }, [isOpen]);
+
+    // Lanzador automático del escáner nativo CameraX + ML Kit en Android para modo BARCODE
+    const shouldLaunchNativeCameraX = Boolean(
+        isOpen &&
+        !preferWebScanner &&
+        (initialMode || 'BARCODE') === 'BARCODE' &&
+        !mlKitUnavailableRef.current &&
+        typeof window !== 'undefined' &&
+        window.Capacitor?.isNativePlatform?.() &&
+        typeof window.Capacitor?.Plugins?.PosNativeHardware?.startNativeScanner === 'function'
+    );
+
+    useEffect(() => {
+        if (!shouldLaunchNativeCameraX) return;
+
+        let cancelled = false;
+        let listenerHandle = null;
+        nativeSessionCodesRef.current = new Set();
+        setNativeScannerActive(true);
+
+        const plugin = window.Capacitor.Plugins.PosNativeHardware;
+
+        (async () => {
+            try {
+                if (typeof plugin.addListener === 'function') {
+                    listenerHandle = await plugin.addListener('nativeBarcodeScanned', (evt) => {
+                        if (cancelled || !evt?.barcode) return;
+                        const code = String(evt.barcode).trim();
+                        if (!code) return;
+                        nativeSessionCodesRef.current.add(`${code}#${evt.count || 0}`);
+                        handleValidBarcodeRef.current?.(code, { fromNativeScanner: true });
+                    });
+                }
+
+                const res = await plugin.startNativeScanner({
+                    burstMode: Boolean(initialBurstMode) && targetMode !== 'ASSIGN',
+                    title: title || 'Escáner Nativo POS',
+                    subtitle: subtitle || (targetMode === 'ASSIGN' ? 'Apunta al código para asignar' : 'Apunta al código • Toca pantalla para enfocar'),
+                    targetMode: targetMode || 'CART'
+                });
+
+                if (cancelled) return;
+
+                // Procesar lecturas de respaldo solo si no se emitieron por el stream live
+                if (Array.isArray(res?.barcodes) && res.barcodes.length > 0 && nativeSessionCodesRef.current.size === 0) {
+                    for (const code of res.barcodes) {
+                        if (code) handleValidBarcodeRef.current?.(code, { fromNativeScanner: true });
+                    }
+                }
+
+                if (res?.fallbackToWeb) {
+                    if (res.fallbackReason && /MLKIT_UNAVAILABLE/i.test(res.fallbackReason)) {
+                        mlKitUnavailableRef.current = true;
+                    }
+                    setNativeScannerActive(false);
+                    setPreferWebScanner(true);
+                    return;
+                }
+
+                setNativeScannerActive(false);
+                onCloseRef.current?.();
+            } catch (err) {
+                if (cancelled) return;
+                console.warn('[Scanner] Fallback a WebView tras aviso en CameraX nativo:', err?.message || err);
+                setNativeScannerActive(false);
+                setPreferWebScanner(true);
+            } finally {
+                try {
+                    await listenerHandle?.remove?.();
+                } catch { /* listener ya liberado */ }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            try {
+                listenerHandle?.remove?.();
+            } catch { /* listener ya liberado */ }
+        };
+    }, [shouldLaunchNativeCameraX, initialBurstMode, title, subtitle, targetMode]);
+
+    useEffect(() => {
+        if (isOpen && !shouldLaunchNativeCameraX) {
             setActiveMode(initialMode || 'BARCODE');
             setVisionMatches([]);
             setDetectedOcr({ batchNumber: '', expirationDate: '' });
@@ -933,9 +1030,9 @@ export default function MobileBarcodeScannerModal({
         return () => {
             stopScanner();
         };
-    }, [isOpen, initialMode, startScanner, stopScanner]);
+    }, [isOpen, initialMode, shouldLaunchNativeCameraX, startScanner, stopScanner]);
 
-    if (!isOpen) return null;
+    if (!isOpen || nativeScannerActive || shouldLaunchNativeCameraX) return null;
 
     const modalContent = (
         <AnimatePresence>
