@@ -20,7 +20,53 @@ class LANSyncService {
     this.printedSaleIds = new Set();
     this._socketBaseUrl = null;
     this._socketAuthToken = null;
+    this.isActive = false;
+    this.consecutivePeerFailures = 0;
+    this.lastPeerErrorMsg = null;
   }
+
+  getPeerPollBackoffMs() {
+    const baseMs = 45000;
+    const maxMs = 300000;
+    const exp = Math.min(4, Math.max(0, this.consecutivePeerFailures));
+    return Math.min(maxMs, baseMs * (2 ** exp));
+  }
+
+  _clearPeerPollTimer() {
+    if (this.pollInterval) {
+      clearTimeout(this.pollInterval);
+      this.pollInterval = null;
+    }
+  }
+
+  scheduleNextPeerPoll() {
+    this._clearPeerPollTimer();
+    if (!this.isActive) return;
+    const delayMs = this.getPeerPollBackoffMs();
+    this.pollInterval = setTimeout(async () => {
+      if (!this.isActive) return;
+      const isHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+      if (!isHidden && (!this.socket || !this.socket.connected)) {
+        await this.fetchLANPeers();
+      }
+      this.scheduleNextPeerPoll();
+    }, delayMs);
+  }
+
+  handleVisibilityChange = () => {
+    if (!this.isActive) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      this.consecutivePeerFailures = 0;
+      this.lastPeerErrorMsg = null;
+      if (!this.socket || !this.socket.connected) {
+        if (!this.socket?.active && !this.isConnecting) {
+          this.connectSocket();
+        }
+        this.fetchLANPeers();
+      }
+      this.scheduleNextPeerPoll();
+    }
+  };
 
   _resolveBaseUrl() {
     const isAndroidCap = typeof window !== 'undefined' && ((window.Capacitor?.isNativePlatform && window.Capacitor.isNativePlatform()) || window.location.protocol === 'capacitor:');
@@ -85,38 +131,36 @@ class LANSyncService {
       this.isConnecting = false;
     }
 
+    this.isActive = true;
+    this.consecutivePeerFailures = 0;
+    this.lastPeerErrorMsg = null;
+
     if (!this.isListeningNetwork) {
       window.addEventListener('online', this.handleNetworkChange);
       window.addEventListener('offline', this.handleNetworkChange);
       window.addEventListener('server-discovered', this.handleServerUrlChange);
       window.addEventListener('api-base-url-changed', this.handleServerUrlChange);
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      }
       this.isListeningNetwork = true;
     }
 
     this.connectSocket();
-
-    // Sondeo de respaldo de peers vía REST inteligente (solo cuando el socket no esté activo, cada 45s)
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
-    }
-    this.pollInterval = setInterval(() => {
-      // Si el socket P2P ya está conectado y saludable, no saturar la red Wi-Fi móvil
-      if (!this.socket || !this.socket.connected) {
-        this.fetchLANPeers();
-      }
-    }, 45000);
-
+    this.scheduleNextPeerPoll();
     this.fetchLANPeers();
   }
 
   handleNetworkChange = () => {
     const isOnline = navigator.onLine;
     if (isOnline) {
+      this.consecutivePeerFailures = 0;
+      this.lastPeerErrorMsg = null;
       this.status.state = 'CLOUD_ONLINE';
       if (!this.socket?.connected && !this.socket?.active && !this.isConnecting) {
         this.connectSocket();
       }
+      this.scheduleNextPeerPoll();
     } else {
       this.status.state = this.status.peers.length > 0 ? 'LAN_P2P_ACTIVE' : 'OFFLINE_ISOLATED';
     }
@@ -157,6 +201,8 @@ class LANSyncService {
 
       this.socket.on('connect', () => {
         this.isConnecting = false;
+        this.consecutivePeerFailures = 0;
+        this.lastPeerErrorMsg = null;
         console.log('[LAN_SYNC] 🌐 Socket P2P conectado al servidor LAN:', baseUrl);
         this.status.state = navigator.onLine ? 'CLOUD_ONLINE' : 'LAN_P2P_ACTIVE';
 
@@ -354,12 +400,15 @@ class LANSyncService {
   }
 
   async fetchLANPeers() {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     const authToken = typeof window !== 'undefined' ? secureMobileStorage.getToken() : null;
     const syncKey = typeof window !== 'undefined' ? localStorage.getItem('sync_secret_key') : null;
     if (!authToken && !syncKey) return;
     try {
       const res = await api.get('/lan/peers');
       if (res.data && res.data.success) {
+        this.consecutivePeerFailures = 0;
+        this.lastPeerErrorMsg = null;
         this.status.clusterSize = res.data.clusterSize || 1;
         this.status.peers = res.data.peers || [];
         this.status.localNode = res.data.localNode || null;
@@ -371,8 +420,14 @@ class LANSyncService {
         this.notifyListeners();
       }
     } catch (e) {
-      if (navigator.onLine) {
-        console.warn('[LAN_SYNC] Error consultando pares LAN:', e?.message);
+      this.consecutivePeerFailures += 1;
+      const errMsg = e?.message || 'error desconocido';
+      const shouldLogWarn =
+        navigator.onLine &&
+        (errMsg !== this.lastPeerErrorMsg || this.consecutivePeerFailures === 1 || this.consecutivePeerFailures % 4 === 0);
+      this.lastPeerErrorMsg = errMsg;
+      if (shouldLogWarn) {
+        console.warn('[LAN_SYNC] Error consultando pares LAN:', errMsg);
       }
       if (!navigator.onLine && this.status.peers.length === 0) {
         this.status.state = 'OFFLINE_ISOLATED';
@@ -506,12 +561,18 @@ class LANSyncService {
   }
 
   stop() {
+    this.isActive = false;
+    this.consecutivePeerFailures = 0;
+    this.lastPeerErrorMsg = null;
     window.removeEventListener('online', this.handleNetworkChange);
     window.removeEventListener('offline', this.handleNetworkChange);
     window.removeEventListener('server-discovered', this.handleServerUrlChange);
     window.removeEventListener('api-base-url-changed', this.handleServerUrlChange);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    }
     this.isListeningNetwork = false;
-    if (this.pollInterval) clearInterval(this.pollInterval);
+    this._clearPeerPollTimer();
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;

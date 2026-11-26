@@ -29,7 +29,10 @@ import {
   clearDiagnosticEvents,
   subscribeDiagnosticEvents,
   collectDeviceHealthSnapshot,
-  buildDiagnosticReportText
+  buildDiagnosticReportText,
+  getLastNetworkLatency,
+  subscribeNetworkLatency,
+  recordNetworkLatency
 } from '../../services/mobileDiagnosticsService';
 
 const SYNC_ALERTS_STORAGE_KEY = 'pos_mobile_sync_alerts_v1';
@@ -57,7 +60,7 @@ export default function MobileSyncCenterView({
   onOpenServerConfig,
   canManageSettings = false
 }) {
-  const [latencyMs, setLatencyMs] = useState(null);
+  const [latencyMs, setLatencyMs] = useState(() => getLastNetworkLatency()?.latencyMs ?? null);
   const [isTestingPing, setIsTestingPing] = useState(false);
   const [appVersion, setAppVersion] = useState('Consultando...');
   const [isUpdatingOta, setIsUpdatingOta] = useState(false);
@@ -225,6 +228,12 @@ export default function MobileSyncCenterView({
       });
     }
 
+    const unsubLatency = subscribeNetworkLatency((sample) => {
+      if (typeof sample?.latencyMs === 'number') {
+        setLatencyMs(sample.latencyMs);
+      }
+    });
+
     // Iniciar y suscribirse al servicio de sincronización automática 24/7 en tiempo real
     cloudRateSyncService.init();
     const unsub = cloudRateSyncService.subscribe((data) => {
@@ -241,6 +250,7 @@ export default function MobileSyncCenterView({
 
     return () => {
       unsub();
+      unsubLatency();
       unsubOtaReady();
       unsubDiag();
       window.removeEventListener('sync-queue-conflict', handleSyncEvents);
@@ -342,7 +352,8 @@ export default function MobileSyncCenterView({
     const start = performance.now();
     try {
       await api.get('/hello', { timeout: 2500 });
-      const duration = Math.round(performance.now() - start);
+      const duration = Math.max(1, Math.round(performance.now() - start));
+      recordNetworkLatency(duration);
       setLatencyMs(duration);
       showToast?.(`✅ Servidor PC en línea • Latencia: ${duration} ms`);
     } catch (_e) {
@@ -428,8 +439,18 @@ export default function MobileSyncCenterView({
             </div>
             <div>
               <span className={`text-[10px] font-bold ${T.textMuted} uppercase block`}>Latencia LAN</span>
-              <span className={`font-bold text-[11px] ${latencyMs === 'offline' ? 'text-rose-500' : latencyMs ? 'text-emerald-500' : T.textPrimary}`}>
-                {latencyMs === 'offline' ? 'Inaccesible' : latencyMs ? `${latencyMs} ms` : 'Normal (~1-3 ms)'}
+              <span className={`font-bold text-[11px] ${
+                latencyMs === 'offline'
+                  ? 'text-rose-500'
+                  : typeof latencyMs === 'number'
+                    ? (latencyMs <= 100 ? 'text-emerald-500' : latencyMs <= 350 ? 'text-amber-500' : 'text-rose-500')
+                    : T.textPrimary
+              }`}>
+                {latencyMs === 'offline'
+                  ? 'Inaccesible'
+                  : typeof latencyMs === 'number'
+                    ? `${latencyMs} ms${latencyMs <= 100 ? ' • Óptima' : latencyMs <= 350 ? ' • Lenta' : ' • Alta'}`
+                    : 'Sin medir aún'}
               </span>
             </div>
           </div>

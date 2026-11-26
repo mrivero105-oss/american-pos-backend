@@ -208,4 +208,48 @@ describe('Fase M4 — Sincronización LAN, Caché de Imágenes y Store Móvil', 
     expect(useMobilePosStore.getState().cart[0].product.name).toBe('Harina');
     expect(useMobilePosStore.getState().heldSales).toHaveLength(1);
   });
+
+  it('lanSyncService aplica backoff exponencial acotado (45s->90s->180s->300s), anti-spam de warn y pausa en segundo plano', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    api.get.mockRejectedValue(new Error('timeout of 8000ms exceeded'));
+
+    try {
+      expect(lanSyncService.getPeerPollBackoffMs()).toBe(45000);
+
+      await lanSyncService.fetchLANPeers();
+      expect(lanSyncService.getPeerPollBackoffMs()).toBe(90000);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      // Segundo y tercer fallo con mismo mensaje NO deben spamear console.warn
+      await lanSyncService.fetchLANPeers();
+      expect(lanSyncService.getPeerPollBackoffMs()).toBe(180000);
+      await lanSyncService.fetchLANPeers();
+      expect(lanSyncService.getPeerPollBackoffMs()).toBe(300000);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      // Cuarto fallo sí vuelve a emitir 1 aviso periódico y mantiene tope 300s
+      await lanSyncService.fetchLANPeers();
+      expect(lanSyncService.getPeerPollBackoffMs()).toBe(300000);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+
+      // Con app oculta en segundo plano, fetchLANPeers NO consulta red
+      const callsBeforeHidden = api.get.mock.calls.length;
+      const origVis = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      try {
+        await lanSyncService.fetchLANPeers();
+        expect(api.get.mock.calls.length).toBe(callsBeforeHidden);
+      } finally {
+        if (origVis) Object.defineProperty(document, 'visibilityState', origVis);
+        else Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      }
+
+      // Al recuperarse el servidor, el backoff vuelve inmediatamente a 45s
+      api.get.mockResolvedValueOnce({ data: { success: true, peers: [], clusterSize: 1 } });
+      await lanSyncService.fetchLANPeers();
+      expect(lanSyncService.getPeerPollBackoffMs()).toBe(45000);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });

@@ -2,6 +2,7 @@ import axios from 'axios';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { getTerminalId } from '../utils/terminalIdentity';
 import secureMobileStorage from '../utils/secureMobileStorage';
+import { recordNetworkLatency } from './mobileDiagnosticsService';
 
 export const PosNativeHardware = (typeof window !== 'undefined' && window.__posNativeHardwarePlugin)
     ? window.__posNativeHardwarePlugin
@@ -148,9 +149,12 @@ export const updateApiBaseUrl = (newIp) => {
 // Check server health quickly via /hello endpoint (instant latency + real DB readiness)
 export const checkServerHealth = async (customUrl = null, options = {}) => {
     const targetUrl = customUrl ? formatServerUrl(customUrl) : (api.defaults.baseURL || getBaseUrl() || 'http://127.0.0.1:3005');
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
         const res = await axios.get(`${targetUrl}/hello`, { timeout: options.timeoutMs || 3500 });
         if (res.status === 200) {
+            const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+            recordNetworkLatency(elapsed);
             if (res.data && res.data.dbReady === false) return false;
             if (options.requireMasterHost && res.data?.role === 'LAN_SPOKE') return false;
             return true;
@@ -169,6 +173,7 @@ export const checkServerDetailedHealth = async (customUrl = null, timeoutMs = 30
         const res = await axios.get(`${targetUrl}/hello`, { timeout: timeoutMs });
         const latencyMs = Math.round(performance.now() - t0);
         if (res.status === 200 && res.data) {
+            recordNetworkLatency(latencyMs);
             const isDbReady = res.data.dbReady !== false;
             return {
                 healthy: isDbReady,
@@ -554,12 +559,24 @@ api.interceptors.request.use((config) => {
     } catch (termErr) {
         console.warn('[API] Error adjuntando terminalId:', termErr?.message);
     }
+    config.__isaacStartTs = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
     return config;
 });
 
 // Response Interceptor: Handle 401 Unauthorized & 403 License Required globally
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        const startTs = response?.config?.__isaacStartTs;
+        if (typeof startTs === 'number') {
+            const nowTs = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? performance.now()
+                : Date.now();
+            recordNetworkLatency(nowTs - startTs);
+        }
+        return response;
+    },
     (error) => {
         if (error.response) {
             if (error.response.status === 401) {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AuthContext } from '../hooks/AuthContext';
-import api from '../services/api';
+import api, { getBaseUrl } from '../services/api';
 import syncService from '../services/syncService';
 import biometricService from '../services/biometricService';
 import secureMobileStorage from '../utils/secureMobileStorage';
@@ -447,6 +447,78 @@ export const AuthProvider = ({ children }) => {
             setLicenseLoading(true);
         }
 
+        const resolveOfflineFallback = async () => {
+            const latestStoredInfo = readStoredLicenseInfo();
+            if (isStoredLicenseBlocked(latestStoredInfo)) {
+                const blockedState = {
+                    ...latestStoredInfo,
+                    activated: false,
+                    graceExpired: Boolean(
+                        latestStoredInfo?.graceExpired ||
+                        (latestStoredInfo?.graceUntil && Date.now() > Date.parse(latestStoredInfo.graceUntil))
+                    )
+                };
+                if (blockedState.graceExpired && !blockedState.suspended && !blockedState.reason) {
+                    blockedState.reason = 'El periodo de gracia sin conexión ha expirado. Conecta el equipo a internet para validar tu licencia.';
+                }
+                setLicenseInfo(blockedState);
+                writeStoredLicenseInfo(blockedState);
+                localStorage.removeItem('isaac_pos_license_activated');
+                setIsActivated(false);
+                setMachineId(savedMachineId || currentTerminalId);
+                setLicenseLoading(false);
+                return blockedState;
+            }
+
+            const isNativeMobile = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
+            const hasOfflineProfile = Boolean(secureMobileStorage.getUserProfile() || localStorage.getItem('isaac_pos_cached_cashiers'));
+            const hasInheritedServerActivation = Boolean(savedActivated && latestStoredInfo?.isInherited);
+
+            if (savedKey || hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile)) {
+                // Exigir prueba verificable offline (llave RSA válida, herencia registrada del servidor o perfil móvil ya sincronizado);
+                // nunca confiar en el booleano `isaac_pos_license_activated=true` desnudo en localStorage
+                let isLocallyValid = Boolean(hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile));
+                if (savedKey) {
+                    try {
+                        const localCheck = await validateLicenseKeyLocally(savedKey, currentTerminalId);
+                        if (localCheck.valid) {
+                            isLocallyValid = true;
+                        } else if (localCheck.requiresServerValidation && savedActivated && latestStoredInfo?.activated) {
+                            isLocallyValid = true;
+                        } else if (hasInheritedServerActivation) {
+                            // Terminal autorizada por herencia de la licencia del servidor PC: una llave local antigua no debe bloquear el modo offline
+                            localStorage.removeItem('isaac_pos_license_key');
+                            isLocallyValid = true;
+                        } else {
+                            isLocallyValid = false;
+                        }
+                    } catch (err) {
+                        console.warn('[Auth] Error validando clave local durante check offline:', err?.message);
+                        if (!hasInheritedServerActivation) isLocallyValid = false;
+                    }
+                }
+                if (isLocallyValid) {
+                    const effectiveMid = savedMachineId || currentTerminalId;
+                    localStorage.setItem('isaac_pos_license_activated', 'true');
+                    localStorage.setItem('isaac_pos_license_machine_id', effectiveMid);
+                    setIsActivated(true);
+                    setMachineId(effectiveMid);
+                    setLicenseLoading(false);
+                    return { activated: true, isOffline: true, machineId: effectiveMid };
+                }
+            }
+
+            setIsActivated(false);
+            setMachineId(currentTerminalId);
+            setLicenseLoading(false);
+            return null;
+        };
+
+        const configuredBaseUrl = api.defaults?.baseURL || (typeof getBaseUrl === 'function' ? getBaseUrl() : '');
+        if (!configuredBaseUrl) {
+            return await resolveOfflineFallback();
+        }
+
         try {
             const { data } = await api.get('/license/status', {
                 params: { terminalId: currentTerminalId },
@@ -538,71 +610,7 @@ export const AuthProvider = ({ children }) => {
             return data;
         } catch (e) {
             console.warn('License check pending or offline:', e?.message || e);
-
-            const latestStoredInfo = readStoredLicenseInfo();
-            if (isStoredLicenseBlocked(latestStoredInfo)) {
-                const blockedState = {
-                    ...latestStoredInfo,
-                    activated: false,
-                    graceExpired: Boolean(
-                        latestStoredInfo?.graceExpired ||
-                        (latestStoredInfo?.graceUntil && Date.now() > Date.parse(latestStoredInfo.graceUntil))
-                    )
-                };
-                if (blockedState.graceExpired && !blockedState.suspended && !blockedState.reason) {
-                    blockedState.reason = 'El periodo de gracia sin conexión ha expirado. Conecta el equipo a internet para validar tu licencia.';
-                }
-                setLicenseInfo(blockedState);
-                writeStoredLicenseInfo(blockedState);
-                localStorage.removeItem('isaac_pos_license_activated');
-                setIsActivated(false);
-                setMachineId(savedMachineId || currentTerminalId);
-                setLicenseLoading(false);
-                return blockedState;
-            }
-
-            const isNativeMobile = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
-            const hasOfflineProfile = Boolean(secureMobileStorage.getUserProfile() || localStorage.getItem('isaac_pos_cached_cashiers'));
-            const hasInheritedServerActivation = Boolean(savedActivated && latestStoredInfo?.isInherited);
-
-            if (savedKey || hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile)) {
-                // Exigir prueba verificable offline (llave RSA válida, herencia registrada del servidor o perfil móvil ya sincronizado);
-                // nunca confiar en el booleano `isaac_pos_license_activated=true` desnudo en localStorage
-                let isLocallyValid = Boolean(hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile));
-                if (savedKey) {
-                    try {
-                        const localCheck = await validateLicenseKeyLocally(savedKey, currentTerminalId);
-                        if (localCheck.valid) {
-                            isLocallyValid = true;
-                        } else if (localCheck.requiresServerValidation && savedActivated && latestStoredInfo?.activated) {
-                            isLocallyValid = true;
-                        } else if (hasInheritedServerActivation) {
-                            // Terminal autorizada por herencia de la licencia del servidor PC: una llave local antigua no debe bloquear el modo offline
-                            localStorage.removeItem('isaac_pos_license_key');
-                            isLocallyValid = true;
-                        } else {
-                            isLocallyValid = false;
-                        }
-                    } catch (err) {
-                        console.warn('[Auth] Error validando clave local durante check offline:', err?.message);
-                        if (!hasInheritedServerActivation) isLocallyValid = false;
-                    }
-                }
-                if (isLocallyValid) {
-                    const effectiveMid = savedMachineId || currentTerminalId;
-                    localStorage.setItem('isaac_pos_license_activated', 'true');
-                    localStorage.setItem('isaac_pos_license_machine_id', effectiveMid);
-                    setIsActivated(true);
-                    setMachineId(effectiveMid);
-                    setLicenseLoading(false);
-                    return { activated: true, isOffline: true, machineId: effectiveMid };
-                }
-            }
-
-            setIsActivated(false);
-            setMachineId(currentTerminalId);
-            setLicenseLoading(false);
-            return null;
+            return await resolveOfflineFallback();
         }
     }, []);
 
@@ -656,7 +664,7 @@ export const AuthProvider = ({ children }) => {
                 setUser({ ...savedProfileObj, isOfflineMode: true });
             } else {
                 try {
-                    const res = await api.get('/auth/me');
+                    const res = await api.get('/auth/me', savedProfileObj ? { timeout: 3500 } : undefined);
                     if (res.data?.user) {
                         sessionExpiredRef.current = false;
                         setUser(res.data.user);
@@ -692,9 +700,11 @@ export const AuthProvider = ({ children }) => {
         bootstrap();
     }, [checkLicense]);
 
-    // Re-verify session and license whenever a server is auto-discovered
+    // Re-verify session and license whenever a server is auto-discovered or manually configured
     useEffect(() => {
-        const handleServerDiscovered = async () => {
+        const handleServerAvailable = async (event) => {
+            const configuredUrl = event?.detail?.baseUrl || event?.detail?.url || api.defaults?.baseURL || (typeof getBaseUrl === 'function' ? getBaseUrl() : '');
+            if (!configuredUrl) return;
             try {
                 await checkLicense();
                 const isSessionActive = typeof window !== 'undefined' && sessionStorage.getItem('isaac_pos_session_active') === 'true';
@@ -712,8 +722,12 @@ export const AuthProvider = ({ children }) => {
                 // Ignore silent refresh error if not logged in
             }
         };
-        window.addEventListener('server-discovered', handleServerDiscovered);
-        return () => window.removeEventListener('server-discovered', handleServerDiscovered);
+        window.addEventListener('server-discovered', handleServerAvailable);
+        window.addEventListener('api-base-url-changed', handleServerAvailable);
+        return () => {
+            window.removeEventListener('server-discovered', handleServerAvailable);
+            window.removeEventListener('api-base-url-changed', handleServerAvailable);
+        };
     }, [checkLicense]);
 
     // Listen to global license requirement / invalidity event
@@ -983,7 +997,12 @@ export const AuthProvider = ({ children }) => {
                 return res.data.user;
             }
         } catch (e) {
-            console.error('Error refreshing user profile:', e);
+            const isNetworkOffline = !e?.response || e?.code === 'ECONNABORTED';
+            if (isNetworkOffline) {
+                console.warn('[Auth] Perfil no actualizado (red/offline):', e?.message || e);
+            } else {
+                console.error('Error refreshing user profile:', e);
+            }
         }
         return null;
     }, []);

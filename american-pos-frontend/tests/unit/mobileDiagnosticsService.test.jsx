@@ -6,7 +6,10 @@ import {
   clearDiagnosticEvents,
   redactSensitiveData,
   redactSensitiveText,
-  buildDiagnosticReportText
+  buildDiagnosticReportText,
+  recordNetworkLatency,
+  getLastNetworkLatency,
+  collectDeviceHealthSnapshot
 } from '../../src/services/mobileDiagnosticsService';
 import MobileSyncCenterView from '../../src/components/mobile/MobileSyncCenterView';
 
@@ -146,5 +149,21 @@ describe('Bloque 1 — Caja Negra Sanitizada (mobileDiagnosticsService) y Panel 
 
     fireEvent.click(screen.getByRole('button', { name: /Ver eventos/i }));
     expect(screen.getByText(/Prueba error diagnóstico visible solo admin/i)).toBeTruthy();
+  });
+
+  it('deduplica eventos consecutivos idénticos incrementando repeatCount y rellena latencyMs real en health', async () => {
+    recordDiagnosticEvent('warn', 'sync', '[LAN_SYNC] Error consultando pares LAN: timeout');
+    recordDiagnosticEvent('warn', 'sync', '[LAN_SYNC] Error consultando pares LAN: timeout');
+    recordDiagnosticEvent('warn', 'sync', '[LAN_SYNC] Error consultando pares LAN: timeout');
+
+    const events = getDiagnosticEvents();
+    expect(events.length).toBe(1);
+    expect(events[0].meta?.repeatCount).toBe(3);
+
+    recordNetworkLatency(27.4);
+    expect(getLastNetworkLatency()?.latencyMs).toBe(27);
+
+    const snapshot = await collectDeviceHealthSnapshot({ latencyMs: null });
+    expect(snapshot.latencyMs).toBe(27);
   });
 });

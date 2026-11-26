@@ -17,6 +17,38 @@ let initializedFromStorage = false;
 let globalHooksInstalled = false;
 let persistTimer = null;
 const subscribers = new Set();
+let lastNetworkLatency = null;
+const latencySubscribers = new Set();
+const DEDUPE_WINDOW_MS = 120000;
+
+export function recordNetworkLatency(ms) {
+  const numeric = Number(ms);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  lastNetworkLatency = {
+    latencyMs: Math.max(1, Math.round(numeric)),
+    updatedAt: Date.now()
+  };
+  for (const fn of latencySubscribers) {
+    try {
+      fn(lastNetworkLatency);
+    } catch {
+      // Ignorar errores de listeners UI
+    }
+  }
+  return lastNetworkLatency;
+}
+
+export function getLastNetworkLatency() {
+  return lastNetworkLatency ? { ...lastNetworkLatency } : null;
+}
+
+export function subscribeNetworkLatency(listener) {
+  if (typeof listener !== 'function') return () => {};
+  latencySubscribers.add(listener);
+  return () => {
+    latencySubscribers.delete(listener);
+  };
+}
 
 export function redactSensitiveText(rawText) {
   if (rawText === null || rawText === undefined) return '';
@@ -130,12 +162,44 @@ function notifySubscribers() {
 export function recordDiagnosticEvent(level, category, message, meta = undefined) {
   loadPersistedBuffer();
   const normalizedLevel = level === 'error' || level === 'warn' ? level : 'info';
+  const normalizedCategory = String(category || 'general').slice(0, 32);
+  const cleanMessage = redactSensitiveText(message);
+  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+
+  const lastEntry = ringBuffer.length > 0 ? ringBuffer[ringBuffer.length - 1] : null;
+  const lastEntryMs = lastEntry ? Date.parse(lastEntry.ts) : 0;
+  if (
+    lastEntry &&
+    lastEntry.level === normalizedLevel &&
+    lastEntry.category === normalizedCategory &&
+    lastEntry.message === cleanMessage &&
+    Number.isFinite(lastEntryMs) &&
+    nowMs - lastEntryMs <= DEDUPE_WINDOW_MS
+  ) {
+    const prevCount = Number(lastEntry.meta?.repeatCount) || 1;
+    const mergedMeta = {
+      ...(lastEntry.meta && typeof lastEntry.meta === 'object' ? lastEntry.meta : {}),
+      ...(meta !== undefined && typeof meta === 'object' && meta !== null ? redactSensitiveData(meta) : {}),
+      repeatCount: prevCount + 1
+    };
+    const updatedEntry = {
+      ...lastEntry,
+      ts: nowIso,
+      meta: mergedMeta
+    };
+    ringBuffer[ringBuffer.length - 1] = updatedEntry;
+    schedulePersist();
+    notifySubscribers();
+    return updatedEntry;
+  }
+
   const entry = {
-    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-    ts: new Date().toISOString(),
+    id: `${nowMs.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    ts: nowIso,
     level: normalizedLevel,
-    category: String(category || 'general').slice(0, 32),
-    message: redactSensitiveText(message),
+    category: normalizedCategory,
+    message: cleanMessage,
     ...(meta !== undefined ? { meta: redactSensitiveData(meta) } : {})
   };
 
@@ -291,6 +355,13 @@ export async function collectDeviceHealthSnapshot(extra = {}) {
   const chromeMatch = ua.match(/Chrome\/([\d.]+)/);
   const androidMatch = ua.match(/Android\s([\d.]+)/);
 
+  const sanitizedExtra = redactSensitiveData(extra) || {};
+  const resolvedLatencyMs = (
+    typeof sanitizedExtra.latencyMs === 'number' && Number.isFinite(sanitizedExtra.latencyMs)
+  )
+    ? sanitizedExtra.latencyMs
+    : (lastNetworkLatency?.latencyMs ?? (sanitizedExtra.latencyMs ?? null));
+
   return {
     generatedAt: new Date().toISOString(),
     platform: Capacitor.getPlatform?.() || 'web',
@@ -302,7 +373,8 @@ export async function collectDeviceHealthSnapshot(extra = {}) {
     online: typeof navigator !== 'undefined' ? Boolean(navigator.onLine) : true,
     viewport: typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : 'unknown',
     storage: storageQuota,
-    ...redactSensitiveData(extra)
+    ...sanitizedExtra,
+    latencyMs: resolvedLatencyMs
   };
 }
 
@@ -327,6 +399,9 @@ export const mobileDiagnosticsService = {
   getEvents: getDiagnosticEvents,
   clear: clearDiagnosticEvents,
   subscribe: subscribeDiagnosticEvents,
+  recordNetworkLatency,
+  getLastNetworkLatency,
+  subscribeNetworkLatency,
   installGlobalErrorHooks,
   collectDeviceHealthSnapshot,
   buildDiagnosticReportText,
