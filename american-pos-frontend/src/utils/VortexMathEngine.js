@@ -13,11 +13,17 @@ const parseToStringExact = (val) => {
     let s;
     if (typeof val === 'number') {
         if (isNaN(val) || !isFinite(val)) return '0';
-        s = val.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 8 });
+        s = val.toFixed(8);
     } else {
         s = String(val).trim();
     }
     if (s === '') return '0';
+    // Manejar notación científica en strings (ej: "1e-7", "2.5E+3")
+    if (/^[+-]?\d+(?:\.\d+)?[eE][+-]?\d+$/.test(s)) {
+        const num = Number(s);
+        if (!Number.isFinite(num)) return '0';
+        return num.toFixed(8);
+    }
     if (s.includes(',') && s.includes('.')) {
         if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
             s = s.replace(/\./g, '').replace(/,/g, '.');
@@ -26,6 +32,9 @@ const parseToStringExact = (val) => {
         }
     } else if (s.includes(',')) {
         s = s.replace(/,/g, '.');
+    }
+    if (!/^[+-]?\d*(?:\.\d+)?$/.test(s) || s === '+' || s === '-' || s === '.') {
+        return '0';
     }
     return s;
 };

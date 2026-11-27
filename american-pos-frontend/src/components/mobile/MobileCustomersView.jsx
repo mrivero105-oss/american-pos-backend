@@ -250,6 +250,11 @@ export default function MobileCustomersView({
           setDetailCustomer(prev => ({ ...prev, ...updated }));
         }
       } catch (err) {
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          showToast?.(`⚠️ ${err.response?.data?.error || 'No se pudo actualizar el cliente'}`);
+          return;
+        }
         console.warn('Fallo al actualizar en el servidor, guardando local:', err);
         const updated = { ...editingCustomer, ...payload, updatedAt: new Date().toISOString() };
         setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? updated : c));
@@ -275,14 +280,15 @@ export default function MobileCustomersView({
       }
     } else {
       // CREAR
+      const tempCustId = `cust_off_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
       const newCust = {
-        id: `cust_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        id: tempCustId,
         ...payload,
         creditBalance: 0,
         balance: 0,
         loyaltyPoints: 0,
         isActive: true,
-        status: 'pending_sync',
+        status: 'offline_queued',
         createdAt: new Date().toISOString()
       };
 
@@ -292,12 +298,17 @@ export default function MobileCustomersView({
         setCustomers(prev => [created, ...prev]);
         try {
           if (localDb && localDb.customers) {
-            await localDb.customers.put(created);
+            await localDb.customers.put({ ...created, status: 'synced' });
           }
         } catch (caughtErr) { console.warn('[MobileCustomersView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
         showToast?.(`✅ Cliente "${payload.name}" registrado`);
         setIsFormModalOpen(false);
       } catch (_netErr) {
+        const httpStatus = _netErr?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          showToast?.(`⚠️ ${_netErr.response?.data?.error || 'Datos de cliente inválidos'}`);
+          return;
+        }
         console.warn('Servidor inaccesible, guardando cliente en base local:', _netErr);
         setCustomers(prev => [newCust, ...prev]);
         try {
@@ -306,9 +317,10 @@ export default function MobileCustomersView({
           }
           await primaryDb.put('syncQueue', {
             id: `cust_create_${Date.now()}`,
+            tempLocalId: tempCustId,
             endpoint: '/customers',
             method: 'POST',
-            payload: newCust,
+            payload: { ...payload, id: tempCustId },
             createdAt: new Date().toISOString()
           });
         } catch (caughtErr) { console.warn('[MobileCustomersView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }

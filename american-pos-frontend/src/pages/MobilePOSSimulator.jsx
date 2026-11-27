@@ -37,6 +37,7 @@ import { useMobileBackAndGestures } from '../hooks/mobile/useMobileBackAndGestur
 
 const INITIAL_SPLIT_PAYMENTS = {
   cash_usd: '',
+  cash_eur: '',
   cash_bs: '',
   pago_movil: '',
   tarjeta: '',

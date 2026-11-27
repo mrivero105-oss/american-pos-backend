@@ -386,7 +386,7 @@ export default function MobileSalesView({
     try {
       const isOfflineSale = saleToCancel.status === 'pending_sync' || saleToCancel.isOffline;
       const saleId = saleToCancel.id;
-      const itemsList = saleToCancel.items || saleToCancel.SaleItems || [];
+      let itemsList = saleToCancel.items || saleToCancel.SaleItems || [];
 
       if (isOfflineSale) {
         const updated = { ...saleToCancel, status: 'cancelled', isOffline: false };
@@ -400,6 +400,21 @@ export default function MobileSalesView({
         onSaleCancelled?.(saleId, updated);
         showToast?.('✅ Venta offline anulada y stock devuelto al catálogo');
       } else {
+        // Si la venta vino de un listado resumido sin SaleItems, recuperar el detalle antes de anular
+        if (!Array.isArray(itemsList) || itemsList.length === 0) {
+          try {
+            const detailRes = await api.get(`/sales/${saleId}`, { timeout: 5000 });
+            const fetchedSale = detailRes?.data?.sale || detailRes?.data || null;
+            itemsList = fetchedSale?.SaleItems || fetchedSale?.items || [];
+          } catch (_fetchDetailErr) {
+            // Se validará abajo antes de encolar un /refunds vacío
+          }
+        }
+        if (!Array.isArray(itemsList) || itemsList.length === 0) {
+          showToast?.('⚠️ Conéctate al servidor PC para descargar los renglones de esta factura antes de anularla.');
+          setIsCancelling(false);
+          return;
+        }
         const payload = {
           saleId: saleToCancel.id,
           reason: `${cancelReason}${cancelNotes ? ` - ${cancelNotes}` : ''}`,

@@ -537,7 +537,7 @@ export default function CatalogImporter() {
             const { data } = await api.post('/products/reparse-invoice', {
                 invoiceUrl: historyInvoice.invoiceUrl,
                 supplierId: historyInvoice.supplierId
-            });
+            }, { timeout: 180000 });
             const success = applyExtractedCatalogData(data);
             if (success) {
                 toast.success(`Factura #${historyInvoice.referenceNumber} cargada con ${data.items?.length || 0} renglones`, { id: toastId });
@@ -931,7 +931,7 @@ export default function CatalogImporter() {
             const { data } = await api.post('/products/new/search-images-ia', {
                 name: searchName,
                 category: 'General'
-            });
+            }, { timeout: 45000 });
             setCandidateImages(data.images || []);
             if (!data.images || data.images.length === 0) {
                 toast.error('No se encontraron imágenes candidatas en la web');
@@ -958,7 +958,7 @@ export default function CatalogImporter() {
             const { data } = await api.post('/products/new/search-images-ia', {
                 name: query,
                 category: 'General'
-            });
+            }, { timeout: 45000 });
             setCandidateImages(data.images || []);
             if (!data.images || data.images.length === 0) {
                 toast.error('No se encontraron imágenes para este término');
@@ -1004,13 +1004,13 @@ export default function CatalogImporter() {
                 const { data } = await api.post('/products/new/search-images-ia', {
                     name: searchName,
                     category: 'General'
-                });
+                }, { timeout: 45000 });
                 if (data?.images && data.images.length > 0) {
                     const firstImg = data.images[0];
                     const selRes = await api.post('/products/new/select-image-ia', {
                         imageUrl: firstImg,
                         name: searchName
-                    });
+                    }, { timeout: 30000 });
                     newItems[i] = {
                         ...newItems[i],
                         image: selRes.data?.imageUri || selRes.data?.imageUrl || firstImg

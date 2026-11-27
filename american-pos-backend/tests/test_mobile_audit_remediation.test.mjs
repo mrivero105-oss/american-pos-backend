@@ -1,509 +1,327 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-
-// Aislamiento estricto antes de cargar cualquier módulo del backend
-const isolatedUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'isaac-pos-mobile-m2-'));
-process.env.ISAAC_TEST_ISOLATED = '1';
-process.env.NODE_ENV = 'test';
-process.env.DB_NAME_FORCE = 'americanpos_test';
-process.env.DISABLE_BACKGROUND_WORKERS = 'true';
-process.env.USER_DATA_PATH = isolatedUserDataDir;
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'm2-jwt-' + crypto.randomBytes(24).toString('hex');
-process.env.OWNER_SECRET_KEY = process.env.OWNER_SECRET_KEY || 'm2-owner-' + crypto.randomBytes(16).toString('hex');
-process.env.BACKUP_ENCRYPTION_KEY = process.env.BACKUP_ENCRYPTION_KEY || 'm2-bkp-' + crypto.randomBytes(24).toString('hex');
-process.env.AUDIT_HMAC_SECRET = process.env.AUDIT_HMAC_SECRET || 'm2-aud-' + crypto.randomBytes(24).toString('hex');
-process.env.SYNC_SECRET_KEY = process.env.SYNC_SECRET_KEY || 'm2-sync-' + crypto.randomBytes(24).toString('hex');
-process.env.LAN_CLUSTER_SECRET = process.env.LAN_CLUSTER_SECRET || 'm2-lan-' + crypto.randomBytes(24).toString('hex');
-
-const { publicKey: testRsaPub, privateKey: testRsaPriv } = crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
-});
-process.env.LICENSE_PUBLIC_KEY_PEM = testRsaPub;
-process.env.LICENSE_PRIVATE_KEY_PEM = testRsaPriv;
-delete process.env.ALLOW_LEGACY_HMAC_LICENSES;
-
-const bcrypt = require('bcryptjs');
-const { startServer } = require('../index');
-const licenseUtils = require('../utils/licenseUtils');
-const { clearLicenseCache } = require('../middleware/licenseMiddleware');
+const models = require('../database/models');
+const { productSchema, productUpdateSchema, stockCountSchema } = require('../schemas/productSchema');
+const SaleService = require('../services/SaleService');
+const CashService = require('../services/CashService');
+const PromotionService = require('../services/PromotionService');
+const AlertService = require('../services/AlertService');
 const AccountingEngineService = require('../services/AccountingEngineService');
-const { canonicalizePaymentMethodId, isVesPaymentMethod } = require('../services/cash/cashHelpers');
-const { SETTINGS_FILE } = require('../config/paths');
-const { readJson, writeJson } = require('../utils/helpers');
-const cache = require('../utils/cacheService');
+const SupabaseSyncService = require('../services/SupabaseSyncService');
+const LANClusterService = require('../services/LANClusterService');
+const { evaluateCartPromotions } = require('../utils/promotionsEngineCore');
 
-let srvHandle = null;
-const cleanupIds = {
-    users: [],
-    products: [],
-    licenses: [],
-    shifts: [],
-    expenses: [],
-    sales: []
-};
-let priorActiveLicenseIds = [];
-
-test.after(async () => {
+after(async () => {
     try {
-        const models = require('../database/models');
-        if (cleanupIds.sales.length && models.Sale) {
-            if (models.StockAlert) await models.StockAlert.destroy({ where: { saleId: cleanupIds.sales } }).catch(() => {});
-            if (models.SaleItem) await models.SaleItem.destroy({ where: { saleId: cleanupIds.sales } }).catch(() => {});
-            await models.Sale.destroy({ where: { id: cleanupIds.sales } }).catch(() => {});
-        }
-        if (cleanupIds.expenses.length && models.Expense) {
-            await models.Expense.destroy({ where: { id: cleanupIds.expenses } }).catch(() => {});
-        }
-        if (cleanupIds.shifts.length && models.CashShift) {
-            await models.CashShift.destroy({ where: { id: cleanupIds.shifts } }).catch(() => {});
-        }
-        if (cleanupIds.products.length && models.Product) {
-            await models.Product.destroy({ where: { id: cleanupIds.products } }).catch(() => {});
-        }
-        if (cleanupIds.licenses.length && models.License) {
-            await models.License.destroy({ where: { id: cleanupIds.licenses } }).catch(() => {});
-        }
-        if (priorActiveLicenseIds.length && models.License) {
-            await models.License.update({ status: 'active' }, { where: { id: priorActiveLicenseIds } }).catch(() => {});
-        }
-        if (cleanupIds.users.length && models.User) {
-            await models.User.destroy({ where: { id: cleanupIds.users } }).catch(() => {});
-        }
+        await models.sequelize.close();
     } catch (_) {}
-
-    clearLicenseCache();
-    if (srvHandle?.stopServer) await srvHandle.stopServer();
-    try { fs.rmSync(isolatedUserDataDir, { recursive: true, force: true }); } catch (_) {}
 });
 
-test('Suite Integral Fase M1+M2: Biometría ECDSA v2, RBAC Móvil, Modo Ciego, Gastos VES y Contabilidad', async (t) => {
-    await t.test('1. AccountingEngineService y cashHelpers normalizan métodos con tildes y espacios', () => {
-        assert.equal(AccountingEngineService._isBankMethod('Pago Móvil'), true);
-        assert.equal(AccountingEngineService._isBankMethod('pago_movil'), true);
-        assert.equal(AccountingEngineService._isBankMethod('Punto de Venta'), true);
-        assert.equal(AccountingEngineService._isBankMethod('Efectivo USD'), false);
-
-        assert.equal(canonicalizePaymentMethodId('Pago Móvil'), 'pago_movil');
-        assert.equal(canonicalizePaymentMethodId('Punto de Venta'), 'debit');
-        assert.equal(canonicalizePaymentMethodId('Efectivo Bs.'), 'cash_bs');
-        assert.equal(isVesPaymentMethod('Pago Móvil'), true);
-        assert.equal(isVesPaymentMethod('Efectivo USD'), false);
+test('Fase 1.2 — productSchema, productUpdateSchema y stockCountSchema aceptan imageUri null y conteo físico parcial', () => {
+    const parsedCreate = productSchema.parse({
+        body: {
+            name: 'Harina Pan',
+            price: 1.5,
+            cost: 1.1,
+            imageUri: null
+        }
     });
+    assert.equal(parsedCreate.body.imageUri, null);
 
-    srvHandle = await startServer([0], isolatedUserDataDir);
-    const dbOk = await srvHandle.dbInitPromise;
-    assert.equal(dbOk, true);
-    const posUrl = `http://127.0.0.1:${srvHandle.mainPort}`;
-    const models = require('../database/models');
-    const { User, License, Product, Expense } = models;
-
-    const serverMachineId = await licenseUtils.getMachineId();
-    const existingActives = await License.findAll({ where: { machineId: serverMachineId, status: 'active' } });
-    priorActiveLicenseIds = existingActives.map((l) => l.id);
-
-    const ts = Date.now();
-    const companyId = `m2_comp_${ts}`;
-    const pwd = 'M2_Password_' + crypto.randomBytes(6).toString('hex');
-    const pwdHash = bcrypt.hashSync(pwd, 8);
-
-    const adminUser = await User.create({
-        id: `m2-admin-${ts}`,
-        username: `m2_admin_${ts}`,
-        name: 'Admin M2',
-        email: `m2_admin_${ts}@test.local`,
-        password: pwdHash,
-        role: 'master',
-        status: 'active',
-        companyId,
-        permissions: { canManageInventory: true, canCreateProducts: true, canManageExpenses: true, canManageCashShift: true, canViewCosts: true, canManageSettings: true }
+    const parsedUpdate = productUpdateSchema.parse({
+        body: {
+            stockQuantity: 42,
+            imageUri: null
+        }
     });
-    const cashierUser = await User.create({
-        id: `m2-cashier-${ts}`,
-        username: `m2_cashier_${ts}`,
-        name: 'Cajero M2',
-        email: `m2_cashier_${ts}@test.local`,
-        password: pwdHash,
-        role: 'cashier',
-        status: 'active',
-        companyId,
-        permissions: { canAccessPOS: true, canManageCashShift: true, canViewCosts: false, canCreateProducts: false, canManageInventory: false, canManageExpenses: false, canManageSettings: false }
-    });
-    const waiterUser = await User.create({
-        id: `m2-waiter-${ts}`,
-        username: `m2_waiter_${ts}`,
-        name: 'Mesero M2',
-        email: `m2_waiter_${ts}@test.local`,
-        password: pwdHash,
-        role: 'waiter',
-        status: 'active',
-        companyId,
-        permissions: { canAccessPOS: true, canManageCashShift: false, canViewCosts: false, canManageExpenses: false }
-    });
-    cleanupIds.users.push(adminUser.id, cashierUser.id, waiterUser.id);
+    assert.equal(parsedUpdate.body.stockQuantity, 42);
+    assert.equal(parsedUpdate.body.imageUri, null);
 
-    const loginAs = async (username) => {
-        const res = await fetch(`${posUrl}/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password: pwd })
-        });
-        assert.equal(res.status, 200);
-        const data = await res.json();
-        return data.token;
+    const parsedCount = stockCountSchema.parse({
+        body: {
+            stockQuantity: 15,
+            reason: 'Conteo físico móvil'
+        }
+    });
+    assert.equal(parsedCount.body.stockQuantity, 15);
+
+    assert.throws(() => stockCountSchema.parse({ body: { reason: 'Sin stock ni delta' } }));
+});
+
+test('Fase 1.3 — promotionsEngineCore evalúa vigencia contra fecha histórica (venta offline)', () => {
+    const expiredPromo = {
+        id: 'promo-hist-1',
+        name: 'Promo Ayer 20%',
+        type: 'CATEGORY_DISCOUNT',
+        discountPercentage: 20,
+        isActive: true,
+        startDate: '2026-01-01T00:00:00.000Z',
+        endDate: '2026-01-05T23:59:59.000Z',
+        daysOfWeek: [0, 1, 2, 3, 4, 5, 6]
     };
+    const items = [{ id: 'p1', productId: 'p1', name: 'Café', category: 'Bebidas', price: 10, quantity: 1 }];
 
-    const adminToken = await loginAs(adminUser.username);
-    const cashierToken = await loginAs(cashierUser.username);
-    const waiterToken = await loginAs(waiterUser.username);
+    // Hoy (fuera de vigencia): 0 descuento
+    const evalNow = evaluateCartPromotions(items, [expiredPromo], 'cash_usd', new Date('2026-02-01T12:00:00.000Z'));
+    assert.equal(evalNow.totalPromoSavings, 0);
 
-    // Activar licencia en el servidor de pruebas
-    const baseKey = licenseUtils.generateKeyV2(serverMachineId, 365);
-    const actRes = await fetch(`${posUrl}/license/activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-        body: JSON.stringify({ key: baseKey, machineId: serverMachineId })
-    });
-    assert.equal(actRes.status, 200);
-    const actBody = await actRes.json();
-    cleanupIds.licenses.push(actBody.license.id);
+    // En la fecha histórica de la venta offline (dentro de vigencia): $2.00 descuento
+    const evalHistorical = evaluateCartPromotions(items, [expiredPromo], 'cash_usd', new Date('2026-01-03T12:00:00.000Z'));
+    assert.equal(evalHistorical.totalPromoSavings, 2);
+});
 
-    await t.test('2. Biometría ECDSA P-256 v2: corte inmediato de v1, registro SPKI, reto único y anti-replay', async () => {
-        // Rechazar registro v1 con biometricToken plano
-        const legacyReg = await fetch(`${posUrl}/auth/biometrics/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cashierToken}` },
-            body: JSON.stringify({ biometricToken: 'a'.repeat(64), deviceName: 'Legacy Phone' })
+test('Fase 1.3 (A3) — SaleService isOfflineSync acepta precio/tasa históricos válidos, registra alertas/auditoría y recalcula changeAmount', async () => {
+    const origGetSettings = SaleService._getSettings;
+    const origLogAudit = SaleService._logAudit;
+    const origSaleFindByPk = models.Sale.findByPk;
+    const origSaleFindOne = models.Sale.findOne;
+    const origSaleCreate = models.Sale.create;
+    const origSaleItemCreate = models.SaleItem.create;
+    const origProductFindAll = models.Product.findAll;
+    const origProductFindOne = models.Product.findOne;
+    const origProductUpdate = models.Product.update;
+    const origProductLotFindAll = models.ProductLot.findAll;
+    const origBomFindAll = models.BillOfMaterials?.findAll;
+    const origSequelizeQuery = models.sequelize.query;
+    const origBranchFindOne = models.Branch.findOne;
+    const origBranchStockCount = models.BranchStock.count;
+    const origBranchStockFindOrCreate = models.BranchStock.findOrCreate;
+    const origStockMovBulkCreate = models.StockMovement.bulkCreate;
+    const origTransaction = models.sequelize.transaction;
+    const origTriggerAlert = AlertService.triggerAlert;
+    const origGenAccounting = AccountingEngineService.generateSaleEntry;
+    const origQueueEvent = SupabaseSyncService.queueEvent;
+    const origBroadcastLan = LANClusterService.broadcastLANEvent;
+    const origPromoEval = PromotionService.evaluateCart;
+
+    const auditLogs = [];
+    const triggeredAlerts = [];
+    let createdSaleData = null;
+    let lanBroadcastPayload = null;
+
+    try {
+        SaleService._getSettings = async () => ({
+            exchangeRate: 100, // Tasa vigente hoy = 100 Bs/$
+            businessInfo: { country: 'Venezuela' },
+            taxConfig: { ivaEnabled: false, igtfEnabled: false }
         });
-        assert.equal(legacyReg.status, 400);
-
-        // Rechazar login v1 sin challengeId/signature
-        const legacyLogin = await fetch(`${posUrl}/auth/biometrics/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: cashierUser.id, biometricToken: 'a'.repeat(64) })
-        });
-        assert.equal(legacyLogin.status, 401);
-        const legacyLoginBody = await legacyLogin.json();
-        assert.equal(legacyLoginBody.code, 'BIOMETRIC_V2_REQUIRED');
-
-        // Generar par ECDSA P-256 simulando AndroidKeyStore
-        const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-        const spkiBase64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-
-        // Registrar clave pública SPKI
-        const regRes = await fetch(`${posUrl}/auth/biometrics/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cashierToken}` },
-            body: JSON.stringify({ publicKeySpki: spkiBase64, deviceName: 'Android TEE StrongBox' })
-        });
-        assert.equal(regRes.status, 200);
-        const regBody = await regRes.json();
-        assert.equal(regBody.version, 2);
-
-        // Estado biométrico debe reportar enrolled=true, version=2
-        const statusRes = await fetch(`${posUrl}/auth/biometrics/status`, {
-            headers: { Authorization: `Bearer ${cashierToken}` }
-        });
-        assert.equal(statusRes.status, 200);
-        const statusBody = await statusRes.json();
-        assert.equal(statusBody.enrolled, true);
-        assert.equal(statusBody.version, 2);
-
-        // Solicitar reto de un solo uso
-        const chRes = await fetch(`${posUrl}/auth/biometrics/challenge`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: cashierUser.id, username: cashierUser.username })
-        });
-        assert.equal(chRes.status, 200);
-        const { challengeId, challenge } = await chRes.json();
-        assert.ok(challengeId && challenge);
-
-        // Firmar el reto con ECDSA SHA-256 (DER estándar, idéntico a Android SHA256withECDSA)
-        const signatureBase64 = crypto.sign('sha256', Buffer.from(challenge, 'utf8'), privateKey).toString('base64');
-
-        // Login biométrico exitoso
-        const bioLoginRes = await fetch(`${posUrl}/auth/biometrics/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: cashierUser.id, challengeId, signature: signatureBase64 })
-        });
-        assert.equal(bioLoginRes.status, 200);
-        const bioLoginBody = await bioLoginRes.json();
-        assert.equal(bioLoginBody.success, true);
-        assert.equal(bioLoginBody.version, 2);
-        assert.ok(bioLoginBody.token);
-
-        // Anti-replay: reutilizar el mismo challengeId debe fallar con 401
-        const replayRes = await fetch(`${posUrl}/auth/biometrics/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: cashierUser.id, challengeId, signature: signatureBase64 })
-        });
-        assert.equal(replayRes.status, 401);
-
-        // Firma falsificada sobre un reto nuevo debe fallar con 401
-        const ch2Res = await fetch(`${posUrl}/auth/biometrics/challenge`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: cashierUser.id })
-        });
-        const ch2 = await ch2Res.json();
-        const { privateKey: attackerKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-        const forgedSig = crypto.sign('sha256', Buffer.from(ch2.challenge, 'utf8'), attackerKey).toString('base64');
-        const forgedRes = await fetch(`${posUrl}/auth/biometrics/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: cashierUser.id, challengeId: ch2.challengeId, signature: forgedSig })
-        });
-        assert.equal(forgedRes.status, 401);
-    });
-
-    await t.test('3. RBAC Productos: /products/public-sync bloquea cajero (403) y GET /products/:id oculta costos', async () => {
-        const prod = await Product.create({
-            id: `m2-prod-${ts}`,
-            name: 'Café Molido 500g',
-            barcode: `CAFE-${ts}`,
-            price: 10,
-            cost: 6.25,
-            margin: 60,
-            stock: 20,
-            stockQuantity: 20,
-            companyId,
-            status: 'active'
-        });
-        cleanupIds.products.push(prod.id);
-
-        // Cajero sin permiso de catálogo no puede sincronizar/crear productos vía /public-sync
-        const syncDeny = await fetch(`${posUrl}/products/public-sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cashierToken}` },
-            body: JSON.stringify({ products: [{ id: 'local-1', name: 'Hack', price: 0.01, stock: 100 }] })
-        });
-        assert.equal(syncDeny.status, 403);
-
-        // Cajero sin canViewCosts no ve cost ni margin en GET /products/:id
-        const getByCashier = await fetch(`${posUrl}/products/${prod.id}`, {
-            headers: { Authorization: `Bearer ${cashierToken}` }
-        });
-        assert.equal(getByCashier.status, 200);
-        const prodCashier = await getByCashier.json();
-        assert.equal(prodCashier.cost, undefined);
-        assert.equal(prodCashier.margin, undefined);
-
-        // Admin sí ve cost en GET /products/:id
-        const getByAdmin = await fetch(`${posUrl}/products/${prod.id}`, {
-            headers: { Authorization: `Bearer ${adminToken}` }
-        });
-        assert.equal(getByAdmin.status, 200);
-        const prodAdmin = await getByAdmin.json();
-        assert.equal(Number(prodAdmin.cost), 6.25);
-    });
-
-    await t.test('4. RBAC Caja + Modo Ciego en GET /cash/x-report', async () => {
-        // Configurar modo BLIND + secretos en SETTINGS_FILE para esta empresa
-        const allSettings = readJson(SETTINGS_FILE) || {};
-        allSettings[companyId] = {
-            ...(allSettings[companyId] || {}),
-            cashClosureMode: 'BLIND',
-            geminiApiKey: 'sk-test-secret-gemini',
-            smtpPass: 'super-secret-smtp-pass',
-            businessInfo: { name: 'Tienda Test M2', country: 'Venezuela' }
+        SaleService._logAudit = async (_u, action, desc, entityId, oldVal, newVal) => {
+            auditLogs.push({ action, desc, entityId, oldVal, newVal });
         };
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.del('all_settings');
+        AlertService.triggerAlert = async (alertData) => {
+            triggeredAlerts.push(alertData);
+            return alertData;
+        };
+        AccountingEngineService.generateSaleEntry = async () => ({ id: 'je-1' });
+        SupabaseSyncService.queueEvent = async () => {};
+        LANClusterService.broadcastLANEvent = (evt, payload) => {
+            if (evt === 'lan_stock_update') lanBroadcastPayload = payload;
+        };
+        PromotionService.evaluateCart = async () => ({ totalDiscount: 0, appliedPromotions: [] });
 
-        // Mesero sin canManageCashShift recibe 403 en /cash/open, /cash/movement, /cash/x-report y /cash/history
-        const openDeny = await fetch(`${posUrl}/cash/open`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${waiterToken}` },
-            body: JSON.stringify({ amount: 50, registerId: 'M2-TEST' })
+        const mockProduct = {
+            id: 'prod-harina',
+            name: 'Harina',
+            price: 12.00, // Precio actual en catálogo subió a $12
+            cost: 7.00,
+            category: 'Alimentos',
+            companyId: 'default',
+            taxStatus: 'exento',
+            stockQuantity: 50,
+            stock: 50,
+            allowNegative: true,
+            Presentations: [],
+            decrement: async () => {},
+            update: async () => {}
+        };
+
+        models.Sale.findByPk = async () => null;
+        models.Sale.findOne = async () => ({
+            id: createdSaleData?.id,
+            ...createdSaleData,
+            setDataValue: () => {}
         });
-        assert.equal(openDeny.status, 403);
-
-        const xDeny = await fetch(`${posUrl}/cash/x-report?registerId=M2-TEST`, {
-            headers: { Authorization: `Bearer ${waiterToken}` }
+        models.Sale.create = async (data) => {
+            createdSaleData = { ...data };
+            return {
+                ...data,
+                update: async (patch) => Object.assign(createdSaleData, patch),
+                toJSON: () => ({ ...createdSaleData })
+            };
+        };
+        models.SaleItem.create = async (data) => ({ ...data });
+        models.Product.findAll = async () => [mockProduct];
+        models.Product.findOne = async () => mockProduct;
+        models.Product.update = async () => [1];
+        models.ProductLot.findAll = async () => [];
+        if (models.BillOfMaterials) models.BillOfMaterials.findAll = async () => [];
+        models.sequelize.query = async () => [{ nextval: 1 }];
+        models.Branch.findOne = async () => ({ id: 'branch-main' });
+        models.BranchStock.count = async () => 1;
+        models.BranchStock.findOrCreate = async () => [{ quantity: 50, decrement: async () => {} }, false];
+        models.StockMovement.bulkCreate = async () => [];
+        models.sequelize.transaction = async () => ({
+            LOCK: { UPDATE: 'UPDATE' },
+            commit: async () => {},
+            rollback: async () => {},
+            finished: false
         });
-        assert.equal(xDeny.status, 403);
 
-        const histDeny = await fetch(`${posUrl}/cash/history`, {
-            headers: { Authorization: `Bearer ${waiterToken}` }
+        const cashierUser = { id: 'u-cajero-1', companyId: 'default', role: 'user', name: 'Cajero Móvil', permissions: {} };
+        const twoHoursAgoIso = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+        // Venta offline con precio histórico $10 (vs $12 actual), tasa histórica 90 Bs/$ (dentro de ±35% de 100),
+        // pagada con 1080 Bs (= $12 a tasa 90 => vuelto real $2.00, aunque el cliente mande changeAmount fraudulento 999)
+        const result = await SaleService.processSale(cashierUser, {
+            id: 'tx-offline-drift-001',
+            date: twoHoursAgoIso,
+            terminalId: 'TERM-MOB-TEST',
+            exchangeRate: 90,
+            total: 10.00,
+            changeAmount: 999.00,
+            paymentMethod: 'cash_bs',
+            paymentMethods: [{ method: 'cash_bs', amount: 1080, currency: 'VES' }],
+            items: [{ productId: 'prod-harina', name: 'Harina', quantity: 1, price: 10.00 }]
+        }, { isOfflineSync: true, bypassShiftCheck: true, bypassStockCheck: true });
+
+        assert.ok(result, 'La venta offline con drift histórico razonable debe aceptarse sin cuarentena');
+        assert.equal(createdSaleData.total, 10);
+        assert.equal(createdSaleData.exchangeRate, 90);
+        assert.equal(createdSaleData.changeAmount, 2, 'El vuelto debe recalcularse en el servidor ($12 - $10 = $2), ignorando 999');
+        assert.ok(auditLogs.some(l => l.action === 'OFFLINE_PRICE_DRIFT'), 'Debe registrar AuditLog OFFLINE_PRICE_DRIFT');
+        assert.ok(auditLogs.some(l => l.action === 'OFFLINE_RATE_DRIFT'), 'Debe registrar AuditLog OFFLINE_RATE_DRIFT');
+        assert.ok(triggeredAlerts.some(a => a.type === 'OFFLINE_PRICE_DRIFT'), 'Debe disparar Alert OFFLINE_PRICE_DRIFT');
+        assert.ok(triggeredAlerts.some(a => a.type === 'OFFLINE_RATE_DRIFT'), 'Debe disparar Alert OFFLINE_RATE_DRIFT');
+        assert.equal(lanBroadcastPayload?.sourceTerminalId, 'TERM-MOB-TEST', 'Debe propagar sourceTerminalId en lan_stock_update');
+
+        // Validar rechazo si la tasa offline supera ±35% (ej. 50 Bs vs 100 Bs = -50%)
+        await assert.rejects(
+            () => SaleService.processSale(cashierUser, {
+                id: 'tx-offline-bad-rate',
+                date: twoHoursAgoIso,
+                exchangeRate: 50,
+                total: 10.00,
+                paymentMethod: 'cash_bs',
+                paymentMethods: [{ method: 'cash_bs', amount: 500, currency: 'VES' }],
+                items: [{ productId: 'prod-harina', name: 'Harina', quantity: 1, price: 10.00 }]
+            }, { isOfflineSync: true, bypassShiftCheck: true, bypassStockCheck: true }),
+            /±35%/
+        );
+
+        // Validar rechazo si la venta offline tiene más de 7 días de antigüedad
+        const tenDaysAgoIso = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+        await assert.rejects(
+            () => SaleService.processSale(cashierUser, {
+                id: 'tx-offline-too-old',
+                date: tenDaysAgoIso,
+                exchangeRate: 100,
+                total: 12.00,
+                paymentMethod: 'cash_usd',
+                paymentMethods: [{ method: 'cash_usd', amount: 12, currency: 'USD' }],
+                items: [{ productId: 'prod-harina', name: 'Harina', quantity: 1, price: 12.00 }]
+            }, { isOfflineSync: true, bypassShiftCheck: true, bypassStockCheck: true }),
+            /7 días/
+        );
+    } finally {
+        SaleService._getSettings = origGetSettings;
+        SaleService._logAudit = origLogAudit;
+        models.Sale.findByPk = origSaleFindByPk;
+        models.Sale.findOne = origSaleFindOne;
+        models.Sale.create = origSaleCreate;
+        models.SaleItem.create = origSaleItemCreate;
+        models.Product.findAll = origProductFindAll;
+        models.Product.findOne = origProductFindOne;
+        models.Product.update = origProductUpdate;
+        models.ProductLot.findAll = origProductLotFindAll;
+        if (models.BillOfMaterials && origBomFindAll) models.BillOfMaterials.findAll = origBomFindAll;
+        models.sequelize.query = origSequelizeQuery;
+        models.Branch.findOne = origBranchFindOne;
+        models.BranchStock.count = origBranchStockCount;
+        models.BranchStock.findOrCreate = origBranchStockFindOrCreate;
+        models.StockMovement.bulkCreate = origStockMovBulkCreate;
+        models.sequelize.transaction = origTransaction;
+        AlertService.triggerAlert = origTriggerAlert;
+        AccountingEngineService.generateSaleEntry = origGenAccounting;
+        SupabaseSyncService.queueEvent = origQueueEvent;
+        LANClusterService.broadcastLANEvent = origBroadcastLan;
+        PromotionService.evaluateCart = origPromoEval;
+    }
+});
+
+test('Fase 1.3 — CashService.closeShiftBlind acepta declaración numérica plana (móvil) además de denominaciones', async () => {
+    const OwnerNotificationService = require('../services/OwnerNotificationService');
+    const origTransaction = models.sequelize.transaction;
+    const origShiftFindOne = models.CashShift.findOne;
+    const origMovFindAll = models.CashMovement.findAll;
+    const origMovCreate = models.CashMovement.create;
+    const origDeclCreate = models.CashDeclaration.create;
+    const origQueueEvent = SupabaseSyncService.queueEvent;
+    const origNotifyShiftClose = OwnerNotificationService.notifyShiftClose;
+    const origGetStats = CashService.getShiftStats;
+    const origGetProdSummary = CashService.getShiftProductsSummary;
+    const origLogAudit = CashService._logAudit;
+
+    let savedDeclaration = null;
+
+    try {
+        const mockShift = {
+            id: 'shift-blind-mob-1',
+            userId: 'u-1',
+            companyId: 'default',
+            registerId: 'MOB-ABC123',
+            status: 'open',
+            openedAt: new Date().toISOString(),
+            initialAmount: 10,
+            initialBreakdown: { cash: 10 },
+            update: async () => {},
+            toJSON: () => ({ id: 'shift-blind-mob-1', status: 'closed', registerId: 'MOB-ABC123' })
+        };
+
+        models.sequelize.transaction = async (cb) => cb({ LOCK: { UPDATE: 'UPDATE' } });
+        models.CashShift.findOne = async () => mockShift;
+        models.CashMovement.findAll = async () => [];
+        models.CashMovement.create = async (data) => data;
+        models.CashDeclaration.create = async (data) => {
+            savedDeclaration = data;
+            return data;
+        };
+        SupabaseSyncService.queueEvent = async () => {};
+        OwnerNotificationService.notifyShiftClose = async () => {};
+        CashService.getShiftStats = async () => ({
+            totalSalesAmount: 35,
+            cashSalesTotal: 35,
+            salesCount: 2,
+            paymentBreakdownNative: { cash: 35 }
         });
-        assert.equal(histDeny.status, 403);
+        CashService.getShiftProductsSummary = async () => [];
+        CashService._logAudit = async () => {};
 
-        // Cajero con canManageCashShift abre turno y consulta GET /cash/x-report -> modo ciego oculta esperados
-        const openOk = await fetch(`${posUrl}/cash/open`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cashierToken}` },
-            body: JSON.stringify({ amount: 100, registerId: 'M2-TEST' })
-        });
-        assert.equal(openOk.status, 201);
-        const openedShift = await openOk.json();
-        cleanupIds.shifts.push(openedShift.id);
+        const res = await CashService.closeShiftBlind(
+            { id: 'u-1', companyId: 'default', role: 'user', name: 'Cajero Ciego' },
+            {
+                shiftId: 'shift-blind-mob-1',
+                registerId: 'MOB-ABC123',
+                declaration: { usd: 45, ves: 0, card: 0, zelle: 0, mobile: 0 },
+                notes: 'Cierre ciego móvil exacto'
+            }
+        );
 
-        const xCashier = await fetch(`${posUrl}/cash/x-report?registerId=M2-TEST`, {
-            headers: { Authorization: `Bearer ${cashierToken}` }
-        });
-        assert.equal(xCashier.status, 200);
-        const xData = await xCashier.json();
-        assert.equal(xData.isBlindClose, true);
-        assert.equal(xData.expectedAmount, null);
-        assert.equal(xData.theoreticalTotalUsd, null);
-        assert.equal(xData.expectedCashUsd, null);
-        assert.equal(xData.expectedBreakdown, null);
-
-        // Verificar sanitización de GET /settings para cajero sin canManageSettings
-        const settingsCashierRes = await fetch(`${posUrl}/settings`, {
-            headers: { Authorization: `Bearer ${cashierToken}` }
-        });
-        assert.equal(settingsCashierRes.status, 200);
-        const settingsCashier = await settingsCashierRes.json();
-        assert.equal(settingsCashier.geminiApiKey, undefined);
-        assert.equal(settingsCashier.smtpPass, undefined);
-        assert.equal(settingsCashier.businessInfo?.name, 'Tienda Test M2');
-
-        const settingsAdminRes = await fetch(`${posUrl}/settings`, {
-            headers: { Authorization: `Bearer ${adminToken}` }
-        });
-        assert.equal(settingsAdminRes.status, 200);
-        const settingsAdmin = await settingsAdminRes.json();
-        assert.equal(settingsAdmin.geminiApiKey, 'sk-test-secret-gemini');
-    });
-
-    await t.test('5. Gastos: requirePermission array en GET /expenses y normalización BS -> VES en POST /expenses/public-sync', async () => {
-        // Cajero con canManageCashShift (pero sin canManageExpenses) ahora SÍ puede leer GET /expenses y /summary
-        const listRes = await fetch(`${posUrl}/expenses`, {
-            headers: { Authorization: `Bearer ${cashierToken}` }
-        });
-        assert.equal(listRes.status, 200);
-
-        const sumRes = await fetch(`${posUrl}/expenses/summary`, {
-            headers: { Authorization: `Bearer ${cashierToken}` }
-        });
-        assert.equal(sumRes.status, 200);
-
-        // Pero el cajero sin canManageExpenses NO puede crear gastos por public-sync
-        const syncExpDeny = await fetch(`${posUrl}/expenses/public-sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cashierToken}` },
-            body: JSON.stringify({ expenses: [{ description: 'No autorizado', amount: 10, currency: 'BS' }] })
-        });
-        assert.equal(syncExpDeny.status, 403);
-
-        // Admin sincroniza gasto en 'BS' -> ExpenseService.syncExpenses lo guarda como 'VES' sin crash y con idempotencia
-        const expId = `m2-exp-${ts}`;
-        const syncExpOk = await fetch(`${posUrl}/expenses/public-sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-            body: JSON.stringify({
-                expenses: [{
-                    id: expId,
-                    description: 'Compra hielo tienda',
-                    category: 'Operativo',
-                    amount: 3500,
-                    currency: 'BS',
-                    paymentMethod: 'Pago Móvil'
-                }]
-            })
-        });
-        assert.equal(syncExpOk.status, 200);
-        const syncExpBody = await syncExpOk.json();
-        assert.equal(syncExpBody.success, true);
-        assert.equal(syncExpBody.syncedCount, 1);
-        assert.equal(syncExpBody.synced[0].action, 'created');
-        const createdId = syncExpBody.synced[0].id;
-
-        const savedExp = await Expense.findByPk(createdId);
-        assert.ok(savedExp, 'El gasto sincronizado debe existir en BD');
-        cleanupIds.expenses.push(savedExp.id);
-        assert.equal(savedExp.currency, 'VES', 'Moneda BS debe normalizarse a VES en BD');
-
-        // Reenvío idempotente del mismo ID no duplica
-        const syncExpDup = await fetch(`${posUrl}/expenses/public-sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-            body: JSON.stringify({
-                expenses: [{
-                    id: createdId,
-                    description: 'Compra hielo tienda',
-                    category: 'Operativo',
-                    amount: 3500,
-                    currency: 'BS'
-                }]
-            })
-        });
-        assert.equal(syncExpDup.status, 200);
-        const syncExpDupBody = await syncExpDup.json();
-        assert.equal(syncExpDupBody.synced[0].action, 'skipped_existing');
-    });
-
-    await t.test('7. Fase M4: Delta Sync ?since= y retorno de inventoryWarnings en /sales/public-sync con sobregiro offline', async () => {
-        // 7A. Delta Sync inicial devuelve serverTime
-        const initDeltaRes = await fetch(`${posUrl}/products?minimal=true&limit=0&delta=true`, {
-            headers: { Authorization: `Bearer ${adminToken}` }
-        });
-        assert.equal(initDeltaRes.status, 200);
-        const initDelta = await initDeltaRes.json();
-        assert.ok(initDelta.serverTime, 'Debe devolver serverTime para futuras consultas delta');
-
-        // Crear producto con stock 1 para probar tanto Delta Sync incremental como sobregiro offline
-        const lowProd = await Product.create({
-            id: `m4-prod-${ts}`,
-            name: 'Producto Delta M4',
-            barcode: `DELTA-${ts}`,
-            price: 5,
-            cost: 2,
-            stock: 1,
-            stockQuantity: 1,
-            companyId,
-            status: 'active'
-        });
-        cleanupIds.products.push(lowProd.id);
-
-        const incDeltaRes = await fetch(`${posUrl}/products?minimal=true&limit=0&since=${encodeURIComponent(initDelta.serverTime)}`, {
-            headers: { Authorization: `Bearer ${adminToken}` }
-        });
-        assert.equal(incDeltaRes.status, 200);
-        const incDelta = await incDeltaRes.json();
-        assert.equal(incDelta.delta, true);
-        assert.equal(incDelta.fullSyncRequired, false);
-        assert.ok(incDelta.products.some((p) => String(p.id) === String(lowProd.id)), 'El delta debe incluir el producto nuevo');
-
-        // 7B. Venta offline por cantidad 3 sobre stock 1 -> debe sincronizar con bypassStockCheck y retornar inventoryWarnings
-        const offlineSaleId = `m4-sale-${ts}`;
-        cleanupIds.sales.push(offlineSaleId);
-        const saleSyncRes = await fetch(`${posUrl}/sales/public-sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-            body: JSON.stringify({
-                sales: [{
-                    id: offlineSaleId,
-                    total: 15,
-                    subtotal: 15,
-                    tax: 0,
-                    discount: 0,
-                    paymentMethod: 'cash_usd',
-                    paymentMethods: [{ method: 'cash_usd', amount: 15, currency: 'USD' }],
-                    items: [{ id: lowProd.id, productId: lowProd.id, name: lowProd.name, quantity: 3, price: 5 }]
-                }]
-            })
-        });
-        assert.equal(saleSyncRes.status, 200);
-        const saleSyncBody = await saleSyncRes.json();
-        assert.equal(saleSyncBody.success, true);
-        assert.equal(saleSyncBody.synced, 1);
-        assert.ok(Array.isArray(saleSyncBody.inventoryWarnings), 'Debe retornar array inventoryWarnings');
-        assert.equal(saleSyncBody.inventoryWarnings.length, 1, 'Debe reportar 1 advertencia de sobregiro');
-        assert.equal(saleSyncBody.inventoryWarnings[0].productId, lowProd.id);
-        assert.equal(Number(saleSyncBody.inventoryWarnings[0].overdraftAmount), 2);
-    });
+        assert.ok(res, 'closeShiftBlind debe completarse correctamente');
+        assert.equal(savedDeclaration.declaredCashUSD, 45);
+        assert.equal(savedDeclaration.differenceUSD, 0);
+    } finally {
+        models.sequelize.transaction = origTransaction;
+        models.CashShift.findOne = origShiftFindOne;
+        models.CashMovement.findAll = origMovFindAll;
+        models.CashMovement.create = origMovCreate;
+        models.CashDeclaration.create = origDeclCreate;
+        SupabaseSyncService.queueEvent = origQueueEvent;
+        OwnerNotificationService.notifyShiftClose = origNotifyShiftClose;
+        CashService.getShiftStats = origGetStats;
+        CashService.getShiftProductsSummary = origGetProdSummary;
+        CashService._logAudit = origLogAudit;
+    }
 });

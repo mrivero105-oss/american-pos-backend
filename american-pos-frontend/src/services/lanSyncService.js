@@ -3,13 +3,14 @@ import api from './api';
 import db from '../db/localDb';
 import { fetchGlobalSettings } from '../utils/format';
 import secureMobileStorage from '../utils/secureMobileStorage';
+import { getTerminalId } from '../utils/terminalIdentity';
 
 class LANSyncService {
   constructor() {
     this.socket = null;
     this.listeners = new Set();
     this.status = {
-      state: navigator.onLine ? 'CLOUD_ONLINE' : 'OFFLINE_ISOLATED',
+      state: 'OFFLINE_ISOLATED',
       clusterSize: 1,
       peers: [],
       localNode: null,
@@ -156,13 +157,17 @@ class LANSyncService {
     if (isOnline) {
       this.consecutivePeerFailures = 0;
       this.lastPeerErrorMsg = null;
-      this.status.state = 'CLOUD_ONLINE';
-      if (!this.socket?.connected && !this.socket?.active && !this.isConnecting) {
-        this.connectSocket();
+      if (this.socket?.connected) {
+        this.status.state = 'CLOUD_ONLINE';
+      } else {
+        this.status.state = this.status.peers.length > 0 ? 'LAN_P2P_ACTIVE' : 'OFFLINE_ISOLATED';
+        if (!this.socket?.active && !this.isConnecting) {
+          this.connectSocket();
+        }
       }
       this.scheduleNextPeerPoll();
     } else {
-      this.status.state = this.status.peers.length > 0 ? 'LAN_P2P_ACTIVE' : 'OFFLINE_ISOLATED';
+      this.status.state = (this.socket?.connected && this.status.peers.length > 0) ? 'LAN_P2P_ACTIVE' : 'OFFLINE_ISOLATED';
     }
     this.notifyListeners();
   };
@@ -229,12 +234,16 @@ class LANSyncService {
       this.socket.on('disconnect', () => {
         this.isConnecting = false;
         console.warn('[LAN_SYNC] ⚠️ Socket P2P desconectado.');
-        this.status.state = navigator.onLine ? 'CLOUD_ONLINE' : 'OFFLINE_ISOLATED';
+        this.status.state = 'OFFLINE_ISOLATED';
         this.notifyListeners();
       });
 
       this.socket.on('connect_error', () => {
         this.isConnecting = false;
+        if (!this.socket?.connected) {
+          this.status.state = 'OFFLINE_ISOLATED';
+          this.notifyListeners();
+        }
       });
 
       // Escuchar cambios de topología LAN
@@ -253,10 +262,11 @@ class LANSyncService {
       // Escuchar actualizaciones de stock instantáneas propagadas por otras cajas (ignorando eco propio para evitar descuento 2x)
       this.socket.on('lan_stock_update', async (payload) => {
         if (!payload || !Array.isArray(payload.items)) return;
-        const myTerminalId = typeof window !== 'undefined' ? (localStorage.getItem('pos_terminal_id') || 'Caja 1') : 'Caja 1';
+        const myTerminalId = getTerminalId();
+        const legacyTermId = typeof window !== 'undefined' ? localStorage.getItem('pos_terminal_id') : null;
         if (
           (payload.sourceSocketId && this.socket?.id && payload.sourceSocketId === this.socket.id) ||
-          (payload.sourceTerminalId && payload.sourceTerminalId === myTerminalId)
+          (payload.sourceTerminalId && (payload.sourceTerminalId === myTerminalId || (legacyTermId && payload.sourceTerminalId === legacyTermId)))
         ) {
           return;
         }
@@ -275,14 +285,22 @@ class LANSyncService {
         try {
           if (!payload || !payload.sale) return;
           const incomingSale = payload.sale;
-          const myTerminalId = localStorage.getItem('pos_terminal_id') || 'Caja 1';
+          const myTerminalId = getTerminalId();
           if (incomingSale.terminalId && incomingSale.terminalId === myTerminalId) return;
+
+          // Validar aislamiento multi-tenant antes de guardar ventas P2P en localDb
+          const myCompanyId = typeof window !== 'undefined' ? String(localStorage.getItem('companyId') || '').trim() : '';
+          if (myCompanyId && incomingSale.companyId && String(incomingSale.companyId) !== myCompanyId) {
+            return;
+          }
 
           console.log('[LAN_SYNC] 💸 Venta P2P sincronizada desde nodo remoto:', incomingSale.id);
 
           if (db && db.sales) {
             await db.sales.put({
               ...incomingSale,
+              status: 'synced',
+              isOffline: false,
               synced_p2p: true,
               receivedAt: Date.now()
             }).catch(() => {});
@@ -405,7 +423,7 @@ class LANSyncService {
     const syncKey = typeof window !== 'undefined' ? localStorage.getItem('sync_secret_key') : null;
     if (!authToken && !syncKey) return;
     try {
-      const res = await api.get('/lan/peers');
+      const res = await api.get('/lan/peers', { timeout: 3000 });
       if (res.data && res.data.success) {
         this.consecutivePeerFailures = 0;
         this.lastPeerErrorMsg = null;
@@ -429,7 +447,7 @@ class LANSyncService {
       if (shouldLogWarn) {
         console.warn('[LAN_SYNC] Error consultando pares LAN:', errMsg);
       }
-      if (!navigator.onLine && this.status.peers.length === 0) {
+      if (!this.socket?.connected) {
         this.status.state = 'OFFLINE_ISOLATED';
         this.notifyListeners();
       }

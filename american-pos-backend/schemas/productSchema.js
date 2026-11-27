@@ -30,7 +30,7 @@ const productSchema = z.object({
         midBulkPrice: numeric.optional(),
         midBulkPriceBs: numeric.optional(),
         midBulkBarcode: z.string().nullable().optional(),
-        imageUri: z.string().optional(),
+        imageUri: z.string().nullable().optional(),
         presentations: z.array(z.object({
             id: z.string().optional(),
             name: z.string(),
@@ -45,4 +45,16 @@ const productSchema = z.object({
     }).passthrough()
 });
 
-module.exports = { productSchema };
+const productUpdateSchema = z.object({
+    body: productSchema.shape.body.partial().passthrough()
+});
+
+const stockCountSchema = z.object({
+    body: z.object({
+        stockQuantity: z.coerce.number(),
+        previousStock: z.coerce.number().optional(),
+        reason: z.string().max(255).optional()
+    }).passthrough()
+});
+
+module.exports = { productSchema, productUpdateSchema, stockCountSchema };

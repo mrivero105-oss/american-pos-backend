@@ -271,16 +271,39 @@ router.post('/close-blind', requirePermission('canManageCashShift'), validate(cl
             });
         }
 
+        const isSupervisorOrAdmin = ['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'master', 'supervisor'].includes(String(req.user?.role || '').toLowerCase());
+        if (!isSupervisorOrAdmin && result && typeof result === 'object') {
+            // En Modo Ciego estricto no filtrar montos esperados ni discrepancias exactas al cajero
+            const blindSafeResponse = {
+                success: true,
+                blindClose: true,
+                message: 'Declaración de cierre ciego registrada correctamente para auditoría.',
+                shift: result.shift ? {
+                    id: result.shift.id,
+                    registerId: result.shift.registerId,
+                    registerName: result.shift.registerName,
+                    status: result.shift.status,
+                    openedAt: result.shift.openedAt,
+                    closedAt: result.shift.closedAt
+                } : null,
+                declarationHash: result.declarationHash || result.hash || null
+            };
+            return res.json(blindSafeResponse);
+        }
+
         res.json(result);
     } catch (error) {
         console.error(`[CASH] Error en POST /cash/close-blind (User: ${req.user.id}):`, error.message);
         const isAuthReq = error.code === 'SUPERVISOR_AUTH_REQUIRED';
+        const isSupervisorOrAdmin = ['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'master', 'supervisor'].includes(String(req.user?.role || '').toLowerCase());
+        const clientMessage = (isAuthReq && !isSupervisorOrAdmin)
+            ? 'La declaración de cierre ciego presenta una diferencia fuera de la tolerancia permitida. Se requiere autorización de un supervisor.'
+            : (error.message || 'No se pudo procesar la declaración de cierre');
         res.status(isAuthReq ? 403 : 400).json({ 
-            error: error.message || 'No se pudo procesar la declaración de cierre', 
-            message: error.message,
+            error: clientMessage, 
+            message: clientMessage,
             code: error.code || 'BLIND_CLOSE_ERROR',
-            difference: error.difference,
-            tolerance: error.tolerance
+            ...(isSupervisorOrAdmin ? { difference: error.difference, tolerance: error.tolerance } : {})
         });
     }
 });

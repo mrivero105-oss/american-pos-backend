@@ -620,17 +620,29 @@ export default function MobileInventoryView({
         stock: newStock
       };
 
+      const theoretical = Number(prod.stockQuantity ?? prod.stock ?? 0);
+      const stockPayload = {
+        stockQuantity: newStock,
+        previousStock: theoretical,
+        reason: 'Conteo físico móvil'
+      };
+
       try {
-        await api.put(`/products/${id}`, { stockQuantity: newStock }, { timeout: 3500 });
+        await api.patch(`/products/${id}/stock-count`, stockPayload, { timeout: 4500 });
         successCount++;
       } catch (err) {
-        console.warn('[MobileInventoryView] Error capturado en operación:', err?.message || err);
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          console.warn('[MobileInventoryView] Conteo rechazado por servidor:', err?.response?.data?.error || err?.message);
+          continue;
+        }
+        console.warn('[MobileInventoryView] Error de red en conteo físico, encolando:', err?.message || err);
         try {
           await primaryDb.put('syncQueue', {
             id: `audit_${Date.now()}_${id}`,
-            endpoint: `/products/${id}`,
-            method: 'PUT',
-            payload: { stockQuantity: newStock },
+            endpoint: `/products/${id}/stock-count`,
+            method: 'PATCH',
+            payload: stockPayload,
             createdAt: new Date().toISOString()
           });
           successCount++;

@@ -547,7 +547,10 @@ api.interceptors.request.use((config) => {
         config.headers['x-sync-key'] = envSyncKey;
     }
     const rawCompanyId = localStorage.getItem('companyId');
-    const activeCompanyId = (rawCompanyId && rawCompanyId.length < 10 && rawCompanyId !== 'null' && rawCompanyId !== 'undefined') ? rawCompanyId : '2';
+    const trimmedCompanyId = rawCompanyId ? String(rawCompanyId).trim() : '';
+    const activeCompanyId = (trimmedCompanyId && trimmedCompanyId !== 'null' && trimmedCompanyId !== 'undefined')
+        ? trimmedCompanyId
+        : '2';
     if (!config.headers['x-company-id'] && !config.headers['X-Company-Id']) {
         config.headers['x-company-id'] = activeCompanyId;
     }

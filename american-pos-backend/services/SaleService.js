@@ -321,9 +321,30 @@ class SaleService {
         const dbProducts = await Product.findAll({ where: { id: itemIds, ...companyCondition }, include: [{ model: ProductPresentation, as: 'Presentations' }] });
         const dbProductMap = new Map(dbProducts.map(p => [String(p.id), p]));
 
+        const isOfflineSync = Boolean(options.isOfflineSync);
+        const rawClientSaleDate = saleData.date || saleData.timestamp || null;
+        let parsedOfflineSaleDate = null;
+        if (isOfflineSync && rawClientSaleDate) {
+            const candidateDate = new Date(rawClientSaleDate);
+            if (Number.isNaN(candidateDate.getTime())) {
+                throw new Error('INTEGRITY_ERROR: Fecha de venta offline inválida.');
+            }
+            const nowMs = Date.now();
+            const maxPastMs = 7 * 24 * 60 * 60 * 1000;
+            const maxFutureMs = 5 * 60 * 1000;
+            if ((nowMs - candidateDate.getTime()) > maxPastMs) {
+                throw new Error('INTEGRITY_ERROR: La venta offline excede la ventana máxima permitida de 7 días de antigüedad.');
+            }
+            if ((candidateDate.getTime() - nowMs) > maxFutureMs) {
+                throw new Error('INTEGRITY_ERROR: La fecha de la venta offline está adelantada más de 5 minutos respecto al servidor.');
+            }
+            parsedOfflineSaleDate = candidateDate;
+        }
+
         let serverCalculatedSubtotal = 0;
         let taxableSubtotalAfterItemPromo = 0;
         let exemptSubtotalAfterItemPromo = 0;
+        const offlinePriceDrifts = [];
         for (const item of items) {
             const itemQty = Number(item.quantity) || 0;
             if (itemQty <= 0) throw new Error(`INTEGRITY_ERROR: Cantidad inválida para producto: ${item.name}`);
@@ -424,9 +445,22 @@ class SaleService {
             if (dbProd && hasExplicitPrice && Math.abs(requestedPrice - officialPrice) > priceTolerance) {
                 const canModifyPrices = isServiceItem || ['superadmin', 'admin', 'owner', 'supervisor'].includes((reqUser.role || '').toLowerCase()) || reqUser.permissions?.canModifyPrices === true;
                 if (!canModifyPrices && !saleData.supervisorApprovalId && !options.forceOverridePrice) {
-                    throw new Error(`INTEGRITY_ERROR: No tienes permiso para modificar el precio del producto "${item.name}". El precio oficial ($${officialPrice.toFixed(2)}) no coincide con el recibido ($${requestedPrice.toFixed(2)}). Se requiere la aprobación de un supervisor.`);
+                    if (isOfflineSync && requestedPrice > 0) {
+                        // Política A3: Aceptar precio histórico del momento de la venta offline (siendo > 0) y registrar alerta + auditoría de drift
+                        offlinePriceDrifts.push({
+                            productId: prodId,
+                            productName: dbProd.name || item.name || 'Producto',
+                            officialPrice,
+                            offlinePrice: requestedPrice,
+                            diff: precision.round(precision.subtract(requestedPrice, officialPrice), 2)
+                        });
+                        itemPrice = requestedPrice;
+                    } else {
+                        throw new Error(`INTEGRITY_ERROR: No tienes permiso para modificar el precio del producto "${item.name}". El precio oficial ($${officialPrice.toFixed(2)}) no coincide con el recibido ($${requestedPrice.toFixed(2)}). Se requiere la aprobación de un supervisor.`);
+                    }
+                } else {
+                    itemPrice = requestedPrice;
                 }
-                itemPrice = requestedPrice;
             } else if (isWeightedWholesale && hasExplicitPrice && requestedPrice > 0) {
                 itemPrice = requestedPrice;
             }
@@ -517,7 +551,12 @@ class SaleService {
                 const primaryPaymentMethod = (Array.isArray(saleData.paymentMethods) && saleData.paymentMethods[0]?.method)
                     || saleData.paymentMethod
                     || null;
-                const promoEval = await PromotionService.evaluateCart(evalCartItems, companyId, primaryPaymentMethod);
+                const promoEval = await PromotionService.evaluateCart(
+                    evalCartItems,
+                    companyId,
+                    primaryPaymentMethod,
+                    isOfflineSync ? parsedOfflineSaleDate : null
+                );
                 verifiedPromoDiscount = Math.max(0, Number(promoEval?.totalDiscount) || 0);
                 verifiedAppliedPromotions = Array.isArray(promoEval?.appliedPromotions) ? promoEval.appliedPromotions : [];
             } catch (promoErr) {
@@ -573,7 +612,25 @@ class SaleService {
             }
         }
 
-        const exchangeRate = isSingleCountry ? 1.0 : (Number(settings.exchangeRate) || 1.0);
+        const currentServerExchangeRate = isSingleCountry ? 1.0 : (Number(settings.exchangeRate) || 1.0);
+        let exchangeRate = currentServerExchangeRate;
+        let offlineRateDrift = null;
+        if (isOfflineSync && !isSingleCountry && Number(saleData.exchangeRate) > 0 && currentServerExchangeRate > 0) {
+            const offlineRate = Number(saleData.exchangeRate);
+            const rateDiff = Math.abs(precision.subtract(offlineRate, currentServerExchangeRate));
+            if (rateDiff > 0.005) {
+                const driftRatio = Math.abs(offlineRate - currentServerExchangeRate) / currentServerExchangeRate;
+                if (driftRatio > 0.35) {
+                    throw new Error(`INTEGRITY_ERROR: La tasa histórica offline (${offlineRate.toFixed(2)}) excede el desvío máximo permitido (±35%) respecto a la tasa vigente (${currentServerExchangeRate.toFixed(2)}).`);
+                }
+                exchangeRate = offlineRate;
+                offlineRateDrift = {
+                    officialRate: currentServerExchangeRate,
+                    offlineRate,
+                    driftPercent: precision.round(driftRatio * 100, 2)
+                };
+            }
+        }
         console.log(`[SALE-CALC] Country: ${regionCfg.id}, Currency: ${regionCfg.currencyCode}, Subtotal: ${serverCalculatedSubtotal}, Discount: ${discountValue}, Tax(Server ${regionCfg.taxLabel} ${ivaRate}%): ${serverCalculatedTax}, Rate: ${exchangeRate}`);
 
         const isBinanceIgtfEnabled = isVenezuela && Boolean(
@@ -728,8 +785,15 @@ class SaleService {
             throw new Error(`FRAUDE_PAGO_INSUFICIENTE: Total Factura: ${serverCalculatedTotal.toFixed(2)}, Cubierto: ${totalSettledOrCreditedUsd.toFixed(2)}. Falta: ${underpaymentDiff.toFixed(2)}`);
         }
 
-        const saleDate = saleData.date || saleData.timestamp || new Date().toISOString();
+        const saleDate = (isOfflineSync && parsedOfflineSaleDate)
+            ? parsedOfflineSaleDate.toISOString()
+            : (saleData.date || saleData.timestamp || new Date().toISOString());
         const now = saleDate;
+        const cashRequiredUsd = Math.max(0, precision.subtract(serverCalculatedTotal, creditTotal || 0));
+        const serverCalculatedChangeAmount = precision.round(Math.max(0, precision.subtract(totalCoveredUsd, cashRequiredUsd)), 2);
+        const serverCalculatedReceivedAmount = totalCoveredUsd > 0
+            ? precision.round(totalCoveredUsd, 2)
+            : (Number(receivedAmount) || 0);
         let saleRecord = null;
 
         // --- BEGIN TRANSACTION (POSTGRESQL READ COMMITTED + DETERMINISTIC FOR UPDATE LOCKS) ---
@@ -818,8 +882,8 @@ class SaleService {
                 subtotal: serverCalculatedSubtotal,
                 tax: serverCalculatedTax,
                 discount: discountValue,
-                receivedAmount: Number(receivedAmount) || 0,
-                changeAmount: Number(changeAmount) || 0,
+                receivedAmount: serverCalculatedReceivedAmount,
+                changeAmount: serverCalculatedChangeAmount,
                 igtfAmount: recalculatedIgtf,
                 taxInfo: enrichedTaxInfo,
                 date: saleDate,
@@ -1517,7 +1581,54 @@ class SaleService {
             } catch (_) {}
 
             // Auditoría post-commit
-            this._logAudit(reqUser, 'CREATE_SALE', `Venta completada: ${clientTransactionId}`, clientTransactionId, null, { total: saleTotal }).catch(() => {});
+            this._logAudit(reqUser, 'CREATE_SALE', `Venta completada: ${clientTransactionId}`, clientTransactionId, null, { total: serverCalculatedTotal }).catch(() => {});
+
+            // Alertas y auditoría por desvío de precio o tasa en ventas sincronizadas offline (Política A3)
+            if (isOfflineSync && (offlinePriceDrifts.length > 0 || offlineRateDrift)) {
+                try {
+                    const AlertService = require('./AlertService');
+                    if (offlinePriceDrifts.length > 0) {
+                        const driftSummary = offlinePriceDrifts.map(d => `${d.productName}: $${d.offlinePrice.toFixed(2)} vs $${d.officialPrice.toFixed(2)}`).join(', ');
+                        const hasSevereDrop = offlinePriceDrifts.some(d => d.officialPrice > 0 && d.offlinePrice < d.officialPrice * 0.7);
+                        this._logAudit(
+                            reqUser,
+                            'OFFLINE_PRICE_DRIFT',
+                            `Desvío de precio aceptado en venta offline ${clientTransactionId}: ${driftSummary}`,
+                            clientTransactionId,
+                            { officialPrices: offlinePriceDrifts.map(d => ({ id: d.productId, price: d.officialPrice })) },
+                            { offlinePrices: offlinePriceDrifts }
+                        ).catch(() => {});
+                        AlertService.triggerAlert({
+                            type: 'OFFLINE_PRICE_DRIFT',
+                            severity: hasSevereDrop ? 'high' : 'medium',
+                            message: `Venta offline #${clientTransactionId.slice(-6)} con cambio de precio: ${driftSummary}`,
+                            userId,
+                            companyId,
+                            metadata: { saleId: clientTransactionId, drifts: offlinePriceDrifts, saleDate }
+                        }).catch(() => {});
+                    }
+                    if (offlineRateDrift) {
+                        this._logAudit(
+                            reqUser,
+                            'OFFLINE_RATE_DRIFT',
+                            `Tasa histórica offline (${offlineRateDrift.offlineRate}) aceptada vs vigente (${offlineRateDrift.officialRate}) en venta ${clientTransactionId}`,
+                            clientTransactionId,
+                            { officialRate: offlineRateDrift.officialRate },
+                            offlineRateDrift
+                        ).catch(() => {});
+                        AlertService.triggerAlert({
+                            type: 'OFFLINE_RATE_DRIFT',
+                            severity: offlineRateDrift.driftPercent > 15 ? 'high' : 'medium',
+                            message: `Venta offline #${clientTransactionId.slice(-6)} registrada con tasa histórica Bs. ${offlineRateDrift.offlineRate.toFixed(2)} (vigente: Bs. ${offlineRateDrift.officialRate.toFixed(2)}, ${offlineRateDrift.driftPercent}%)`,
+                            userId,
+                            companyId,
+                            metadata: { saleId: clientTransactionId, ...offlineRateDrift, saleDate }
+                        }).catch(() => {});
+                    }
+                } catch (driftAlertErr) {
+                    console.warn('[SaleService] Error registrando alertas de drift offline:', driftAlertErr.message);
+                }
+            }
 
             // Propagar cambio de stock por LAN en tiempo real
             try {
@@ -1533,7 +1644,11 @@ class SaleService {
                         const qty = precision.multiply(Number(it.quantity) || 1, mult);
                         return { productId: cleanId, quantity: qty, name: it.name };
                     });
-                    LANClusterService.broadcastLANEvent('lan_stock_update', { items: broadcastItems, timestamp: Date.now() });
+                    LANClusterService.broadcastLANEvent('lan_stock_update', {
+                        items: broadcastItems,
+                        sourceTerminalId: saleData.terminalId || null,
+                        timestamp: Date.now()
+                    });
                 }
             } catch (lanErr) {}
 

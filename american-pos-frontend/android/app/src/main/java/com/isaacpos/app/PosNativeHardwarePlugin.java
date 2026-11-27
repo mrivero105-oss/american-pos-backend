@@ -64,6 +64,8 @@ public class PosNativeHardwarePlugin extends Plugin {
     private NativeSqliteManager sqliteManager;
     private NativeNetworkManager networkManager;
     private NativeShareAndVoiceManager shareAndVoiceManager;
+    // Referencia fuerte al listener mientras CameraX está abierto (evita recolección GC de WeakReference en ráfaga)
+    private NativeVisionScannerActivity.LiveScanListener activeLiveScanListener;
 
     @Override
     public void load() {
@@ -242,17 +244,19 @@ public class PosNativeHardwarePlugin extends Plugin {
             intent.putExtra(NativeVisionScannerActivity.EXTRA_TARGET_MODE, call.getString("targetMode", "CART"));
 
             // Stream en tiempo real hacia JS para modo ráfaga (+1) sin cerrar la cámara
-            NativeVisionScannerActivity.setLiveScanListener((barcode, format, count, burstMode) -> {
+            activeLiveScanListener = (barcode, format, count, burstMode) -> {
                 JSObject evt = new JSObject();
                 evt.put("barcode", barcode);
                 evt.put("format", format);
                 evt.put("count", count);
                 evt.put("burstMode", burstMode);
                 notifyListeners("nativeBarcodeScanned", evt);
-            });
+            };
+            NativeVisionScannerActivity.setLiveScanListener(activeLiveScanListener);
 
             startActivityForResult(call, intent, "handleNativeScannerResult");
         } catch (Exception e) {
+            activeLiveScanListener = null;
             NativeVisionScannerActivity.setLiveScanListener(null);
             call.reject("No se pudo iniciar el escáner nativo CameraX: " + e.getMessage());
         }
@@ -260,6 +264,7 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @ActivityCallback
     private void handleNativeScannerResult(PluginCall call, ActivityResult result) {
+        activeLiveScanListener = null;
         NativeVisionScannerActivity.setLiveScanListener(null);
         if (call == null) return;
         JSObject ret = new JSObject();
@@ -478,6 +483,7 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        activeLiveScanListener = null;
         NativeVisionScannerActivity.setLiveScanListener(null);
         if (printerManager != null) printerManager.shutdown();
         if (visionManager != null) visionManager.shutdown();

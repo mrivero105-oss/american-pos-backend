@@ -53,15 +53,12 @@ export function useMobileCatalogAndSync({
   // Red, Socket Espejo y Cola Offline
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [lanSocketConnected, setLanSocketConnected] = useState(() => Boolean(
-    lanSyncService?.socket?.connected ||
-    lanSyncService?.status?.state === 'CLOUD_ONLINE' ||
-    lanSyncService?.status?.state === 'LAN_P2P_ACTIVE'
+    lanSyncService?.socket?.connected
   ));
   const socketConnected = Boolean(
     isRealtimeConnected ||
     lanSocketConnected ||
-    lanSyncService?.socket?.connected ||
-    (lanSyncService?.status?.state && lanSyncService.status.state !== 'OFFLINE_ISOLATED')
+    lanSyncService?.socket?.connected
   );
 
   const [pendingSalesCount, setPendingSalesCount] = useState(0);
@@ -108,7 +105,7 @@ export function useMobileCatalogAndSync({
     } catch (caughtErr) {
       console.warn('[MobileCatalogSync] Error leyendo tasa local:', caughtErr?.message || caughtErr);
     }
-    return 1000.0;
+    return 1;
   });
 
   const [businessMode, setBusinessMode] = useState(() =>
@@ -320,12 +317,24 @@ export function useMobileCatalogAndSync({
       }
 
       let rateLoaded = false;
-      if (rateRes.status === 'fulfilled' && rateRes.value.data?.rate) {
-        const rateVal = parseFloat(rateRes.value.data.rate);
+      if (rateRes.status === 'fulfilled' && rateRes.value.data) {
+        const rateData = rateRes.value.data;
+        const rateVal = parseFloat(rateData.rate);
         if (rateVal && !isNaN(rateVal)) {
           setExchangeRate(rateVal);
           try { localStorage.setItem('pos_cached_exchange_rate', String(rateVal)); } catch { /* noop */ }
           rateLoaded = true;
+        }
+        if (rateData.binanceRate !== undefined || rateData.euroRate !== undefined) {
+          setBusinessInfo((prev) => {
+            const updated = {
+              ...prev,
+              ...(Number(rateData.binanceRate) > 0 ? { binanceRate: Number(rateData.binanceRate) } : {}),
+              ...(Number(rateData.euroRate) > 0 ? { euroRate: Number(rateData.euroRate) } : {})
+            };
+            try { localStorage.setItem('pos_cached_business_info', JSON.stringify(updated)); } catch { /* noop */ }
+            return updated;
+          });
         }
       }
 
@@ -456,9 +465,6 @@ export function useMobileCatalogAndSync({
           }
           const changedProducts = Array.isArray(deltaPayload.products) ? deltaPayload.products : [];
           const deletedIds = Array.isArray(deltaPayload.deletedIds) ? deltaPayload.deletedIds.map(String) : [];
-          if (deltaPayload.serverTime) {
-            try { localStorage.setItem(PRODUCTS_LAST_SYNC_KEY, deltaPayload.serverTime); } catch { /* noop */ }
-          }
 
           if (changedProducts.length > 0 || deletedIds.length > 0) {
             const pendingDeductions = await computePendingDeductions();
@@ -477,21 +483,30 @@ export function useMobileCatalogAndSync({
             catalogSignatureRef.current = computeCatalogSignature(nextCatalog);
             setProducts(nextCatalog);
 
-            setTimeout(async () => {
-              try {
-                if (adjustedDelta.length > 0 && primaryDb?.putBatch) {
-                  await primaryDb.putBatch('products', adjustedDelta).catch(() => {});
+            // Persistir de forma garantizada en primaryDb (putAll) ANTES de adelantar el puntero since
+            let persistedOk = true;
+            try {
+              if (adjustedDelta.length > 0 && typeof primaryDb?.putAll === 'function') {
+                await primaryDb.putAll('products', adjustedDelta);
+              }
+              for (const delId of deletedIds) {
+                if (!delId.startsWith('off_prod_')) {
+                  await primaryDb.delete('products', delId);
                 }
-                for (const delId of deletedIds) {
-                  if (!delId.startsWith('off_prod_')) {
-                    await primaryDb.delete('products', delId).catch(() => {});
-                  }
-                }
-                if (adjustedDelta.length > 0) {
-                  cacheAllProductImages(adjustedDelta, { concurrency: 2, yieldMs: 25 }).catch(() => {});
-                }
-              } catch { /* noop */ }
-            }, 150);
+              }
+            } catch (persistErr) {
+              persistedOk = false;
+              console.warn('[MobilePOSSimulator] Error persistiendo Delta Sync en BD local; se reintentará en próximo sync:', persistErr?.message || persistErr);
+            }
+
+            if (persistedOk && deltaPayload.serverTime) {
+              try { localStorage.setItem(PRODUCTS_LAST_SYNC_KEY, deltaPayload.serverTime); } catch { /* noop */ }
+            }
+            if (adjustedDelta.length > 0) {
+              cacheAllProductImages(adjustedDelta, { concurrency: 2, yieldMs: 25 }).catch(() => {});
+            }
+          } else if (deltaPayload.serverTime) {
+            try { localStorage.setItem(PRODUCTS_LAST_SYNC_KEY, deltaPayload.serverTime); } catch { /* noop */ }
           }
           return;
         }
@@ -691,7 +706,8 @@ export function useMobileCatalogAndSync({
           const match = items.find((it) => String(it.productId || it.id) === String(p.id));
           if (match) {
             const cur = Number(p.stockQuantity ?? p.stock ?? 0);
-            const next = Math.max(0, cur - Number(match.quantity || 1));
+            const mult = Math.max(1, Number(match.factorConversion || match.unitsMultiplier || 1));
+            const next = Math.max(0, cur - (Number(match.quantity || 1) * mult));
             return { ...p, stockQuantity: next, stock: next };
           }
           return p;
@@ -714,6 +730,18 @@ export function useMobileCatalogAndSync({
           try { localStorage.setItem('pos_cached_exchange_rate', String(newRate)); } catch { /* noop */ }
           showToast(`💱 Tasa oficial actualizada en tiempo real: Bs. ${newRate.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
         }
+      }
+      if (payload?.binanceRate !== undefined || payload?.euroRate !== undefined || payload?.taxConfig !== undefined) {
+        setBusinessInfo((prev) => {
+          const next = {
+            ...prev,
+            ...(payload.binanceRate !== undefined ? { binanceRate: Number(payload.binanceRate) } : {}),
+            ...(payload.euroRate !== undefined ? { euroRate: Number(payload.euroRate) } : {}),
+            ...(payload.taxConfig !== undefined ? { taxConfig: { ...(prev?.taxConfig || {}), ...payload.taxConfig } } : {})
+          };
+          try { localStorage.setItem('pos_cached_business_info', JSON.stringify(next)); } catch { /* noop */ }
+          return next;
+        });
       }
       loadSettingsRef.current?.();
     };
@@ -787,10 +815,6 @@ export function useMobileCatalogAndSync({
     };
     window.addEventListener('pos-sound-mute-changed', handleMuteChange);
 
-    const syncInterval = setInterval(() => {
-      syncOfflineSalesQueueRef.current?.();
-    }, 30000);
-
     return () => {
       if (primarySocket) {
         primarySocket.off('connect', handleConnect);
@@ -817,7 +841,6 @@ export function useMobileCatalogAndSync({
       window.removeEventListener('server-discovered', handleServerDiscovered);
       window.removeEventListener('offline-sales-synced', handleSyncQueueUpdated);
       window.removeEventListener('sync-queue-updated', handleSyncQueueUpdated);
-      clearInterval(syncInterval);
       clearTimeout(secondaryInitTimer);
       if (loadProductsRetryTimerRef.current) clearTimeout(loadProductsRetryTimerRef.current);
     };

@@ -37,8 +37,9 @@ async function getPendingOfflineStockDeductions() {
                 const rawProdId = item?.productId ?? item?.producto_id ?? item?.product?.id ?? item?.id;
                 const qty = Number(item?.quantity ?? item?.qty ?? 0);
                 if (!rawProdId || !Number.isFinite(qty) || qty <= 0) continue;
-                const key = String(rawProdId).trim();
-                deductions.set(key, (deductions.get(key) || 0) + qty);
+                const cleanKey = String(rawProdId).trim().replace(/__bulk$|__mid$|__pres_.*$|__wpres_.*$|__srv_.*$/, '');
+                const mult = Number(item?.factorConversion || item?.unitsMultiplier) || (item?.isBulk ? (Number(item?.unitsPerBulk) || 1) : (item?.isMidBulk ? (Number(item?.unitsPerMidBulk) || 1) : 1));
+                deductions.set(cleanKey, (deductions.get(cleanKey) || 0) + (qty * mult));
             }
         }
     };

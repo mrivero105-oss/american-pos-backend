@@ -218,6 +218,12 @@ router.get('/', async (req, res) => {
         try {
             const result = await Sale.findAndCountAll({
                 where: whereClause,
+                include: [{
+                    model: SaleItem,
+                    as: 'SaleItems',
+                    attributes: ['id', 'productId', 'name', 'quantity', 'price', 'subtotal', 'factorConversion', 'isBulk', 'unitsPerBulk', 'isMidBulk', 'unitsPerMidBulk']
+                }],
+                distinct: true,
                 limit: parseInt(limit),
                 offset: (parseInt(page) - 1) * parseInt(limit),
                 order: [['date', 'DESC']]

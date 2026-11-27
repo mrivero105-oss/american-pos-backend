@@ -53,7 +53,7 @@ final class NativeSqliteManager {
                 db.enableWriteAheadLogging();
             } catch (Exception ignored) {}
             try {
-                db.execSQL("PRAGMA synchronous = NORMAL;");
+                db.execSQL("PRAGMA synchronous = FULL;");
                 db.execSQL("PRAGMA temp_store = MEMORY;");
             } catch (Exception ignored) {}
         }
@@ -94,9 +94,11 @@ final class NativeSqliteManager {
         }
 
         sqliteExecutor.execute(() -> {
+            SQLiteDatabase db = null;
             SQLiteStatement stmt = null;
             try {
-                SQLiteDatabase db = getSqliteHelper(appContext).getWritableDatabase();
+                db = getSqliteHelper(appContext).getWritableDatabase();
+                db.beginTransactionNonExclusive();
                 stmt = db.compileStatement(
                     "INSERT OR REPLACE INTO kv_records (store_name, record_id, json_payload, status, search_text, updated_at) VALUES (?, ?, ?, ?, ?, ?);"
                 );
@@ -107,6 +109,7 @@ final class NativeSqliteManager {
                 stmt.bindString(5, searchText != null ? searchText.toLowerCase(Locale.ROOT) : "");
                 stmt.bindLong(6, System.currentTimeMillis());
                 stmt.executeInsert();
+                db.setTransactionSuccessful();
 
                 JSObject res = new JSObject();
                 res.put("success", true);
@@ -117,6 +120,9 @@ final class NativeSqliteManager {
             } finally {
                 if (stmt != null) {
                     try { stmt.close(); } catch (Exception ignored) {}
+                }
+                if (db != null && db.inTransaction()) {
+                    try { db.endTransaction(); } catch (Exception ignored) {}
                 }
             }
         });

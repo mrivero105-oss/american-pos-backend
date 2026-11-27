@@ -21,10 +21,11 @@ function matchesPaymentMethod(targetMethods = [], methodIdOrName = '') {
     });
 }
 
-function getCurrentlyActivePromotions(promotions = []) {
+function getCurrentlyActivePromotions(promotions = [], referenceDate = null) {
     if (!Array.isArray(promotions) || promotions.length === 0) return [];
 
-    const now = new Date();
+    const parsedRef = referenceDate ? new Date(referenceDate) : null;
+    const now = (parsedRef && !Number.isNaN(parsedRef.getTime())) ? parsedRef : new Date();
     const currentDay = now.getDay();
     const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -39,7 +40,7 @@ function getCurrentlyActivePromotions(promotions = []) {
     }).sort((a, b) => (b.priority || 1) - (a.priority || 1));
 }
 
-function evaluateCartPromotions(cartItems = [], promotions = [], selectedPaymentMethod = null) {
+function evaluateCartPromotions(cartItems = [], promotions = [], selectedPaymentMethod = null, referenceDate = null) {
     if (!Array.isArray(cartItems) || cartItems.length === 0) {
         return {
             itemsWithPromotions: [],
@@ -81,7 +82,7 @@ function evaluateCartPromotions(cartItems = [], promotions = [], selectedPayment
         };
     }
 
-    const validPromos = getCurrentlyActivePromotions(promotions);
+    const validPromos = getCurrentlyActivePromotions(promotions, referenceDate);
     const rawCartSubtotal = cartItems.reduce((sum, it) => sum + ((parseFloat(it.quantity) || 1) * (parseFloat(it.price) || 0)), 0);
 
     let totalPromoSavings = 0;

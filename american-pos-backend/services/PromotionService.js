@@ -20,9 +20,9 @@ class PromotionService {
      * Obtiene únicamente las promociones válidas y activas en este preciso momento
      * (Verificando rango de fechas, día de la semana y rango horario si aplica)
      */
-    static async getActivePromotions(companyId = 'default') {
+    static async getActivePromotions(companyId = 'default', referenceDate = null) {
         const allPromos = await this.getAllPromotions(companyId);
-        return getCurrentlyActivePromotions(allPromos);
+        return getCurrentlyActivePromotions(allPromos, referenceDate);
     }
 
     /**
@@ -117,9 +117,9 @@ class PromotionService {
      * Motor de Evaluación: Recibe los ítems del carrito y calcula los descuentos y ahorros
      * Delega el cálculo matemático al motor compartido (promotionsEngineCore)
      */
-    static async evaluateCart(cartItems = [], companyId = 'default', paymentMethod = null) {
-        const activePromos = await this.getActivePromotions(companyId);
-        return evaluateCartPromotions(cartItems, activePromos, paymentMethod);
+    static async evaluateCart(cartItems = [], companyId = 'default', paymentMethod = null, referenceDate = null) {
+        const activePromos = await this.getActivePromotions(companyId, referenceDate);
+        return evaluateCartPromotions(cartItems, activePromos, paymentMethod, referenceDate);
     }
 }
 
