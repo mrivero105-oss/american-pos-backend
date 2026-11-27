@@ -23,6 +23,23 @@ const SKIP_BUILD_CHECKS = process.argv.includes('--artifacts-only');
 const MAX_APK_MB = Number(process.env.MOBILE_MAX_APK_MB || 16);
 const MAX_OTA_MB = Number(process.env.MOBILE_MAX_OTA_MB || 3.8);
 
+function compareSemverParts(a, b) {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
+function readGradleVersionName() {
+  const gradleSrc = fs.readFileSync(path.join(FRONTEND, 'android', 'app', 'build.gradle'), 'utf8');
+  const m = gradleSrc.match(/\bversionName\s+["']([^"']+)["']/);
+  return m ? m[1].trim() : '';
+}
+
 const results = [];
 
 function pass(gate, detail) {
@@ -176,8 +193,12 @@ async function main() {
   try {
     const marker = JSON.parse(fs.readFileSync(path.join(DIST_MOBILE, '.build-version'), 'utf8'));
     const backendManifest = JSON.parse(fs.readFileSync(path.join(BACKEND_PUBLIC, 'version.json'), 'utf8'));
+    const gradleVersionName = readGradleVersionName();
     if (!marker.version || marker.version !== backendManifest.version) {
       throw new Error(`Desfase: .build-version=${marker.version} vs backend version.json=${backendManifest.version}`);
+    }
+    if (gradleVersionName && compareSemverParts(marker.version, gradleVersionName) < 0) {
+      throw new Error(`Desfase OTA/APK: build OTA (${marker.version}) es menor que versionName del APK (${gradleVersionName}); el APK bloquearía futuras OTAs como downgrade`);
     }
     if (LOCAL_OTA_DIR && fs.existsSync(path.join(LOCAL_OTA_DIR, 'version.json'))) {
       const localManifest = JSON.parse(fs.readFileSync(path.join(LOCAL_OTA_DIR, 'version.json'), 'utf8'));

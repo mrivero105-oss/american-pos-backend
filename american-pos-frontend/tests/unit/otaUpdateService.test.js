@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import capCfg from '../../capacitor.config.json';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const mockUpdater = vi.hoisted(() => ({
   notifyAppReady: vi.fn().mockResolvedValue(undefined),
@@ -423,5 +426,20 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
     expect(res.alreadyStaged).toBe(true);
     expect(mockUpdater.download).not.toHaveBeenCalled();
     expect(mockUpdater.set).not.toHaveBeenCalled();
+  });
+
+  it('mantiene paridad semver entre package.json y android/app/build.gradle versionName para evitar bloqueo de futuras OTAs', () => {
+    const testDir = path.dirname(fileURLToPath(import.meta.url));
+    const frontendRoot = path.resolve(testDir, '../..');
+    const pkg = JSON.parse(fs.readFileSync(path.join(frontendRoot, 'package.json'), 'utf8'));
+    const gradle = fs.readFileSync(path.join(frontendRoot, 'android/app/build.gradle'), 'utf8');
+    const versionNameMatch = gradle.match(/\bversionName\s+["']([^"']+)["']/);
+    expect(versionNameMatch).not.toBeNull();
+    const gradleVersionName = versionNameMatch[1];
+
+    // package.json nunca debe quedar debajo de versionName del APK
+    expect(compareOtaVersions(pkg.version, gradleVersionName)).toBeGreaterThanOrEqual(0);
+    // Un OTA generado sobre pkg.version.<timestamp> debe ser estrictamente mayor que versionName
+    expect(compareOtaVersions(`${pkg.version}.1795765000`, gradleVersionName)).toBe(1);
   });
 });

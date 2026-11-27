@@ -143,19 +143,43 @@ function readAndroidApkVersionCode() {
   return '0';
 }
 
+function compareDotSemver(a, b) {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
 function readMobileBaseVersion() {
+  let pkgVer = '24.4.0';
+  let gradleVer = '';
   try {
     const pkgPath = path.resolve(process.cwd(), 'package.json');
     if (fs.existsSync(pkgPath)) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       if (pkg.version) {
-        return pkg.version.replace(/^(\d+)\.0*(\d+)/, '$1.$2');
+        pkgVer = pkg.version.replace(/^(\d+)\.0*(\d+)/, '$1.$2');
       }
     }
   } catch {
     // Fallback silencioso
   }
-  return '24.4.0';
+  try {
+    const gradlePath = path.resolve(process.cwd(), 'android', 'app', 'build.gradle');
+    if (fs.existsSync(gradlePath)) {
+      const gradleSrc = fs.readFileSync(gradlePath, 'utf8');
+      const m = gradleSrc.match(/\bversionName\s+["']([^"']+)["']/);
+      if (m) gradleVer = m[1].trim();
+    }
+  } catch {
+    // Fallback silencioso
+  }
+  // Garantizar que la versión base del OTA nunca sea menor que versionName del APK nativo
+  return (gradleVer && compareDotSemver(gradleVer, pkgVer) > 0) ? gradleVer : pkgVer;
 }
 
 function writeBuildVersionMarkerPlugin(buildVersion) {

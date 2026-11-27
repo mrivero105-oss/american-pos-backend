@@ -512,6 +512,14 @@ export function useMobileCatalogAndSync({
         }
       }
     } catch (deltaErr) {
+      if (deltaErr?.response?.status === 401) {
+        // Sesión inválida/expirada en servidor vivo: abortar fallback de catálogo hasta re-autenticar
+        if (loadProductsRetryTimerRef.current) {
+          clearTimeout(loadProductsRetryTimerRef.current);
+          loadProductsRetryTimerRef.current = null;
+        }
+        return;
+      }
       console.warn('[MobilePOSSimulator] Delta sync no disponible, continuando con carga completa:', deltaErr?.message || deltaErr);
     }
 
@@ -520,6 +528,17 @@ export function useMobileCatalogAndSync({
         api.get('/products?minimal=true&limit=0&delta=true', { timeout: 15000 }),
         api.get('/products?minimal=true&limit=0&status=inactive', { timeout: 15000 })
       ]);
+
+      if (
+        (activeRes.status === 'rejected' && activeRes.reason?.response?.status === 401) ||
+        (inactiveRes.status === 'rejected' && inactiveRes.reason?.response?.status === 401)
+      ) {
+        if (loadProductsRetryTimerRef.current) {
+          clearTimeout(loadProductsRetryTimerRef.current);
+          loadProductsRetryTimerRef.current = null;
+        }
+        return;
+      }
 
       const extractList = (settled) => {
         if (settled.status !== 'fulfilled' || !settled.value?.data) return [];

@@ -813,8 +813,12 @@ export const AuthProvider = ({ children }) => {
                         secureMobileStorage.setSessionActive(false);
                         setUser(null);
                     }
-                } catch {
-                    if (savedProfileObj && offlineAllowed) {
+                } catch (meErr) {
+                    if (meErr?.response?.status === 401) {
+                        secureMobileStorage.removeToken();
+                        secureMobileStorage.setSessionActive(false);
+                        setUser(null);
+                    } else if (savedProfileObj && offlineAllowed) {
                         setUser({ ...savedProfileObj, isOfflineMode: true });
                     } else {
                         secureMobileStorage.removeToken();
