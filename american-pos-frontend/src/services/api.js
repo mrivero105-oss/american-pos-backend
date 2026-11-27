@@ -3,6 +3,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 import { getTerminalId } from '../utils/terminalIdentity';
 import secureMobileStorage from '../utils/secureMobileStorage';
 import { recordNetworkLatency } from './mobileDiagnosticsService';
+import { clearRuntimeCloudConfig, syncRuntimeCloudConfigFromServer } from '../config/supabaseConfig';
 
 export const PosNativeHardware = (typeof window !== 'undefined' && window.__posNativeHardwarePlugin)
     ? window.__posNativeHardwarePlugin
@@ -155,14 +156,17 @@ export const updateApiBaseUrl = (newIp, options = {}) => {
         if (options.serverFingerprint) {
             setPairedServerFingerprint(options.serverFingerprint);
         } else if (options.manualChange) {
-            // Al configurar manualmente una nueva IP, permitir re-emparejar su huella en el próximo /hello
+            // Al configurar manualmente una nueva IP, permitir re-emparejar su huella y limpiar nube del local anterior
             setPairedServerFingerprint('');
+            clearRuntimeCloudConfig();
         }
+        syncRuntimeCloudConfigFromServer(finalUrl).catch(() => {});
     } else {
         localStorage.removeItem('isaac_pos_server_ip');
         localStorage.removeItem('american_pos_server_ip');
         localStorage.setItem('isaac_pos_server_ip_explicitly_cleared', 'true');
         setPairedServerFingerprint('');
+        clearRuntimeCloudConfig();
         api.defaults.baseURL = '';
     }
     if (typeof window !== 'undefined') {

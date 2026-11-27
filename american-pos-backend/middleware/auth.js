@@ -165,6 +165,7 @@ const isExplicitPublicRoute = (req) => {
         (req.method === 'GET' && (reqPath === '/settings/pago-movil' || reqPath === '/api/settings/pago-movil')) ||
         (req.method === 'GET' && (reqPath === '/settings/binance' || reqPath === '/api/settings/binance' || reqPath === '/settings/binance/rate' || reqPath === '/api/settings/binance/rate')) ||
         (req.method === 'GET' && (reqPath === '/settings/is-setup' || reqPath === '/api/settings/is-setup')) ||
+        (req.method === 'GET' && (reqPath === '/sync/cloud-client-config' || reqPath === '/api/sync/cloud-client-config')) ||
         reqPath === '/license/status' ||
         reqPath === '/license/activate' ||
         reqPath === '/license/sync-online' ||

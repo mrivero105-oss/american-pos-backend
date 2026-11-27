@@ -12,6 +12,7 @@ import {
     Banknote, 
     SlidersHorizontal, 
     HardDrive, 
+    Cloud,
     MessageSquare, 
     Search, 
     Volume2
@@ -27,6 +28,7 @@ import BusinessSettings from '../components/settings/BusinessSettings';
 import TaxSettings from '../components/settings/TaxSettings';
 import PaymentMethodSettings from '../components/settings/PaymentMethodSettings';
 import BackupSettings from '../components/settings/BackupSettings';
+import CloudSupabaseSettings from '../components/settings/CloudSupabaseSettings';
 import OfflineSalesSettings from '../components/settings/OfflineSalesSettings';
 import RegionSettings from '../components/settings/RegionSettings';
 import SecuritySettings from '../components/settings/SecuritySettings';
@@ -997,6 +999,19 @@ export default function Settings() {
 
                             <button
                                 type="button"
+                                onClick={() => setSubTabSystem('cloud')}
+                                className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
+                                    subTabSystem === 'cloud'
+                                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs border border-slate-200/80 dark:border-slate-700'
+                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                }`}
+                            >
+                                <Cloud size={15} />
+                                <span>Nube Supabase</span>
+                            </button>
+
+                            <button
+                                type="button"
                                 onClick={() => setSubTabSystem('communications')}
                                 className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
                                     subTabSystem === 'communications'
@@ -1054,6 +1069,13 @@ export default function Settings() {
                                         onSync={handleManualSync}
                                     />
                                 )}
+                            </div>
+                        )}
+
+                        {/* Sub-tab: Nube Supabase Independiente por Comercio */}
+                        {subTabSystem === 'cloud' && (
+                            <div className="space-y-6 animate-in fade-in duration-300 max-w-4xl">
+                                <CloudSupabaseSettings />
                             </div>
                         )}
 

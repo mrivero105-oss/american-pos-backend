@@ -7,10 +7,11 @@
  */
 
 import {
-  hasSupabaseConfig, 
-  getSupabaseRealtimeWsUrl, 
-  getSupabaseRestUrl, 
-  getSupabaseHeaders
+  hasSupabaseConfig,
+  getSupabaseRealtimeWsUrl,
+  getSupabaseRestUrl,
+  getSupabaseHeaders,
+  subscribeCloudConfigChange
 } from '../config/supabaseConfig';
 
 class CloudRateSyncService {
@@ -25,6 +26,8 @@ class CloudRateSyncService {
     this.listeners = new Set();
     this.isConnected = false;
     this._initialized = false;
+    this._activeWsUrl = '';
+    this._unsubCloudConfig = null;
   }
 
   init() {
@@ -44,28 +47,24 @@ class CloudRateSyncService {
       if (savedDate) this.lastUpdatedAt = savedDate;
     }
 
-    // 2. Consulta inmediata al arrancar
-    this.checkRate();
+    // 2. Reaccionar dinámicamente cuando el servidor PC entregue o cambie la nube Supabase propia del comercio
+    this._unsubCloudConfig = subscribeCloudConfigChange(() => {
+      this.reconfigureTransport();
+    });
 
-    // 3. Si no hay Supabase configurado en el build, no iniciar WebSocket ni polling infinito
-    if (!getSupabaseRealtimeWsUrl()) {
-      console.log('[CloudRateSync] Sin configuración Supabase activa; polling en la nube desactivado.');
-      return;
-    }
-
-    // 4. Iniciar WebSocket Realtime con Supabase y sondeo de respaldo
-    this.connectRealtimeWs();
-    this.startPolling();
-
-    // 5. Escuchar cambios de visibilidad / foco de la app (con referencias nombradas para cleanup limpio)
+    // 3. Escuchar cambios de visibilidad / foco de la app (con referencias nombradas para cleanup limpio)
     if (typeof window !== 'undefined') {
-      this._onFocus = () => this.checkRate();
+      this._onFocus = () => {
+        if (hasSupabaseConfig()) this.checkRate();
+      };
       this._onOnline = () => {
-        this.checkRate();
-        this.connectRealtimeWs();
+        if (hasSupabaseConfig()) {
+          this.checkRate();
+          this.connectRealtimeWs();
+        }
       };
       this._onVisibilityChange = () => {
-        if (document.visibilityState === 'visible') {
+        if (document.visibilityState === 'visible' && hasSupabaseConfig()) {
           this.checkRate();
           if (!this.isConnected) this.connectRealtimeWs();
         }
@@ -77,7 +76,46 @@ class CloudRateSyncService {
       }
     }
 
-    console.log('[CloudRateSync] ⚡ Servicio de Tasa en Tiempo Real 24/7 activado.');
+    // 4. Iniciar transporte si ya hay configuración Supabase activa para este comercio
+    this.reconfigureTransport();
+  }
+
+  reconfigureTransport() {
+    const targetWsUrl = getSupabaseRealtimeWsUrl();
+    if (!targetWsUrl) {
+      this.stopPolling();
+      clearInterval(this.heartbeatTimer);
+      clearTimeout(this.reconnectTimer);
+      if (this.ws) {
+        try {
+          this.ws.onclose = null;
+          this.ws.onerror = null;
+          this.ws.close();
+        } catch { /* WebSocket ya cerrado */ }
+        this.ws = null;
+      }
+      this._activeWsUrl = '';
+      if (this.isConnected) {
+        this.isConnected = false;
+        this.notifyStatus(false);
+      }
+      return;
+    }
+
+    if (this._activeWsUrl && this._activeWsUrl !== targetWsUrl && this.ws) {
+      try {
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.close();
+      } catch { /* WebSocket ya cerrado */ }
+      this.ws = null;
+      this.isConnected = false;
+    }
+
+    this._activeWsUrl = targetWsUrl;
+    this.checkRate();
+    this.connectRealtimeWs();
+    this.startPolling();
   }
 
   connectRealtimeWs() {
@@ -196,6 +234,10 @@ class CloudRateSyncService {
     this.stopPolling();
     clearInterval(this.heartbeatTimer);
     clearTimeout(this.reconnectTimer);
+    if (typeof this._unsubCloudConfig === 'function') {
+      this._unsubCloudConfig();
+      this._unsubCloudConfig = null;
+    }
     if (typeof window !== 'undefined') {
       if (this._onFocus) window.removeEventListener('focus', this._onFocus);
       if (this._onOnline) window.removeEventListener('online', this._onOnline);
@@ -214,6 +256,7 @@ class CloudRateSyncService {
       } catch { /* WebSocket ya cerrado */ }
       this.ws = null;
     }
+    this._activeWsUrl = '';
     this.isConnected = false;
     this._initialized = false;
   }

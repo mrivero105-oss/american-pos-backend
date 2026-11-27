@@ -167,6 +167,7 @@ jobs:
           node --check ../cloud_license_server/node-server/licenseStore.js
           node --test --test-concurrency=1 \
             tests/test_mobile_audit_remediation.test.mjs \
+            tests/test_cloud_isolation_level2.test.mjs \
             tests/test_e2e_api_and_socket.test.mjs \
             tests/test_block2_security_hardening.test.mjs \
             tests/test_audit_remediation_regressions.test.mjs \

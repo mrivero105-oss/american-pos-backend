@@ -27,7 +27,7 @@ const CACHE_TTL = 1000 * 60 * 5; // 5 minutos
  */
 const verifyLicense = async (req, res, next) => {
     // Exempt routes (activation, health check, business info, OTA artifacts and public catalog read-only)
-    const isExactExempt = ['/license/status', '/license/activate', '/license/sync-online', '/hello', '/settings/business', '/settings/is-setup', '/version.json', '/dist.zip', '/api/app-update-info', '/Isaac-POS-Mobile.apk', '/settings/rate'].includes(req.path);
+    const isExactExempt = ['/license/status', '/license/activate', '/license/sync-online', '/hello', '/settings/business', '/settings/is-setup', '/version.json', '/dist.zip', '/api/app-update-info', '/Isaac-POS-Mobile.apk', '/settings/rate', '/sync/cloud-client-config'].includes(req.path);
     const isAuthRoute = req.path.startsWith('/auth/') && !req.path.endsWith('/public-cashiers'); 
     // Allowlist explícita mínima (eliminada exención blanket /*/public-* para que public-sync y pagos respeten la licencia)
     const isExplicitPublicCatalog = req.method === 'GET' && req.path === '/products/public-catalog';

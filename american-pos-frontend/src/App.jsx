@@ -46,9 +46,10 @@ const MobileInitialSyncWizard = lazy(() => import('./components/MobileInitialSyn
 import { useAuth } from './hooks/AuthContext';
 import { useTheme } from './hooks/ThemeContext';
 import { useWin7Zoom } from './hooks/useWin7Zoom';
-import api from './services/api';
+import api, { getBaseUrl } from './services/api';
 import { otaUpdateService } from './services/otaUpdateService';
 import { cloudRateSyncService } from './services/cloudRateSyncService';
+import { syncRuntimeCloudConfigFromServer } from './config/supabaseConfig';
 import lanSyncService from './services/lanSyncService';
 
 const isMobileDevice = () => {
@@ -154,6 +155,15 @@ function App() {
   useEffect(() => {
     otaUpdateService.init();
     cloudRateSyncService.init();
+    const syncCloudFromActiveServer = (event) => {
+      const targetUrl = event?.detail?.baseUrl || event?.detail?.url || api?.defaults?.baseURL || getBaseUrl();
+      if (targetUrl) {
+        syncRuntimeCloudConfigFromServer(targetUrl).catch(() => {});
+      }
+    };
+    syncCloudFromActiveServer();
+    window.addEventListener('server-discovered', syncCloudFromActiveServer);
+    window.addEventListener('api-base-url-changed', syncCloudFromActiveServer);
     if (!isMobileDevice()) {
       // En PC de escritorio, purgar cualquier residuo de modo offline accidental
       if (localStorage.getItem('isaac_pos_is_offline_mode') === 'true') {
@@ -167,6 +177,8 @@ function App() {
     window.addEventListener('hashchange', handleHashChange);
     return () => {
       window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('server-discovered', syncCloudFromActiveServer);
+      window.removeEventListener('api-base-url-changed', syncCloudFromActiveServer);
       cloudRateSyncService.destroy();
     };
   }, []);

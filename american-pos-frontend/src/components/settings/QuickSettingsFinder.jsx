@@ -21,7 +21,8 @@ import {
     Server,
     Cpu,
     CornerDownLeft,
-    Volume2
+    Volume2,
+    Cloud
 } from 'lucide-react';
 
 const ICON_MAP = {
@@ -42,7 +43,8 @@ const ICON_MAP = {
     RefreshCw,
     Server,
     Cpu,
-    Volume2
+    Volume2,
+    Cloud
 };
 
 const SETTINGS_INDEX = [
@@ -395,6 +397,17 @@ const SETTINGS_INDEX = [
         category: 'Sistema & Respaldos',
         icon: 'Volume2',
         keywords: ['voz', 'silenciar', 'silencio', 'ia', 'asistente', 'audio', 'habla', 'sonido', 'mudo', 'beep', 'volumen', 'parlante', 'decir', 'hablar', 'desactivar voz']
+    },
+    {
+        id: 'sys_cloud_supabase',
+        title: 'Nube Independiente del Comercio (Supabase)',
+        description: 'Conectar un proyecto Supabase propio por cliente para tasa 24/7, imágenes y respaldo en la nube aislado.',
+        tab: 'system',
+        subTab: 'cloud',
+        targetElementId: 'cloud-supabase-settings-card',
+        category: 'Sistema & Respaldos',
+        icon: 'Cloud',
+        keywords: ['nube', 'supabase', 'cloud', 'independiente', 'cliente', 'anon key', 'service key', 'realtime', 'sql', 'aislamiento']
     }
 ];
 

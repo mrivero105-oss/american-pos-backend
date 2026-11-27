@@ -1,54 +1,140 @@
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
+const net = require('net');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const SyncOutbox = require('../database/models/SyncOutbox');
 const { sequelize } = require('../database/connection');
 const { runWithTenantContext } = require('../database/tenantContext');
 const { readJson, getUserSettings, normalizeCompanyId } = require('../utils/helpers');
 
+const REQUIRED_CLOUD_TABLES = [
+    'cloud_configuracion',
+    'cloud_productos',
+    'cloud_clientes',
+    'cloud_ventas',
+    'cloud_cierres_caja'
+];
+
+function isPrivateOrLocalHostname(rawHost) {
+    const host = String(rawHost || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host) return true;
+    if (
+        host === 'localhost' ||
+        host.endsWith('.localhost') ||
+        host.endsWith('.local') ||
+        host.endsWith('.internal') ||
+        host === 'metadata.google.internal'
+    ) {
+        return true;
+    }
+    const ipType = net.isIP(host);
+    if (ipType === 4) {
+        const parts = host.split('.').map(Number);
+        if (parts.length !== 4 || parts.some(Number.isNaN)) return true;
+        const [a, b] = parts;
+        if (a === 10 || a === 127 || a === 0) return true;
+        if (a === 169 && b === 254) return true;
+        if (a === 172 && b >= 16 && b <= 31) return true;
+        if (a === 192 && b === 168) return true;
+        if (a === 100 && b >= 64 && b <= 127) return true;
+        return false;
+    }
+    if (ipType === 6) {
+        if (host === '::1' || host === '::' || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+function validateSupabaseUrl(rawUrl) {
+    const clean = String(rawUrl || '').trim().replace(/\/+$/, '');
+    if (!clean) {
+        throw new Error('Debes indicar la URL del proyecto Supabase (ej. https://tu-proyecto.supabase.co).');
+    }
+    let parsed;
+    try {
+        parsed = new URL(clean);
+    } catch {
+        throw new Error('La URL de Supabase no tiene un formato válido.');
+    }
+    if (parsed.protocol !== 'https:') {
+        throw new Error('La URL de Supabase debe usar HTTPS obligatorio.');
+    }
+    if (parsed.username || parsed.password) {
+        throw new Error('La URL de Supabase no debe contener credenciales embebidas.');
+    }
+    if (isPrivateOrLocalHostname(parsed.hostname)) {
+        throw new Error('URL bloqueada por seguridad anti-SSRF: usa un dominio HTTPS público de Supabase.');
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+}
+
+function maskKeyTail(secret) {
+    const clean = String(secret || '').trim();
+    if (!clean) return '';
+    if (clean.length <= 8) return '••••';
+    return `${clean.slice(0, 6)}••••${clean.slice(-4)}`;
+}
+
 class SupabaseSyncService {
     constructor() {
         this.supabaseUrl = '';
         this.serviceKey = '';
+        this.anonKey = '';
         this.branchId = process.env.POS_BRANCH_ID || 'principal';
         this.isSyncing = false;
         this.timer = null;
         this.refreshCredentials();
     }
 
-    refreshCredentials() {
+    refreshCredentials(options = {}) {
+        const forceReload = Boolean(options.forceReload);
         const isIsolated = this._isIsolatedEnv();
-        if (isIsolated) {
+        if (isIsolated && !forceReload) {
             if (!this.supabaseUrl) this.supabaseUrl = '';
             if (!this.serviceKey) this.serviceKey = '';
+            if (!this.anonKey) this.anonKey = '';
             return;
         }
 
-        if (!this.supabaseUrl) {
-            this.supabaseUrl = process.env.SUPABASE_URL || '';
-        }
-        if (!this.serviceKey) {
-            this.serviceKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || '';
-        }
-
-        if (!this.supabaseUrl || !this.serviceKey) {
-            try {
-                const SecretVault = require('../config/secretVault');
-                if (!this.serviceKey) {
-                    this.serviceKey =
-                        SecretVault.getSecret('SUPABASE_SERVICE_KEY') ||
-                        SecretVault.getSecret('SUPABASE_KEY') ||
-                        '';
-                }
-                if (!this.supabaseUrl) {
-                    this.supabaseUrl = SecretVault.getSecret('SUPABASE_URL') || '';
-                }
-            } catch (_) {}
+        if (forceReload) {
+            this.supabaseUrl = '';
+            this.serviceKey = '';
+            this.anonKey = '';
+            this.branchId = 'principal';
         }
 
-        if (!this.supabaseUrl || !this.serviceKey) {
+        try {
+            const SecretVault = require('../config/secretVault');
+            const vaultUrl = SecretVault.getSecret('SUPABASE_URL') || '';
+            const vaultService = SecretVault.getSecret('SUPABASE_SERVICE_KEY') || SecretVault.getSecret('SUPABASE_KEY') || '';
+            const vaultAnon = SecretVault.getSecret('SUPABASE_ANON_KEY') || '';
+            const vaultBranch = SecretVault.getSecret('POS_BRANCH_ID') || '';
+
+            if (!this.supabaseUrl && vaultUrl) this.supabaseUrl = vaultUrl;
+            if (!this.serviceKey && vaultService) this.serviceKey = vaultService;
+            if (!this.anonKey && vaultAnon) this.anonKey = vaultAnon;
+            if (vaultBranch) this.branchId = vaultBranch;
+        } catch (_) {}
+
+        if (!this.supabaseUrl && process.env.SUPABASE_URL) {
+            this.supabaseUrl = process.env.SUPABASE_URL;
+        }
+        if (!this.serviceKey && (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY)) {
+            this.serviceKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
+        }
+        if (!this.anonKey && process.env.SUPABASE_ANON_KEY) {
+            this.anonKey = process.env.SUPABASE_ANON_KEY;
+        }
+        if (process.env.POS_BRANCH_ID && (!this.branchId || this.branchId === 'principal')) {
+            this.branchId = process.env.POS_BRANCH_ID;
+        }
+
+        if (!isIsolated && (!this.supabaseUrl || !this.serviceKey || !this.anonKey)) {
             try {
-                const fs = require('fs');
                 const envPaths = [
                     path.join(process.env.USER_DATA_PATH || '', '.env'),
                     path.join(process.env.APPDATA || '', 'isaac-pos', '.env'),
@@ -71,10 +157,199 @@ class SupabaseSyncService {
                                 process.env.SUPABASE_SERVICE_KEY = this.serviceKey;
                             }
                         }
+                        if (!this.anonKey) {
+                            const anonMatch = content.match(/^SUPABASE_ANON_KEY=([^\r\n]+)/m);
+                            if (anonMatch && anonMatch[1]?.trim()) {
+                                this.anonKey = anonMatch[1].trim().replace(/^["']|["']$/g, '');
+                                process.env.SUPABASE_ANON_KEY = this.anonKey;
+                            }
+                        }
                     }
                 }
             } catch (_) {}
         }
+
+        this.supabaseUrl = String(this.supabaseUrl || '').trim().replace(/\/+$/, '');
+        this.serviceKey = String(this.serviceKey || '').trim();
+        this.anonKey = String(this.anonKey || '').trim();
+        this.branchId = String(this.branchId || 'principal').trim() || 'principal';
+    }
+
+    getPublicClientConfig() {
+        this.refreshCredentials();
+        const configured = Boolean(this.supabaseUrl && this.anonKey);
+        return {
+            configured,
+            supabaseUrl: configured ? this.supabaseUrl : '',
+            anonKey: configured ? this.anonKey : '',
+            branchId: this.branchId || 'principal'
+        };
+    }
+
+    getAdminConfig() {
+        this.refreshCredentials();
+        const hasUrl = Boolean(this.supabaseUrl);
+        const hasServiceKey = Boolean(this.serviceKey);
+        const hasAnonKey = Boolean(this.anonKey);
+        return {
+            configured: Boolean(hasUrl && hasServiceKey),
+            clientRealtimeConfigured: Boolean(hasUrl && hasAnonKey),
+            supabaseUrl: this.supabaseUrl || '',
+            anonKey: this.anonKey || '',
+            hasAnonKey,
+            hasServiceKey,
+            serviceKeyMasked: hasServiceKey ? maskKeyTail(this.serviceKey) : '',
+            branchId: this.branchId || 'principal',
+            isSyncing: Boolean(this.isSyncing)
+        };
+    }
+
+    saveClientConfig({ supabaseUrl, anonKey, serviceKey, branchId } = {}) {
+        const SecretVault = require('../config/secretVault');
+        const normalizedUrl = validateSupabaseUrl(supabaseUrl);
+        const cleanAnon = String(anonKey || '').trim();
+        const cleanService = String(serviceKey || '').trim();
+        const cleanBranch = String(branchId || 'principal').trim().replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) || 'principal';
+
+        this.refreshCredentials();
+        const finalServiceKey = cleanService || this.serviceKey;
+        if (!finalServiceKey) {
+            throw new Error('Debes ingresar la Service Role Key de tu proyecto Supabase.');
+        }
+
+        SecretVault.setSecret('SUPABASE_URL', normalizedUrl);
+        SecretVault.setSecret('SUPABASE_SERVICE_KEY', finalServiceKey);
+        SecretVault.setSecret('SUPABASE_KEY', null);
+        SecretVault.setSecret('SUPABASE_ANON_KEY', cleanAnon || null);
+        SecretVault.setSecret('POS_BRANCH_ID', cleanBranch);
+
+        this.supabaseUrl = normalizedUrl;
+        this.serviceKey = finalServiceKey;
+        this.anonKey = cleanAnon;
+        this.branchId = cleanBranch;
+        this._lastConfigSignature = null;
+        this._configNextRetryAt = 0;
+
+        return {
+            admin: this.getAdminConfig(),
+            client: this.getPublicClientConfig()
+        };
+    }
+
+    clearClientConfig() {
+        const SecretVault = require('../config/secretVault');
+        SecretVault.setSecret('SUPABASE_URL', null);
+        SecretVault.setSecret('SUPABASE_SERVICE_KEY', null);
+        SecretVault.setSecret('SUPABASE_KEY', null);
+        SecretVault.setSecret('SUPABASE_ANON_KEY', null);
+        SecretVault.setSecret('POS_BRANCH_ID', null);
+
+        this.supabaseUrl = '';
+        this.serviceKey = '';
+        this.anonKey = '';
+        this.branchId = 'principal';
+        this._lastConfigSignature = null;
+        this._configNextRetryAt = 0;
+
+        return {
+            admin: this.getAdminConfig(),
+            client: this.getPublicClientConfig()
+        };
+    }
+
+    async testConnection({ supabaseUrl, serviceKey, anonKey } = {}) {
+        this.refreshCredentials();
+        const normalizedUrl = validateSupabaseUrl(supabaseUrl || this.supabaseUrl);
+        const targetServiceKey = String(serviceKey || '').trim() || this.serviceKey;
+        const targetAnonKey = String(anonKey || '').trim() || this.anonKey;
+
+        if (!targetServiceKey) {
+            throw new Error('Debes proporcionar la Service Role Key para validar el proyecto Supabase.');
+        }
+
+        const authHeaders = {
+            apikey: targetServiceKey,
+            Authorization: `Bearer ${targetServiceKey}`
+        };
+
+        const tables = [];
+        for (const table of REQUIRED_CLOUD_TABLES) {
+            try {
+                const res = await axios.get(`${normalizedUrl}/rest/v1/${table}?select=id&limit=1`, {
+                    headers: authHeaders,
+                    timeout: 8000,
+                    validateStatus: () => true
+                });
+                const ok = res.status >= 200 && res.status < 300;
+                tables.push({
+                    name: table,
+                    ok,
+                    status: res.status,
+                    error: ok ? null : (res.data?.message || res.data?.hint || `HTTP ${res.status}`)
+                });
+            } catch (err) {
+                tables.push({
+                    name: table,
+                    ok: false,
+                    status: 0,
+                    error: err?.message || 'Error de red'
+                });
+            }
+        }
+
+        let bucketOk = false;
+        let bucketError = null;
+        try {
+            const bucketRes = await axios.get(`${normalizedUrl}/storage/v1/bucket/product-images`, {
+                headers: authHeaders,
+                timeout: 8000,
+                validateStatus: () => true
+            });
+            bucketOk = bucketRes.status >= 200 && bucketRes.status < 300;
+            if (!bucketOk) {
+                bucketError = bucketRes.data?.message || `HTTP ${bucketRes.status}`;
+            }
+        } catch (err) {
+            bucketError = err?.message || 'Error consultando Storage';
+        }
+
+        let anonCheck = { tested: false, ok: false, error: null };
+        if (targetAnonKey) {
+            anonCheck.tested = true;
+            try {
+                const anonRes = await axios.get(`${normalizedUrl}/rest/v1/cloud_configuracion?id=eq.general&select=id&limit=1`, {
+                    headers: {
+                        apikey: targetAnonKey,
+                        Authorization: `Bearer ${targetAnonKey}`
+                    },
+                    timeout: 8000,
+                    validateStatus: () => true
+                });
+                anonCheck.ok = anonRes.status >= 200 && anonRes.status < 300;
+                if (!anonCheck.ok) {
+                    anonCheck.error = anonRes.data?.message || `HTTP ${anonRes.status}`;
+                }
+            } catch (err) {
+                anonCheck.error = err?.message || 'Error probando Anon Key';
+            }
+        }
+
+        const allTablesOk = tables.every((t) => t.ok);
+        const ok = allTablesOk && bucketOk && (!anonCheck.tested || anonCheck.ok);
+
+        return {
+            ok,
+            supabaseUrl: normalizedUrl,
+            tables,
+            bucket: { name: 'product-images', ok: bucketOk, error: bucketError },
+            anonCheck,
+            missingTables: tables.filter((t) => !t.ok).map((t) => t.name)
+        };
+    }
+
+    getSchemaSql() {
+        const sqlPath = path.join(__dirname, '..', 'migrations', 'supabase_client_cloud_schema.sql');
+        return fs.readFileSync(sqlPath, 'utf8');
     }
 
     _isIsolatedEnv() {

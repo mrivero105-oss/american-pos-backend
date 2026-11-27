@@ -9,6 +9,8 @@ import { useAuth } from './hooks/AuthContext';
 import { useTheme } from './hooks/ThemeContext';
 import { otaUpdateService } from './services/otaUpdateService';
 import lanSyncService from './services/lanSyncService';
+import api, { getBaseUrl } from './services/api';
+import { syncRuntimeCloudConfigFromServer } from './config/supabaseConfig';
 import { useMobileKeyboardViewport } from './hooks/useMobileKeyboardViewport';
 
 const MobilePOSSimulator = lazy(() => import('./pages/MobilePOSSimulator'));
@@ -117,8 +119,20 @@ export default function MobileApp() {
         }
       }).catch(() => {});
     }
+    const syncCloudFromActiveServer = (event) => {
+      const targetUrl = event?.detail?.baseUrl || event?.detail?.url || api?.defaults?.baseURL || getBaseUrl();
+      if (targetUrl) {
+        syncRuntimeCloudConfigFromServer(targetUrl).catch(() => {});
+      }
+    };
+    syncCloudFromActiveServer();
+    window.addEventListener('server-discovered', syncCloudFromActiveServer);
+    window.addEventListener('api-base-url-changed', syncCloudFromActiveServer);
+
     return () => {
       unsubOta();
+      window.removeEventListener('server-discovered', syncCloudFromActiveServer);
+      window.removeEventListener('api-base-url-changed', syncCloudFromActiveServer);
     };
   }, []);
 

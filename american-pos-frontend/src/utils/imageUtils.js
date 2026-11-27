@@ -1,7 +1,8 @@
 import api, { getBaseUrl } from '../services/api';
 import { getSupabaseStoragePublicUrl } from '../config/supabaseConfig';
 
-export const SUPABASE_STORAGE_URL = getSupabaseStoragePublicUrl('product-images');
+export const getSupabaseProductStorageUrl = () => getSupabaseStoragePublicUrl('product-images');
+export const SUPABASE_STORAGE_URL = getSupabaseProductStorageUrl();
 
 /**
  * Detecta si el entorno de ejecución actual es un dispositivo móvil (Capacitor nativo o navegador móvil)
@@ -105,7 +106,8 @@ export const getImageCandidateUrls = (uri) => {
             const filename = canonical.replace(/^product_images\//, '');
             const encodedName = filename.split('/').map((seg) => encodeURIComponent(seg)).join('/');
             const lanUrl = origin ? `${origin}/product_images/${encodedName}` : '';
-            const cloudUrl = SUPABASE_STORAGE_URL ? `${SUPABASE_STORAGE_URL}/${encodeURIComponent(filename)}` : '';
+            const dynamicCloudStorage = getSupabaseProductStorageUrl();
+            const cloudUrl = dynamicCloudStorage ? `${dynamicCloudStorage}/${encodeURIComponent(filename)}` : '';
             if (lanUrl && !candidates.includes(lanUrl)) candidates.push(lanUrl);
             if (cloudUrl && !candidates.includes(cloudUrl)) candidates.push(cloudUrl);
         }
@@ -119,7 +121,8 @@ export const getImageCandidateUrls = (uri) => {
     if (isProductImage) {
         const filename = cleanPath.replace(/^product_images\//, '');
         const encodedPath = filename.split('/').map((seg) => encodeURIComponent(seg)).join('/');
-        const cloudUrl = SUPABASE_STORAGE_URL ? `${SUPABASE_STORAGE_URL}/${encodeURIComponent(filename)}` : '';
+        const dynamicCloudStorage = getSupabaseProductStorageUrl();
+        const cloudUrl = dynamicCloudStorage ? `${dynamicCloudStorage}/${encodeURIComponent(filename)}` : '';
         const lanUrl = origin ? `${origin}/product_images/${encodedPath}` : '';
 
         const ordered = [];

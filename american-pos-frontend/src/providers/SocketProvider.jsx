@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { SocketContext } from '../hooks/SocketContext';
 import { useAuth } from '../hooks/AuthContext';
-import api, { formatServerUrl } from '../services/api';
+import api, { formatServerUrl, getBaseUrl } from '../services/api';
 import secureMobileStorage from '../utils/secureMobileStorage';
+import { setRuntimeCloudConfig } from '../config/supabaseConfig';
 
 export const SocketProvider = ({ children }) => {
     const { user, refreshUser } = useAuth();
@@ -136,8 +137,15 @@ export const SocketProvider = ({ children }) => {
             }));
         };
 
+        const handleCloudConfigUpdated = (payload) => {
+            if (payload && typeof payload === 'object') {
+                setRuntimeCloudConfig(payload, api?.defaults?.baseURL || getBaseUrl());
+            }
+        };
+
         newSocket.on('force_logout', handleForcedDisconnect);
         newSocket.on('session_revoked', handleForcedDisconnect);
+        newSocket.on('cloud_config_updated', handleCloudConfigUpdated);
 
         newSocket.on('disconnect', (reason) => {
             if (reason === 'io client disconnect') {
@@ -170,6 +178,7 @@ export const SocketProvider = ({ children }) => {
             window.removeEventListener('online', handleOnline);
             newSocket.off('force_logout', handleForcedDisconnect);
             newSocket.off('session_revoked', handleForcedDisconnect);
+            newSocket.off('cloud_config_updated', handleCloudConfigUpdated);
             newSocket.disconnect();
             setSocket(null);
             setIsConnected(false);
