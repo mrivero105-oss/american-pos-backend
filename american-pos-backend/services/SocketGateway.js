@@ -27,8 +27,43 @@ function createVirtualIoHub(ioInstances) {
             ioInstances.forEach((instance) => {
                 instance.emit(event, ...args);
             });
+        },
+        disconnectUser: (userId, reason = 'Sesión revocada por administrador') => {
+            if (!userId) return;
+            const targetRoom = `user:${String(userId)}`;
+            ioInstances.forEach((instance) => {
+                try {
+                    instance.to(targetRoom).emit('force_logout', { userId: String(userId), reason, timestamp: Date.now() });
+                    instance.to(targetRoom).emit('session_revoked', { userId: String(userId), reason, timestamp: Date.now() });
+                    if (typeof instance.in === 'function') {
+                        const roomOps = instance.in(targetRoom);
+                        if (roomOps && typeof roomOps.disconnectSockets === 'function') {
+                            roomOps.disconnectSockets(true);
+                        }
+                    }
+                } catch (_) {}
+            });
         }
     };
+}
+
+function disconnectUserSockets(io, userId, reason = 'Sesión revocada por administrador') {
+    if (!io || !userId) return;
+    if (typeof io.disconnectUser === 'function') {
+        io.disconnectUser(userId, reason);
+        return;
+    }
+    const targetRoom = `user:${String(userId)}`;
+    try {
+        io.to(targetRoom).emit('force_logout', { userId: String(userId), reason, timestamp: Date.now() });
+        io.to(targetRoom).emit('session_revoked', { userId: String(userId), reason, timestamp: Date.now() });
+        if (typeof io.in === 'function') {
+            const roomOps = io.in(targetRoom);
+            if (roomOps && typeof roomOps.disconnectSockets === 'function') {
+                roomOps.disconnectSockets(true);
+            }
+        }
+    } catch (_) {}
 }
 
 function parseCookieToken(rawCookieHeader) {
@@ -110,6 +145,9 @@ function setupSocketEvents(io, { logger = console } = {}) {
 
         if (isAuthenticatedClient) {
             socket.join(userCompanyId);
+            if (socket.user?.id) {
+                socket.join(`user:${String(socket.user.id)}`);
+            }
         }
 
         socket.on('join_company', (requestedCompanyId) => {
@@ -204,12 +242,12 @@ function setupSocketEvents(io, { logger = console } = {}) {
         });
 
         socket.on('lan_stock_update', (data) => {
-            if (!isAuthenticatedClient) return;
+            if (!isAuthenticatedClient || !socket.user) return;
             safeEmitCompany('lan_stock_update', data);
         });
 
         socket.on('lan_sale_sync', (payload) => {
-            if (!isAuthenticatedClient) return;
+            if (!isAuthenticatedClient || !socket.user) return;
             safeEmitCompany('lan_sale_sync', payload);
         });
 
@@ -343,5 +381,6 @@ function setupSocketEvents(io, { logger = console } = {}) {
 
 module.exports = {
     createVirtualIoHub,
-    setupSocketEvents
+    setupSocketEvents,
+    disconnectUserSockets
 };

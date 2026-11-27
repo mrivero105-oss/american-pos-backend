@@ -1585,7 +1585,15 @@ router.get('/:id/lots', require('../middleware/auth').verifyToken, async (req, r
             where: { productId: req.params.id, companyId: req.user.companyId },
             order: [['expirationDate', 'ASC']]
         });
-        res.json(lots);
+        const canSeeCosts = ProductService.canUserViewCosts(req.user);
+        const sanitizedLots = lots.map((lot) => {
+            const plain = lot.get ? lot.get({ plain: true }) : { ...lot };
+            if (!canSeeCosts) {
+                delete plain.cost;
+            }
+            return plain;
+        });
+        res.json(sanitizedLots);
     } catch (error) {
         console.error('Get lots error:', error);
         res.status(500).json({ error: 'Error al obtener lotes' });

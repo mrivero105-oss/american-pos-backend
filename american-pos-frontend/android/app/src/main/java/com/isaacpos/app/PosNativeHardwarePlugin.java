@@ -3,10 +3,12 @@ package com.isaacpos.app;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.pm.PackageInfoCompat;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -477,6 +479,23 @@ public class PosNativeHardwarePlugin extends Plugin {
     @PluginMethod
     public void sqliteGetStats(PluginCall call) {
         sqliteManager.getStats(call);
+    }
+
+    @PluginMethod
+    public void getAppBuildInfo(PluginCall call) {
+        try {
+            PackageManager pm = getContext().getPackageManager();
+            String pkg = getContext().getPackageName();
+            PackageInfo pInfo = pm.getPackageInfo(pkg, 0);
+            long versionCode = PackageInfoCompat.getLongVersionCode(pInfo);
+            JSObject res = new JSObject();
+            res.put("versionCode", versionCode);
+            res.put("versionName", pInfo.versionName != null ? pInfo.versionName : "");
+            res.put("packageName", pkg);
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject("No se pudo leer información de compilación del APK: " + e.getMessage());
+        }
     }
 
     // ==================== CICLO DE VIDA ====================

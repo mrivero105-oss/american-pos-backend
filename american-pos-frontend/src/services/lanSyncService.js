@@ -116,7 +116,7 @@ class LANSyncService {
    */
   init() {
     const currentAuthToken = typeof window !== 'undefined' ? (secureMobileStorage.getToken() || null) : null;
-    const currentSyncKey = typeof window !== 'undefined' ? (localStorage.getItem('sync_secret_key') || null) : null;
+    const currentSyncKey = typeof window !== 'undefined' ? (secureMobileStorage.getSyncKey?.() || null) : null;
     if (!currentAuthToken && !currentSyncKey) {
       return;
     }
@@ -186,7 +186,7 @@ class LANSyncService {
         return;
       }
       const authToken = typeof window !== 'undefined' ? secureMobileStorage.getToken() : null;
-      const syncKey = typeof window !== 'undefined' ? localStorage.getItem('sync_secret_key') : null;
+      const syncKey = typeof window !== 'undefined' ? (secureMobileStorage.getSyncKey?.() || null) : null;
       if (!authToken && !syncKey) {
         this.isConnecting = false;
         return;
@@ -420,7 +420,7 @@ class LANSyncService {
   async fetchLANPeers() {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     const authToken = typeof window !== 'undefined' ? secureMobileStorage.getToken() : null;
-    const syncKey = typeof window !== 'undefined' ? localStorage.getItem('sync_secret_key') : null;
+    const syncKey = typeof window !== 'undefined' ? (secureMobileStorage.getSyncKey?.() || null) : null;
     if (!authToken && !syncKey) return;
     try {
       const res = await api.get('/lan/peers', { timeout: 3000 });

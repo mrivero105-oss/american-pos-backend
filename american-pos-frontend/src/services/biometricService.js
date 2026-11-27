@@ -257,6 +257,62 @@ class BiometricService {
     }
 
     /**
+     * Firma un reto criptográfico de un solo uso con la clave ECDSA P-256 en AndroidKeyStore
+     * para autorización de acciones sensibles por parte del supervisor titular de la sesión.
+     */
+    async signSupervisorBiometricChallenge(supervisorObj, options = {}) {
+        const cred = this.getEnrolledCredential();
+        const targetId = supervisorObj?.id;
+        if (!cred || !cred.keyAlias || !targetId || String(cred.userId) !== String(targetId)) {
+            throw new Error('No hay una huella ECDSA v2 vinculada en este dispositivo para el supervisor seleccionado. Usa tu PIN.');
+        }
+
+        if (!this.isNativeHardwareBiometricAvailable()) {
+            throw new Error('La autorización biométrica ECDSA v2 requiere la app Android nativa con sensor biométrico fuerte.');
+        }
+
+        const challengeRes = await api.post('/auth/biometrics/challenge', {
+            userId: cred.userId,
+            username: cred.username
+        }, { timeout: 5000 });
+
+        const { challengeId, challenge } = challengeRes.data || {};
+        if (!challengeId || !challenge) {
+            throw new Error('El servidor no pudo emitir un reto criptográfico biométrico.');
+        }
+
+        const supervisorName = supervisorObj?.name || supervisorObj?.username || 'Supervisor';
+        let signRes;
+        try {
+            signRes = await window.Capacitor.Plugins.PosNativeHardware.signBiometricChallenge({
+                alias: cred.keyAlias,
+                challenge,
+                title: options.title || 'Autorización de Supervisor',
+                subtitle: options.subtitle || `Coloca tu huella para autorizar como ${supervisorName}`,
+                cancelText: 'Usar PIN'
+            });
+        } catch (nativeErr) {
+            this.triggerHaptic('error');
+            const errCode = String(nativeErr?.code || '');
+            const errMsg = String(nativeErr?.message || '');
+            if (errCode.includes('BIOMETRIC_KEY_INVALIDATED') || errMsg.includes('BIOMETRIC_KEY_INVALIDATED')) {
+                localStorage.removeItem(BIOMETRIC_CREDENTIAL_KEY);
+                throw new Error('Las huellas del dispositivo cambiaron y la llave biométrica fue invalidada. Usa tu PIN y vuelve a vincularla.');
+            }
+            throw new Error(errMsg || 'Verificación biométrica cancelada o rechazada.');
+        }
+
+        const signature = signRes?.signature;
+        if (!signature) {
+            this.triggerHaptic('error');
+            throw new Error('No se recibió firma criptográfica válida del hardware biométrico.');
+        }
+
+        this.triggerHaptic('success');
+        return { challengeId, signature };
+    }
+
+    /**
      * Desvincular huella dactilar del usuario en el backend, borrar clave del Keystore y limpiar metadatos.
      */
     async revokeBiometrics() {

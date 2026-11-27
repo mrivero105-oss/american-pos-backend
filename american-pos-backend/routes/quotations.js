@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { Quotation, Product, Customer } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
+const { requirePermission } = require('../middleware/auth');
+const { isSupervisorOrAboveRole } = require('../constants/roles');
 
 async function sanitizeCustomerId(customerId, companyId, customerName) {
     if (customerId && customerId !== '') {
@@ -25,12 +27,12 @@ async function sanitizeCustomerId(customerId, companyId, customerName) {
 }
 
 // GET all quotations
-router.get('/', async (req, res) => {
+router.get('/', requirePermission(['canAccessPOS', 'canManageQuotations', 'canViewSalesHistory']), async (req, res) => {
     try {
         const whereClause = { companyId: req.user.companyId };
         
-        // Aislar datos si el usuario es un vendedor regular
-        if (req.user.role === 'user') {
+        // Aislar datos para cualquier rol por debajo de supervisión
+        if (!isSupervisorOrAboveRole(req.user.role)) {
             whereClause.userId = req.user.id;
         }
 
@@ -82,7 +84,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST Create Quotation
-router.post('/', async (req, res) => {
+router.post('/', requirePermission(['canAccessPOS', 'canManageQuotations']), async (req, res) => {
     try {
         const safeFields = pickQuotationFields(req.body || {});
         const customerId = await sanitizeCustomerId(safeFields.customerId, req.user.companyId, safeFields.customerName);
@@ -104,7 +106,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT Update Quotation
-router.put('/:id', async (req, res) => {
+router.put('/:id', requirePermission(['canAccessPOS', 'canManageQuotations']), async (req, res) => {
     try {
         const updateData = pickQuotationFields(req.body || {});
         if (updateData.customerId !== undefined) {
@@ -125,7 +127,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE Quotation
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requirePermission(['canAccessPOS', 'canManageQuotations']), async (req, res) => {
     try {
         const deleted = await Quotation.destroy({
             where: buildQuotationOwnerScope(req, req.params.id)

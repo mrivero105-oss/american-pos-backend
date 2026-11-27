@@ -542,7 +542,7 @@ api.interceptors.request.use((config) => {
     if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
         config.headers['Authorization'] = `Bearer ${token}`;
     }
-    const envSyncKey = localStorage.getItem('sync_secret_key');
+    const envSyncKey = secureMobileStorage.getSyncKey();
     if (envSyncKey && !config.headers['x-sync-key'] && !config.headers['X-Sync-Key']) {
         config.headers['x-sync-key'] = envSyncKey;
     }

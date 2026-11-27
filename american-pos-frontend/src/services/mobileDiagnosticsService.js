@@ -6,11 +6,17 @@ const MAX_MESSAGE_LEN = 500;
 const MAX_STRING_LEN = 320;
 const PERSIST_DEBOUNCE_MS = 600;
 
-const SENSITIVE_KEY_PATTERN = /(pass(word|wd)?|token|auth(orization)?|secret|pin|cookie|private[_-]?key|api[_-]?key|jwt|session[_-]?id|signature|credential|bearer)/i;
+const SENSITIVE_KEY_PATTERN = /(pass(word|wd)?|token|auth(orization)?|secret|pin|cookie|private[_-]?key|api[_-]?key|sync[_-]?key|license[_-]?key|jwt|session[_-]?id|signature|credential|bearer|biometric|rif|cedula|dni|document[_-]?id|phone|telefono|email|correo)/i;
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9+/=]{6,}/gi;
+const COOKIE_HEADER_PATTERN = /\b((?:set-)?cookie\s*[:=]\s*)[^\r\n;\s]+/gi;
+const HEADER_OR_ASSIGN_SECRET_PATTERN = /\b((?:x-sync-key|sync[_-]?key|license[_-]?key|password|passwd|pin|secret|api[_-]?key)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;]+)/gi;
 const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
-const QUERY_SECRET_PATTERN = /([?&](?:token|key|apikey|password|pin|secret|auth)=)[^&\s]+/gi;
+const QUERY_SECRET_PATTERN = /([?&](?:token|key|apikey|password|pin|secret|auth|sync_?key|license_?key)=)[^&\s]+/gi;
+const EMAIL_PII_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+const RIF_CEDULA_PII_PATTERN = /\b[VEJPGvejpg]-?\d{6,9}(?:-\d)?\b/g;
+const PHONE_PII_PATTERN = /(?:\+?\d{1,3}[\s.-]?)?(?:\(?0?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}|\b0?(?:412|414|416|424|426|2\d{2})[\s.-]?\d{7}\b)/g;
 
 let ringBuffer = [];
 let initializedFromStorage = false;
@@ -55,8 +61,14 @@ export function redactSensitiveText(rawText) {
   let out = String(rawText);
   out = out.replace(PEM_BLOCK_PATTERN, '[REDACTED_PEM_KEY]');
   out = out.replace(BEARER_PATTERN, 'Bearer [REDACTED]');
+  out = out.replace(BASIC_AUTH_PATTERN, 'Basic [REDACTED]');
+  out = out.replace(COOKIE_HEADER_PATTERN, '$1[REDACTED]');
   out = out.replace(JWT_PATTERN, '[REDACTED_JWT]');
   out = out.replace(QUERY_SECRET_PATTERN, '$1[REDACTED]');
+  out = out.replace(HEADER_OR_ASSIGN_SECRET_PATTERN, '$1[REDACTED]');
+  out = out.replace(EMAIL_PII_PATTERN, '[REDACTED_EMAIL]');
+  out = out.replace(RIF_CEDULA_PII_PATTERN, '[REDACTED_ID]');
+  out = out.replace(PHONE_PII_PATTERN, '[REDACTED_PHONE]');
   if (out.length > MAX_MESSAGE_LEN) {
     out = `${out.slice(0, MAX_MESSAGE_LEN)}...`;
   }

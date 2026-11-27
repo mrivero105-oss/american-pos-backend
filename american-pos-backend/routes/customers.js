@@ -37,10 +37,31 @@ router.get('/public-list', require('../middleware/auth').verifyToken, async (req
     }
 });
 
+const { z } = require('zod');
+const { isCompanyAdminRole } = require('../constants/roles');
+
+const publicSyncCustomerItemSchema = z.object({
+    id: z.union([z.string(), z.number()]).optional(),
+    name: z.string().trim().min(1).max(200),
+    idDocument: z.string().trim().max(64).optional().nullable(),
+    identification: z.string().trim().max(64).optional().nullable(),
+    phone: z.string().trim().max(64).optional().nullable(),
+    email: z.string().trim().max(160).optional().nullable(),
+    address: z.string().trim().max(400).optional().nullable(),
+    creditLimit: z.coerce.number().min(0).optional()
+});
+
+const canModifyCustomerCreditLimit = (user) => {
+    if (!user) return false;
+    if (isCompanyAdminRole(user.role)) return true;
+    const perms = user.permissions || {};
+    return perms.canManageReceivables === true;
+};
+
 /**
- * POST /public-payment - Register a payment (Abono) from mobile (Protected)
+ * POST /public-payment - Register a payment (Abono) from mobile (Protected + RBAC)
  */
-router.post('/public-payment', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/public-payment', require('../middleware/auth').verifyToken, requirePermission(['canManageReceivables', 'canManageCustomers']), async (req, res) => {
     try {
         const { payment } = req.body;
         if (!payment || !payment.customerId || !payment.amount) {
@@ -63,7 +84,7 @@ router.post('/public-payment', require('../middleware/auth').verifyToken, async 
 });
 
 /**
- * POST /public-sync - Sync local mobile customers to server (Protected)
+ * POST /public-sync - Sync local mobile customers to server (Protected + Zod Allowlist Anti-Mass-Assignment)
  */
 router.post('/public-sync', require('../middleware/auth').verifyToken, async (req, res) => {
     try {
@@ -73,10 +94,16 @@ router.post('/public-sync', require('../middleware/auth').verifyToken, async (re
         const { Customer } = require('../database/models');
         const syncedCustomers = [];
         const idMap = {};
+        const allowCreditLimitEdit = canModifyCustomerCreditLimit(req.user);
 
-        for (const custData of customers) {
+        for (const rawCust of customers) {
+            const parsed = publicSyncCustomerItemSchema.safeParse(rawCust);
+            if (!parsed.success) {
+                continue;
+            }
+            const custData = parsed.data;
             const rawId = String(custData.id || '');
-            const isTempId = !rawId || rawId.startsWith('CUST-') || rawId.startsWith('cust_off_');
+            const isTempId = !rawId || rawId.startsWith('CUST-') || rawId.startsWith('cust_off_') || rawId.startsWith('cust_offline_');
             let cust = null;
 
             // 1. First attempt to match by ID (if it's not a temporary mobile ID)
@@ -96,24 +123,34 @@ router.post('/public-sync', require('../middleware/auth').verifyToken, async (re
             }
 
             if (cust) {
-                // Update authoritative fields from mobile
-                await cust.update({ 
-                    phone: custData.phone || cust.phone, 
+                // Allowlist estricto: jamás aceptar creditBalance, isCreditBlocked ni loyaltyPoints desde móvil
+                const updateFields = {
+                    phone: custData.phone || cust.phone,
                     email: custData.email || cust.email,
                     address: custData.address || cust.address,
-                    idDocument: cleanDoc || cust.idDocument,
-                    creditLimit: custData.creditLimit !== undefined ? (Number(custData.creditLimit) || 0) : cust.creditLimit
-                });
+                    idDocument: cleanDoc || cust.idDocument
+                };
+                if (allowCreditLimitEdit && custData.creditLimit !== undefined) {
+                    updateFields.creditLimit = Number(custData.creditLimit) || 0;
+                }
+                await cust.update(updateFields);
             } else {
-                // Register as new customer
+                // Register as new customer con campos estrictamente allowlisted
                 const finalId = !isTempId ? rawId : `CUST-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
                 cust = await Customer.create({
-                    ...custData,
                     id: finalId,
-                    idDocument: cleanDoc || custData.idDocument || 'V-00000000',
+                    name: custData.name,
+                    idDocument: cleanDoc || 'V-00000000',
+                    phone: custData.phone || '',
+                    email: custData.email || '',
+                    address: custData.address || '',
                     userId: req.user.id,
                     companyId: req.user.companyId,
-                    creditLimit: Number(custData.creditLimit) || 0
+                    creditLimit: allowCreditLimitEdit ? (Number(custData.creditLimit) || 0) : 0,
+                    creditBalance: 0,
+                    isCreditBlocked: false,
+                    loyaltyPoints: 0,
+                    isActive: true
                 });
             }
 
@@ -199,10 +236,17 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-// POST / - Create customer
+// POST / - Create customer (restringir creditLimit si el usuario no puede gestionar CxC)
 router.post('/', validate(customerSchema), async (req, res) => {
     try {
-        const newCustomer = await customerService.createCustomer(req.user, req.body);
+        const body = { ...req.body };
+        if (!canModifyCustomerCreditLimit(req.user)) {
+            delete body.creditLimit;
+            delete body.creditLimitDays;
+            delete body.isCreditBlocked;
+            delete body.allowOverdueCredit;
+        }
+        const newCustomer = await customerService.createCustomer(req.user, body);
         emitCustomersChanged(req, { action: 'created', customer: newCustomer });
         SupabaseSyncService.queueCustomer(newCustomer).catch(() => {});
         res.status(201).json(newCustomer);
@@ -215,7 +259,14 @@ router.post('/', validate(customerSchema), async (req, res) => {
 // PUT /:id - Update customer
 router.put('/:id', validate(customerUpdateSchema), async (req, res) => {
     try {
-        const updatedCustomer = await customerService.updateCustomer(req.user, req.params.id, req.body);
+        const body = { ...req.body };
+        if (!canModifyCustomerCreditLimit(req.user)) {
+            delete body.creditLimit;
+            delete body.creditLimitDays;
+            delete body.isCreditBlocked;
+            delete body.allowOverdueCredit;
+        }
+        const updatedCustomer = await customerService.updateCustomer(req.user, req.params.id, body);
         if (updatedCustomer) {
             emitCustomersChanged(req, { action: 'updated', customer: updatedCustomer });
             SupabaseSyncService.queueCustomer(updatedCustomer).catch(() => {});
@@ -294,7 +345,7 @@ router.get('/:id/credit-history', async (req, res) => {
 });
 
 // POST /:id/payment - Register a payment (Abono)
-router.post('/:id/payment', async (req, res) => {
+router.post('/:id/payment', requirePermission(['canManageReceivables', 'canManageCustomers']), async (req, res) => {
     try {
         const result = await customerService.registerPayment(req.user, req.params.id, req.body);
         emitCustomersChanged(req, { action: 'payment', customerId: req.params.id });

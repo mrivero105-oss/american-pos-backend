@@ -122,10 +122,13 @@ router.post('/public-sync', require('../middleware/auth').verifyToken, async (re
  */
 router.get('/public-list', require('../middleware/auth').verifyToken, async (req, res) => {
     try {
+        const { isSupervisorOrAboveRole } = require('../constants/roles');
+        const ProductService = require('../services/ProductService');
         const where = {};
         // IDOR FIX: Always enforce companyId
         where.companyId = req.user.companyId;
-        if (req.user.role?.toLowerCase() === 'user') {
+        const canViewAllSales = isSupervisorOrAboveRole(req.user.role) || req.user.permissions?.canViewSalesHistory === true;
+        if (!canViewAllSales) {
             where.userId = req.user.id;
         }
 
@@ -135,7 +138,18 @@ router.get('/public-list', require('../middleware/auth').verifyToken, async (req
             order: [['date', 'DESC']],
             include: [{ model: SaleItem, as: 'SaleItems' }]
         });
-        res.json(sales);
+        const canSeeCosts = ProductService.canUserViewCosts(req.user);
+        const sanitized = sales.map((s) => {
+            const plain = typeof s.toJSON === 'function' ? s.toJSON() : { ...s };
+            if (!canSeeCosts && Array.isArray(plain.SaleItems)) {
+                plain.SaleItems = plain.SaleItems.map((it) => {
+                    const { cost: _c, ...rest } = it;
+                    return rest;
+                });
+            }
+            return plain;
+        });
+        res.json(sanitized);
     } catch (error) {
         console.error('Public sales list error:', error);
         res.status(500).json({ error: 'Error al obtener historial de ventas' });

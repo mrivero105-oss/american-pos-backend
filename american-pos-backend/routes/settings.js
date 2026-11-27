@@ -965,14 +965,51 @@ router.post('/email-test', requirePermission('canManageSettings'), async (req, r
     }
 });
 
+const ALLOWED_PRINTER_TCP_PORTS = new Set([9100, 9101, 9102, 515, 631]);
+
+const isPrivateRfc1918Ipv4 = (ip) => {
+    const clean = String(ip || '').trim();
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(clean)) return false;
+    const parts = clean.split('.').map(Number);
+    if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+    // Bloquear explícitamente loopback 127.0.0.0/8 y link-local 169.254.0.0/16
+    if (parts[0] === 127 || (parts[0] === 169 && parts[1] === 254)) return false;
+    if (parts[0] === 10) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    return false;
+};
+
 const isSafeLanPrinterHost = (rawHost) => {
     const h = String(rawHost || '').trim().toLowerCase();
     if (!h || h.length > 120) return false;
-    if (h === 'localhost') return true;
-    if (/^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(h)) {
-        return true;
-    }
+    if (h === 'localhost' || h.startsWith('127.') || h === '::1') return false;
+    if (isPrivateRfc1918Ipv4(h)) return true;
     return /^[a-z0-9][a-z0-9-]*\.local$/.test(h);
+};
+
+const resolveAndValidateLanPrinterTarget = async (rawHost, rawPort = 9100) => {
+    const host = String(rawHost || '').trim();
+    const port = Number(rawPort) || 9100;
+    if (!ALLOWED_PRINTER_TCP_PORTS.has(port)) {
+        return { ok: false, error: 'Puerto TCP no permitido. Solo se admiten puertos de impresión estándar (9100, 9101, 9102, 515, 631).' };
+    }
+    if (!isSafeLanPrinterHost(host)) {
+        return { ok: false, error: 'Solo se permiten direcciones IP RFC1918 de red local privada (10.x, 172.16-31.x, 192.168.x) o nombres .local.' };
+    }
+    if (!isPrivateRfc1918Ipv4(host)) {
+        try {
+            const dns = require('dns').promises;
+            const resolved = await dns.lookup(host, { family: 4 });
+            if (!resolved?.address || !isPrivateRfc1918Ipv4(resolved.address)) {
+                return { ok: false, error: 'El host de impresora resolvió fuera de red local privada RFC1918.' };
+            }
+            return { ok: true, host: resolved.address, port };
+        } catch {
+            return { ok: false, error: 'No se pudo resolver el host local de la impresora.' };
+        }
+    }
+    return { ok: true, host, port };
 };
 
 const isSafeSerialPortName = (rawPort) => {
@@ -986,8 +1023,9 @@ router.post('/test-network-printer', requirePermission('canManageSettings'), asy
         if (!host) {
             return res.status(400).json({ error: 'Debe ingresar la dirección IP de la impresora de red' });
         }
-        if (!isSafeLanPrinterHost(host)) {
-            return res.status(400).json({ error: 'Solo se permiten direcciones IP de red local privada (LAN) o nombres .local para impresoras.' });
+        const validated = await resolveAndValidateLanPrinterTarget(host, port || 9100);
+        if (!validated.ok) {
+            return res.status(400).json({ error: validated.error });
         }
         const NetworkPrinterService = require('../services/NetworkPrinterService');
         const allSettings = getCachedSettings();
@@ -995,7 +1033,7 @@ router.post('/test-network-printer', requirePermission('canManageSettings'), asy
         const userSettings = getUserSettings(allSettings, companyId);
         const bizName = userSettings.businessInfo?.name || 'Isaac POS';
 
-        const result = await NetworkPrinterService.testPrint(host, port || 9100, bizName);
+        const result = await NetworkPrinterService.testPrint(validated.host, validated.port, bizName);
         if (result.success) {
             res.json({ success: true, message: result.message || 'Ticket de prueba enviado a la impresora de red con éxito' });
         } else {
@@ -1134,11 +1172,9 @@ router.post('/print-network-raw', verifyToken, requirePermission(['canAccessPOS'
         const { ip, host, port = 9100, dataBase64, content } = req.body || {};
         const targetHost = String(ip || host || '').trim();
         const targetPort = Number(port) || 9100;
-        if (!targetHost || !isSafeLanPrinterHost(targetHost)) {
-            return res.status(400).json({ success: false, error: 'IP de impresora inválida o fuera de red local permitida.' });
-        }
-        if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
-            return res.status(400).json({ success: false, error: 'Puerto TCP de impresora inválido.' });
+        const validated = await resolveAndValidateLanPrinterTarget(targetHost, targetPort);
+        if (!validated.ok) {
+            return res.status(400).json({ success: false, error: validated.error });
         }
         let payloadBuf;
         if (dataBase64 && typeof dataBase64 === 'string') {
@@ -1152,7 +1188,7 @@ router.post('/print-network-raw', verifyToken, requirePermission(['canAccessPOS'
             return res.status(400).json({ success: false, error: 'Tamaño de trabajo ESC/POS fuera de rango (1B - 256KB).' });
         }
         const NetworkPrinterService = require('../services/NetworkPrinterService');
-        const result = await NetworkPrinterService.printNetwork(targetHost, targetPort, payloadBuf);
+        const result = await NetworkPrinterService.printNetwork(validated.host, validated.port, payloadBuf);
         return res.json({ success: true, ...result });
     } catch (error) {
         console.error('Error in print-network-raw:', error);
@@ -1542,7 +1578,7 @@ const canManageDisplayAds = (req) => {
         || req.user?.permissions?.canManagePromotions === true;
 };
 
-router.get('/customer-display/pairing', (req, res) => {
+router.get('/customer-display/pairing', requirePermission(['canAccessPOS', 'canManageSettings']), (req, res) => {
     try {
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : String(req.user.companyId);
         const registerId = String(req.query.registerId || '1');

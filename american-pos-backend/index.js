@@ -903,12 +903,14 @@ const startServer = (ports, userDataPath = null) => {
                 return 'default';
             };
 
-            // WiFi Sync Route for Mobile Terminal (Protected LAN sync)
-            app.get(['/api/sync/pull', '/sync/pull'], waitForDb, verifySyncOrToken, verifyLicense, async (req, res) => {
+            // WiFi Sync Route for Mobile Terminal (Requiere JWT obligatorio para proteger ventas y proveedores)
+            app.get(['/api/sync/pull', '/sync/pull'], waitForDb, verifyToken, verifyLicense, async (req, res) => {
                 try {
                     const { Product, Sale, Customer, Supplier } = require('./database/models');
                     const { SETTINGS_FILE } = require('./config/paths');
                     const { readJson } = require('./utils/helpers');
+                    const { isSupervisorOrAboveRole } = require('./constants/roles');
+                    const ProductService = require('./services/ProductService');
                     
                     const userRole = String(req.user?.role || '').toLowerCase();
                     const allowExplicitCompany = userRole === 'superadmin';
@@ -916,7 +918,10 @@ const startServer = (ports, userDataPath = null) => {
                         ? (req.query.companyId || req.headers['x-company-id'] || req.user?.companyId)
                         : req.user?.companyId;
                     const companyId = await resolveActiveCompanyId(requestedCompanyId);
-                    const canViewCosts = userRole === 'superadmin' || userRole === 'admin' || userRole === 'owner' || userRole === 'dueño' || req.user?.permissions?.canViewCosts === true;
+                    const canViewCosts = ProductService.canUserViewCosts(req.user);
+                    const isSupervisor = isSupervisorOrAboveRole(userRole);
+                    const canViewAllSales = isSupervisor || req.user?.permissions?.canViewSalesHistory === true;
+                    const canViewSuppliers = isSupervisor || req.user?.permissions?.canManageSuppliers === true || req.user?.permissions?.canManagePurchases === true || req.user?.permissions?.canManageInventory === true;
                     const productAttributes = canViewCosts
                         ? ['id', 'name', 'price', 'cost', 'stockQuantity', 'stock', 'category', 'barcode', 'imageUri', 'minStock', 'priceBs']
                         : ['id', 'name', 'price', 'stockQuantity', 'stock', 'category', 'barcode', 'imageUri', 'minStock', 'priceBs'];
@@ -927,8 +932,12 @@ const startServer = (ports, userDataPath = null) => {
                         raw: true
                     });
 
+                    const salesWhere = { companyId };
+                    if (!canViewAllSales && req.user?.id) {
+                        salesWhere.userId = req.user.id;
+                    }
                     const sales = await Sale.findAll({
-                        where: { companyId },
+                        where: salesWhere,
                         order: [['createdAt', 'DESC']],
                         limit: 500,
                         raw: true
@@ -939,10 +948,12 @@ const startServer = (ports, userDataPath = null) => {
                         raw: true
                     });
 
-                    const suppliers = await Supplier.findAll({
-                        where: { isActive: true, companyId },
-                        raw: true
-                    });
+                    const suppliers = canViewSuppliers
+                        ? await Supplier.findAll({
+                            where: { isActive: true, companyId },
+                            raw: true
+                        })
+                        : [];
 
                     let exchangeRate = 1.0;
                     try {

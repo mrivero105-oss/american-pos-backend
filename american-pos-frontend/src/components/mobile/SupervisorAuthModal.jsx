@@ -190,15 +190,53 @@ export default function SupervisorAuthModal({
     }
   }, [selectedSupervisorId, currentUser, actionType, referenceId, onAuthorized, onClose]);
 
-  // La biometría local del dispositivo del cajero no puede suplantar el PIN criptográfico del supervisor
-  const triggerBiometric = useCallback(async () => {
-    setError('Por seguridad Zero-Trust, ingrese el PIN del supervisor.');
-    setIsBiometricAttempting(false);
-  }, []);
+  const enrolledBio = biometricService.getEnrolledCredential();
+  const canUseBiometric = Boolean(
+    hasBiometricSensor &&
+    currentUser &&
+    selectedSupervisorId &&
+    String(currentUser.id) === String(selectedSupervisorId) &&
+    ['supervisor', 'admin', 'owner', 'superadmin'].includes(String(currentUser.role || '').toLowerCase()) &&
+    enrolledBio?.keyAlias &&
+    String(enrolledBio.userId) === String(selectedSupervisorId) &&
+    biometricService.isNativeHardwareBiometricAvailable()
+  );
 
-  useEffect(() => {
-    // El PIN del supervisor se solicita directamente sin disparar biometría del cajero
-  }, [isOpen, hasBiometricSensor]);
+  // Firma biométrica ECDSA P-256 v2 sobre reto de un solo uso (solo si el supervisor es el titular de la sesión)
+  const triggerBiometric = useCallback(async () => {
+    if (!canUseBiometric) {
+      setError('Por seguridad Zero-Trust, ingrese el PIN del supervisor.');
+      return;
+    }
+    setIsBiometricAttempting(true);
+    setLoading(true);
+    setError('');
+    try {
+      const supObj = supervisors.find(s => String(s.id) === String(selectedSupervisorId)) || currentUser;
+      const { challengeId, signature } = await biometricService.signSupervisorBiometricChallenge(supObj, {
+        title,
+        subtitle: reason
+      });
+      const { data } = await api.post('/auth/supervisor-authorize', {
+        supervisorId: selectedSupervisorId,
+        isBiometric: true,
+        challengeId,
+        signature,
+        actionType,
+        referenceId
+      }, { timeout: 6000 });
+      biometricService.triggerHaptic('success');
+      onAuthorized?.(data);
+      onClose();
+    } catch (err) {
+      biometricService.triggerHaptic('error');
+      const serverMsg = err.response?.data?.message || err.response?.data?.error;
+      setError(serverMsg || err.message || 'Verificación biométrica no completada. Ingresa tu PIN.');
+    } finally {
+      setIsBiometricAttempting(false);
+      setLoading(false);
+    }
+  }, [canUseBiometric, supervisors, selectedSupervisorId, currentUser, title, reason, actionType, referenceId, onAuthorized, onClose]);
 
   // Manejo de teclado de PIN numérico (Soporta 4 a 6 dígitos con auto-envío en 6 o botón confirmar en 4+)
   const handleKeyPress = (num) => {
@@ -293,8 +331,8 @@ export default function SupervisorAuthModal({
             </div>
           )}
 
-          {/* Botón de Huella / Face Unlock si hay soporte */}
-          {hasBiometricSensor && (
+          {/* Botón de Huella ECDSA v2 solo cuando el supervisor es el titular de la sesión */}
+          {canUseBiometric && (
             <button
               type="button"
               onClick={triggerBiometric}
@@ -302,7 +340,7 @@ export default function SupervisorAuthModal({
               className="w-full py-2.5 px-3 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-400 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-colors shadow-sm"
             >
               <Fingerprint size={18} className={isBiometricAttempting ? 'animate-pulse text-blue-300' : ''} />
-              <span>{isBiometricAttempting ? 'Esperando Huella Digital...' : 'Tocar Lector de Huellas'}</span>
+              <span>{isBiometricAttempting ? 'Esperando Huella Digital...' : 'Autorizar con Huella (ECDSA v2)'}</span>
             </button>
           )}
 

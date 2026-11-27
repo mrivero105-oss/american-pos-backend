@@ -7,10 +7,12 @@
  */
 
 const TOKEN_KEY = 'auth_token';
+const SYNC_KEY_STORAGE = 'sync_secret_key';
 const USER_PROFILE_KEY = 'isaac_pos_saved_user_profile';
 const SESSION_ACTIVE_KEY = 'isaac_pos_session_active';
 
 let memoryToken = null;
+let memorySyncKey = null;
 
 function sanitizeProfileForCache(profile) {
   if (!profile || typeof profile !== 'object') return null;
@@ -113,6 +115,95 @@ export const secureMobileStorage = {
       }
     } catch (err) {
       console.warn('[SecureStorage] Error removiendo token:', err?.message);
+    }
+  },
+
+  getSyncKey: () => {
+    if (memorySyncKey) return memorySyncKey;
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const sKey = sessionStorage.getItem(SYNC_KEY_STORAGE);
+        if (sKey) {
+          memorySyncKey = sKey;
+          return sKey;
+        }
+      }
+      if (typeof localStorage !== 'undefined') {
+        const legacyKey = localStorage.getItem(SYNC_KEY_STORAGE);
+        if (legacyKey) {
+          memorySyncKey = legacyKey;
+          try {
+            if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.setItem(SYNC_KEY_STORAGE, legacyKey);
+            }
+            if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.saveSecureSecret) {
+              window.Capacitor.Plugins.PosNativeHardware.saveSecureSecret({ key: SYNC_KEY_STORAGE, value: legacyKey }).catch(() => {});
+            }
+            localStorage.removeItem(SYNC_KEY_STORAGE);
+          } catch (err) {
+            console.warn('[SecureStorage] Error migrando syncKey:', err?.message);
+          }
+          return legacyKey;
+        }
+      }
+      return null;
+    } catch {
+      return memorySyncKey;
+    }
+  },
+
+  restoreSyncKeyFromNative: async () => {
+    if (memorySyncKey) return memorySyncKey;
+    try {
+      if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.getSecureSecret) {
+        const res = await window.Capacitor.Plugins.PosNativeHardware.getSecureSecret({ key: SYNC_KEY_STORAGE });
+        if (res?.value) {
+          memorySyncKey = String(res.value);
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(SYNC_KEY_STORAGE, memorySyncKey);
+          }
+          return memorySyncKey;
+        }
+      }
+    } catch (err) {
+      console.warn('[SecureStorage] Error restaurando syncKey desde Android Keystore:', err?.message);
+    }
+    return null;
+  },
+
+  setSyncKey: (keyVal) => {
+    const normalized = keyVal ? String(keyVal).trim() : null;
+    memorySyncKey = normalized;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(SYNC_KEY_STORAGE);
+      }
+      if (typeof sessionStorage !== 'undefined') {
+        if (!normalized) sessionStorage.removeItem(SYNC_KEY_STORAGE);
+        else sessionStorage.setItem(SYNC_KEY_STORAGE, normalized);
+      }
+      if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.()) {
+        if (normalized && window.Capacitor?.Plugins?.PosNativeHardware?.saveSecureSecret) {
+          window.Capacitor.Plugins.PosNativeHardware.saveSecureSecret({ key: SYNC_KEY_STORAGE, value: normalized }).catch(() => {});
+        } else if (!normalized && window.Capacitor?.Plugins?.PosNativeHardware?.removeSecureSecret) {
+          window.Capacitor.Plugins.PosNativeHardware.removeSecureSecret({ key: SYNC_KEY_STORAGE }).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.warn('[SecureStorage] Error guardando syncKey:', err?.message);
+    }
+  },
+
+  removeSyncKey: () => {
+    memorySyncKey = null;
+    try {
+      if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(SYNC_KEY_STORAGE);
+      if (typeof localStorage !== 'undefined') localStorage.removeItem(SYNC_KEY_STORAGE);
+      if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.removeSecureSecret) {
+        window.Capacitor.Plugins.PosNativeHardware.removeSecureSecret({ key: SYNC_KEY_STORAGE }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('[SecureStorage] Error removiendo syncKey:', err?.message);
     }
   },
 

@@ -87,7 +87,6 @@ export default function MobileApp() {
   const [isApplyingOta, setIsApplyingOta] = useState(false);
 
   useEffect(() => {
-    otaUpdateService.init();
     const unsubOta = otaUpdateService.subscribeUpdateReady(({ ready, version }) => {
       if (ready) {
         setOtaReadyVersion(version || 'nueva');
@@ -117,6 +116,14 @@ export default function MobileApp() {
       unsubOta();
     };
   }, []);
+
+  // Confirmar notifyAppReady() ante CapacitorUpdater SOLO tras un render saludable de React
+  // (cuando AuthProvider y licencia concluyeron bootstrap) para preservar rollback real ante pantallas blancas.
+  useEffect(() => {
+    if (!authLoading && !licenseLoading) {
+      otaUpdateService.init().catch(() => {});
+    }
+  }, [authLoading, licenseLoading]);
 
   useEffect(() => {
     if (user) {

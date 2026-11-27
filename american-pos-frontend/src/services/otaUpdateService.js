@@ -100,8 +100,10 @@ export function compareOtaVersions(remoteVer, localVer) {
 function hasValidManifestSignatureShape(manifest) {
     if (!manifest || !manifest.version || !manifest.bundleUrl) return false;
     const hasSig = Boolean(String(manifest.otaSignature || '').trim());
+    const hasManifestSig = Boolean(String(manifest.otaManifestSignature || '').trim());
+    const hasBuildTime = Boolean(String(manifest.buildTime || '').trim());
     const hasSha = /^[a-f0-9]{64}$/i.test(String(manifest.checksum || '').trim());
-    return hasSig && hasSha;
+    return hasSig && hasManifestSig && hasBuildTime && hasSha;
 }
 
 /**
@@ -192,17 +194,22 @@ export async function verifyOtaPackageIntegrity(bundleBytes, remoteManifest, opt
         throw new Error('Firma criptográfica RSA-SHA256 del paquete OTA inválida. Actualización rechazada.');
     }
 
-    if (remoteManifest?.otaManifestSignature && remoteManifest?.version && remoteManifest?.buildTime) {
-        const canonical = `${remoteManifest.version}|${expectedChecksum}|${remoteManifest.buildTime}`;
-        const manifestBytes = new TextEncoder().encode(canonical);
-        const isManifestValid = await verifyRsaSha256Bytes(
-            manifestBytes,
-            String(remoteManifest.otaManifestSignature).trim(),
-            publicKeyPem
-        );
-        if (!isManifestValid) {
-            throw new Error('Firma criptográfica del manifiesto OTA inválida. Actualización rechazada.');
-        }
+    const manifestSignature = String(remoteManifest?.otaManifestSignature || '').trim();
+    const manifestVersion = String(remoteManifest?.version || '').trim();
+    const manifestBuildTime = String(remoteManifest?.buildTime || '').trim();
+    if (!manifestSignature || !manifestVersion || !manifestBuildTime) {
+        throw new Error('Manifiesto OTA sin firma criptográfica otaManifestSignature/buildTime obligatoria. Actualización rechazada.');
+    }
+
+    const canonical = `${manifestVersion}|${expectedChecksum}|${manifestBuildTime}`;
+    const manifestBytes = new TextEncoder().encode(canonical);
+    const isManifestValid = await verifyRsaSha256Bytes(
+        manifestBytes,
+        manifestSignature,
+        publicKeyPem
+    );
+    if (!isManifestValid) {
+        throw new Error('Firma criptográfica del manifiesto OTA inválida. Actualización rechazada.');
     }
 
     return { verified: true, mode: 'rsa-sha256', checksum: actualChecksum };
@@ -219,7 +226,16 @@ export const otaUpdateService = {
             return { purged: false };
         }
         try {
-            const embeddedCode = options.embeddedVersionCode ?? getEmbeddedNativeApkVersionCode();
+            let nativeApkCode = 0;
+            if (options.embeddedVersionCode === undefined && typeof window !== 'undefined' && window.Capacitor?.Plugins?.PosNativeHardware?.getAppBuildInfo) {
+                try {
+                    const buildInfo = await window.Capacitor.Plugins.PosNativeHardware.getAppBuildInfo();
+                    nativeApkCode = Number(buildInfo?.versionCode) || 0;
+                } catch {
+                    nativeApkCode = 0;
+                }
+            }
+            const embeddedCode = options.embeddedVersionCode ?? (nativeApkCode > 0 ? nativeApkCode : getEmbeddedNativeApkVersionCode());
             const embeddedBuildVer = options.embeddedBuildVersion ?? getEmbeddedMobileBuildVersion();
             const storedCode = Number(localStorage.getItem(NATIVE_APK_VERSION_CODE_KEY) || '0') || 0;
             const current = await CapacitorUpdater.current().catch(() => null);
@@ -446,9 +462,12 @@ export const otaUpdateService = {
                 return { updateAvailable: true, alreadyStaged: true, newVersion: remote.version, source: selected.source };
             }
 
-            // Fail-closed antes de descargar: exigir firma RSA-SHA256 y checksum SHA-256 en manifiesto
+            // Fail-closed antes de descargar: exigir firma RSA-SHA256 del paquete, firma del manifiesto y checksum SHA-256
             if (!String(remote.otaSignature || '').trim()) {
                 throw new Error('Paquete OTA sin firma digital RSA-SHA256 obligatoria. Actualización rechazada.');
+            }
+            if (!String(remote.otaManifestSignature || '').trim() || !String(remote.buildTime || '').trim()) {
+                throw new Error('Manifiesto OTA sin firma criptográfica otaManifestSignature/buildTime obligatoria. Actualización rechazada.');
             }
             if (!/^[a-f0-9]{64}$/i.test(String(remote.checksum || '').trim())) {
                 throw new Error('Manifiesto OTA sin checksum SHA-256 válido. Actualización rechazada.');

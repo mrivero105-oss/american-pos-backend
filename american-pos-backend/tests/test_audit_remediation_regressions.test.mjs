@@ -226,7 +226,18 @@ test('R7. /sync/stats lee sync_outbox real y /recharges exige canAccessPOS, aisl
     };
 
     try {
-        const statsRes = await invokeRouter(syncRouter, { method: 'GET', url: '/stats' });
+        const deniedStatsRes = await invokeRouter(syncRouter, {
+            method: 'GET',
+            url: '/stats',
+            user: { id: 'u-cashier', role: 'cashier', companyId: 'comp-77', permissions: { canManageSettings: false } }
+        });
+        assert.equal(deniedStatsRes.statusCode, 403, '/sync/stats debe exigir canManageSettings');
+
+        const statsRes = await invokeRouter(syncRouter, {
+            method: 'GET',
+            url: '/stats',
+            user: { id: 'u-admin', role: 'admin', companyId: 'comp-77', permissions: { canManageSettings: true } }
+        });
         assert.equal(statsRes.handled, true);
         assert.equal(statsRes.statusCode, 200);
         assert.equal(statsRes.body?.success, true);

@@ -165,9 +165,14 @@ export default defineConfig(({ command }) => {
   const mobileBuildVersion =
     process.env.MOBILE_BUILD_VERSION ||
     `${readMobileBaseVersion()}.${Math.floor(Date.now() / 1000)}`;
+  const otaPublicBaseUrl = String(
+    process.env.VITE_OTA_PUBLIC_BASE_URL ||
+    (process.env.VITE_SUPABASE_URL ? `${String(process.env.VITE_SUPABASE_URL).trim().replace(/\/+$/, '')}/storage/v1/object/public/app-updates` : '')
+  ).trim().replace(/\/+$/, '');
   const baseDefine = {
     'import.meta.env.VITE_APK_VERSION_CODE': JSON.stringify(apkVersionCode),
     'import.meta.env.VITE_MOBILE_BUILD_VERSION': JSON.stringify(mobileBuildVersion),
+    'import.meta.env.VITE_OTA_PUBLIC_BASE_URL': JSON.stringify(otaPublicBaseUrl),
     ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
       ? {
           'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),

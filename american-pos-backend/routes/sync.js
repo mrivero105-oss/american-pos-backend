@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { sequelize } = require('../database/connection');
 const SupabaseSyncService = require('../services/SupabaseSyncService');
+const { requirePermission } = require('../middleware/auth');
 
 /**
  * GET /stats - Get real background cloud synchronization outbox statistics
  */
-router.get('/stats', async (req, res) => {
+router.get('/stats', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const counts = {
             PENDING: 0,
@@ -15,13 +16,35 @@ router.get('/stats', async (req, res) => {
             RETRYING: 0,
             FAILED: 0
         };
+        const companyId = req.user?.companyId ? String(req.user.companyId) : null;
 
         try {
-            const [rows] = await sequelize.query(`
-                SELECT status, COUNT(*)::int AS cnt
-                FROM sync_outbox
-                GROUP BY status;
-            `);
+            let rows = [];
+            if (companyId) {
+                try {
+                    const [tenantRows] = await sequelize.query(`
+                        SELECT status, COUNT(*)::int AS cnt
+                        FROM sync_outbox
+                        WHERE payload->>'companyId' = :companyId
+                        GROUP BY status;
+                    `, { replacements: { companyId } });
+                    rows = tenantRows;
+                } catch (_tenantQueryErr) {
+                    const [fallbackRows] = await sequelize.query(`
+                        SELECT status, COUNT(*)::int AS cnt
+                        FROM sync_outbox
+                        GROUP BY status;
+                    `);
+                    rows = fallbackRows;
+                }
+            } else {
+                const [allRows] = await sequelize.query(`
+                    SELECT status, COUNT(*)::int AS cnt
+                    FROM sync_outbox
+                    GROUP BY status;
+                `);
+                rows = allRows;
+            }
             if (Array.isArray(rows)) {
                 for (const row of rows) {
                     const key = String(row.status || '').toUpperCase();

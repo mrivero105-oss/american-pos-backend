@@ -111,6 +111,36 @@ describe('Bloque 1 — Caja Negra Sanitizada (mobileDiagnosticsService) y Panel 
     expect(reportJson).toContain('[REDACTED]');
   });
 
+  it('redacta syncKey, licenseKey, Basic auth, Cookie, asignaciones libres y PII (cédula/RIF, teléfono, correo)', () => {
+    const rawMsg = 'Header x-sync-key: SUPER_SYNC_999 Authorization: Basic dXNlcjpwYXNz Cookie: authToken=abc123 password=clave123 cliente V-24567890 correo juan.perez@empresa.com tel 0414-5551234';
+    const clean = redactSensitiveText(rawMsg);
+    expect(clean).not.toContain('SUPER_SYNC_999');
+    expect(clean).not.toContain('dXNlcjpwYXNz');
+    expect(clean).not.toContain('authToken=abc123');
+    expect(clean).not.toContain('clave123');
+    expect(clean).not.toContain('V-24567890');
+    expect(clean).not.toContain('juan.perez@empresa.com');
+    expect(clean).not.toContain('0414-5551234');
+    expect(clean).toContain('[REDACTED_EMAIL]');
+    expect(clean).toContain('[REDACTED_ID]');
+    expect(clean).toContain('[REDACTED_PHONE]');
+
+    const cleanMeta = redactSensitiveData({
+      syncKey: 'my-sync-secret',
+      licenseKey: 'ISAAC-RSA-KEY-999',
+      customerRif: 'J-40123456-7',
+      phone: '+58 412 9876543',
+      email: 'cliente@demo.ve',
+      safeCounter: 7
+    });
+    expect(cleanMeta.syncKey).toBe('[REDACTED]');
+    expect(cleanMeta.licenseKey).toBe('[REDACTED]');
+    expect(cleanMeta.customerRif).toBe('[REDACTED]');
+    expect(cleanMeta.phone).toBe('[REDACTED]');
+    expect(cleanMeta.email).toBe('[REDACTED]');
+    expect(cleanMeta.safeCounter).toBe(7);
+  });
+
   it('respeta el tope circular de 300 eventos y permite limpiar la Caja Negra', () => {
     for (let i = 0; i < 340; i++) {
       recordDiagnosticEvent(i % 2 === 0 ? 'info' : 'error', 'sync', `Evento #${i}`);

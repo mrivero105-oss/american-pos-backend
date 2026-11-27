@@ -40,8 +40,9 @@ export default function AccountStatementModal({ isOpen, onClose, customer, busin
         const printContent = printRef.current;
         if (!printContent) return;
 
-        const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+        const printWindow = window.open('', '_blank');
         if (!printWindow) return;
+        try { printWindow.opener = null; } catch { /* noop */ }
         printWindow.document.write(`
             <!DOCTYPE html>
             <html>

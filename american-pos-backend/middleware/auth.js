@@ -179,8 +179,6 @@ const isAllowedSyncKeyRequest = (method, rawPath) => {
 
     if (cleanMethod === 'GET') {
         return (
-            normalizedPath.startsWith('/sync/') ||
-            normalizedPath === '/sync' ||
             normalizedPath === '/products' ||
             normalizedPath.startsWith('/products/') ||
             normalizedPath === '/customers' ||
@@ -286,44 +284,25 @@ const verifyToken = async (req, res, next) => {
             });
         }
 
-        // Resolver ID de usuario real respetando cajero móvil o cuenta de bajo privilegio para Foreign Keys
+        // Resolver ID de usuario de servicio de bajo privilegio (sin aceptar spoofing de x-cashier-id sin JWT)
         let validSyncUserId = '2';
         let validSyncCompanyId = process.env.DEFAULT_COMPANY_ID || '2';
-        let terminalUserName = (req.headers && (req.headers['x-terminal-name'] || req.headers['x-cashier-name'])) || 'Terminal Móvil Preventa';
+        let terminalUserName = (req.headers && req.headers['x-terminal-name']) || 'Terminal Móvil Preventa';
 
         try {
             const { User } = require('../database/models');
-            const requestedCashierId = (req.headers && (req.headers['x-cashier-id'] || req.headers['x-user-id'])) || (req.query && req.query.userId);
             const allowedTerminalRoles = ['cajero', 'cashier', 'vendedor', 'mesero'];
-
-            let matchedUser = null;
-            if (requestedCashierId) {
-                matchedUser = await User.findOne({
-                    where: {
-                        id: String(requestedCashierId),
-                        companyId: validSyncCompanyId,
-                        status: 'active',
-                        role: allowedTerminalRoles
-                    }
-                });
-            }
-
-            if (!matchedUser) {
-                matchedUser = await User.findOne({
-                    where: {
-                        companyId: validSyncCompanyId,
-                        status: 'active',
-                        role: allowedTerminalRoles
-                    },
-                    order: [['id', 'ASC']]
-                });
-            }
+            const matchedUser = await User.findOne({
+                where: {
+                    companyId: validSyncCompanyId,
+                    status: 'active',
+                    role: allowedTerminalRoles
+                },
+                order: [['id', 'ASC']]
+            });
 
             if (matchedUser) {
                 validSyncUserId = String(matchedUser.id);
-                if (requestedCashierId && matchedUser.name) {
-                    terminalUserName = matchedUser.name;
-                }
             }
         } catch (e) {
             console.warn('[AUTH SyncKey] Aviso consultando usuario en BD:', e.message);

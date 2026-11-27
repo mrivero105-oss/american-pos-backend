@@ -7,8 +7,8 @@ const { requirePermission } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { createAccountSchema, createEntrySchema } = require('../schemas/accountingSchema');
 
-// Todas las rutas contables requieren permiso financiero o rango administrativo
-router.use(requirePermission('canAccessFinance'));
+// Todas las rutas contables requieren permiso financiero/contable o rango administrativo
+router.use(requirePermission(['canAccessFinance', 'canManageAccounting']));
 
 // Obtener todas las cuentas del catálogo
 router.get('/accounts', async (req, res) => {

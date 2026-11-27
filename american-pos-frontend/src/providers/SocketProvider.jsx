@@ -9,10 +9,23 @@ export const SocketProvider = ({ children }) => {
     const { user, refreshUser } = useAuth();
     const [socket, setSocket] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
+    const [serverRevision, setServerRevision] = useState(0);
     const refreshUserRef = useRef(refreshUser);
     refreshUserRef.current = refreshUser;
     const userId = user?.id;
     const companyId = user?.companyId;
+
+    useEffect(() => {
+        const handleServerUrlChanged = () => {
+            setServerRevision((prev) => prev + 1);
+        };
+        window.addEventListener('server-discovered', handleServerUrlChanged);
+        window.addEventListener('api-base-url-changed', handleServerUrlChanged);
+        return () => {
+            window.removeEventListener('server-discovered', handleServerUrlChanged);
+            window.removeEventListener('api-base-url-changed', handleServerUrlChanged);
+        };
+    }, []);
 
     useEffect(() => {
         if (!userId || !companyId) return;
@@ -102,6 +115,30 @@ export const SocketProvider = ({ children }) => {
             }
         });
 
+        const handleForcedDisconnect = (payload) => {
+            console.warn('🔒 Sesión revocada por el servidor vía WebSocket:', payload?.reason || payload);
+            try {
+                secureMobileStorage.removeToken();
+                secureMobileStorage.setSessionActive(false);
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem('isaac_pos_session_revoked', 'true');
+                }
+            } catch {
+                // Ignorar error de storage restringido
+            }
+            try {
+                newSocket.disconnect();
+            } catch {
+                // Socket ya cerrado
+            }
+            window.dispatchEvent(new CustomEvent('auth-unauthorized', {
+                detail: { forced: true, reason: payload?.reason || 'Sesión revocada por el administrador' }
+            }));
+        };
+
+        newSocket.on('force_logout', handleForcedDisconnect);
+        newSocket.on('session_revoked', handleForcedDisconnect);
+
         newSocket.on('disconnect', (reason) => {
             if (reason === 'io client disconnect') {
                 console.log('🔄 Sesión actualizada: Reconectando en tiempo real...');
@@ -131,11 +168,13 @@ export const SocketProvider = ({ children }) => {
         return () => {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
             window.removeEventListener('online', handleOnline);
+            newSocket.off('force_logout', handleForcedDisconnect);
+            newSocket.off('session_revoked', handleForcedDisconnect);
             newSocket.disconnect();
             setSocket(null);
             setIsConnected(false);
         };
-    }, [userId, companyId]);
+    }, [userId, companyId, serverRevision]);
 
     const contextValue = useMemo(() => ({ socket, isConnected }), [socket, isConnected]);
 

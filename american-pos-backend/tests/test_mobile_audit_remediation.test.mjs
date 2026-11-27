@@ -325,3 +325,393 @@ test('Fase 1.3 — CashService.closeShiftBlind acepta declaración numérica pla
         CashService._logAudit = origLogAudit;
     }
 });
+
+// ============================================================================
+// FASE 2 — SEGURIDAD, RBAC, BIOMETRÍA ECDSA v2, LICENCIAS Y ANTI-SSRF
+// ============================================================================
+
+const invokeExpressRouter = (router, reqOverrides = {}) => new Promise((resolve, reject) => {
+    const out = { handled: false, statusCode: 200, body: null };
+    const urlPath = (reqOverrides.url || '/').split('?')[0];
+    const req = {
+        method: 'GET',
+        url: '/',
+        path: urlPath,
+        originalUrl: reqOverrides.url || '/',
+        headers: {},
+        query: {},
+        body: {},
+        params: {},
+        app: { get: () => null },
+        ...reqOverrides
+    };
+    const res = {
+        statusCode: 200,
+        status(code) { this.statusCode = code; out.statusCode = code; return this; },
+        json(payload) { out.handled = true; out.body = payload; resolve(out); return this; },
+        send(payload) { out.handled = true; out.body = payload; resolve(out); return this; },
+        setHeader() { return this; },
+        getHeader() { return undefined; }
+    };
+    router.handle(req, res, (err) => {
+        if (err) return reject(err);
+        resolve(out);
+    });
+});
+
+test('Fase 2.1 — licenseMiddleware exige licencia en endpoints public-sync y solo exime GET /products/public-catalog', async () => {
+    const { verifyLicense, clearLicenseCache } = require('../middleware/licenseMiddleware');
+    const origLicenseFindOne = models.License.findOne;
+    clearLicenseCache();
+    models.License.findOne = async () => null;
+
+    const runMiddleware = (method, path) => new Promise((resolve) => {
+        let calledNext = false;
+        let statusCode = 200;
+        let body = null;
+        const req = {
+            method,
+            path,
+            originalUrl: path,
+            headers: { 'x-terminal-id': 'TERM-PHASE2-UNLICENSED' },
+            query: {},
+            ip: '192.168.1.99'
+        };
+        const res = {
+            status(code) { statusCode = code; return this; },
+            json(payload) { body = payload; resolve({ calledNext, statusCode, body }); return this; }
+        };
+        verifyLicense(req, res, () => {
+            calledNext = true;
+            resolve({ calledNext, statusCode, body });
+        });
+    });
+
+    try {
+        const catalogRes = await runMiddleware('GET', '/products/public-catalog');
+        assert.equal(catalogRes.calledNext, true, 'GET /products/public-catalog debe mantenerse exento');
+
+        for (const blockedPath of ['/sales/public-sync', '/products/public-sync', '/customers/public-sync', '/customers/public-payment']) {
+            const res = await runMiddleware('POST', blockedPath);
+            assert.equal(res.calledNext, false, `${blockedPath} debe bloquearse sin licencia activa`);
+            assert.equal(res.statusCode, 403, `${blockedPath} debe responder 403 sin licencia activa`);
+        }
+    } finally {
+        models.License.findOne = origLicenseFindOne;
+        clearLicenseCache();
+    }
+});
+
+test('Fase 2.2 — routes/customers bloquea mass-assignment financiero en /public-sync y exige RBAC en /public-payment', async () => {
+    const jwt = require('jsonwebtoken');
+    const customersRouter = require('../routes/customers');
+    const { invalidateUserAuthCache } = require('../middleware/auth');
+    const origFindByPk = models.Customer.findByPk;
+    const origFindOne = models.Customer.findOne;
+    const origCreate = models.Customer.create;
+    const origUserFindByPk = models.User.findByPk;
+    let createdPayload = null;
+
+    const cashier = {
+        id: 'u-cashier-p22',
+        username: 'cajero_p22',
+        role: 'cashier',
+        status: 'active',
+        companyId: 'comp-sec',
+        currentSessionId: 'SESS-P22',
+        permissions: { canAccessPOS: true, canManageReceivables: false, canManageCustomers: false }
+    };
+    const token = jwt.sign(
+        { id: cashier.id, role: cashier.role, companyId: cashier.companyId, sessionId: 'SESS-P22', permissions: cashier.permissions },
+        process.env.JWT_SECRET,
+        { expiresIn: '1h' }
+    );
+
+    invalidateUserAuthCache(cashier.id);
+    models.User.findByPk = async (id) => (String(id) === cashier.id ? cashier : null);
+    models.Customer.findByPk = async () => null;
+    models.Customer.findOne = async () => null;
+    models.Customer.create = async (payload) => {
+        createdPayload = payload;
+        return { ...payload, toJSON: () => ({ ...payload }) };
+    };
+
+    try {
+        const syncRes = await invokeExpressRouter(customersRouter, {
+            method: 'POST',
+            url: '/public-sync',
+            headers: { authorization: `Bearer ${token}` },
+            body: {
+                customers: [{
+                    id: 'cust-ma-1',
+                    name: 'Cliente Prueba',
+                    cedula: 'V-12345678',
+                    creditLimit: 99999,
+                    creditBalance: 50000,
+                    isCreditBlocked: false,
+                    loyaltyPoints: 50000
+                }]
+            }
+        });
+        assert.equal(syncRes.statusCode, 200);
+        assert.ok(createdPayload, 'Debe crear el cliente permitido');
+        assert.equal(createdPayload.creditLimit, 0, 'Un cajero sin canManageReceivables no puede elevar creditLimit');
+        assert.equal(createdPayload.creditBalance, 0, 'creditBalance jamás debe ser asignable desde public-sync (siempre inicia en 0)');
+        assert.equal(createdPayload.loyaltyPoints, 0, 'loyaltyPoints jamás debe ser asignable desde public-sync (siempre inicia en 0)');
+
+        const payDenied = await invokeExpressRouter(customersRouter, {
+            method: 'POST',
+            url: '/public-payment',
+            headers: { authorization: `Bearer ${token}` },
+            body: { customerId: 'cust-ma-1', amount: 10 }
+        });
+        assert.equal(payDenied.statusCode, 403, '/customers/public-payment debe exigir canManageReceivables o canManageCustomers');
+    } finally {
+        models.User.findByPk = origUserFindByPk;
+        models.Customer.findByPk = origFindByPk;
+        models.Customer.findOne = origFindOne;
+        models.Customer.create = origCreate;
+        invalidateUserAuthCache(cashier.id);
+    }
+});
+
+test('Fase 2.3 — Fugas de costos y ventas ajenas selladas en ProductImportService, /products/:id/lots y /sales/public-list', async () => {
+    const ProductImportService = require('../services/products/ProductImportService');
+    const productsRouter = require('../routes/products');
+    const salesRouter = require('../routes/sales');
+
+    const origProductFindAll = models.Product.findAll;
+    const origLotFindAll = models.ProductLot.findAll;
+    const origSaleFindAll = models.Sale.findAll;
+
+    const rawProd = {
+        id: 'p-1',
+        name: 'Café',
+        sku: 'CAF-1',
+        barcode: '7591234',
+        price: 10,
+        cost: 4.5,
+        margin: 122,
+        stockQuantity: 20,
+        unitsPerBulk: 1,
+        category: 'Bebidas',
+        unit: 'unidad',
+        imageUri: null
+    };
+    models.Product.findAll = async () => [{
+        ...rawProd,
+        get: () => ({ ...rawProd })
+    }];
+    models.ProductLot.findAll = async () => [{
+        id: 'lot-1',
+        lotNumber: 'L001',
+        quantity: 10,
+        cost: 4.5,
+        toJSON() { return { id: 'lot-1', lotNumber: 'L001', quantity: 10, cost: 4.5 }; }
+    }];
+    let capturedSaleWhere = null;
+    models.Sale.findAll = async (opts) => {
+        capturedSaleWhere = opts?.where || null;
+        return [{
+            id: 'sale-1',
+            userId: 'u-cashier-1',
+            total: 10,
+            SaleItems: [{ id: 'si-1', name: 'Café', price: 10, cost: 4.5, quantity: 1 }],
+            toJSON() {
+                return {
+                    id: 'sale-1',
+                    userId: 'u-cashier-1',
+                    total: 10,
+                    SaleItems: [{ id: 'si-1', name: 'Café', price: 10, cost: 4.5, quantity: 1 }]
+                };
+            }
+        }];
+    };
+
+    const jwt = require('jsonwebtoken');
+    const { invalidateUserAuthCache } = require('../middleware/auth');
+    const origUserFindByPk = models.User.findByPk;
+    const cashier = {
+        id: 'u-cashier-1',
+        username: 'cajero_p23',
+        role: 'cashier',
+        status: 'active',
+        companyId: 'comp-sec',
+        currentSessionId: 'SESS-P23',
+        permissions: { canAccessPOS: true, canViewCosts: false, canViewSalesHistory: false }
+    };
+    const token = jwt.sign(
+        { id: cashier.id, role: cashier.role, companyId: cashier.companyId, sessionId: 'SESS-P23', permissions: cashier.permissions },
+        process.env.JWT_SECRET,
+        { expiresIn: '1h' }
+    );
+    invalidateUserAuthCache(cashier.id);
+    models.User.findByPk = async (id) => (String(id) === cashier.id ? cashier : null);
+
+    try {
+        const linked = await ProductImportService.searchProductsForLink('comp-sec', 'Café', cashier);
+        assert.equal(linked.length, 1);
+        assert.equal(linked[0].cost, undefined, 'searchProductsForLink no debe exponer cost a cajeros');
+        assert.equal(linked[0].currentCost, undefined, 'searchProductsForLink no debe exponer currentCost a cajeros');
+
+        const lotsRes = await invokeExpressRouter(productsRouter, {
+            method: 'GET',
+            url: '/p-1/lots',
+            headers: { authorization: `Bearer ${token}` }
+        });
+        assert.equal(lotsRes.statusCode, 200);
+        assert.equal(lotsRes.body[0].cost, undefined, 'GET /products/:id/lots no debe exponer cost a cajeros');
+
+        const salesRes = await invokeExpressRouter(salesRouter, {
+            method: 'GET',
+            url: '/public-list',
+            headers: { authorization: `Bearer ${token}` }
+        });
+        assert.equal(salesRes.statusCode, 200);
+        assert.equal(capturedSaleWhere.userId, 'u-cashier-1', 'GET /sales/public-list debe aislar ventas por userId para cajeros');
+        assert.equal(salesRes.body[0].SaleItems[0].cost, undefined, 'GET /sales/public-list no debe exponer cost en SaleItems');
+    } finally {
+        models.User.findByPk = origUserFindByPk;
+        models.Product.findAll = origProductFindAll;
+        models.ProductLot.findAll = origLotFindAll;
+        models.Sale.findAll = origSaleFindAll;
+        invalidateUserAuthCache(cashier.id);
+    }
+});
+
+test('Fase 2.4 — AuthorizationService valida firma biométrica ECDSA P-256 v2 con reto one-time y rechaza replay y suplantación', async () => {
+    const crypto = require('crypto');
+    const AuthorizationService = require('../services/AuthorizationService');
+    const { BIOMETRIC_V2_PREFIX, issueBiometricChallenge } = require('../utils/biometricChallengeStore');
+
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    const spkiB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+
+    const origUserFindOne = models.User.findOne;
+    const origApprovalCreate = models.SupervisorApproval.create;
+
+    const supervisorUser = {
+        id: 'sup-ecdsa-1',
+        username: 'super1',
+        name: 'Supervisor Uno',
+        role: 'supervisor',
+        status: 'active',
+        companyId: 'comp-sec',
+        biometricTokenHash: `${BIOMETRIC_V2_PREFIX}${spkiB64}`,
+        failedLoginAttempts: 0,
+        lockUntil: null,
+        update: async (patch) => Object.assign(supervisorUser, patch)
+    };
+
+    models.User.findOne = async () => supervisorUser;
+    models.SupervisorApproval.create = async (data) => ({ ...data });
+
+    try {
+        // 1. Reto válido firmado por el propio supervisor
+        const issued = issueBiometricChallenge({ userId: supervisorUser.id, username: supervisorUser.username });
+        const sig = crypto.sign('sha256', Buffer.from(issued.challenge, 'utf8'), privateKey).toString('base64');
+
+        const approval = await AuthorizationService.authorizeAction(
+            { id: supervisorUser.id, role: 'supervisor', username: 'super1', companyId: 'comp-sec' },
+            {
+                supervisorId: supervisorUser.id,
+                isBiometric: true,
+                challengeId: issued.challengeId,
+                signature: sig,
+                actionType: 'VOID_SALE',
+                referenceId: 'sale-99'
+            }
+        );
+        assert.equal(approval.approvedBy, supervisorUser.id);
+        assert.equal(approval.metadata.authMethod, 'BIOMETRIC_HARDWARE_ECDSA_V2');
+
+        // 2. Replay del mismo challengeId debe rechazarse
+        await assert.rejects(
+            () => AuthorizationService.authorizeAction(
+                { id: supervisorUser.id, role: 'supervisor', username: 'super1', companyId: 'comp-sec' },
+                {
+                    supervisorId: supervisorUser.id,
+                    isBiometric: true,
+                    challengeId: issued.challengeId,
+                    signature: sig,
+                    actionType: 'VOID_SALE'
+                }
+            ),
+            /expiró o ya fue utilizado/i
+        );
+
+        // 3. Un cajero nunca puede autorizar con biometría en nombre de un supervisor
+        const issued2 = issueBiometricChallenge({ userId: supervisorUser.id });
+        const sig2 = crypto.sign('sha256', Buffer.from(issued2.challenge, 'utf8'), privateKey).toString('base64');
+        await assert.rejects(
+            () => AuthorizationService.authorizeAction(
+                { id: 'cajero-99', role: 'cashier', username: 'cajero99', companyId: 'comp-sec' },
+                {
+                    supervisorId: supervisorUser.id,
+                    isBiometric: true,
+                    challengeId: issued2.challengeId,
+                    signature: sig2,
+                    actionType: 'VOID_SALE'
+                }
+            ),
+            /PIN secreto/i
+        );
+    } finally {
+        models.User.findOne = origUserFindOne;
+        models.SupervisorApproval.create = origApprovalCreate;
+    }
+});
+
+test('Fase 2.5 — Anti-SSRF en settings/test-network-printer y desconexión inmediata de sockets en disconnectUserSockets', async () => {
+    const settingsRouter = require('../routes/settings');
+    const { disconnectUserSockets } = require('../services/SocketGateway');
+
+    const adminUser = { id: 'u-admin', role: 'admin', companyId: 'comp-sec', permissions: { canManageSettings: true } };
+
+    // Loopback bloqueado
+    const loopbackRes = await invokeExpressRouter(settingsRouter, {
+        method: 'POST',
+        url: '/test-network-printer',
+        user: adminUser,
+        body: { ip: '127.0.0.1', port: 9100 }
+    });
+    assert.equal(loopbackRes.statusCode, 400, 'Debe bloquear loopback 127.0.0.1 en test-network-printer');
+
+    // Link-local metadata AWS/GCP bloqueada
+    const metaRes = await invokeExpressRouter(settingsRouter, {
+        method: 'POST',
+        url: '/test-network-printer',
+        user: adminUser,
+        body: { ip: '169.254.169.254', port: 9100 }
+    });
+    assert.equal(metaRes.statusCode, 400, 'Debe bloquear link-local 169.254.169.254');
+
+    // Puerto no permitido (PostgreSQL 5432) bloqueado
+    const portRes = await invokeExpressRouter(settingsRouter, {
+        method: 'POST',
+        url: '/test-network-printer',
+        user: adminUser,
+        body: { ip: '192.168.1.50', port: 5432 }
+    });
+    assert.equal(portRes.statusCode, 400, 'Debe bloquear puertos fuera de la allowlist de impresión (5432)');
+
+    // disconnectUserSockets emite force_logout + session_revoked y cierra el socket
+    const emitted = [];
+    let disconnected = false;
+    const mockIo = {
+        to(room) {
+            return {
+                emit(ev, payload) { emitted.push({ room, ev, payload }); }
+            };
+        },
+        in(room) {
+            return {
+                disconnectSockets(close) { if (room === 'user:u-revoked' && close) disconnected = true; }
+            };
+        }
+    };
+    disconnectUserSockets(mockIo, 'u-revoked', 'Cuenta desactivada');
+    assert.equal(disconnected, true);
+    assert.ok(emitted.some(e => e.room === 'user:u-revoked' && e.ev === 'force_logout'));
+    assert.ok(emitted.some(e => e.room === 'user:u-revoked' && e.ev === 'session_revoked'));
+});

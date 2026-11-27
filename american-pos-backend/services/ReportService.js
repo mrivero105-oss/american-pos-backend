@@ -5,6 +5,13 @@ const { processSalesAnalysis } = require('../utils/salesAnalytics');
 const precision = require('../utils/precision');
 const cacheService = require('../utils/cacheService');
 const DailyRollupService = require('./DailyRollupService');
+const { isSupervisorOrAboveRole } = require('../constants/roles');
+const ProductService = require('./ProductService');
+
+const isRestrictedReportUser = (reqUser) => {
+    const role = String(reqUser?.role || '').toLowerCase();
+    return !isSupervisorOrAboveRole(role) && !reqUser?.permissions?.canViewReports;
+};
 
 class ReportService {
     /**
@@ -60,8 +67,10 @@ class ReportService {
 
         const startIso = queryStart.toISOString();
         const endIso = queryEnd.toISOString();
+        const restrictedUser = isRestrictedReportUser(reqUser);
+        const canViewCosts = ProductService.canUserViewCosts(reqUser);
         const dashCacheKey = process.env.ISAAC_TEST_ISOLATED !== '1'
-            ? `dashboard_summary_${companyId}_${role}_${role === 'user' ? userId : 'all'}_${startIso}_${endIso}`
+            ? `dashboard_summary_${companyId}_${role}_${restrictedUser ? userId : 'all'}_${canViewCosts ? 'c1' : 'c0'}_${startIso}_${endIso}`
             : null;
         if (dashCacheKey) {
             const cachedDash = cacheService.get(dashCacheKey);
@@ -73,20 +82,20 @@ class ReportService {
             status: { [Op.notIn]: ['cancelled'] }, // Incluimos 'refunded' y 'partially_refunded' en las ventas brutas
             date: { [Op.gte]: startIso, [Op.lte]: endIso }
         };
-        if (role === 'user') saleWhere.userId = userId;
+        if (restrictedUser) saleWhere.userId = userId;
 
         const { Refund } = require('../database/models');
         const refundWhere = {
             companyId,
             date: { [Op.gte]: startIso, [Op.lte]: endIso }
         };
-        if (role === 'user') refundWhere.userId = userId;
+        if (restrictedUser) refundWhere.userId = userId;
 
         let analytics = null;
         const isPostgres = typeof sequelize.getDialect === 'function' && sequelize.getDialect() === 'postgres';
 
         // Fast-Path Rollup Incremental (< 5 ms incluso en reportes anuales 365 días)
-        if (isPostgres && role !== 'user') {
+        if (isPostgres && !restrictedUser) {
             try {
                 analytics = await DailyRollupService.tryGetDashboardAnalytics(companyId, startIso, endIso);
             } catch (_rollupErr) {
@@ -95,8 +104,8 @@ class ReportService {
         }
 
         if (!analytics && isPostgres) {
-            const userSqlFilter = role === 'user' ? 'AND s."userId" = :userId' : '';
-            const sqlReplacements = { companyId: String(companyId), startIso, endIso, ...(role === 'user' ? { userId: String(userId) } : {}) };
+            const userSqlFilter = restrictedUser ? 'AND s."userId" = :userId' : '';
+            const sqlReplacements = { companyId: String(companyId), startIso, endIso, ...(restrictedUser ? { userId: String(userId) } : {}) };
 
             const [
                 dailySalesRows,
@@ -174,7 +183,7 @@ class ReportService {
                     attributes: ['total', 'paymentMethod', 'paymentMethods', 'exchangeRate'],
                     raw: true
                 }),
-                role !== 'user' ? sequelize.query(`
+                !restrictedUser ? sequelize.query(`
                     SELECT LEFT(COALESCE("date", "createdAt"::text), 10) AS day,
                            COALESCE(SUM("amount"), 0)::float AS total
                     FROM "Expenses"
@@ -299,7 +308,7 @@ class ReportService {
                     where: saleWhere,
                     raw: true
                 }),
-                role !== 'user' ? Expense.findAll({
+                !restrictedUser ? Expense.findAll({
                     where: { companyId, date: { [Op.gte]: startIso, [Op.lte]: endIso } },
                     attributes: [[sequelize.fn('SUM', sequelize.col('amount')), 'total']]
                 }) : Promise.resolve([{ dataValues: { total: 0 } }]),
@@ -316,7 +325,7 @@ class ReportService {
                     include: [{ model: SaleItem, as: 'SaleItems' }],
                     order: [['date', 'DESC']]
                 }),
-                role !== 'user' ? Expense.findAll({
+                !restrictedUser ? Expense.findAll({
                     where: { companyId, date: { [Op.gte]: startIso, [Op.lte]: endIso } }
                 }) : Promise.resolve([]),
                 Refund.findAll({
@@ -356,7 +365,7 @@ class ReportService {
 
         // Inventory Valuation & Alerts (Optimized for Large Inventories + L1 Cache invalidated on sales/edits)
         let inventoryValuation = 0, itemCount = 0, lowStockItems = [], lowStockCount = 0;
-        if (role !== 'user') {
+        if (!restrictedUser) {
             const invCacheKey = process.env.ISAAC_TEST_ISOLATED !== '1' ? `low_stock_valuation_${companyId}` : null;
             const cachedInv = invCacheKey ? cacheService.get(invCacheKey) : null;
             if (cachedInv) {
@@ -421,9 +430,12 @@ class ReportService {
             salesChart.expenses.push(trend ? trend.expenses : 0);
         }
 
+        const recentSalesWhere = restrictedUser ? { companyId, userId } : { companyId };
         const [recentSales, auditLogs] = await Promise.all([
-            Sale.findAll({ where: { companyId }, limit: 10, order: [['date', 'DESC']], attributes: ['id', 'total', 'customerName', 'date', 'paymentMethod'] }),
-            AuditLog.findAll({ where: { companyId }, include: [{ model: User, as: 'User', attributes: ['name', 'username'] }], limit: 10, order: [['createdAt', 'DESC']] })
+            Sale.findAll({ where: recentSalesWhere, limit: 10, order: [['date', 'DESC']], attributes: ['id', 'total', 'customerName', 'date', 'paymentMethod'] }),
+            !restrictedUser
+                ? AuditLog.findAll({ where: { companyId }, include: [{ model: User, as: 'User', attributes: ['name', 'username'] }], limit: 10, order: [['createdAt', 'DESC']] })
+                : Promise.resolve([])
         ]);
 
         const resultPayload = {
@@ -436,10 +448,10 @@ class ReportService {
             rangeSummary: {
                 totalRevenue: analytics.summary.totalSales,
                 numberOfSales: analytics.summary.numberOfSales,
-                totalProfit: analytics.summary.grossProfit,
-                totalExpenses: analytics.summary.totalExpenses,
-                netProfit: analytics.summary.netProfit,
-                avgMargin: analytics.summary.margin,
+                totalProfit: canViewCosts ? analytics.summary.grossProfit : 0,
+                totalExpenses: restrictedUser ? 0 : analytics.summary.totalExpenses,
+                netProfit: canViewCosts ? analytics.summary.netProfit : 0,
+                avgMargin: canViewCosts ? analytics.summary.margin : 0,
                 ticketPromedio: analytics.summary.avgTicket
             },
             ranking: {
@@ -448,7 +460,7 @@ class ReportService {
                 paymentMethods: analytics.paymentMethods
             },
             charts: { salesChart, hourlySales: analytics.hourlySales },
-            inventory: { lowStockItems, lowStockCount, lowStockTotalCount: lowStockCount, totalValueAtCost: inventoryValuation, itemCount },
+            inventory: { lowStockItems, lowStockCount, lowStockTotalCount: lowStockCount, totalValueAtCost: canViewCosts ? inventoryValuation : 0, itemCount },
             activity: {
                 recentSales,
                 auditLogs: auditLogs.map(l => ({ id: l.id, action: l.action, userEmail: l.User ? (l.User.name || l.User.username) : 'Sistema', timestamp: l.timestamp }))
@@ -505,25 +517,28 @@ class ReportService {
             endDateStr = new Date().toISOString();
         }
 
+        const restrictedUser = isRestrictedReportUser(reqUser);
+        const canViewCosts = ProductService.canUserViewCosts(reqUser);
+
         const saleWhere = {
             companyId,
             date: { [Op.gte]: startDateStr, [Op.lte]: endDateStr },
             status: { [Op.notIn]: ['cancelled'] } // Incluimos reembolsadas para contarlas y luego deducir el refund
         };
-        if (role === 'user') saleWhere.userId = userId;
+        if (restrictedUser) saleWhere.userId = userId;
 
         const { Refund } = require('../database/models');
         const refundWhere = {
             companyId,
             date: { [Op.gte]: startDateStr, [Op.lte]: endDateStr }
         };
-        if (role === 'user') refundWhere.userId = userId;
+        if (restrictedUser) refundWhere.userId = userId;
 
         const expenseWhere = {
             companyId,
             date: { [Op.gte]: startDateStr.substring(0, 10), [Op.lte]: endDateStr.substring(0, 10) }
         };
-        if (role === 'user') expenseWhere.userId = userId;
+        if (restrictedUser) expenseWhere.userId = userId;
 
         const netFactorSql = '(CASE WHEN COALESCE("Sale"."subtotal", 0) > (COALESCE("Sale"."discount", 0) + COALESCE("Sale"."promoDiscount", 0)) THEN (COALESCE("Sale"."subtotal", 0) - COALESCE("Sale"."discount", 0) - COALESCE("Sale"."promoDiscount", 0)) / "Sale"."subtotal" WHEN COALESCE("Sale"."subtotal", 0) > 0 THEN 0 ELSE 1 END)';
 
@@ -721,17 +736,19 @@ class ReportService {
                 totalSales: totalRevenue,
                 numberOfSales,
                 totalRefunds,
-                totalCost: precision.round(netTotalCost, 2),
-                totalExpenses,
-                grossProfit: precision.round(grossProfit, 2),
-                netProfit,
-                margin: netTotalCost > 0 ? precision.round((grossProfit / netTotalCost) * 100) : 0,
+                totalCost: canViewCosts ? precision.round(netTotalCost, 2) : 0,
+                totalExpenses: restrictedUser ? 0 : totalExpenses,
+                grossProfit: canViewCosts ? precision.round(grossProfit, 2) : 0,
+                netProfit: canViewCosts ? netProfit : 0,
+                margin: (canViewCosts && netTotalCost > 0) ? precision.round((grossProfit / netTotalCost) * 100) : 0,
                 avgTicket
             },
-            topProducts: formattedTopProducts,
-            topProductsByProfit: formattedTopProductsByProfit,
-            trends: trends.map(t => ({ ...t, sales: Number(t.sales), profit: Number(t.profit) || 0, count: Number(t.count) })),
-            byCategory: byCategory.map(c => ({ ...c, category: c.category || 'General', total: Number(c.total), profit: Number(c.profit) })),
+            topProducts: canViewCosts
+                ? formattedTopProducts
+                : formattedTopProducts.map(({ cost: _c, totalCost: _tc, profit: _p, totalProfit: _tp, margin: _m, ...rest }) => rest),
+            topProductsByProfit: canViewCosts ? formattedTopProductsByProfit : [],
+            trends: trends.map(t => ({ ...t, sales: Number(t.sales), profit: canViewCosts ? (Number(t.profit) || 0) : 0, count: Number(t.count) })),
+            byCategory: byCategory.map(c => ({ ...c, category: c.category || 'General', total: Number(c.total), profit: canViewCosts ? Number(c.profit) : 0 })),
             hourlySales: hourlySalesMap
         };
     }
@@ -804,7 +821,7 @@ class ReportService {
             dateCondition = { [likeOp]: `${date}%` };
         }
         const saleWhere = { companyId, date: dateCondition };
-        if (role === 'user') saleWhere.userId = userId;
+        if (isRestrictedReportUser(reqUser)) saleWhere.userId = userId;
 
         return await Sale.findAll({ where: saleWhere, order: [['date', 'DESC']] });
     }
@@ -813,7 +830,7 @@ class ReportService {
      * Get customer ranking by total sales.
      */
     async getCustomerRanking(reqUser, range = '30d') {
-        const { companyId, role, id: userId } = reqUser;
+        const { companyId, id: userId } = reqUser;
         const now = new Date();
         let startDate = new Date();
         if (range === '7d') startDate.setDate(now.getDate() - 7);
@@ -824,7 +841,7 @@ class ReportService {
             customerId: { [Op.ne]: null },
             date: { [Op.gte]: startDate.toISOString().split('T')[0] }
         };
-        if (role === 'user') saleWhere.userId = userId;
+        if (isRestrictedReportUser(reqUser)) saleWhere.userId = userId;
 
         const rows = await Sale.findAll({
             where: saleWhere,
@@ -1169,7 +1186,7 @@ class ReportService {
             date: { [Op.gte]: startDate.toISOString().split('T')[0] },
             status: { [Op.notIn]: ['cancelled', 'refunded'] }
         };
-        if (role === 'user') saleWhere.userId = userId;
+        if (isRestrictedReportUser(reqUser)) saleWhere.userId = userId;
 
         const isPg = sequelize.getDialect() === 'postgres';
         const dayExpr = isPg
