@@ -421,7 +421,7 @@ export const db = {
         const database = await initDB();
         if (!database || !database.objectStoreNames.contains(storeName)) return;
 
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             try {
                 const transaction = database.transaction(storeName, 'readwrite');
                 const store = transaction.objectStore(storeName);
@@ -434,12 +434,23 @@ export const db = {
                     notifyQueueUpdated(storeName, 'putAll');
                     resolve();
                 };
-                transaction.onerror = () => resolve();
-            } catch (_) {
-                resolve();
+                transaction.onerror = () => {
+                    const err = transaction.error || new Error(`IndexedDB putAll error en ${storeName}`);
+                    console.error(`[DB] putAll fallo en ${storeName}:`, err?.message || err);
+                    reject(err);
+                };
+                transaction.onabort = () => {
+                    const err = transaction.error || new Error(`IndexedDB putAll abortado en ${storeName}`);
+                    console.error(`[DB] putAll abortado en ${storeName}:`, err?.message || err);
+                    reject(err);
+                };
+            } catch (err) {
+                reject(err);
             }
         });
     },
+
+    putBatch: async (storeName, items = []) => db.putAll(storeName, items),
 
     /**
      * Reemplaza o actualiza el contenido de una tabla en una ÚNICA transacción ACID
@@ -483,7 +494,7 @@ export const db = {
         const database = await initDB();
         if (!database || !database.objectStoreNames.contains(storeName)) return;
 
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             try {
                 const transaction = database.transaction(storeName, 'readwrite');
                 const store = transaction.objectStore(storeName);
@@ -513,9 +524,10 @@ export const db = {
                 }
 
                 transaction.oncomplete = () => resolve();
-                transaction.onerror = () => resolve();
-            } catch (_) {
-                resolve();
+                transaction.onerror = () => reject(transaction.error || new Error(`IndexedDB replaceAllAtomic error en ${storeName}`));
+                transaction.onabort = () => reject(transaction.error || new Error(`IndexedDB replaceAllAtomic abortado en ${storeName}`));
+            } catch (err) {
+                reject(err);
             }
         });
     },
@@ -634,16 +646,16 @@ export const db = {
 
         const store = await getStore(storeName, 'readwrite');
         if (!store) return;
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             try {
                 const request = store.clear();
                 request.onsuccess = () => {
                     notifyQueueUpdated(storeName, 'clear');
                     resolve();
                 };
-                request.onerror = () => resolve();
-            } catch (_) {
-                resolve();
+                request.onerror = () => reject(request.error || new Error(`IndexedDB clear error en ${storeName}`));
+            } catch (err) {
+                reject(err);
             }
         });
     },
@@ -654,12 +666,8 @@ export const db = {
         getMirrorMap(storeName).delete(keyStr);
 
         if (await isNativeSqliteAvailable()) {
-            try {
-                const plugin = getNativePlugin();
-                await plugin.sqliteDelete({ storeName, recordId: keyStr });
-            } catch (sqlErr) {
-                console.warn(`[DB] Native sqliteDelete fallo (${storeName}):`, sqlErr?.message);
-            }
+            const plugin = getNativePlugin();
+            await plugin.sqliteDelete({ storeName, recordId: keyStr });
             notifyQueueUpdated(storeName, 'delete');
             return;
         }
@@ -669,7 +677,7 @@ export const db = {
             notifyQueueUpdated(storeName, 'delete');
             return;
         }
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             try {
                 const request = store.delete(id);
                 request.onsuccess = () => {
@@ -679,9 +687,9 @@ export const db = {
                     notifyQueueUpdated(storeName, 'delete');
                     resolve();
                 };
-                request.onerror = () => resolve();
-            } catch {
-                resolve();
+                request.onerror = () => reject(request.error || new Error(`IndexedDB delete error en ${storeName}`));
+            } catch (err) {
+                reject(err);
             }
         });
     },

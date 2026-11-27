@@ -28,6 +28,7 @@ import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.ArrayList;
@@ -99,7 +100,9 @@ final class NativePrinterManager {
                     == PackageManager.PERMISSION_GRANTED
                     && hasBluetoothConnectPermission();
         }
-        return true;
+        // En Android 7–11 (API 24–30), Bluetooth/BLE discovery requiere ACCESS_FINE_LOCATION en runtime
+        return ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private BluetoothAdapter getBluetoothAdapter() {
@@ -260,6 +263,7 @@ final class NativePrinterManager {
         }
 
         final ConcurrentHashMap<String, DiscoveredPrinter> found = new ConcurrentHashMap<>();
+        final JSArray warnings = new JSArray();
 
         // 1. Sembrar dispositivos ya emparejados
         try {
@@ -387,6 +391,9 @@ final class NativePrinterManager {
             JSObject res = new JSObject();
             res.put("printers", arr);
             res.put("count", sorted.size());
+            if (warnings.length() > 0) {
+                res.put("warnings", warnings);
+            }
             call.resolve(res);
         };
 
@@ -397,9 +404,11 @@ final class NativePrinterManager {
             IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
             ContextCompat.registerReceiver(appContext, classicReceiver, filter, ContextCompat.RECEIVER_EXPORTED);
             receiverRegistered.set(true);
-        } catch (Exception ignored) {}
+        } catch (Exception recErr) {
+            warnings.put("No se pudo registrar descubrimiento Bluetooth Classic: " + recErr.getMessage());
+        }
 
-        // Iniciar BLE scan + Classic discovery (best-effort sin romper en equipos sin BLE)
+        // Iniciar BLE scan + Classic discovery (reportando errores reales sin silenciarlos)
         try {
             if (leScanner != null) {
                 ScanSettings settings = new ScanSettings.Builder()
@@ -407,14 +416,20 @@ final class NativePrinterManager {
                         .build();
                 leScanner.startScan(null, settings, bleCallback);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception bleErr) {
+            warnings.put("Escaneo BLE no disponible: " + bleErr.getMessage());
+        }
 
         try {
             if (adapter.isDiscovering()) {
                 adapter.cancelDiscovery();
             }
-            adapter.startDiscovery();
-        } catch (Exception ignored) {}
+            if (!adapter.startDiscovery()) {
+                warnings.put("El adaptador Bluetooth no inició el descubrimiento Classic (verifica permisos/ubicación).");
+            }
+        } catch (Exception discErr) {
+            warnings.put("Error iniciando descubrimiento Classic: " + discErr.getMessage());
+        }
 
         discoveryScheduler.schedule(finishDiscovery, durationMs, TimeUnit.MILLISECONDS);
     }
@@ -705,9 +720,12 @@ final class NativePrinterManager {
             BluetoothGattCharacteristic match = findFirstWritableChar(service);
             if (match != null) return match;
         }
-        // 2ª pasada: fallback a cualquier característica writable en servicios no estándar
+        // 2ª pasada: fallback a cualquier característica writable en servicios NO estándar (excluyendo 0x1800/0x1801/0x180A/0x180F)
         for (BluetoothGattService service : services) {
-            if (service == null) continue;
+            if (service == null || service.getUuid() == null) continue;
+            if (NativeHardwareUtils.isExcludedStandardGattServiceUuid(service.getUuid().toString())) {
+                continue;
+            }
             BluetoothGattCharacteristic match = findFirstWritableChar(service);
             if (match != null) return match;
         }
@@ -763,15 +781,23 @@ final class NativePrinterManager {
             return;
         }
         if (!NativeHardwareUtils.isValidPrinterPort(port)) {
-            call.reject("Puerto TCP inválido para impresora térmica (debe estar entre 1024 y 65535, estándar 9100).");
+            call.reject("Puerto TCP no permitido para impresora térmica. Puertos autorizados: 9100, 9101, 9102, 515, 631.");
             return;
         }
 
         ioExecutor.execute(() -> {
             try {
+                // Validación post-DNS anti DNS-rebinding / anti-SSRF
+                InetAddress resolvedAddress = InetAddress.getByName(host);
+                String resolvedIp = resolvedAddress != null ? resolvedAddress.getHostAddress() : null;
+                if (!NativeHardwareUtils.isAllowedResolvedPrinterIp(resolvedIp)) {
+                    call.reject("Destino de impresora bloqueado post-DNS: solo se permiten direcciones IPv4 RFC1918 privadas.");
+                    return;
+                }
+
                 byte[] bytes = Base64.decode(base64Data, Base64.DEFAULT);
                 try (Socket socket = new Socket()) {
-                    socket.connect(new InetSocketAddress(host, port), TCP_CONNECT_TIMEOUT_MS);
+                    socket.connect(new InetSocketAddress(resolvedAddress, port), TCP_CONNECT_TIMEOUT_MS);
                     socket.setSoTimeout(TCP_SO_TIMEOUT_MS);
                     OutputStream out = socket.getOutputStream();
                     int offset = 0;

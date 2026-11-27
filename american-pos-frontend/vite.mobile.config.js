@@ -18,7 +18,19 @@ function mobileEntrypointHtmlPlugin() {
     transformIndexHtml: {
       order: 'pre',
       handler(html) {
-        return html
+        // Remover el bloque de registro de Service Worker PWA en el bundle nativo móvil (dist-mobile)
+        // para eliminar la contradicción con MobileApp.jsx (que desregistra SW heredados en APK/Capacitor).
+        const withoutSwRegistration = html.replace(
+          /<script>\s*if\s*\('serviceWorker'\s+in\s+navigator[\s\S]*?<\/script>/i,
+          `<script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          for (const reg of regs) reg.unregister().catch(() => {});
+        }).catch(() => {});
+      }
+    </script>`
+        );
+        return withoutSwRegistration
           .replace('/src/main.jsx', '/src/mobile-main.jsx')
           .replace('<title>Isaac POS V24.04</title>', '<title>Isaac POS Mobile</title>');
       }
@@ -131,19 +143,43 @@ function readAndroidApkVersionCode() {
   return '0';
 }
 
+function compareDotSemver(a, b) {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
 function readMobileBaseVersion() {
+  let pkgVer = '24.4.0';
+  let gradleVer = '';
   try {
     const pkgPath = path.resolve(process.cwd(), 'package.json');
     if (fs.existsSync(pkgPath)) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       if (pkg.version) {
-        return pkg.version.replace(/^(\d+)\.0*(\d+)/, '$1.$2');
+        pkgVer = pkg.version.replace(/^(\d+)\.0*(\d+)/, '$1.$2');
       }
     }
   } catch {
     // Fallback silencioso
   }
-  return '24.4.0';
+  try {
+    const gradlePath = path.resolve(process.cwd(), 'android', 'app', 'build.gradle');
+    if (fs.existsSync(gradlePath)) {
+      const gradleSrc = fs.readFileSync(gradlePath, 'utf8');
+      const m = gradleSrc.match(/\bversionName\s+["']([^"']+)["']/);
+      if (m) gradleVer = m[1].trim();
+    }
+  } catch {
+    // Fallback silencioso
+  }
+  // Garantizar que la versión base del OTA nunca sea menor que versionName del APK nativo
+  return (gradleVer && compareDotSemver(gradleVer, pkgVer) > 0) ? gradleVer : pkgVer;
 }
 
 function writeBuildVersionMarkerPlugin(buildVersion) {
@@ -165,9 +201,14 @@ export default defineConfig(({ command }) => {
   const mobileBuildVersion =
     process.env.MOBILE_BUILD_VERSION ||
     `${readMobileBaseVersion()}.${Math.floor(Date.now() / 1000)}`;
+  const otaPublicBaseUrl = String(
+    process.env.VITE_OTA_PUBLIC_BASE_URL ||
+    (process.env.VITE_SUPABASE_URL ? `${String(process.env.VITE_SUPABASE_URL).trim().replace(/\/+$/, '')}/storage/v1/object/public/app-updates` : '')
+  ).trim().replace(/\/+$/, '');
   const baseDefine = {
     'import.meta.env.VITE_APK_VERSION_CODE': JSON.stringify(apkVersionCode),
     'import.meta.env.VITE_MOBILE_BUILD_VERSION': JSON.stringify(mobileBuildVersion),
+    'import.meta.env.VITE_OTA_PUBLIC_BASE_URL': JSON.stringify(otaPublicBaseUrl),
     ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
       ? {
           'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),
@@ -251,6 +292,7 @@ export default defineConfig(({ command }) => {
             ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/', '/node_modules/zustand/']],
             ['vendor-icons', ['/node_modules/lucide-react/']],
             ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
+            ['vendor-virtual', ['/node_modules/@tanstack/react-virtual/', '/node_modules/@tanstack/virtual-core/']],
             ['vendor-realtime', ['/node_modules/socket.io-client/', '/node_modules/engine.io-client/', '/node_modules/socket.io-parser/']],
             ['vendor-capacitor', ['/node_modules/@capacitor/core/', '/node_modules/@capacitor/clipboard/', '/node_modules/@capgo/capacitor-updater/']],
             ['vendor-qr', ['/node_modules/qrcode/', '/node_modules/jsbarcode/']],

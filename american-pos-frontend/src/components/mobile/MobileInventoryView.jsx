@@ -5,7 +5,6 @@ import {
   Box, 
   Edit3, 
   Plus, 
-  Save, 
   X, 
   RefreshCw, 
   ClipboardList, 
@@ -13,7 +12,6 @@ import {
   Scan, 
   Trash2, 
   Camera, 
-  Percent, 
   Package,
   Clock
 } from 'lucide-react';
@@ -21,14 +19,13 @@ import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
 import localDb from '../../db/localDb';
 import lanSyncService from '../../services/lanSyncService';
-import CachedImage from '../CachedImage';
 import MobileImageSearchModal from './MobileImageSearchModal';
+import MobileQuickProductModal from './MobileQuickProductModal';
 import { triggerHaptic } from '../../utils/haptics';
 import { normalizeProductImage } from '../../utils/imageProcess';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { useFuzzySearch } from '../../hooks/useFuzzySearch';
 import VirtualProductList from '../common/VirtualProductList';
-import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
 
 const MobileBarcodeScannerModal = lazy(() => import('../MobileBarcodeScannerModal'));
@@ -58,16 +55,11 @@ export default function MobileInventoryView({
   const [stockFilter, setStockFilter] = useState('all'); // 'all' | 'low' | 'out'
   const { counts: offlineCounts } = useOfflineQueueCounts();
 
-  // --- MODAL DE CREACIÓN Y EDICIÓN COMPLETA DE PRODUCTO ---
+  // --- MODAL UNIFICADO DE CREACIÓN Y EDICIÓN COMPLETA DE PRODUCTO (MobileQuickProductModal) ---
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
-  const {
-    modalOverlayStyle,
-    modalCardMaxHeightStyle,
-    handleFieldFocusCapture,
-    handleFormKeyDown
-  } = useMobileKeyboardViewport({ enabled: isProductModalOpen });
   const [editingProduct, setEditingProduct] = useState(null); // null = nuevo, obj = editar
   const [productFormData, setProductFormData] = useState({
+    isNew: true,
     name: '',
     barcode: '',
     category: 'General',
@@ -84,7 +76,6 @@ export default function MobileInventoryView({
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isImageSearchModalOpen, setIsImageSearchModalOpen] = useState(false);
-  const fileInputRef = useRef(null);
 
   // --- MODAL DE CONFIRMACIÓN DE ELIMINACIÓN ---
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { product }
@@ -205,6 +196,7 @@ export default function MobileInventoryView({
     triggerHaptic(20);
     setEditingProduct(null);
     setProductFormData({
+      isNew: true,
       name: '',
       barcode: `750${Math.floor(100000000 + Math.random() * 900000000)}`,
       category: selectedCat !== 'Todos' ? selectedCat : 'General',
@@ -249,6 +241,8 @@ export default function MobileInventoryView({
     const mbp = Number(p.midBulkPrice || 0);
 
     setProductFormData({
+      isNew: false,
+      id: p.id,
       name: p.name || p.nombre || '',
       barcode: p.barcode || p.codigo_barras || '',
       category: p.category || p.categoria || 'General',
@@ -620,17 +614,29 @@ export default function MobileInventoryView({
         stock: newStock
       };
 
+      const theoretical = Number(prod.stockQuantity ?? prod.stock ?? 0);
+      const stockPayload = {
+        stockQuantity: newStock,
+        previousStock: theoretical,
+        reason: 'Conteo físico móvil'
+      };
+
       try {
-        await api.put(`/products/${id}`, { stockQuantity: newStock }, { timeout: 3500 });
+        await api.patch(`/products/${id}/stock-count`, stockPayload, { timeout: 4500 });
         successCount++;
       } catch (err) {
-        console.warn('[MobileInventoryView] Error capturado en operación:', err?.message || err);
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          console.warn('[MobileInventoryView] Conteo rechazado por servidor:', err?.response?.data?.error || err?.message);
+          continue;
+        }
+        console.warn('[MobileInventoryView] Error de red en conteo físico, encolando:', err?.message || err);
         try {
           await primaryDb.put('syncQueue', {
             id: `audit_${Date.now()}_${id}`,
-            endpoint: `/products/${id}`,
-            method: 'PUT',
-            payload: { stockQuantity: newStock },
+            endpoint: `/products/${id}/stock-count`,
+            method: 'PATCH',
+            payload: stockPayload,
             createdAt: new Date().toISOString()
           });
           successCount++;
@@ -1089,720 +1095,27 @@ export default function MobileInventoryView({
       </div>
 
       {/* 5. MODAL: CREAR / EDITAR PRODUCTO COMPLETO */}
-      {isProductModalOpen && (
-        <div
-          className="fixed inset-0 bg-black/85 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto"
-          style={modalOverlayStyle}
-        >
-          <div
-            className={`w-full max-w-md sm:max-w-lg ${T.modalCard} rounded-2xl sm:rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar my-auto`}
-            style={modalCardMaxHeightStyle}
-          >
-            {/* Header del Modal */}
-            <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
-              <div className="flex items-center gap-2">
-                {editingProduct ? (
-                  <Edit3 size={18} className="text-amber-500 shrink-0" />
-                ) : (
-                  <Plus size={18} className="text-blue-500 shrink-0" />
-                )}
-                <div>
-                  <h3 className={`font-bold text-sm sm:text-base ${T.textPrimary}`}>
-                    {editingProduct ? 'Editar Producto' : 'Nuevo Producto'}
-                  </h3>
-                  <p className={`text-[10px] ${T.textMuted}`}>
-                    {editingProduct ? `Modificando: ${editingProduct.name || editingProduct.nombre}` : 'Ingresa los datos del nuevo producto'}
-                  </p>
-                </div>
-              </div>
-              <button 
-                type="button"
-                onClick={() => setIsProductModalOpen(false)} 
-                className={`p-1 rounded-lg ${T.btnGhost} text-slate-400 hover:text-rose-500`}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <form
-              onSubmit={handleSaveProduct}
-              onKeyDown={handleFormKeyDown}
-              onFocusCapture={handleFieldFocusCapture}
-              className="space-y-3"
-            >
-              {/* Foto del Producto */}
-              <div className="flex items-center gap-3">
-                <div className="relative shrink-0">
-                  <div 
-                    onClick={() => !isUploadingImage && fileInputRef.current?.click()}
-                    className={`w-14 h-14 rounded-xl border overflow-hidden flex flex-col items-center justify-center relative cursor-pointer transition-colors ${
-                      isLight 
-                        ? 'bg-slate-50 border-slate-300 text-slate-400 hover:border-slate-400' 
-                        : 'bg-slate-900 border-slate-700 text-slate-500 hover:border-slate-600'
-                    }`}
-                    title="Toca para subir foto"
-                  >
-                    {productFormData.imageUri ? (
-                      <CachedImage 
-                        src={productFormData.imageUri} 
-                        alt="Producto" 
-                        className="w-full h-full object-contain p-1 bg-white"
-                      />
-                    ) : (
-                      <Camera size={18} />
-                    )}
-                    {isUploadingImage && (
-                      <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                        <RefreshCw size={14} className="animate-spin text-white" />
-                      </div>
-                    )}
-                  </div>
-                  {productFormData.imageUri && (
-                    <button
-                      type="button"
-                      onClick={() => setProductFormData(p => ({ ...p, imageUri: '' }))}
-                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-slate-800 text-white flex items-center justify-center shadow-xs cursor-pointer"
-                      title="Quitar foto"
-                    >
-                      <X size={11} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <span className={`text-[11px] font-bold ${T.textSecondary} block mb-1`}>
-                    Foto del Producto
-                  </span>
-                  <input 
-                    type="file" 
-                    ref={fileInputRef}
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handleImageUpload}
-                    className="hidden" 
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isUploadingImage}
-                      className={`h-8.5 px-3 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-colors ${
-                        isLight
-                          ? 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
-                          : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                      }`}
-                      title="Subir archivo o tomar foto con la cámara"
-                    >
-                      <Camera size={13} />
-                      <span>{productFormData.imageUri ? 'Cambiar Foto' : 'Subir Foto'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic(15);
-                        setIsImageSearchModalOpen(true);
-                      }}
-                      className={`h-8.5 px-3 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-colors ${
-                        isLight
-                          ? 'bg-sky-50 hover:bg-sky-100 text-sky-700 border-sky-300'
-                          : 'bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border-sky-500/30'
-                      }`}
-                      title="Buscar imagen comercial del producto en Google / Catálogo Web"
-                    >
-                      <Search size={13} />
-                      <span>Buscar Imagen</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Nombre del Producto */}
-              <div className="space-y-1">
-                <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
-                  Nombre del Producto *
-                </label>
-                <input 
-                  type="text" 
-                  enterKeyHint="next"
-                  required
-                  value={productFormData.name}
-                  onChange={(e) => setProductFormData(p => ({ ...p, name: e.target.value }))}
-                  placeholder="Ej: Aceite Amanecer 500 ml"
-                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
-                />
-              </div>
-
-              {/* Código de Barras y Categoría */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider`}>
-                      Código de Barras
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleGenerateEanBarcode}
-                      className="text-[10px] font-bold text-blue-500 hover:underline cursor-pointer"
-                    >
-                      Generar EAN
-                    </button>
-                  </div>
-                  <input 
-                    type="text" 
-                    enterKeyHint="next"
-                    value={productFormData.barcode}
-                    onChange={(e) => setProductFormData(p => ({ ...p, barcode: e.target.value }))}
-                    placeholder="Escanear o escribir..."
-                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-mono font-bold outline-none`}
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider`}>
-                      Categoría
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsCustomCategoryMode(prev => !prev)}
-                      className="text-[10px] font-bold text-blue-500 hover:underline cursor-pointer"
-                    >
-                      {isCustomCategoryMode ? 'Ver lista' : '+ Nueva'}
-                    </button>
-                  </div>
-                  {isCustomCategoryMode ? (
-                    <input 
-                      type="text" 
-                      enterKeyHint="next"
-                      value={productFormData.category}
-                      onChange={(e) => setProductFormData(p => ({ ...p, category: e.target.value }))}
-                      placeholder="Nueva categoría..."
-                      autoFocus
-                      className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
-                    />
-                  ) : (
-                    <select
-                      value={productFormData.category || 'General'}
-                      onChange={(e) => setProductFormData(p => ({ ...p, category: e.target.value }))}
-                      className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none cursor-pointer`}
-                    >
-                      {selectableCategories.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-
-              {/* COSTO Y MARGEN DE GANANCIA (BIDIRECCIONAL INTELIGENTE - solo canViewCosts) */}
-              {canViewCosts && (
-              <div className="p-3 rounded-2xl border border-blue-500/20 bg-blue-500/5 space-y-2">
-                <div className="flex items-center gap-1.5 text-blue-500 text-xs font-black">
-                  <Percent size={14} />
-                  <span>Costo y Margen de Ganancia</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="space-y-1">
-                    <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
-                      Costo ($ USD)
-                    </label>
-                    <div className="relative">
-                      <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold ${T.textMuted}`}>$</span>
-                      <input 
-                        type="number" 
-                        inputMode="decimal"
-                        enterKeyHint="next"
-                        step="0.01" 
-                        value={productFormData.costUSD}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const costNum = parseFloat(val) || 0;
-                          setProductFormData(p => {
-                            const marginNum = parseFloat(p.margin);
-                            if (costNum > 0 && !isNaN(marginNum) && String(p.margin).trim() !== '') {
-                              const nextUsd = (costNum * (1 + marginNum / 100)).toFixed(2);
-                              const nextBs = (parseFloat(nextUsd) * exchangeRate).toFixed(2);
-                              return { ...p, costUSD: val, priceUSD: nextUsd, priceBS: nextBs };
-                            }
-                            return { ...p, costUSD: val };
-                          });
-                        }}
-                        placeholder="0.00"
-                        className={`w-full min-h-[44px] pl-6 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
-                      Margen Ganancia (%)
-                    </label>
-                    <div className="relative">
-                      <input 
-                        type="number" 
-                        inputMode="decimal"
-                        enterKeyHint="next"
-                        step="0.1" 
-                        value={productFormData.margin ?? ''}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const marginNum = parseFloat(val);
-                          setProductFormData(p => {
-                            const costNum = parseFloat(p.costUSD) || 0;
-                            if (costNum > 0 && !isNaN(marginNum)) {
-                              const nextUsd = (costNum * (1 + marginNum / 100)).toFixed(2);
-                              const nextBs = (parseFloat(nextUsd) * exchangeRate).toFixed(2);
-                              return { ...p, margin: val, priceUSD: nextUsd, priceBS: nextBs };
-                            }
-                            return { ...p, margin: val };
-                          });
-                        }}
-                        placeholder="30"
-                        className={`w-full min-h-[44px] pl-3 pr-6 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
-                      />
-                      <span className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold ${T.textMuted}`}>%</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              )}
-
-              {/* Precios: USD y Bs */}
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="space-y-1">
-                  <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
-                    Precio de Venta ($ USD) *
-                  </label>
-                  <div className="relative">
-                    <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-500`}>$</span>
-                    <input 
-                      type="number" 
-                      inputMode="decimal"
-                      enterKeyHint="next"
-                      step="0.01" 
-                      required
-                      value={productFormData.priceUSD}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const num = parseFloat(val) || 0;
-                        setProductFormData(p => {
-                          const costNum = parseFloat(p.costUSD) || 0;
-                          const nextMargin = (costNum > 0 && num > 0)
-                            ? (((num - costNum) / costNum) * 100).toFixed(1).replace(/\.0$/, '')
-                            : p.margin;
-                          return {
-                            ...p,
-                            priceUSD: val,
-                            priceBS: num > 0 ? (num * exchangeRate).toFixed(2) : '',
-                            margin: nextMargin
-                          };
-                        });
-                      }}
-                      placeholder="0.00"
-                      className={`w-full min-h-[44px] pl-6 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-black outline-none`}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
-                    Precio de Venta (Bs)
-                  </label>
-                  <div className="relative">
-                    <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold ${T.textMuted}`}>Bs</span>
-                    <input 
-                      type="number" 
-                      inputMode="decimal"
-                      enterKeyHint="next"
-                      step="0.1" 
-                      value={productFormData.priceBS}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const num = parseFloat(val) || 0;
-                        setProductFormData(p => {
-                          const nextUsdNum = num > 0 && exchangeRate > 0 ? (num / exchangeRate) : 0;
-                          const costNum = parseFloat(p.costUSD) || 0;
-                          const nextMargin = (costNum > 0 && nextUsdNum > 0)
-                            ? (((nextUsdNum - costNum) / costNum) * 100).toFixed(1).replace(/\.0$/, '')
-                            : p.margin;
-                          return {
-                            ...p,
-                            priceBS: val,
-                            priceUSD: nextUsdNum > 0 ? nextUsdNum.toFixed(2) : '',
-                            margin: nextMargin
-                          };
-                        });
-                      }}
-                      placeholder="0.00"
-                      className={`w-full min-h-[44px] pl-7 pr-2.5 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Stock Disponible y Botones de Ajuste Rápido */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-end">
-                <div className="space-y-1">
-                  <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
-                    Stock Disponible
-                  </label>
-                  <input 
-                    type="number" 
-                    inputMode="decimal"
-                    enterKeyHint="next"
-                    step="any" 
-                    value={productFormData.stock}
-                    onChange={(e) => setProductFormData(p => ({ ...p, stock: e.target.value }))}
-                    placeholder="0"
-                    className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-black outline-none`}
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
-                    Ajuste Rápido de Stock
-                  </label>
-                  <div className="grid grid-cols-4 gap-1">
-                    {[-10, -1, 1, 10].map(delta => (
-                      <button
-                        type="button"
-                        key={delta}
-                        onClick={() => {
-                          const cur = parseFloat(productFormData.stock) || 0;
-                          setProductFormData(p => ({ ...p, stock: String(Math.max(0, Number((cur + delta).toFixed(3)))) }));
-                        }}
-                        className={`py-1.5 rounded-xl text-[11px] font-bold border ${T.btnGhost} flex items-center justify-center cursor-pointer active:scale-95`}
-                      >
-                        {delta > 0 ? `+${delta}` : delta}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Impuesto / IVA */}
-              <div className={`flex items-center justify-between p-2.5 rounded-xl border ${T.border}`}>
-                <span className={`text-xs font-bold ${T.textPrimary}`}>Impuesto (IVA)</span>
-                <div className={`inline-flex p-0.5 rounded-lg border ${isLight ? 'bg-slate-100 border-slate-200' : 'bg-slate-950 border-slate-800'}`}>
-                  <button
-                    type="button"
-                    onClick={() => setProductFormData(p => ({ ...p, taxStatus: 'gravable' }))}
-                    className={`px-3 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
-                      productFormData.taxStatus === 'gravable'
-                        ? 'bg-blue-600 text-white shadow-xs'
-                        : T.textMuted
-                    }`}
-                  >
-                    Gravable (Impuesto)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setProductFormData(p => ({ ...p, taxStatus: 'exento' }))}
-                    className={`px-3 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
-                      productFormData.taxStatus === 'exento'
-                        ? 'bg-blue-600 text-white shadow-xs'
-                        : T.textMuted
-                    }`}
-                  >
-                    Exento
-                  </button>
-                </div>
-              </div>
-
-              {/* Presentación al Mayor: Venta por Caja / Bulto / Media Caja */}
-              <div className={`p-3 rounded-2xl border ${
-                isLight ? 'bg-purple-50/50 border-purple-200/80' : 'bg-purple-950/20 border-purple-800/40'
-              } space-y-3`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Package size={15} className="text-purple-500 shrink-0" />
-                    <div>
-                      <h4 className={`text-xs font-black ${T.textPrimary}`}>Venta por Caja / Bulto</h4>
-                      <p className={`text-[10px] ${T.textMuted}`}>Permite vender por caja o media caja en POS</p>
-                    </div>
-                  </div>
-                  {productFormData.unitsPerBulk && productFormData.bulkPrice ? (
-                    <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-600 dark:text-purple-300 text-[10px] font-black">
-                      Activo
-                    </span>
-                  ) : (
-                    <span className={`text-[10px] font-bold ${T.textMuted}`}>Opcional</span>
-                  )}
-                </div>
-
-                {/* Tipo de Empaque y Unidades por Caja */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
-                      Empaque
-                    </label>
-                    <input 
-                      type="text" 
-                      value={productFormData.bulkUnitName}
-                      onChange={(e) => setProductFormData(p => ({ ...p, bulkUnitName: e.target.value }))}
-                      placeholder="Caja, Bulto, Display"
-                      className={`w-full px-2.5 py-1.5 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
-                    />
-                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-0.5">
-                      {['Caja', 'Bulto', 'Display', 'Fardo'].map(tipo => (
-                        <button
-                          type="button"
-                          key={tipo}
-                          onClick={() => setProductFormData(p => ({ ...p, bulkUnitName: tipo }))}
-                          className={`px-1.5 py-0.5 rounded-md text-[9px] font-bold cursor-pointer transition-colors ${
-                            productFormData.bulkUnitName === tipo
-                              ? 'bg-purple-600 text-white'
-                              : `${T.btnGhost} ${T.textMuted}`
-                          }`}
-                        >
-                          {tipo}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
-                      Unidades x {productFormData.bulkUnitName || 'Caja'}
-                    </label>
-                    <input 
-                      type="number" 
-                      min="2"
-                      step="1"
-                      value={productFormData.unitsPerBulk}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const unitsNum = parseFloat(val) || 0;
-                        setProductFormData(p => {
-                          const retailPrice = parseFloat(p.priceUSD) || 0;
-                          let suggestedBulk = p.bulkPrice;
-                          // Si no hay precio de caja o es 0, sugerir precio con 10% de descuento al mayor
-                          if ((!suggestedBulk || suggestedBulk === '0') && retailPrice > 0 && unitsNum > 1) {
-                            suggestedBulk = (retailPrice * unitsNum * 0.90).toFixed(2);
-                          }
-                          return {
-                            ...p,
-                            unitsPerBulk: val,
-                            bulkPrice: suggestedBulk,
-                            unitsPerMidBulk: p.enableMidBulk && unitsNum > 1 ? String(Math.floor(unitsNum / 2)) : p.unitsPerMidBulk
-                          };
-                        });
-                      }}
-                      placeholder="Ej: 20, 24"
-                      className={`w-full px-2.5 py-1.5 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-black outline-none`}
-                    />
-                  </div>
-                </div>
-
-                {/* Precio de Caja en USD y cálculo de ahorro */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
-                      Precio {productFormData.bulkUnitName || 'Caja'} ($ USD)
-                    </label>
-                    {(() => {
-                      const uNum = parseFloat(productFormData.unitsPerBulk) || 0;
-                      const bPrice = parseFloat(productFormData.bulkPrice) || 0;
-                      const rPrice = parseFloat(productFormData.priceUSD) || 0;
-                      if (uNum > 1 && bPrice > 0) {
-                        const unitInBox = bPrice / uNum;
-                        const retailTotal = rPrice * uNum;
-                        const pctSavings = retailTotal > 0 ? (((retailTotal - bPrice) / retailTotal) * 100) : 0;
-                        return (
-                          <span className="text-[10px] font-bold text-emerald-500">
-                            ${unitInBox.toFixed(2)} c/u {pctSavings > 0 ? `(-${pctSavings.toFixed(0)}%)` : ''}
-                          </span>
-                        );
-                      }
-                      return null;
-                    })()}
-                  </div>
-
-                  <div className="relative">
-                    <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold ${T.textMuted}`}>$</span>
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      value={productFormData.bulkPrice}
-                      onChange={(e) => setProductFormData(p => ({ ...p, bulkPrice: e.target.value }))}
-                      placeholder="0.00"
-                      className={`w-full pl-6 pr-3 py-1.5 rounded-xl ${T.inputBg} border ${T.border} text-emerald-500 text-xs font-black outline-none`}
-                    />
-                  </div>
-
-                  {/* Botones de sugerencia rápida según precio unitario */}
-                  {(() => {
-                    const uNum = parseFloat(productFormData.unitsPerBulk) || 0;
-                    const rPrice = parseFloat(productFormData.priceUSD) || 0;
-                    if (uNum > 1 && rPrice > 0) {
-                      const retailSum = rPrice * uNum;
-                      return (
-                        <div className="flex items-center gap-1.5 pt-1">
-                          <span className={`text-[9px] ${T.textMuted} font-bold`}>Sugerir:</span>
-                          {[-5, -10, -15].map(disc => {
-                            const discPrice = (retailSum * (1 + disc / 100)).toFixed(2);
-                            return (
-                              <button
-                                type="button"
-                                key={disc}
-                                onClick={() => setProductFormData(p => ({ ...p, bulkPrice: discPrice }))}
-                                className={`px-2 py-0.5 rounded-lg text-[9px] font-bold border ${T.btnGhost} text-purple-600 dark:text-purple-300 hover:bg-purple-500/10 cursor-pointer`}
-                              >
-                                {disc}% (${discPrice})
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                </div>
-
-                {/* Código de barras de la caja */}
-                <div className="space-y-1">
-                  <label className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
-                    Código de Barras de la Caja (Opcional)
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <input 
-                      type="text" 
-                      value={productFormData.bulkBarcode}
-                      onChange={(e) => setProductFormData(p => ({ ...p, bulkBarcode: e.target.value }))}
-                      placeholder="Escanear o ingresar código del empaque"
-                      className={`flex-1 px-2.5 py-1.5 rounded-xl ${T.inputBg} border ${T.border} font-mono ${T.textPrimary} text-xs font-bold outline-none`}
-                    />
-                    {productFormData.barcode && !productFormData.bulkBarcode && (
-                      <button
-                        type="button"
-                        onClick={() => setProductFormData(p => ({ ...p, bulkBarcode: `${p.barcode}C` }))}
-                        className={`px-2 py-1.5 rounded-xl text-[10px] font-bold border ${T.btnGhost} text-purple-500 cursor-pointer whitespace-nowrap`}
-                        title="Asignar código sugerido derivado"
-                      >
-                        Auto
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Toggle para Media Caja / Medio Empaque */}
-                <div className="pt-2 border-t border-dashed border-purple-500/20 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className={`text-[11px] font-bold ${T.textPrimary}`}>
-                      ¿Vender también por Media Caja?
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextState = !productFormData.enableMidBulk;
-                        setProductFormData(p => {
-                          const uNum = parseFloat(p.unitsPerBulk) || 0;
-                          const bPrice = parseFloat(p.bulkPrice) || 0;
-                          return {
-                            ...p,
-                            enableMidBulk: nextState,
-                            unitsPerMidBulk: nextState && (!p.unitsPerMidBulk || p.unitsPerMidBulk === '0') && uNum > 1
-                              ? String(Math.floor(uNum / 2))
-                              : p.unitsPerMidBulk,
-                            midBulkPrice: nextState && (!p.midBulkPrice || p.midBulkPrice === '0') && bPrice > 0
-                              ? (bPrice / 2).toFixed(2)
-                              : p.midBulkPrice
-                          };
-                        });
-                      }}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-colors cursor-pointer ${
-                        productFormData.enableMidBulk
-                          ? 'bg-purple-600 text-white shadow-xs'
-                          : `${T.btnGhost} ${T.textMuted}`
-                      }`}
-                    >
-                      {productFormData.enableMidBulk ? '✓ Activado' : 'No'}
-                    </button>
-                  </div>
-
-                  {productFormData.enableMidBulk && (
-                    <div className="grid grid-cols-2 gap-2 pt-1 animate-fadeIn">
-                      <div className="space-y-1">
-                        <label className={`text-[9.5px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
-                          Unidades Media
-                        </label>
-                        <input 
-                          type="number" 
-                          min="1"
-                          step="1"
-                          value={productFormData.unitsPerMidBulk}
-                          onChange={(e) => setProductFormData(p => ({ ...p, unitsPerMidBulk: e.target.value }))}
-                          placeholder="Ej: 10"
-                          className={`w-full px-2.5 py-1.5 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-black outline-none`}
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className={`text-[9.5px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
-                          Precio Media ($ USD)
-                        </label>
-                        <div className="relative">
-                          <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold ${T.textMuted}`}>$</span>
-                          <input 
-                            type="number" 
-                            step="0.01"
-                            value={productFormData.midBulkPrice}
-                            onChange={(e) => setProductFormData(p => ({ ...p, midBulkPrice: e.target.value }))}
-                            placeholder="0.00"
-                            className={`w-full pl-6 pr-2.5 py-1.5 rounded-xl ${T.inputBg} border ${T.border} text-emerald-500 text-xs font-black outline-none`}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Botones del Formulario: Guardar y Eliminar */}
-              <div className="pt-2 flex items-center gap-2">
-                {editingProduct && canDeleteProducts && (
-                  <button
-                    type="button"
-                    onClick={() => handleRequestDelete(editingProduct)}
-                    className="p-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-500 font-bold transition-all cursor-pointer flex items-center justify-center shrink-0"
-                    title="Eliminar este producto"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setIsProductModalOpen(false)}
-                  className={`flex-1 min-h-[44px] rounded-xl ${T.btnGhost} font-bold text-xs uppercase transition-all`}
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={isSavingProduct}
-                  className="flex-1 min-h-[44px] bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95"
-                >
-                  {isSavingProduct ? (
-                    <>
-                      <RefreshCw size={14} className="animate-spin" />
-                      <span>Guardando...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Save size={14} />
-                      <span>{editingProduct ? 'Guardar Cambios' : 'Crear Producto'}</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <MobileQuickProductModal
+        isOpen={isProductModalOpen}
+        onClose={() => setIsProductModalOpen(false)}
+        T={T}
+        isLight={isLight}
+        productFormData={productFormData}
+        setProductFormData={setProductFormData}
+        handleSaveProduct={handleSaveProduct}
+        isSavingProduct={isSavingProduct}
+        isUploadingImage={isUploadingImage}
+        handleProductImageUpload={handleImageUpload}
+        onOpenImageSearch={() => setIsImageSearchModalOpen(true)}
+        generateInternalEanBarcode={handleGenerateEanBarcode}
+        isCustomCategoryMode={isCustomCategoryMode}
+        setIsCustomCategoryMode={setIsCustomCategoryMode}
+        selectableCategories={selectableCategories}
+        exchangeRate={exchangeRate}
+        triggerHaptic={triggerHaptic}
+        canViewCosts={canViewCosts}
+        onDelete={editingProduct && canDeleteProducts ? () => handleRequestDelete(editingProduct) : null}
+      />
 
       {/* 6. MODAL: CONFIRMACIÓN DE ELIMINACIÓN */}
       {deleteConfirm && (

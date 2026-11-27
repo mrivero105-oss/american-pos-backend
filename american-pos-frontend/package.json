@@ -1,7 +1,7 @@
 {
   "name": "isaac-pos-frontend",
   "private": true,
-  "version": "24.4.0",
+  "version": "24.4.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -30,7 +30,6 @@
     "fuse.js": "^7.5.0",
     "html2canvas-pro": "^2.6.4",
     "jsbarcode": "^3.12.3",
-    "jspdf": "^4.2.1",
     "lucide-react": "^1.77.0",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",

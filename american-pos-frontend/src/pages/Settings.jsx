@@ -53,6 +53,11 @@ export default function Settings() {
     const { user } = useAuth();
     const isOwnerUser = ['owner', 'dueño', 'dueno', 'superadmin'].includes((user?.role || '').toLowerCase());
     const isElectronDesktop = typeof window !== 'undefined' && Boolean(window.electronAPI);
+    const isMobileRuntime = typeof window !== 'undefined' && !isElectronDesktop && (
+        Boolean(window.Capacitor?.isNativePlatform?.())
+        || window.location.hash.includes('/mobile')
+        || window.location.pathname.includes('/mobile')
+    );
     const [searchParams, setSearchParams] = useSearchParams();
     const tabFromUrl = searchParams.get('tab');
     const [loading, setLoading] = useState(true);
@@ -878,17 +883,47 @@ export default function Settings() {
 
                 {/* 2. IMPRESORAS & PERIFÉRICOS */}
                 {activeTab === 'printers' && (
-                    <PrinterSettings
-                        business={business}
-                        setBusiness={setBusiness}
-                        systemPrinters={systemPrinters}
-                        saving={saving}
-                        onSave={handleSaveBusiness}
-                        onTestPrint={handleTestPrint}
-                        onTestDrawer={handleTestDrawer}
-                        onRefreshPrinters={fetchSystemPrinters}
-                        refreshingPrinters={refreshingPrinters}
-                    />
+                    isMobileRuntime ? (
+                        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
+                            <div className="flex items-start gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                                    <Printer size={20} />
+                                </div>
+                                <div className="space-y-1">
+                                    <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                                        Impresión Térmica Móvil (Bluetooth / Wi-Fi LAN)
+                                    </h3>
+                                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                                        La configuración de cola USB y gaveta Windows aplica únicamente al servidor de escritorio. En dispositivos Android usa el gestor nativo de impresoras térmicas Bluetooth / BLE / TCP 9100.
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300 space-y-1">
+                                <p className="font-bold">Cómo configurar tu impresora en este teléfono:</p>
+                                <p>Abre el menú lateral del POS móvil y selecciona <strong>Impresora Térmica</strong> para vincular tu ticketera Bluetooth o configurar una impresora de red local (IP LAN).</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => window.dispatchEvent(new CustomEvent('isaac-open-mobile-printer'))}
+                                className="px-4 py-2.5 min-h-[44px] rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer active:scale-95 transition-transform"
+                            >
+                                <Printer size={15} />
+                                <span>Abrir Gestor de Impresora Térmica Móvil</span>
+                            </button>
+                        </div>
+                    ) : (
+                        <PrinterSettings
+                            business={business}
+                            setBusiness={setBusiness}
+                            systemPrinters={systemPrinters}
+                            saving={saving}
+                            onSave={handleSaveBusiness}
+                            onTestPrint={handleTestPrint}
+                            onTestDrawer={handleTestDrawer}
+                            onRefreshPrinters={fetchSystemPrinters}
+                            refreshingPrinters={refreshingPrinters}
+                        />
+                    )
                 )}
 
                 {/* 3. FINANZAS & PAGOS */}

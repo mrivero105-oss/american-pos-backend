@@ -8,15 +8,10 @@ import { AuthProvider } from './providers/AuthProvider';
 import { SocketProvider } from './providers/SocketProvider';
 import { ensureStoragePersistence } from './services/storagePersistence';
 import { installGlobalErrorHooks } from './services/mobileDiagnosticsService';
-import { otaUpdateService } from './services/otaUpdateService';
 import ErrorBoundary from './components/ErrorBoundary';
 
 // 🖤 Instalar Caja Negra de diagnóstico sanitizada desde el milisegundo 0
 installGlobalErrorHooks();
-
-// 🚀 Confirmar notifyAppReady() ante CapacitorUpdater desde el milisegundo 0,
-// desacoplado de AuthProvider (/auth/me) para evitar Semaphore timeout y rollbacks en arranque offline.
-otaUpdateService.init().catch(() => {});
 
 // 🛡️ Blindaje de Almacenamiento Persistente en Android / iOS / PWA
 ensureStoragePersistence().catch(() => {});

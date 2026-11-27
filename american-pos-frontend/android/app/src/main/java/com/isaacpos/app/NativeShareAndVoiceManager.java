@@ -62,6 +62,7 @@ final class NativeShareAndVoiceManager {
         final String text = call.getString("text", "");
         final String phone = call.getString("phone", "");
         final String title = call.getString("title", "Factura Digital");
+        final String preferredApp = call.getString("preferredApp", "auto");
 
         if (rawBase64 == null || rawBase64.isEmpty()) {
             call.reject("No se proporcionó la imagen en base64");
@@ -73,6 +74,10 @@ final class NativeShareAndVoiceManager {
         ioExecutor.execute(() -> {
             try {
                 byte[] imageBytes = Base64.decode(base64Image, Base64.DEFAULT);
+                if (!NativeHardwareUtils.isValidPngPayload(imageBytes)) {
+                    call.reject("La imagen del comprobante no es un PNG válido o supera el límite de 10 MB.");
+                    return;
+                }
 
                 File cacheDir = new File(appContext.getCacheDir(), "shared_receipts");
                 if (!cacheDir.exists()) {
@@ -121,11 +126,22 @@ final class NativeShareAndVoiceManager {
                     hasWhatsAppBusiness = true;
                 } catch (Exception ignored) {}
 
+                String pref = preferredApp != null ? preferredApp.trim().toLowerCase(java.util.Locale.ROOT) : "auto";
                 String targetPackage = null;
-                if (hasWhatsApp) {
-                    targetPackage = "com.whatsapp";
-                } else if (hasWhatsAppBusiness) {
-                    targetPackage = "com.whatsapp.w4b";
+                boolean forceChooser = "chooser".equals(pref);
+                if (!forceChooser) {
+                    if (("whatsapp_business".equals(pref) || "w4b".equals(pref) || "com.whatsapp.w4b".equals(pref)) && hasWhatsAppBusiness) {
+                        targetPackage = "com.whatsapp.w4b";
+                    } else if (("whatsapp".equals(pref) || "com.whatsapp".equals(pref)) && hasWhatsApp) {
+                        targetPackage = "com.whatsapp";
+                    } else if (hasWhatsAppBusiness && !hasWhatsApp) {
+                        targetPackage = "com.whatsapp.w4b";
+                    } else if (hasWhatsApp && !hasWhatsAppBusiness) {
+                        targetPackage = "com.whatsapp";
+                    } else if (hasWhatsApp && hasWhatsAppBusiness) {
+                        // Si el comercio tiene WhatsApp y WhatsApp Business instalados y no fijó preferencia, mostrar selector
+                        forceChooser = true;
+                    }
                 }
 
                 if (targetPackage != null) {
@@ -140,13 +156,20 @@ final class NativeShareAndVoiceManager {
                     call.reject("Actividad cerrada antes de compartir la imagen");
                     return;
                 }
+                final boolean openWithChooser = forceChooser || targetPackage == null;
                 act.runOnUiThread(() -> {
                     if (!isActivityAlive(act)) {
                         call.reject("Actividad no disponible al compartir imagen");
                         return;
                     }
                     try {
-                        act.startActivity(intent);
+                        if (openWithChooser) {
+                            Intent chooser = Intent.createChooser(intent, title);
+                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            act.startActivity(chooser);
+                        } else {
+                            act.startActivity(intent);
+                        }
                         JSObject res = new JSObject();
                         res.put("success", true);
                         call.resolve(res);

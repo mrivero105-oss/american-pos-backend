@@ -27,6 +27,8 @@ const supervisorAuthorizeSchema = z.object({
         supervisorId: z.string().trim().min(1, 'Supervisor requerido').max(100),
         pin: nonEmptySecret.optional(),
         biometricToken: z.string().max(512).optional(),
+        challengeId: z.string().trim().min(1).max(128).optional(),
+        signature: z.string().trim().min(1).max(512).optional(),
         isBiometric: z.boolean().optional(),
         actionType: z.string().trim().min(1).max(120).optional(),
         referenceId: z.union([z.string(), z.number(), z.null()]).optional(),

@@ -27,6 +27,7 @@ import localDb from '../../db/localDb';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
+import VirtualMobileList from './VirtualMobileList';
 
 const stripAccents = (str = '') => String(str).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
@@ -171,16 +172,6 @@ export default function MobileCustomersView({
     });
   }, [customers, searchQuery, activeTab]);
 
-  const [displayLimit, setDisplayLimit] = useState(30);
-
-  useEffect(() => {
-    setDisplayLimit(30);
-  }, [searchQuery, activeTab]);
-
-  const visibleCustomers = useMemo(() => {
-    return filteredCustomers.slice(0, displayLimit);
-  }, [filteredCustomers, displayLimit]);
-
   // Abrir modal para Crear
   const handleOpenCreate = () => {
     setEditingCustomer(null);
@@ -250,6 +241,11 @@ export default function MobileCustomersView({
           setDetailCustomer(prev => ({ ...prev, ...updated }));
         }
       } catch (err) {
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          showToast?.(`⚠️ ${err.response?.data?.error || 'No se pudo actualizar el cliente'}`);
+          return;
+        }
         console.warn('Fallo al actualizar en el servidor, guardando local:', err);
         const updated = { ...editingCustomer, ...payload, updatedAt: new Date().toISOString() };
         setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? updated : c));
@@ -275,14 +271,15 @@ export default function MobileCustomersView({
       }
     } else {
       // CREAR
+      const tempCustId = `cust_off_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
       const newCust = {
-        id: `cust_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        id: tempCustId,
         ...payload,
         creditBalance: 0,
         balance: 0,
         loyaltyPoints: 0,
         isActive: true,
-        status: 'pending_sync',
+        status: 'offline_queued',
         createdAt: new Date().toISOString()
       };
 
@@ -292,12 +289,17 @@ export default function MobileCustomersView({
         setCustomers(prev => [created, ...prev]);
         try {
           if (localDb && localDb.customers) {
-            await localDb.customers.put(created);
+            await localDb.customers.put({ ...created, status: 'synced' });
           }
         } catch (caughtErr) { console.warn('[MobileCustomersView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
         showToast?.(`✅ Cliente "${payload.name}" registrado`);
         setIsFormModalOpen(false);
       } catch (_netErr) {
+        const httpStatus = _netErr?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          showToast?.(`⚠️ ${_netErr.response?.data?.error || 'Datos de cliente inválidos'}`);
+          return;
+        }
         console.warn('Servidor inaccesible, guardando cliente en base local:', _netErr);
         setCustomers(prev => [newCust, ...prev]);
         try {
@@ -306,9 +308,10 @@ export default function MobileCustomersView({
           }
           await primaryDb.put('syncQueue', {
             id: `cust_create_${Date.now()}`,
+            tempLocalId: tempCustId,
             endpoint: '/customers',
             method: 'POST',
-            payload: newCust,
+            payload: { ...payload, id: tempCustId },
             createdAt: new Date().toISOString()
           });
         } catch (caughtErr) { console.warn('[MobileCustomersView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
@@ -532,183 +535,177 @@ export default function MobileCustomersView({
         </div>
       </div>
 
-      {/* 3. LISTADO DE CLIENTES RESPONSIVO */}
-      <div className="flex-1 overflow-y-auto p-2.5 sm:p-3 custom-scrollbar">
-        {isLoading ? (
-          <div className="h-48 flex flex-col items-center justify-center gap-2">
-            <RefreshCw size={24} className="animate-spin text-blue-500" />
-            <p className={`text-xs font-bold ${T.textMuted}`}>Cargando clientes...</p>
-          </div>
-        ) : filteredCustomers.length === 0 ? (
-          <div className="h-full min-h-[200px] flex flex-col items-center justify-center p-6 text-center space-y-2">
-            <Users size={36} className={T.textMuted} />
-            <p className={`font-bold text-xs sm:text-sm ${T.textPrimary}`}>
-              {searchQuery ? 'No se encontraron clientes con esa búsqueda' : 'No hay clientes registrados en esta categoría'}
-            </p>
-            <p className={`text-[11px] ${T.textMuted}`}>
-              Usa el botón &ldquo;+ Nuevo&rdquo; arriba para agregar un cliente
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {visibleCustomers.map((cust) => {
-              const doc = cust.idDocument || cust.document || cust.cedula || cust.rif || 'V-00000000';
-              const phone = cust.phone || cust.telefono || '';
-              const credit = Number(cust.creditLimit || cust.limite_credito || 0);
-              const balance = Number(cust.balance || cust.saldo || cust.creditBalance || 0);
-              const isInactive = cust.isActive === false;
+      {/* 3. LISTADO DE CLIENTES RESPONSIVO VIRTUALIZADO */}
+      {isLoading ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2">
+          <RefreshCw size={24} className="animate-spin text-blue-500" />
+          <p className={`text-xs font-bold ${T.textMuted}`}>Cargando clientes...</p>
+        </div>
+      ) : filteredCustomers.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-2">
+          <Users size={36} className={T.textMuted} />
+          <p className={`font-bold text-xs sm:text-sm ${T.textPrimary}`}>
+            {searchQuery ? 'No se encontraron clientes con esa búsqueda' : 'No hay clientes registrados en esta categoría'}
+          </p>
+          <p className={`text-[11px] ${T.textMuted}`}>
+            Usa el botón &ldquo;+ Nuevo&rdquo; arriba para agregar un cliente
+          </p>
+        </div>
+      ) : (
+        <VirtualMobileList
+          items={filteredCustomers}
+          estimateSize={142}
+          gap={10}
+          columnsMd={2}
+          columnsXl={3}
+          className="flex-1"
+          paddingClass="p-2.5 sm:p-3"
+          getItemKey={(cust, idx) => cust.id || idx}
+          renderItem={(cust) => {
+            const doc = cust.idDocument || cust.document || cust.cedula || cust.rif || 'V-00000000';
+            const phone = cust.phone || cust.telefono || '';
+            const credit = Number(cust.creditLimit || cust.limite_credito || 0);
+            const balance = Number(cust.balance || cust.saldo || cust.creditBalance || 0);
+            const isInactive = cust.isActive === false;
 
-              return (
-                <div 
-                  key={cust.id}
-                  className={`${T.ticketItemBg} p-3 rounded-2xl border ${T.border} space-y-2.5 hover:border-blue-500/30 transition-all flex flex-col justify-between shadow-2xs`}
-                >
-                  {/* Fila Superior: Nombre y Datos */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate`}>
-                          {cust.name || cust.nombre}
-                        </h4>
-                        {cust.isVIP && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-500 text-[9.5px] font-black flex items-center gap-0.5 shrink-0">
-                            <Star size={9} className="fill-current" />
-                            VIP
-                          </span>
-                        )}
-                        {isInactive && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-slate-500/20 text-slate-400 text-[9px] font-bold shrink-0">
-                            Inactivo
-                          </span>
-                        )}
-                      </div>
+            return (
+              <div
+                className={`${T.ticketItemBg} p-3 rounded-2xl border ${T.border} space-y-2.5 hover:border-blue-500/30 transition-all flex flex-col justify-between shadow-2xs`}
+              >
+                {/* Fila Superior: Nombre y Datos */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h4 className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate`}>
+                        {cust.name || cust.nombre}
+                      </h4>
+                      {cust.isVIP && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-500 text-[9.5px] font-black flex items-center gap-0.5 shrink-0">
+                          <Star size={9} className="fill-current" />
+                          VIP
+                        </span>
+                      )}
+                      {isInactive && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-slate-500/20 text-slate-400 text-[9px] font-bold shrink-0">
+                          Inactivo
+                        </span>
+                      )}
+                    </div>
 
-                      <p className={`text-[11px] font-mono ${T.textMuted} truncate mt-0.5`}>
-                        {doc} {phone ? `• ${phone}` : ''}
+                    <p className={`text-[11px] font-mono ${T.textMuted} truncate mt-0.5`}>
+                      {doc} {phone ? `• ${phone}` : ''}
+                    </p>
+
+                    {cust.address && (
+                      <p className={`text-[10px] ${T.textSecondary} truncate mt-0.5 flex items-center gap-1`}>
+                        <MapPin size={10} className="shrink-0 text-slate-400" />
+                        <span className="truncate">{cust.address}</span>
                       </p>
-
-                      {cust.address && (
-                        <p className={`text-[10px] ${T.textSecondary} truncate mt-0.5 flex items-center gap-1`}>
-                          <MapPin size={10} className="shrink-0 text-slate-400" />
-                          <span className="truncate">{cust.address}</span>
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Resumen Financiero */}
-                    {(credit > 0 || balance > 0) && (
-                      <div className="text-right shrink-0">
-                        {credit > 0 && (
-                          <span className="text-[10px] text-emerald-500 font-extrabold block">
-                            Crédito: ${credit.toFixed(2)}
-                          </span>
-                        )}
-                        {balance > 0 && (
-                          <span className="text-[10px] text-rose-500 font-black block">
-                            Debe: ${balance.toFixed(2)}
-                          </span>
-                        )}
-                      </div>
                     )}
                   </div>
 
-                  {/* Fila Inferior: Barra de Acciones Completas */}
-                  <div className={`pt-2 border-t ${T.border} flex items-center justify-between gap-1.5 flex-wrap`}>
-                    {/* Botones de Gestión (Editar, Eliminar, Contacto, Ficha) */}
-                    <div className="flex items-center gap-1">
-                      {/* WhatsApp */}
-                      {phone && (
-                        <a 
-                          href={`https://wa.me/${phone.replace(/\D/g, '')}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-2 rounded-xl bg-emerald-600/15 text-emerald-500 hover:bg-emerald-600/25 transition-all flex items-center justify-center"
-                          title="Enviar WhatsApp"
-                        >
-                          <MessageSquare size={13} />
-                        </a>
+                  {/* Resumen Financiero */}
+                  {(credit > 0 || balance > 0) && (
+                    <div className="text-right shrink-0">
+                      {credit > 0 && (
+                        <span className="text-[10px] text-emerald-500 font-extrabold block">
+                          Crédito: ${credit.toFixed(2)}
+                        </span>
                       )}
-
-                      {/* Llamar */}
-                      {phone && (
-                        <a 
-                          href={`tel:${phone}`}
-                          className={`p-2 rounded-xl ${T.btnGhost} text-blue-500 hover:bg-blue-500/15 transition-all flex items-center justify-center`}
-                          title="Llamar"
-                        >
-                          <Phone size={13} />
-                        </a>
+                      {balance > 0 && (
+                        <span className="text-[10px] text-rose-500 font-black block">
+                          Debe: ${balance.toFixed(2)}
+                        </span>
                       )}
-
-                      {/* Editar */}
-                      <button
-                        onClick={() => handleOpenEdit(cust)}
-                        className={`p-2 rounded-xl ${T.btnGhost} text-amber-500 hover:bg-amber-500/15 transition-all flex items-center justify-center cursor-pointer`}
-                        title="Editar Datos del Cliente"
-                      >
-                        <Edit2 size={13} />
-                      </button>
-
-                      {/* Eliminar / Inactivar */}
-                      <button
-                        onClick={() => handleRequestDelete(cust)}
-                        className={`p-2 rounded-xl ${T.btnGhost} text-rose-500 hover:bg-rose-500/15 transition-all flex items-center justify-center cursor-pointer`}
-                        title="Eliminar Cliente"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-
-                      {/* Ficha / Ver Más */}
-                      <button
-                        onClick={() => setDetailCustomer(cust)}
-                        className={`p-2 rounded-xl ${T.btnGhost} ${T.textMuted} hover:text-blue-500 transition-all flex items-center justify-center cursor-pointer`}
-                        title="Ver Ficha Completa"
-                      >
-                        <Eye size={13} />
-                      </button>
                     </div>
-
-                    {/* Botón Principal: Cobrar a este Cliente */}
-                    {!isInactive ? (
-                      <button
-                        onClick={() => {
-                          onSelectCustomerForSale?.({
-                            name: cust.name || cust.nombre,
-                            doc: doc
-                          });
-                          onBackToPOS?.();
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs active:scale-95 transition-all cursor-pointer shadow-sm flex items-center gap-1 ml-auto"
-                      >
-                        <Check size={13} />
-                        <span>Cobrar</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleReactivateCustomer(cust)}
-                        className="px-2.5 py-1 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-[11px] active:scale-95 transition-all cursor-pointer ml-auto"
-                      >
-                        Reactivar
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </div>
-              );
-            })}
-            {visibleCustomers.length < filteredCustomers.length && (
-              <div className="py-4 col-span-full flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => setDisplayLimit(prev => prev + 30)}
-                  className={`px-5 py-2.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-2 active:scale-95 transition-all shadow-xs cursor-pointer`}
-                >
-                  <span>Cargar más clientes ({filteredCustomers.length - visibleCustomers.length} restantes)</span>
-                </button>
+
+                {/* Fila Inferior: Barra de Acciones Completas */}
+                <div className={`pt-2 border-t ${T.border} flex items-center justify-between gap-1.5 flex-wrap`}>
+                  {/* Botones de Gestión (Editar, Eliminar, Contacto, Ficha) */}
+                  <div className="flex items-center gap-1">
+                    {/* WhatsApp */}
+                    {phone && (
+                      <a
+                        href={`https://wa.me/${phone.replace(/\D/g, '')}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-2 rounded-xl bg-emerald-600/15 text-emerald-500 hover:bg-emerald-600/25 transition-all flex items-center justify-center"
+                        title="Enviar WhatsApp"
+                      >
+                        <MessageSquare size={13} />
+                      </a>
+                    )}
+
+                    {/* Llamar */}
+                    {phone && (
+                      <a
+                        href={`tel:${phone}`}
+                        className={`p-2 rounded-xl ${T.btnGhost} text-blue-500 hover:bg-blue-500/15 transition-all flex items-center justify-center`}
+                        title="Llamar"
+                      >
+                        <Phone size={13} />
+                      </a>
+                    )}
+
+                    {/* Editar */}
+                    <button
+                      onClick={() => handleOpenEdit(cust)}
+                      className={`p-2 rounded-xl ${T.btnGhost} text-amber-500 hover:bg-amber-500/15 transition-all flex items-center justify-center cursor-pointer`}
+                      title="Editar Datos del Cliente"
+                    >
+                      <Edit2 size={13} />
+                    </button>
+
+                    {/* Eliminar / Inactivar */}
+                    <button
+                      onClick={() => handleRequestDelete(cust)}
+                      className={`p-2 rounded-xl ${T.btnGhost} text-rose-500 hover:bg-rose-500/15 transition-all flex items-center justify-center cursor-pointer`}
+                      title="Eliminar Cliente"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+
+                    {/* Ficha / Ver Más */}
+                    <button
+                      onClick={() => setDetailCustomer(cust)}
+                      className={`p-2 rounded-xl ${T.btnGhost} ${T.textMuted} hover:text-blue-500 transition-all flex items-center justify-center cursor-pointer`}
+                      title="Ver Ficha Completa"
+                    >
+                      <Eye size={13} />
+                    </button>
+                  </div>
+
+                  {/* Botón Principal: Cobrar a este Cliente */}
+                  {!isInactive ? (
+                    <button
+                      onClick={() => {
+                        onSelectCustomerForSale?.({
+                          name: cust.name || cust.nombre,
+                          doc: doc
+                        });
+                        onBackToPOS?.();
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs active:scale-95 transition-all cursor-pointer shadow-sm flex items-center gap-1 ml-auto"
+                    >
+                      <Check size={13} />
+                      <span>Cobrar</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleReactivateCustomer(cust)}
+                      className="px-2.5 py-1 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-[11px] active:scale-95 transition-all cursor-pointer ml-auto"
+                    >
+                      Reactivar
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-        )}
-      </div>
+            );
+          }}
+        />
+      )}
 
       {/* 4. MODAL: CREAR / EDITAR CLIENTE (COMPLETO Y RESPONSIVO) */}
       {isFormModalOpen && (

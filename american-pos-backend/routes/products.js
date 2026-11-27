@@ -6,7 +6,7 @@ const { isAdmin, requirePermission } = require('../middleware/auth');
 const ProductService = require('../services/ProductService');
 const SupabaseSyncService = require('../services/SupabaseSyncService');
 const validate = require('../middleware/validate');
-const { productSchema } = require('../schemas/productSchema');
+const { productSchema, productUpdateSchema, stockCountSchema } = require('../schemas/productSchema');
 const InvoiceService = require('../services/InvoiceService');
 let ExcelJSRef = null;
 const getExcelJS = () => (ExcelJSRef || (ExcelJSRef = require('exceljs')));
@@ -373,7 +373,7 @@ router.post('/', requirePermission('canCreateProducts'), validate(productSchema)
 /**
  * PUT /:id - Update an existing product
  */
-router.put('/:id', requirePermission('canCreateProducts'), validate(productSchema), async (req, res) => {
+router.put('/:id', requirePermission('canCreateProducts'), validate(productUpdateSchema), async (req, res) => {
     try {
         const updatedProduct = await ProductService.updateProduct(req.user, req.params.id, req.body);
         const io = req.app.get('io');
@@ -387,6 +387,111 @@ router.put('/:id', requirePermission('canCreateProducts'), validate(productSchem
     } catch (error) {
         console.error('Update product error:', error);
         res.status(500).json({ error: 'Error al actualizar producto: ' + error.message });
+    }
+});
+
+/**
+ * PATCH /:id/stock-count - Conteo físico atómico con LOCK.UPDATE y Kardex auditable
+ */
+router.patch('/:id/stock-count', requirePermission(['canManageInventory', 'canCreateProducts']), validate(stockCountSchema), async (req, res) => {
+    const { Product, BranchStock, StockMovement, Branch } = require('../database/models');
+    const { Op } = require('sequelize');
+    const { sequelize } = require('../database/connection');
+    const t = await sequelize.transaction();
+    try {
+        const companyId = String(req.user.companyId || '2');
+        const companyCondition = (companyId === '2' || companyId === 'default')
+            ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }] }
+            : { companyId };
+
+        const product = await Product.findOne({
+            where: { id: String(req.params.id), ...companyCondition },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!product) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Producto no encontrado' });
+        }
+
+        const currentStock = Number(product.stockQuantity ?? product.stock ?? 0);
+        const hasTarget = req.body.stockQuantity !== undefined || req.body.stock !== undefined;
+        const targetStock = hasTarget
+            ? precision.round(Math.max(0, Number(req.body.stockQuantity ?? req.body.stock)), 6)
+            : precision.round(Math.max(0, precision.add([currentStock, Number(req.body.delta || 0)])), 6);
+        const delta = precision.round(precision.subtract(targetStock, currentStock), 6);
+
+        await product.update({
+            stockQuantity: String(targetStock),
+            stock: String(targetStock)
+        }, { transaction: t });
+
+        let activeBranchId = req.body.branchId || req.user.activeBranchId || null;
+        if (!activeBranchId || activeBranchId === '1' || activeBranchId === 'null' || activeBranchId === 'undefined') {
+            const dbBranch = await Branch.findOne({ where: { companyId }, transaction: t });
+            if (dbBranch) activeBranchId = dbBranch.id;
+        }
+        if (activeBranchId) {
+            const bs = await BranchStock.findOne({
+                where: { productId: product.id, branchId: String(activeBranchId) },
+                transaction: t,
+                lock: t.LOCK.UPDATE
+            });
+            if (bs) {
+                await bs.update({ quantity: targetStock }, { transaction: t });
+            } else {
+                await BranchStock.create({
+                    productId: product.id,
+                    branchId: String(activeBranchId),
+                    quantity: targetStock,
+                    companyId
+                }, { transaction: t });
+            }
+        }
+
+        if (Math.abs(delta) > 0.000001) {
+            await StockMovement.create({
+                id: generateRobustId(),
+                productId: product.id,
+                branchId: activeBranchId ? String(activeBranchId) : null,
+                userId: String(req.user.id),
+                companyId,
+                type: delta >= 0 ? 'IN' : 'OUT',
+                category: 'conteo_fisico',
+                quantity: Math.abs(delta),
+                stockBefore: currentStock,
+                stockAfter: targetStock,
+                reason: String(req.body.reason || 'Conteo físico móvil').trim().slice(0, 250),
+                referenceId: `stock-count-${Date.now()}`,
+                date: new Date().toISOString()
+            }, { transaction: t });
+        }
+
+        await t.commit();
+        ProductService.invalidateCatalogCache();
+        const plainProduct = product.get ? product.get({ plain: true }) : { ...product };
+        plainProduct.stockQuantity = targetStock;
+        plainProduct.stock = targetStock;
+        ProductService.sanitizeProductForUser(plainProduct, ProductService.canUserViewCosts(req.user));
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(companyId).emit('inventory_changed');
+            io.to(companyId).emit('product_updated', plainProduct);
+        }
+        SupabaseSyncService.queueProduct(plainProduct).catch(() => {});
+
+        res.json({
+            success: true,
+            product: plainProduct,
+            previousStock: currentStock,
+            stockQuantity: targetStock,
+            delta
+        });
+    } catch (error) {
+        if (t && !t.finished) await t.rollback();
+        console.error('Stock count patch error:', error);
+        res.status(500).json({ error: 'Error al registrar conteo físico: ' + error.message });
     }
 });
 
@@ -1480,7 +1585,15 @@ router.get('/:id/lots', require('../middleware/auth').verifyToken, async (req, r
             where: { productId: req.params.id, companyId: req.user.companyId },
             order: [['expirationDate', 'ASC']]
         });
-        res.json(lots);
+        const canSeeCosts = ProductService.canUserViewCosts(req.user);
+        const sanitizedLots = lots.map((lot) => {
+            const plain = lot.get ? lot.get({ plain: true }) : { ...lot };
+            if (!canSeeCosts) {
+                delete plain.cost;
+            }
+            return plain;
+        });
+        res.json(sanitizedLots);
     } catch (error) {
         console.error('Get lots error:', error);
         res.status(500).json({ error: 'Error al obtener lotes' });
@@ -1706,7 +1819,7 @@ router.get('/:id/variants', async (req, res) => {
     }
 });
 
-router.post('/:id/variants', requirePermission('canManageInventory', 'canCreateProducts'), async (req, res) => {
+router.post('/:id/variants', requirePermission(['canManageInventory', 'canCreateProducts']), async (req, res) => {
     const { Product, VarianteProducto } = require('../database/models');
     const { sequelize } = require('../database/connection');
     const { generateRobustId } = require('../utils/helpers');
@@ -1778,7 +1891,7 @@ router.post('/:id/variants', requirePermission('canManageInventory', 'canCreateP
     }
 });
 
-router.put('/:id/variants/:variantId', requirePermission('canManageInventory', 'canCreateProducts'), async (req, res) => {
+router.put('/:id/variants/:variantId', requirePermission(['canManageInventory', 'canCreateProducts']), async (req, res) => {
     const { Product, VarianteProducto } = require('../database/models');
     const { sequelize } = require('../database/connection');
     const t = await sequelize.transaction();
@@ -1866,7 +1979,7 @@ router.put('/:id/variants/:variantId', requirePermission('canManageInventory', '
     }
 });
 
-router.delete('/:id/variants/:variantId', requirePermission('canManageInventory', 'canCreateProducts'), async (req, res) => {
+router.delete('/:id/variants/:variantId', requirePermission(['canManageInventory', 'canCreateProducts']), async (req, res) => {
     const { Product, VarianteProducto } = require('../database/models');
     const { sequelize } = require('../database/connection');
     const t = await sequelize.transaction();

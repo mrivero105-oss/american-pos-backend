@@ -345,7 +345,7 @@ test('Fase 1: Seguridad IDOR, RBAC, x-sync-key allowlist, fail-closed Bearer, Br
                 items: [{ productId: prodAId, name: 'Hacked', quantity: 2, price: 0.01 }],
                 total: 0.02,
                 paymentMethods: [{ method: 'cash', amount: 0.02, currency: 'USD' }],
-                exchangeRate: 50
+                exchangeRate: 40
             }]
         })
     });
@@ -369,7 +369,7 @@ test('Fase 1: Seguridad IDOR, RBAC, x-sync-key allowlist, fail-closed Bearer, Br
                 items: [{ productId: prodAId, name: 'Harina Test', quantity: 2 }],
                 total: 25,
                 paymentMethods: [{ method: 'zelle', amount: 25, currency: 'USD' }],
-                exchangeRate: 50
+                exchangeRate: 40
             }]
         })
     });

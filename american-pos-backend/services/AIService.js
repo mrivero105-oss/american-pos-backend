@@ -220,8 +220,17 @@ class AIService {
                 .filter((w) => w.length >= 3)
                 .slice(0, 6);
 
+            const { isSupervisorOrAboveRole } = require('../constants/roles');
+            const canSeeFinancialMetrics = Boolean(
+                reqUser && (
+                    isSupervisorOrAboveRole(reqUser.role) ||
+                    (reqUser.permissions?.canViewReports === true && reqUser.permissions?.canViewCosts === true)
+                )
+            );
             const [dashboard, inventory, relevantProducts] = await Promise.all([
-                ReportService.getDashboardSummary(reqUser, { range: 'today' }),
+                canSeeFinancialMetrics
+                    ? ReportService.getDashboardSummary(reqUser, { range: 'today' })
+                    : Promise.resolve(null),
                 this._getCachedCatalog(companyId, 'stock_limit_200', {
                     where: { companyId, stockQuantity: { [Op.gt]: 0 } },
                     attributes: ['name', 'price', 'barcode', 'category'],
@@ -247,6 +256,9 @@ class AIService {
             const cartItems = cartContext.items ? cartContext.items.map(i => `${i.name} (x${i.qty})`).join(', ') : 'Vacío';
             const cartTotal = cartContext.total || 0;
             const now = new Date().toLocaleString('es-VE');
+            const financialContextBlock = canSeeFinancialMetrics && dashboard?.rangeSummary
+                ? `CONTEXTO DE HOY:\n- Ventas: $${dashboard.rangeSummary.totalRevenue} | Ganancia: $${dashboard.rangeSummary.netProfit}`
+                : 'CONTEXTO DE HOY:\n- Métricas financieras globales restringidas por permisos del rol (NO inventar ni revelar ventas/utilidad del negocio).';
 
             systemPrompt = `
 ERES: Isaac AI 2.0 - Cerebro y Asistente Estrella del Comercio. IMPORTANTE: Tienes personalidad y acento VENEZOLANO. Eres súper amable, ágil, pilas y tienes un vocabulario muy amplio. 
@@ -265,8 +277,7 @@ FECHA/HORA ACTUAL: ${now}
 
 TU OBJETIVO: Procesamiento infalible de órdenes de compra y análisis de negocio con la mejor atención.
 
-CONTEXTO DE HOY:
-- Ventas: $${dashboard.rangeSummary.totalRevenue} | Ganancia: $${dashboard.rangeSummary.netProfit}
+${financialContextBlock}
 
 ESTADO DEL CARRITO:
 - Contenido: ${cartItems}
@@ -358,8 +369,17 @@ SINTAXIS TÉCNICA:
         }
 
         try {
+            const { isSupervisorOrAboveRole } = require('../constants/roles');
+            const canSeeFinancialMetrics = Boolean(
+                reqUser && (
+                    isSupervisorOrAboveRole(reqUser.role) ||
+                    (reqUser.permissions?.canViewReports === true && reqUser.permissions?.canViewCosts === true)
+                )
+            );
             const [dashboard, inventory] = await Promise.all([
-                ReportService.getDashboardSummary(reqUser, { range: 'today' }).catch(() => ({})),
+                canSeeFinancialMetrics
+                    ? ReportService.getDashboardSummary(reqUser, { range: 'today' }).catch(() => ({}))
+                    : Promise.resolve(null),
                 this._getCachedCatalog(companyId, 'stock_limit_200', {
                     where: { companyId, stockQuantity: { [Op.gt]: 0 } },
                     attributes: ['name', 'price', 'barcode', 'category'],
@@ -372,8 +392,11 @@ SINTAXIS TÉCNICA:
                 .map((p) => `${p.name} ($${Number(p.price || 0).toFixed(2)})`)
                 .join('\n');
             const cartItems = cartContext.items ? cartContext.items.map((i) => `${i.name} (x${i.qty})`).join(', ') : 'Vacío';
+            const financialLine = canSeeFinancialMetrics
+                ? `Ventas hoy: $${Number(dashboard?.todaySales || 0).toFixed(2)}.`
+                : 'Métricas financieras reservadas a supervisión.';
             const systemInstruction = `Eres Isaac AI 2.0, asistente comercial de Isaac POS con trato cercano y profesional.
-Ventas hoy: $${Number(dashboard?.todaySales || 0).toFixed(2)}. Carrito actual: ${cartItems}.
+${financialLine} Carrito actual: ${cartItems}.
 Catálogo disponible (muestra):
 ${catalogPreview}`;
 

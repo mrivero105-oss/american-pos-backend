@@ -3,10 +3,12 @@ package com.isaacpos.app;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.pm.PackageInfoCompat;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -51,12 +53,21 @@ import java.util.concurrent.Executors;
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT
             }
+        ),
+        @Permission(
+            alias = "bluetoothLegacyLocation",
+            strings = {
+                Manifest.permission.ACCESS_FINE_LOCATION
+            }
         )
     }
 )
 public class PosNativeHardwarePlugin extends Plugin {
 
+    // Pools separados para evitar que una impresora TCP/BT lenta bloquee Keystore, red o WhatsApp
     private final ExecutorService ioExecutor = Executors.newFixedThreadPool(2);
+    private final ExecutorService printerNetworkExecutor = Executors.newFixedThreadPool(2);
+    private final ExecutorService visionExecutor = Executors.newSingleThreadExecutor();
 
     private NativePrinterManager printerManager;
     private NativeVisionManager visionManager;
@@ -64,15 +75,17 @@ public class PosNativeHardwarePlugin extends Plugin {
     private NativeSqliteManager sqliteManager;
     private NativeNetworkManager networkManager;
     private NativeShareAndVoiceManager shareAndVoiceManager;
+    // Referencia fuerte al listener mientras CameraX está abierto (evita recolección GC de WeakReference en ráfaga)
+    private NativeVisionScannerActivity.LiveScanListener activeLiveScanListener;
 
     @Override
     public void load() {
         super.load();
-        printerManager = new NativePrinterManager(getContext(), ioExecutor);
-        visionManager = new NativeVisionManager(ioExecutor);
+        printerManager = new NativePrinterManager(getContext(), printerNetworkExecutor);
+        visionManager = new NativeVisionManager(visionExecutor);
         biometricKeystoreManager = new NativeBiometricKeystoreManager(getContext(), ioExecutor);
         sqliteManager = new NativeSqliteManager(getContext());
-        networkManager = new NativeNetworkManager(getContext(), ioExecutor);
+        networkManager = new NativeNetworkManager(getContext(), printerNetworkExecutor);
         shareAndVoiceManager = new NativeShareAndVoiceManager(getContext(), ioExecutor);
     }
 
@@ -156,8 +169,12 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @PluginMethod
     public void discoverBluetoothPrinters(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !printerManager.hasBluetoothScanPermission()) {
-            requestPermissionForAlias("bluetoothScan", call, "discoverBluetoothPermsCallback");
+        if (!printerManager.hasBluetoothScanPermission()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                requestPermissionForAlias("bluetoothScan", call, "discoverBluetoothPermsCallback");
+            } else {
+                requestPermissionForAlias("bluetoothLegacyLocation", call, "discoverBluetoothPermsCallback");
+            }
             return;
         }
         printerManager.discoverBluetoothPrinters(call);
@@ -166,7 +183,10 @@ public class PosNativeHardwarePlugin extends Plugin {
     @PermissionCallback
     private void discoverBluetoothPermsCallback(PluginCall call) {
         if (!printerManager.hasBluetoothScanPermission()) {
-            call.reject("Permiso de escaneo Bluetooth (Dispositivos cercanos) denegado por el usuario");
+            String msg = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                ? "Permiso de escaneo Bluetooth (Dispositivos cercanos) denegado por el usuario"
+                : "En Android 7–11 se requiere permiso de Ubicación para descubrir impresoras Bluetooth cercanas";
+            call.reject(msg);
             return;
         }
         printerManager.discoverBluetoothPrinters(call);
@@ -242,17 +262,19 @@ public class PosNativeHardwarePlugin extends Plugin {
             intent.putExtra(NativeVisionScannerActivity.EXTRA_TARGET_MODE, call.getString("targetMode", "CART"));
 
             // Stream en tiempo real hacia JS para modo ráfaga (+1) sin cerrar la cámara
-            NativeVisionScannerActivity.setLiveScanListener((barcode, format, count, burstMode) -> {
+            activeLiveScanListener = (barcode, format, count, burstMode) -> {
                 JSObject evt = new JSObject();
                 evt.put("barcode", barcode);
                 evt.put("format", format);
                 evt.put("count", count);
                 evt.put("burstMode", burstMode);
                 notifyListeners("nativeBarcodeScanned", evt);
-            });
+            };
+            NativeVisionScannerActivity.setLiveScanListener(activeLiveScanListener);
 
             startActivityForResult(call, intent, "handleNativeScannerResult");
         } catch (Exception e) {
+            activeLiveScanListener = null;
             NativeVisionScannerActivity.setLiveScanListener(null);
             call.reject("No se pudo iniciar el escáner nativo CameraX: " + e.getMessage());
         }
@@ -260,6 +282,7 @@ public class PosNativeHardwarePlugin extends Plugin {
 
     @ActivityCallback
     private void handleNativeScannerResult(PluginCall call, ActivityResult result) {
+        activeLiveScanListener = null;
         NativeVisionScannerActivity.setLiveScanListener(null);
         if (call == null) return;
         JSObject ret = new JSObject();
@@ -474,16 +497,45 @@ public class PosNativeHardwarePlugin extends Plugin {
         sqliteManager.getStats(call);
     }
 
+    @PluginMethod
+    public void discoverLanServersUdp(PluginCall call) {
+        networkManager.discoverLanServersUdp(call);
+    }
+
+    @PluginMethod
+    public void getAppBuildInfo(PluginCall call) {
+        try {
+            PackageManager pm = getContext().getPackageManager();
+            String pkg = getContext().getPackageName();
+            PackageInfo pInfo = pm.getPackageInfo(pkg, 0);
+            long versionCode = PackageInfoCompat.getLongVersionCode(pInfo);
+            JSObject res = new JSObject();
+            res.put("versionCode", versionCode);
+            res.put("versionName", pInfo.versionName != null ? pInfo.versionName : "");
+            res.put("packageName", pkg);
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject("No se pudo leer información de compilación del APK: " + e.getMessage());
+        }
+    }
+
     // ==================== CICLO DE VIDA ====================
 
     @Override
     protected void handleOnDestroy() {
+        activeLiveScanListener = null;
         NativeVisionScannerActivity.setLiveScanListener(null);
         if (printerManager != null) printerManager.shutdown();
         if (visionManager != null) visionManager.shutdown();
         if (sqliteManager != null) sqliteManager.shutdown();
         try {
             ioExecutor.shutdownNow();
+        } catch (Exception ignored) {}
+        try {
+            printerNetworkExecutor.shutdownNow();
+        } catch (Exception ignored) {}
+        try {
+            visionExecutor.shutdownNow();
         } catch (Exception ignored) {}
         super.handleOnDestroy();
     }

@@ -5,6 +5,7 @@
  */
 export const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
 export const SUPABASE_ANON_KEY = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+export const OTA_PUBLIC_BASE_URL = String(import.meta.env.VITE_OTA_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
 
 export function hasSupabaseConfig() {
     return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -31,7 +32,13 @@ export function getSupabaseRealtimeWsUrl() {
 }
 
 export function getSupabaseStoragePublicUrl(bucket, filename = '') {
-    if (!SUPABASE_URL) return '';
     const cleanFile = filename ? `/${encodeURIComponent(filename)}` : '';
+    if (bucket === 'app-updates' && OTA_PUBLIC_BASE_URL) {
+        if (OTA_PUBLIC_BASE_URL.includes('/storage/v1/object/public/')) {
+            return `${OTA_PUBLIC_BASE_URL}${cleanFile}`;
+        }
+        return `${OTA_PUBLIC_BASE_URL}/storage/v1/object/public/${bucket}${cleanFile}`;
+    }
+    if (!SUPABASE_URL) return '';
     return `${SUPABASE_URL}/storage/v1/object/public/${bucket}${cleanFile}`;
 }

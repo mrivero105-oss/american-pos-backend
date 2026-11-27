@@ -383,10 +383,15 @@ async function searchProductsForLink(reqUser, search) {
         limit: 25
     });
 
+    const ProductServiceRef = require('../ProductService');
+    const canSeeCosts = typeof ProductServiceRef?.canUserViewCosts === 'function'
+        ? ProductServiceRef.canUserViewCosts(reqUser)
+        : false;
+
     return products.map(p => {
         const plain = p.get({ plain: true });
         const cleanCost = Number(plain.cost || 0);
-        return {
+        const mapped = {
             ...plain,
             cost: cleanCost,
             currentCost: cleanCost,
@@ -395,6 +400,12 @@ async function searchProductsForLink(reqUser, search) {
             margin: Number(plain.margin || 0),
             stockQuantity: Number(plain.stockQuantity || 0)
         };
+        if (!canSeeCosts) {
+            delete mapped.cost;
+            delete mapped.currentCost;
+            delete mapped.margin;
+        }
+        return mapped;
     });
 }
 

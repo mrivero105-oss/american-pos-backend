@@ -26,6 +26,10 @@ import { encodeEscPosCp858, ESC_INIT_CP858 } from '../../utils/escposFormatter';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
+import { getMobileRegisterId, getActiveMobileRegisterId } from '../../utils/terminalIdentity';
+
+const PRIVILEGED_CASH_ROLES = new Set(['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'master', 'supervisor']);
+const isPrivilegedCashRole = (userObj) => PRIVILEGED_CASH_ROLES.has(String(userObj?.role || '').trim().toLowerCase());
 
 // Helper para normalizar el nombre del método de pago proveniente de la base de datos
 const normalizePaymentMethod = (rawMethod) => {
@@ -86,7 +90,7 @@ const getMethodMeta = (methodName) => {
 export default function MobileCashView({
   sales = [],
   user,
-  exchangeRate = 950,
+  exchangeRate = 1,
   businessInfo = null,
   T,
   isLight,
@@ -94,9 +98,18 @@ export default function MobileCashView({
   onOpenSyncCenter = null,
   showToast
 }) {
+  const safeExchangeRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
+  const terminalRegisterId = useMemo(() => getMobileRegisterId(), []);
+  const isPrivileged = useMemo(() => isPrivilegedCashRole(user), [user]);
   const [currentShift, setCurrentShift] = useState(null);
   const [isLoadingShift, setIsLoadingShift] = useState(true);
   const { counts: offlineCounts } = useOfflineQueueCounts();
+
+  const isBlindCloseEnforced = useMemo(() => {
+    if (isPrivileged) return false;
+    const configuredMode = String(businessInfo?.cashClosureMode || '').trim().toUpperCase();
+    return configuredMode === 'BLIND' || currentShift?.isBlindClose === true;
+  }, [isPrivileged, businessInfo?.cashClosureMode, currentShift?.isBlindClose]);
 
   // Modales
   const [isOpenShiftModalOpen, setIsOpenShiftModalOpen] = useState(false);
@@ -127,21 +140,30 @@ export default function MobileCashView({
   const [movementReason, setMovementReason] = useState('');
   const [isSubmittingMovement, setIsSubmittingMovement] = useState(false);
 
-  // Formulario Cierre de Turno (Corte Z)
+  // Formulario Cierre de Turno (Corte Z / Cierre Ciego)
   const [countedUSD, setCountedUSD] = useState('');
   const [countedBS, setCountedBS] = useState('');
+  const [countedCard, setCountedCard] = useState('');
+  const [countedZelle, setCountedZelle] = useState('');
+  const [countedMobile, setCountedMobile] = useState('');
   const [closeNotes, setCloseNotes] = useState('');
   const [isSubmittingClose, setIsSubmittingClose] = useState(false);
   const [supervisorAuthRequest, setSupervisorAuthRequest] = useState(null);
 
-  // Cargar Turno Actual desde el Servidor PC o Local
+  // Cargar Turno Actual desde el Servidor PC (registerId único del dispositivo con fallback a 'Caja Móvil' legado)
   const fetchCurrentShift = useCallback(async () => {
     setIsLoadingShift(true);
     try {
-      const res = await api.get('/cash/current', { timeout: 3500 });
-      if (res.data && res.data.id) {
-        setCurrentShift(res.data);
-        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(res.data)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
+      let shiftResp = await api.get(`/cash/current?registerId=${encodeURIComponent(terminalRegisterId)}`, { timeout: 3500 });
+      if (!shiftResp?.data?.id) {
+        const legacyResp = await api.get(`/cash/current?registerId=${encodeURIComponent('Caja Móvil')}`, { timeout: 3500 }).catch(() => null);
+        if (legacyResp?.data?.id) {
+          shiftResp = legacyResp;
+        }
+      }
+      if (shiftResp?.data && shiftResp.data.id) {
+        setCurrentShift(shiftResp.data);
+        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(shiftResp.data)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       } else {
         setCurrentShift(null);
         try { localStorage.removeItem('pos_mobile_current_shift'); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
@@ -161,7 +183,7 @@ export default function MobileCashView({
     } finally {
       setIsLoadingShift(false);
     }
-  }, []);
+  }, [terminalRegisterId]);
 
   useEffect(() => {
     fetchCurrentShift();
@@ -208,7 +230,7 @@ export default function MobileCashView({
 
     shiftSales.forEach(s => {
       const u = Number(s.totalUSD || s.total || 0);
-      const b = Number(s.totalBS || (u * (s.exchangeRate || exchangeRate)));
+      const b = Number(s.totalBS || (u * (s.exchangeRate || safeExchangeRate)));
       totalUSD += u;
       totalBS += b;
 
@@ -230,8 +252,8 @@ export default function MobileCashView({
           const pCurrency = String(part.currency || '').toUpperCase();
           const isVes = pCurrency === 'VES' || pCurrency === 'BS' || partKey === 'Efectivo Bs' || partKey === 'Pago Móvil';
           const pAmt = Number(part.amount || 0);
-          const pUsd = Number(part.amountUSD || (isVes ? pAmt / (s.exchangeRate || exchangeRate) : pAmt));
-          const pBs = Number(part.amountBS || (isVes ? pAmt : pUsd * (s.exchangeRate || exchangeRate)));
+          const pUsd = Number(part.amountUSD || (isVes ? pAmt / (s.exchangeRate || safeExchangeRate) : pAmt));
+          const pBs = Number(part.amountBS || (isVes ? pAmt : pUsd * (s.exchangeRate || safeExchangeRate)));
 
           if (methods[partKey]) {
             methods[partKey].count++;
@@ -310,7 +332,7 @@ export default function MobileCashView({
       theoreticalCashUsd,
       theoreticalCashBs
     };
-  }, [sales, exchangeRate, currentShift]);
+  }, [sales, safeExchangeRate, currentShift]);
 
   // Manejador: Abrir Turno de Caja
   const handleOpenShift = async (e) => {
@@ -328,8 +350,8 @@ export default function MobileCashView({
       initialAmountUsd: parsedUsd,
       initialAmountBs: parsedBs,
       initialAmount: parsedUsd,
-      registerId: 'Caja Móvil',
-      registerName: 'Terminal Móvil',
+      registerId: terminalRegisterId,
+      registerName: `Terminal ${terminalRegisterId}`,
       notes: openNotes.trim() || 'Apertura desde POS Móvil'
     };
 
@@ -395,7 +417,7 @@ export default function MobileCashView({
       amount: amountNum,
       currency: movementCurrency,
       reason: movementReason.trim(),
-      registerId: 'Caja Móvil'
+      registerId: currentShift?.registerId || getActiveMobileRegisterId()
     };
 
     const localMovObj = {
@@ -471,16 +493,19 @@ export default function MobileCashView({
     }
   };
 
-  const executeCloseShift = async (payload, cUSD, cBS) => {
+  const executeCloseShift = async (payload, cUSD, cBS, { isBlind = false } = {}) => {
     setIsSubmittingClose(true);
+    const endpoint = isBlind ? '/cash/close-blind' : '/cash/close';
     try {
-      const res = await api.post('/cash/close', payload, { timeout: 4500 });
+      const res = await api.post(endpoint, payload, { timeout: 4500 });
       const closed = res.data?.shift || res.data || { ...payload, closedAt: new Date().toISOString() };
       setLastZReportData({
         ...closed,
         countedUSD: cUSD,
         countedBS: cBS,
-        metrics,
+        declaration: payload.declaration || null,
+        isBlindClose: isBlind,
+        metrics: isBlind ? null : metrics,
         user: user?.name || user?.username || 'Cajero Móvil'
       });
       setCurrentShift(null);
@@ -488,9 +513,23 @@ export default function MobileCashView({
       setIsCloseShiftModalOpen(false);
       setReportType('Z');
       setIsReportModalOpen(true);
-      showToast('✅ ¡Caja cerrada exitosamente! Generando Corte Z.');
+      showToast(isBlind ? '✅ ¡Declaración ciega registrada y turno cerrado!' : '✅ ¡Caja cerrada exitosamente! Generando Corte Z.');
     } catch (err) {
       const httpStatus = err?.response?.status;
+      const errCode = err?.response?.data?.code;
+      if (isBlind && httpStatus === 403 && errCode === 'SUPERVISOR_AUTH_REQUIRED') {
+        setSupervisorAuthRequest({
+          title: 'Autorizar Cierre Ciego',
+          reason: 'La declaración de cierre ciego supera la tolerancia de caja. Un supervisor debe autorizar el cierre.',
+          actionType: 'cash_discrepancy',
+          referenceId: String(currentShift?.id || terminalRegisterId),
+          onAuthorized: (approvalData) => executeCloseShift({
+            ...payload,
+            supervisorApprovalId: approvalData?.id || null
+          }, cUSD, cBS, { isBlind: true })
+        });
+        return;
+      }
       if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
         const msg = err?.response?.data?.error || err?.response?.data?.message || 'Cierre de caja rechazado por el servidor';
         showToast(`⚠️ ${msg}`);
@@ -500,7 +539,7 @@ export default function MobileCashView({
       try {
         await primaryDb.put('syncQueue', {
           id: `cash_close_${Date.now()}`,
-          endpoint: '/cash/close',
+          endpoint,
           method: 'POST',
           payload,
           createdAt: new Date().toISOString()
@@ -510,9 +549,11 @@ export default function MobileCashView({
         ...payload,
         countedUSD: cUSD,
         countedBS: cBS,
+        declaration: payload.declaration || null,
+        isBlindClose: isBlind,
         closedAt: new Date().toISOString(),
         isOffline: true,
-        metrics,
+        metrics: isBlind ? null : metrics,
         user: user?.name || user?.username || 'Cajero Móvil'
       });
       setCurrentShift(null);
@@ -526,12 +567,31 @@ export default function MobileCashView({
     }
   };
 
-  // Manejador: Cierre de Turno (Corte Z)
+  // Manejador: Cierre de Turno (Corte Z o Cierre Ciego estricto)
   const handleCloseShift = async (e) => {
     e.preventDefault();
 
     const cUSD = parseFloat(countedUSD) || 0;
     const cBS = parseFloat(countedBS) || 0;
+    const activeRegId = currentShift?.registerId || getActiveMobileRegisterId();
+
+    if (isBlindCloseEnforced) {
+      const blindPayload = {
+        shiftId: currentShift?.id || null,
+        registerId: activeRegId,
+        declaration: {
+          usd: cUSD,
+          ves: cBS,
+          card: parseFloat(countedCard) || 0,
+          zelle: parseFloat(countedZelle) || 0,
+          mobile: parseFloat(countedMobile) || 0
+        },
+        notes: closeNotes.trim() || 'Cierre ciego desde POS Móvil'
+      };
+      await executeCloseShift(blindPayload, cUSD, cBS, { isBlind: true });
+      return;
+    }
+
     const diffUSD = cUSD - metrics.theoreticalCashUsd;
     const diffBS = cBS - metrics.theoreticalCashBs;
 
@@ -560,7 +620,7 @@ export default function MobileCashView({
       declaredAmountBs: cBS,
       finalBreakdown,
       notes: closeNotes.trim() || 'Cierre desde POS Móvil',
-      registerId: currentShift?.registerId || 'Caja Móvil',
+      registerId: activeRegId,
       theoreticalUsd: metrics.theoreticalCashUsd,
       theoreticalBs: metrics.theoreticalCashBs,
       differenceUsd: diffUSD,
@@ -570,21 +630,21 @@ export default function MobileCashView({
     // Tolerancia alineada con CashReconciliationService (por defecto $1.0 USD)
     const configuredTolerance = Number(businessInfo?.cashDifferenceToleranceUsd ?? 1);
     const toleranceUsd = Number.isFinite(configuredTolerance) && configuredTolerance >= 0 ? configuredTolerance : 1;
-    if (Math.abs(diffUSD) > toleranceUsd) {
+    if (Math.abs(diffUSD) > toleranceUsd && !isPrivileged) {
       setSupervisorAuthRequest({
         title: 'Autorizar Cierre con Diferencia',
         reason: `Discrepancia detectada: $${diffUSD.toFixed(2)} USD (tolerancia $${toleranceUsd.toFixed(2)})`,
         actionType: 'cash_discrepancy',
-        referenceId: String(currentShift?.id || 'caja_movil'),
+        referenceId: String(currentShift?.id || activeRegId),
         onAuthorized: (approvalData) => executeCloseShift({
           ...payload,
           supervisorApprovalId: approvalData?.id || null
-        }, cUSD, cBS)
+        }, cUSD, cBS, { isBlind: false })
       });
       return;
     }
 
-    await executeCloseShift(payload, cUSD, cBS);
+    await executeCloseShift(payload, cUSD, cBS, { isBlind: false });
   };
 
   // Fuente de métricas activa para Reporte X vs Corte Z (preserva snapshot del turno recién cerrado)
@@ -598,13 +658,34 @@ export default function MobileCashView({
   // Generar texto para WhatsApp (Corte X o Z)
   const generateReportText = (type = 'X') => {
     const isZ = type === 'Z';
+    const isBlindReceipt = isZ && Boolean(lastZReportData?.isBlindClose);
+    const activeRegLabel = currentShift?.registerId || lastZReportData?.registerId || terminalRegisterId;
+    if (isBlindReceipt) {
+      const decl = lastZReportData?.declaration || {};
+      return [
+        `🔒 *DECLARACIÓN DE CIERRE CIEGO (CORTE Z)*`,
+        `Terminal: *${activeRegLabel}*`,
+        `Cajero: *${user?.name || user?.username || 'Cajero Móvil'}*`,
+        `Fecha: ${new Date().toLocaleDateString('es-VE')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+        `--------------------------------`,
+        `*CONTEO FÍSICO DECLARADO:*`,
+        `• Efectivo USD: $${Number(decl.usd ?? lastZReportData?.countedUSD ?? 0).toFixed(2)}`,
+        `• Efectivo Bs: Bs. ${Number(decl.ves ?? lastZReportData?.countedBS ?? 0).toFixed(2)}`,
+        ...(Number(decl.card) > 0 ? [`• Punto/Tarjeta: ${Number(decl.card).toFixed(2)}`] : []),
+        ...(Number(decl.zelle) > 0 ? [`• Zelle: $${Number(decl.zelle).toFixed(2)}`] : []),
+        ...(Number(decl.mobile) > 0 ? [`• Pago Móvil: Bs. ${Number(decl.mobile).toFixed(2)}`] : []),
+        `--------------------------------`,
+        `Auditoría sellada. Los totales teóricos se concilian en gerencia.`,
+        `Isaac POS Ultra Móvil • Sistema Seguro`
+      ].join('\n');
+    }
     const rMetrics = getReportMetrics(type);
     const lines = [
       `📊 *${isZ ? 'CORTE Z (CIERRE DEFINITIVO)' : 'CORTE X (ARQUEO PARCIAL)'}*`,
-      `Terminal: *Caja Móvil*`,
+      `Terminal: *${activeRegLabel}*`,
       `Cajero: *${user?.name || user?.username || 'Cajero Móvil'}*`,
       `Fecha: ${new Date().toLocaleDateString('es-VE')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-      `Tasa Oficial: Bs. ${exchangeRate.toFixed(2)}`,
+      `Tasa Oficial: Bs. ${safeExchangeRate.toFixed(2)}`,
       `--------------------------------`,
       `*FONDO INICIAL DE APERTURA:*`,
       `• USD: $${rMetrics.initialUsd.toFixed(2)}`,
@@ -648,46 +729,61 @@ export default function MobileCashView({
   const handlePrintBluetooth = async (type = 'X') => {
     try {
       const isZ = type === 'Z';
-      const rMetrics = getReportMetrics(type);
+      const isBlindReceipt = isZ && Boolean(lastZReportData?.isBlindClose);
+      const activeRegLabel = currentShift?.registerId || lastZReportData?.registerId || terminalRegisterId;
       const ESC = '\x1B';
       const GS = '\x1D';
       const divider = '--------------------------------\n';
       let receipt = '';
       receipt += ESC_INIT_CP858; // Init + CP858 Español real (ñ, Ñ, tildes)
       receipt += `${ESC}a\x01`; // Center
-      receipt += `${ESC}!\x30${isZ ? 'CORTE Z (CIERRE)' : 'CORTE X (ARQUEO)'}${ESC}!\x00\n`;
-      receipt += `Terminal: Caja Móvil\n`;
+      receipt += `${ESC}!\x30${isBlindReceipt ? 'CIERRE CIEGO (Z)' : (isZ ? 'CORTE Z (CIERRE)' : 'CORTE X (ARQUEO)')}${ESC}!\x00\n`;
+      receipt += `Terminal: ${activeRegLabel}\n`;
       receipt += `Cajero: ${String(user?.name || user?.username || 'Cajero Móvil')}\n`;
       receipt += `${new Date().toLocaleDateString('es-VE')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n`;
-      receipt += `Tasa BCV: Bs. ${exchangeRate.toFixed(2)}\n`;
       receipt += `${ESC}a\x00`; // Left
       receipt += divider;
-      receipt += `${ESC}E\x01FONDO INICIAL DE APERTURA:${ESC}E\x00\n`;
-      receipt += `USD: $${rMetrics.initialUsd.toFixed(2)}\n`;
-      receipt += `Bs:  Bs. ${rMetrics.initialBs.toFixed(2)}\n`;
-      receipt += divider;
-      receipt += `${ESC}E\x01VENTAS TOTALES DEL TURNO:${ESC}E\x00\n`;
-      receipt += `Total USD: $${rMetrics.totalUSD.toFixed(2)}\n`;
-      receipt += `Total BS:  Bs. ${rMetrics.totalBS.toFixed(2)}\n`;
-      receipt += `Tickets:   ${rMetrics.count}\n`;
-      receipt += divider;
-      receipt += `${ESC}E\x01DESGLOSE POR PAGO:${ESC}E\x00\n`;
-      Object.entries(rMetrics.methods)
-        .filter(([_, data]) => data.count > 0)
-        .forEach(([name, data]) => {
-          receipt += `${String(name)} (${data.count}): $${data.usd.toFixed(2)}\n`;
-        });
-      receipt += divider;
-      receipt += `${ESC}E\x01EFECTIVO ESPERADO EN CAJA:${ESC}E\x00\n`;
-      receipt += `USD Esperado: $${rMetrics.theoreticalCashUsd.toFixed(2)}\n`;
-      receipt += `Bs Esperado:  Bs. ${rMetrics.theoreticalCashBs.toFixed(2)}\n`;
-      if (isZ && lastZReportData) {
+      if (isBlindReceipt) {
+        const decl = lastZReportData?.declaration || {};
+        receipt += `${ESC}E\x01DECLARACION FISICA SELLADA:${ESC}E\x00\n`;
+        receipt += `Efectivo USD: $${Number(decl.usd ?? lastZReportData?.countedUSD ?? 0).toFixed(2)}\n`;
+        receipt += `Efectivo Bs:  Bs. ${Number(decl.ves ?? lastZReportData?.countedBS ?? 0).toFixed(2)}\n`;
+        if (Number(decl.card) > 0) receipt += `Punto/Tarjeta: ${Number(decl.card).toFixed(2)}\n`;
+        if (Number(decl.zelle) > 0) receipt += `Zelle:         $${Number(decl.zelle).toFixed(2)}\n`;
+        if (Number(decl.mobile) > 0) receipt += `Pago Movil:    Bs. ${Number(decl.mobile).toFixed(2)}\n`;
         receipt += divider;
-        receipt += `${ESC}E\x01CONTEO FÍSICO ARQUEADO:${ESC}E\x00\n`;
-        receipt += `Conteo USD: $${Number(lastZReportData.countedUSD || 0).toFixed(2)}\n`;
-        receipt += `Conteo Bs:  Bs. ${Number(lastZReportData.countedBS || 0).toFixed(2)}\n`;
-        receipt += `Dif. USD:   $${Number(lastZReportData.differenceUsd || 0).toFixed(2)}\n`;
-        receipt += `Dif. Bs:    Bs. ${Number(lastZReportData.differenceBs || 0).toFixed(2)}\n`;
+        receipt += `Auditoria reservada en gerencia.\n`;
+      } else {
+        const rMetrics = getReportMetrics(type);
+        receipt += `Tasa BCV: Bs. ${safeExchangeRate.toFixed(2)}\n`;
+        receipt += divider;
+        receipt += `${ESC}E\x01FONDO INICIAL DE APERTURA:${ESC}E\x00\n`;
+        receipt += `USD: $${rMetrics.initialUsd.toFixed(2)}\n`;
+        receipt += `Bs:  Bs. ${rMetrics.initialBs.toFixed(2)}\n`;
+        receipt += divider;
+        receipt += `${ESC}E\x01VENTAS TOTALES DEL TURNO:${ESC}E\x00\n`;
+        receipt += `Total USD: $${rMetrics.totalUSD.toFixed(2)}\n`;
+        receipt += `Total BS:  Bs. ${rMetrics.totalBS.toFixed(2)}\n`;
+        receipt += `Tickets:   ${rMetrics.count}\n`;
+        receipt += divider;
+        receipt += `${ESC}E\x01DESGLOSE POR PAGO:${ESC}E\x00\n`;
+        Object.entries(rMetrics.methods)
+          .filter(([_, data]) => data.count > 0)
+          .forEach(([name, data]) => {
+            receipt += `${String(name)} (${data.count}): $${data.usd.toFixed(2)}\n`;
+          });
+        receipt += divider;
+        receipt += `${ESC}E\x01EFECTIVO ESPERADO EN CAJA:${ESC}E\x00\n`;
+        receipt += `USD Esperado: $${rMetrics.theoreticalCashUsd.toFixed(2)}\n`;
+        receipt += `Bs Esperado:  Bs. ${rMetrics.theoreticalCashBs.toFixed(2)}\n`;
+        if (isZ && lastZReportData) {
+          receipt += divider;
+          receipt += `${ESC}E\x01CONTEO FÍSICO ARQUEADO:${ESC}E\x00\n`;
+          receipt += `Conteo USD: $${Number(lastZReportData.countedUSD || 0).toFixed(2)}\n`;
+          receipt += `Conteo Bs:  Bs. ${Number(lastZReportData.countedBS || 0).toFixed(2)}\n`;
+          receipt += `Dif. USD:   $${Number(lastZReportData.differenceUsd || 0).toFixed(2)}\n`;
+          receipt += `Dif. Bs:    Bs. ${Number(lastZReportData.differenceBs || 0).toFixed(2)}\n`;
+        }
       }
       receipt += divider;
       receipt += `${ESC}a\x01Isaac POS Ultra Móvil\n\n\n\n${GS}V\x41\x00`;
@@ -762,7 +858,7 @@ export default function MobileCashView({
               <span>Caja y Turno</span>
             </h2>
             <p className={`text-[10px] ${T.textMuted}`}>
-              {currentShift ? 'Turno Activo • Caja Móvil' : 'Caja Cerrada • Sin turno activo'}
+              {currentShift ? `Turno Activo • ${currentShift.registerId || terminalRegisterId}` : 'Caja Cerrada • Sin turno activo'}
             </p>
           </div>
         </div>
@@ -788,14 +884,21 @@ export default function MobileCashView({
           </button>
 
           {currentShift ? (
-            <button
-              onClick={() => handleShareWhatsApp('X')}
-              className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1 transition-all shadow-md active:scale-95 cursor-pointer whitespace-nowrap"
-              title="Compartir Arqueo por WhatsApp"
-            >
-              <Share2 size={13} />
-              <span>Arqueo</span>
-            </button>
+            !isBlindCloseEnforced ? (
+              <button
+                onClick={() => handleShareWhatsApp('X')}
+                className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1 transition-all shadow-md active:scale-95 cursor-pointer whitespace-nowrap"
+                title="Compartir Arqueo por WhatsApp"
+              >
+                <Share2 size={13} />
+                <span>Arqueo</span>
+              </button>
+            ) : (
+              <span className="px-2 py-1 rounded-lg bg-slate-800/80 border border-slate-700 text-amber-400 text-[10px] font-black flex items-center gap-1">
+                <Lock size={11} />
+                <span>Ciego</span>
+              </span>
+            )
           ) : (
             <button
               onClick={() => setIsOpenShiftModalOpen(true)}
@@ -835,41 +938,55 @@ export default function MobileCashView({
               </div>
             )}
 
-            {/* Recaudación Total */}
-            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/20">
-              <div>
-                <span className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider`}>
-                  Recaudación USD
-                </span>
-                <p className="font-black text-xl text-emerald-600 dark:text-emerald-400 mt-0.5">
-                  ${metrics.totalUSD.toFixed(2)}
+            {isBlindCloseEnforced ? (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-1 text-xs">
+                <div className="flex items-center gap-1.5 text-amber-500 font-black uppercase text-[10px]">
+                  <Lock size={13} />
+                  <span>Arqueo Ciego Activo (Auditoría Antifraude)</span>
+                </div>
+                <p className={`text-[11px] ${T.textSecondary}`}>
+                  Los montos esperados y el Corte X están ocultos durante el turno. Al finalizar, declara tu conteo físico real en el Cierre Z.
                 </p>
               </div>
-              <div>
-                <span className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider`}>
-                  Recaudación Bs
-                </span>
-                <p className="font-black text-base text-amber-600 dark:text-amber-400 mt-0.5 truncate">
-                  Bs. {metrics.totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
-              </div>
-            </div>
+            ) : (
+              <>
+                {/* Recaudación Total */}
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/20">
+                  <div>
+                    <span className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider`}>
+                      Recaudación USD
+                    </span>
+                    <p className="font-black text-xl text-emerald-600 dark:text-emerald-400 mt-0.5">
+                      ${metrics.totalUSD.toFixed(2)}
+                    </p>
+                  </div>
+                  <div>
+                    <span className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider`}>
+                      Recaudación Bs
+                    </span>
+                    <p className="font-black text-base text-amber-600 dark:text-amber-400 mt-0.5 truncate">
+                      Bs. {metrics.totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
 
-            {/* Efectivo Teórico Esperado en Caja */}
-            <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-xs">
-              <div>
-                <span className="text-emerald-700 dark:text-emerald-400 font-bold block text-[10px] uppercase">Efectivo Teórico en Cajón:</span>
-                <span className={`font-black ${T.textPrimary} text-sm`}>
-                  ${metrics.theoreticalCashUsd.toFixed(2)} USD
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-amber-700 dark:text-amber-400 font-bold block text-[10px] uppercase">En Bolívares:</span>
-                <span className="font-black text-amber-700 dark:text-amber-400 text-xs">
-                  Bs. {metrics.theoreticalCashBs.toFixed(2)}
-                </span>
-              </div>
-            </div>
+                {/* Efectivo Teórico Esperado en Caja */}
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-bold block text-[10px] uppercase">Efectivo Teórico en Cajón:</span>
+                    <span className={`font-black ${T.textPrimary} text-sm`}>
+                      ${metrics.theoreticalCashUsd.toFixed(2)} USD
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-amber-700 dark:text-amber-400 font-bold block text-[10px] uppercase">En Bolívares:</span>
+                    <span className="font-black text-amber-700 dark:text-amber-400 text-xs">
+                      Bs. {metrics.theoreticalCashBs.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
 
             <div className="flex items-center justify-between pt-1 text-xs">
               <span className={T.textSecondary}>Ventas realizadas en turno:</span>
@@ -884,7 +1001,7 @@ export default function MobileCashView({
             )}
 
             {/* BOTONES DE ACCIÓN DE TURNO */}
-            <div className="grid grid-cols-3 gap-2 pt-2">
+            <div className={`grid ${isBlindCloseEnforced ? 'grid-cols-2' : 'grid-cols-3'} gap-2 pt-2`}>
               <button
                 onClick={() => setIsMovementModalOpen(true)}
                 className="py-2.5 px-2 rounded-lg bg-amber-500/10 dark:bg-amber-500/20 hover:bg-amber-500/25 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-bold text-[11px] flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all"
@@ -893,28 +1010,32 @@ export default function MobileCashView({
                 <span>Movimiento</span>
               </button>
 
-              <button
-                onClick={() => {
-                  setReportType('X');
-                  setIsReportModalOpen(true);
-                }}
-                className="py-2.5 px-2 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 hover:bg-blue-500/25 border border-blue-500/30 text-blue-700 dark:text-blue-300 font-bold text-[11px] flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all"
-              >
-                <FileText size={16} />
-                <span>Corte X</span>
-              </button>
+              {!isBlindCloseEnforced && (
+                <button
+                  onClick={() => {
+                    setReportType('X');
+                    setIsReportModalOpen(true);
+                  }}
+                  className="py-2.5 px-2 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 hover:bg-blue-500/25 border border-blue-500/30 text-blue-700 dark:text-blue-300 font-bold text-[11px] flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all"
+                >
+                  <FileText size={16} />
+                  <span>Corte X</span>
+                </button>
+              )}
 
               <button
                 onClick={() => {
-                  const isPrivileged = user?.role === 'admin' || user?.role === 'superadmin';
                   setCountedUSD(isPrivileged ? metrics.theoreticalCashUsd.toFixed(2) : '');
                   setCountedBS(isPrivileged ? metrics.theoreticalCashBs.toFixed(2) : '');
+                  setCountedCard('');
+                  setCountedZelle('');
+                  setCountedMobile('');
                   setIsCloseShiftModalOpen(true);
                 }}
                 className="py-2.5 px-2 rounded-lg bg-rose-500/10 dark:bg-rose-500/20 hover:bg-rose-500/25 border border-rose-500/30 text-rose-700 dark:text-rose-300 font-bold text-[11px] flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all"
               >
                 <Lock size={16} />
-                <span>Cerrar Turno (Z)</span>
+                <span>{isBlindCloseEnforced ? 'Cierre Ciego (Z)' : 'Cerrar Turno (Z)'}</span>
               </button>
             </div>
           </div>
@@ -939,7 +1060,8 @@ export default function MobileCashView({
           </div>
         )}
 
-        {/* 3. DESGLOSE POR FORMAS DE PAGO */}
+        {/* 3. DESGLOSE POR FORMAS DE PAGO (Oculto en Modo Ciego estricto para cajeros) */}
+        {!isBlindCloseEnforced && (
         <div className="space-y-1.5">
           <h3 className={`text-xs font-black uppercase tracking-wider ${T.textMuted} px-1`}>
             Desglose por Formas de Pago
@@ -990,6 +1112,7 @@ export default function MobileCashView({
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* MODAL: APERTURA DE TURNO */}
@@ -1241,7 +1364,7 @@ export default function MobileCashView({
                     onChange={(e) => setCountedUSD(e.target.value)}
                     className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
                   />
-                  {(user?.role === 'admin' || user?.role === 'superadmin') ? (
+                  {isPrivileged ? (
                     <p className={`text-[9px] ${T.textMuted} mt-1`}>
                       Esperado: ${metrics.theoreticalCashUsd.toFixed(2)}
                     </p>
@@ -1266,7 +1389,7 @@ export default function MobileCashView({
                     onChange={(e) => setCountedBS(e.target.value)}
                     className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-amber-500`}
                   />
-                  {(user?.role === 'admin' || user?.role === 'superadmin') ? (
+                  {isPrivileged ? (
                     <p className={`text-[9px] ${T.textMuted} mt-1`}>
                       Esperado: Bs. {metrics.theoreticalCashBs.toFixed(2)}
                     </p>
@@ -1278,8 +1401,55 @@ export default function MobileCashView({
                 </div>
               </div>
 
-              {/* Indicador de Diferencia (Sólo visible para Administrador) */}
-              {(user?.role === 'admin' || user?.role === 'superadmin') && countedUSD !== '' && (
+              {isBlindCloseEnforced && (
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-blue-500 block mb-1">
+                      Lote Punto
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={countedCard}
+                      onChange={(e) => setCountedCard(e.target.value)}
+                      className={`w-full min-h-[42px] ${T.inputBg} border ${T.border} rounded-lg p-2 text-xs font-black ${T.textPrimary} outline-none`}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-indigo-400 block mb-1">
+                      Zelle ($)
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={countedZelle}
+                      onChange={(e) => setCountedZelle(e.target.value)}
+                      className={`w-full min-h-[42px] ${T.inputBg} border ${T.border} rounded-lg p-2 text-xs font-black ${T.textPrimary} outline-none`}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-purple-400 block mb-1">
+                      Pago Móvil (Bs)
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={countedMobile}
+                      onChange={(e) => setCountedMobile(e.target.value)}
+                      className={`w-full min-h-[42px] ${T.inputBg} border ${T.border} rounded-lg p-2 text-xs font-black ${T.textPrimary} outline-none`}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Indicador de Diferencia (Sólo visible para Administrador/Supervisor) */}
+              {isPrivileged && countedUSD !== '' && (
                 <div className={`p-2.5 rounded-lg border text-xs flex justify-between items-center ${
                   (parseFloat(countedUSD) || 0) >= metrics.theoreticalCashUsd 
                     ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400' 
@@ -1339,6 +1509,44 @@ export default function MobileCashView({
             </div>
 
             {(() => {
+              const isBlindReceipt = reportType === 'Z' && Boolean(lastZReportData?.isBlindClose);
+              if (isBlindReceipt) {
+                const decl = lastZReportData?.declaration || {};
+                return (
+                  <div className="border-t border-b border-dashed py-2 space-y-1 text-[10px]">
+                    <p className="font-bold font-sans uppercase text-center text-slate-800">Declaración Ciega Sellada</p>
+                    <div className="flex justify-between font-bold">
+                      <span>Efectivo USD Declarado:</span>
+                      <span>${Number(decl.usd ?? lastZReportData?.countedUSD ?? 0).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Efectivo Bs Declarado:</span>
+                      <span>Bs. {Number(decl.ves ?? lastZReportData?.countedBS ?? 0).toFixed(2)}</span>
+                    </div>
+                    {Number(decl.card) > 0 && (
+                      <div className="flex justify-between">
+                        <span>Punto / Tarjeta:</span>
+                        <span>{Number(decl.card).toFixed(2)}</span>
+                      </div>
+                    )}
+                    {Number(decl.zelle) > 0 && (
+                      <div className="flex justify-between">
+                        <span>Zelle:</span>
+                        <span>${Number(decl.zelle).toFixed(2)}</span>
+                      </div>
+                    )}
+                    {Number(decl.mobile) > 0 && (
+                      <div className="flex justify-between">
+                        <span>Pago Móvil:</span>
+                        <span>Bs. {Number(decl.mobile).toFixed(2)}</span>
+                      </div>
+                    )}
+                    <p className="text-[9px] text-slate-500 font-sans pt-1 text-center">
+                      Los totales teóricos y diferencias son auditados exclusivamente en gerencia.
+                    </p>
+                  </div>
+                );
+              }
               const modalMetrics = getReportMetrics(reportType);
               return (
                 <>

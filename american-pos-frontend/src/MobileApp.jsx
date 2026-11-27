@@ -1,17 +1,19 @@
 import { useState, useEffect, Suspense, lazy } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import { Routes, Route } from 'react-router-dom';
+import { LazyMotion, domAnimation } from 'framer-motion';
 import toast, { Toaster, ToastBar } from 'react-hot-toast';
-import LockScreen from './components/LockScreen';
-import ActivationPortal from './components/ActivationPortal';
 import SplashScreen from './components/SplashScreen';
 import { syncManager } from './services/syncManager';
 import { useAuth } from './hooks/AuthContext';
 import { useTheme } from './hooks/ThemeContext';
 import { otaUpdateService } from './services/otaUpdateService';
 import lanSyncService from './services/lanSyncService';
+import { useMobileKeyboardViewport } from './hooks/useMobileKeyboardViewport';
 
 const MobilePOSSimulator = lazy(() => import('./pages/MobilePOSSimulator'));
+const LockScreen = lazy(() => import('./components/LockScreen'));
+const ActivationPortal = lazy(() => import('./components/ActivationPortal'));
 
 function AutoDismissToast({ toast: t }) {
   useEffect(() => {
@@ -63,6 +65,9 @@ function AutoDismissToast({ toast: t }) {
  * y menor huella de memoria RAM en dispositivos móviles.
  */
 export default function MobileApp() {
+  // Instancia raíz de teclado virtual (mantiene --isaac-keyboard-overlap activo en los 16 módulos ERP)
+  useMobileKeyboardViewport({ enabled: true });
+
   const { theme } = useTheme();
   const isDark = theme === 'dark' || theme === '2025' || theme === 'glass' || theme === 'oled' || theme === 'titanium';
   const {
@@ -87,7 +92,6 @@ export default function MobileApp() {
   const [isApplyingOta, setIsApplyingOta] = useState(false);
 
   useEffect(() => {
-    otaUpdateService.init();
     const unsubOta = otaUpdateService.subscribeUpdateReady(({ ready, version }) => {
       if (ready) {
         setOtaReadyVersion(version || 'nueva');
@@ -117,6 +121,14 @@ export default function MobileApp() {
       unsubOta();
     };
   }, []);
+
+  // Confirmar notifyAppReady() ante CapacitorUpdater SOLO tras un render saludable de React
+  // (cuando AuthProvider y licencia concluyeron bootstrap) para preservar rollback real ante pantallas blancas.
+  useEffect(() => {
+    if (!authLoading && !licenseLoading) {
+      otaUpdateService.init().catch(() => {});
+    }
+  }, [authLoading, licenseLoading]);
 
   useEffect(() => {
     if (user) {
@@ -156,7 +168,7 @@ export default function MobileApp() {
   }, [isLocked]);
 
   return (
-    <>
+    <LazyMotion features={domAnimation}>
       <Toaster
         position="top-center"
         containerStyle={{
@@ -188,7 +200,7 @@ export default function MobileApp() {
         {(t) => <AutoDismissToast toast={t} />}
       </Toaster>
 
-      {showSplash && <SplashScreen onFinished={() => setShowSplash(false)} minDuration={650} />}
+      {showSplash && <SplashScreen onFinished={() => setShowSplash(false)} minDuration={200} />}
 
       {/* Banner persistente de Actualización OTA verificada lista para aplicar */}
       {otaReadyVersion && !otaBannerDismissed && !showSplash && (
@@ -239,17 +251,6 @@ export default function MobileApp() {
             {licenseLoading ? 'Verificando Licencia...' : 'Verificando Sesión...'}
           </p>
         </div>
-      ) : !isActivated ? (
-        <ActivationPortal
-          machineId={machineId}
-          licenseInfo={licenseInfo}
-          onActivated={async () => {
-            setIsActivated(true);
-            if (checkLicense) await checkLicense();
-          }}
-        />
-      ) : isLocked && user ? (
-        <LockScreen user={user} onUnlock={appUnlock} onLogout={logout} />
       ) : (
         <Suspense
           fallback={
@@ -261,14 +262,27 @@ export default function MobileApp() {
             </div>
           }
         >
-          <Routes>
-            <Route path="/mobile" element={<MobilePOSSimulator />} />
-            <Route path="/mobile-pos" element={<MobilePOSSimulator />} />
-            <Route path="/login" element={<MobilePOSSimulator />} />
-            <Route path="*" element={<MobilePOSSimulator />} />
-          </Routes>
+          {!isActivated ? (
+            <ActivationPortal
+              machineId={machineId}
+              licenseInfo={licenseInfo}
+              onActivated={async () => {
+                setIsActivated(true);
+                if (checkLicense) await checkLicense();
+              }}
+            />
+          ) : isLocked && user ? (
+            <LockScreen user={user} onUnlock={appUnlock} onLogout={logout} />
+          ) : (
+            <Routes>
+              <Route path="/mobile" element={<MobilePOSSimulator />} />
+              <Route path="/mobile-pos" element={<MobilePOSSimulator />} />
+              <Route path="/login" element={<MobilePOSSimulator />} />
+              <Route path="*" element={<MobilePOSSimulator />} />
+            </Routes>
+          )}
         </Suspense>
       )}
-    </>
+    </LazyMotion>
   );
 }

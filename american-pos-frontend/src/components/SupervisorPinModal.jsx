@@ -4,6 +4,12 @@ import api from '../services/api';
 import BaseModal from './BaseModal';
 import biometricService from '../services/biometricService';
 import { useAuth } from '../hooks/AuthContext';
+import { computeSha256Hex } from '../utils/clientLicenseValidator';
+
+async function computePinSha256Hex(rawPin) {
+    const bytes = new TextEncoder().encode(String(rawPin || ''));
+    return await computeSha256Hex(bytes);
+}
 
 export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionType, referenceId }) {
     const { user: currentUser } = useAuth();
@@ -59,11 +65,15 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, onClose]);
 
+    const enrolledBio = biometricService.getEnrolledCredential();
     const canUseBiometric = Boolean(
         currentUser &&
         selectedSupervisor &&
         String(currentUser.id) === String(selectedSupervisor) &&
-        ['supervisor', 'admin', 'owner', 'superadmin'].includes(String(currentUser.role || '').toLowerCase())
+        ['supervisor', 'admin', 'owner', 'superadmin'].includes(String(currentUser.role || '').toLowerCase()) &&
+        enrolledBio?.keyAlias &&
+        String(enrolledBio.userId) === String(selectedSupervisor) &&
+        biometricService.isNativeHardwareBiometricAvailable()
     );
 
     const handleBiometricAuth = async () => {
@@ -72,32 +82,25 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
             return;
         }
         setError('');
-        const supObj = supervisors.find(s => s.id === selectedSupervisor);
+        const supObj = supervisors.find(s => String(s.id) === String(selectedSupervisor)) || currentUser;
         try {
             setLoading(true);
-            const enrolledCred = biometricService.getEnrolledCredential();
-            if (!enrolledCred?.biometricToken || String(enrolledCred.userId) !== String(selectedSupervisor)) {
-                setError('No hay una huella criptográfica vinculada en este equipo para el supervisor seleccionado. Usa tu PIN.');
-                return;
-            }
-
-            const bioResult = await biometricService.authenticate({
-                supervisorName: supObj?.name || supObj?.username || 'Supervisor'
+            const { challengeId, signature } = await biometricService.signSupervisorBiometricChallenge(supObj, {
+                title: 'Autorización de Supervisor',
+                subtitle: `Coloca tu huella para autorizar como ${supObj?.name || supObj?.username || 'Supervisor'}`
             });
-
-            if (bioResult.success) {
-                const res = await api.post('/auth/supervisor-authorize', { 
-                    supervisorId: selectedSupervisor, 
-                    isBiometric: true,
-                    biometricToken: enrolledCred.biometricToken,
-                    actionType: actionType || 'GENERAL_ACTION', 
-                    referenceId 
-                });
-                onApprove(res.data.id);
-                onClose();
-            }
+            const res = await api.post('/auth/supervisor-authorize', {
+                supervisorId: selectedSupervisor,
+                isBiometric: true,
+                challengeId,
+                signature,
+                actionType: actionType || 'GENERAL_ACTION',
+                referenceId
+            });
+            onApprove(res.data.id);
+            onClose();
         } catch (err) {
-            setError(err.message || 'Verificación biométrica no completada');
+            setError(err.response?.data?.message || err.message || 'Verificación biométrica no completada');
         } finally {
             setLoading(false);
         }
@@ -114,9 +117,7 @@ export default function SupervisorPinModal({ isOpen, onClose, onApprove, actionT
 
         try {
             setLoading(true);
-            const buffer = new TextEncoder().encode(String(pin));
-            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-            const hashedPin = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+            const hashedPin = await computePinSha256Hex(pin);
 
             const res = await api.post('/auth/supervisor-authorize', { 
                 supervisorId: selectedSupervisor, 

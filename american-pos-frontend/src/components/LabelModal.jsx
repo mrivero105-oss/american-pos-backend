@@ -242,6 +242,7 @@ export default function LabelModal({ isOpen, onClose, products = [], exchangeRat
 
         iframe = document.createElement('iframe');
         iframe.id = 'label-silent-print-frame';
+        iframe.setAttribute('sandbox', 'allow-modals allow-same-origin');
         iframe.style.position = 'fixed';
         iframe.style.top = '-9999px';
         iframe.style.left = '-9999px';

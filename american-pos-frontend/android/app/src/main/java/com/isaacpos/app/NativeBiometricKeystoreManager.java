@@ -154,12 +154,28 @@ final class NativeBiometricKeystoreManager {
         }
 
         final FragmentActivity activity = (FragmentActivity) rawActivity;
-        try {
-            deleteKeystoreEntryQuietly(alias);
+        final String stagingAlias = NativeHardwareUtils.sanitizeBiometricAlias(
+                alias + "_v" + System.currentTimeMillis(),
+                DEFAULT_BIOMETRIC_KEY_ALIAS
+        );
+        final boolean hadExistingKey;
+        {
+            boolean exists = false;
+            try {
+                KeyStore checkKs = KeyStore.getInstance(KEYSTORE_PROVIDER);
+                checkKs.load(null);
+                exists = checkKs.containsAlias(alias);
+            } catch (Exception ignored) {}
+            hadExistingKey = exists;
+        }
+        final String targetAlias = hadExistingKey ? stagingAlias : alias;
 
+        try {
+            // Nunca borrar la clave previa antes de confirmar la huella en BiometricPrompt:
+            // si ya existía una clave activa, generamos la nueva en un alias staging y solo retiramos la anterior tras éxito.
             KeyPairGenerator kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, KEYSTORE_PROVIDER);
             KeyGenParameterSpec.Builder specBuilder = new KeyGenParameterSpec.Builder(
-                alias,
+                targetAlias,
                 KeyProperties.PURPOSE_SIGN
             )
                 .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
@@ -183,7 +199,7 @@ final class NativeBiometricKeystoreManager {
 
             activity.runOnUiThread(() -> {
                 if (activity.isFinishing() || activity.isDestroyed()) {
-                    deleteKeystoreEntryQuietly(alias);
+                    deleteKeystoreEntryQuietly(targetAlias);
                     call.reject("Actividad cerrada durante registro biométrico");
                     return;
                 }
@@ -194,7 +210,7 @@ final class NativeBiometricKeystoreManager {
                                 @Override
                                 public void onAuthenticationError(int errorCode, CharSequence errString) {
                                     super.onAuthenticationError(errorCode, errString);
-                                    deleteKeystoreEntryQuietly(alias);
+                                    deleteKeystoreEntryQuietly(targetAlias);
                                     call.reject(errString.toString(), String.valueOf(errorCode));
                                 }
 
@@ -204,7 +220,7 @@ final class NativeBiometricKeystoreManager {
                                     try {
                                         BiometricPrompt.CryptoObject unlocked = result.getCryptoObject();
                                         if (unlocked == null || unlocked.getSignature() == null) {
-                                            deleteKeystoreEntryQuietly(alias);
+                                            deleteKeystoreEntryQuietly(targetAlias);
                                             call.reject("No se recibió CryptoObject válido al registrar biometría");
                                             return;
                                         }
@@ -212,14 +228,19 @@ final class NativeBiometricKeystoreManager {
                                                 "isaac-pos-biometric-enroll-check".getBytes(StandardCharsets.UTF_8));
                                         unlocked.getSignature().sign();
 
+                                        // Solo después de verificar exitosamente la nueva huella eliminamos el alias anterior
+                                        if (hadExistingKey && !targetAlias.equals(alias)) {
+                                            deleteKeystoreEntryQuietly(alias);
+                                        }
+
                                         JSObject res = new JSObject();
                                         res.put("success", true);
-                                        res.put("alias", alias);
+                                        res.put("alias", targetAlias);
                                         res.put("publicKeySpki", publicKeySpki);
                                         res.put("algorithm", "ECDSA_P256_SHA256");
                                         call.resolve(res);
                                     } catch (Exception signErr) {
-                                        deleteKeystoreEntryQuietly(alias);
+                                        deleteKeystoreEntryQuietly(targetAlias);
                                         call.reject("Fallo verificando firma en hardware seguro: " + signErr.getMessage());
                                     }
                                 }
@@ -234,12 +255,12 @@ final class NativeBiometricKeystoreManager {
 
                     prompt.authenticate(promptInfo, cryptoObject);
                 } catch (Exception promptErr) {
-                    deleteKeystoreEntryQuietly(alias);
+                    deleteKeystoreEntryQuietly(targetAlias);
                     call.reject("Error mostrando prompt biométrico de registro: " + promptErr.getMessage());
                 }
             });
         } catch (Exception e) {
-            deleteKeystoreEntryQuietly(alias);
+            deleteKeystoreEntryQuietly(targetAlias);
             call.reject("Error generando clave ECDSA biométrica en AndroidKeyStore: " + e.getMessage());
         }
     }

@@ -4,12 +4,33 @@ const os = require('os');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 
+function compareDotSemver(a, b) {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
 const pkgPath = path.resolve(__dirname, 'package.json');
-let baseVersion = '24.4.3';
+let baseVersion = '24.4.0';
 try {
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   if (pkg.version) {
     baseVersion = pkg.version.replace(/^(\d+)\.0*(\d+)/, '$1.$2');
+  }
+} catch (_) {}
+try {
+  const gradlePath = path.resolve(__dirname, 'android/app/build.gradle');
+  if (fs.existsSync(gradlePath)) {
+    const gradleSrc = fs.readFileSync(gradlePath, 'utf8');
+    const m = gradleSrc.match(/\bversionName\s+["']([^"']+)["']/);
+    if (m && compareDotSemver(m[1].trim(), baseVersion) > 0) {
+      baseVersion = m[1].trim();
+    }
   }
 } catch (_) {}
 

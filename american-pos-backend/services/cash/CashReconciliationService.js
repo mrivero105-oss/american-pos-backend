@@ -1113,17 +1113,23 @@ module.exports = {
         const { shiftId, declaration = {}, notes = '' } = closingData;
         
         // 1. Calcular el total declarado por el cajero
-        // Efectivo USD desde denominaciones
-        const usdDenoms = declaration.usd || {};
+        // Efectivo USD desde monto directo numérico (móvil) o desde mapa de denominaciones (escritorio)
         let declaredCashUSD = 0;
-        ['100', '50', '20', '10', '5', '1', '0.50', '0.25', '0.10', '0.05', '0.01'].forEach(bill => {
-            if (usdDenoms[bill]) {
-                const subtotal = precision.multiply(Number(bill), Number(usdDenoms[bill]));
-                declaredCashUSD = precision.add([declaredCashUSD, subtotal]);
+        if (typeof declaration.usd === 'number' || (typeof declaration.usd === 'string' && declaration.usd.trim() !== '')) {
+            declaredCashUSD = Number(declaration.usd) || 0;
+        } else if (declaration.cashUsd !== undefined) {
+            declaredCashUSD = Number(declaration.cashUsd) || 0;
+        } else {
+            const usdDenoms = declaration.usd || {};
+            ['100', '50', '20', '10', '5', '1', '0.50', '0.25', '0.10', '0.05', '0.01'].forEach(bill => {
+                if (usdDenoms[bill]) {
+                    const subtotal = precision.multiply(Number(bill), Number(usdDenoms[bill]));
+                    declaredCashUSD = precision.add([declaredCashUSD, subtotal]);
+                }
+            });
+            if (declaration.looseCoins) {
+                declaredCashUSD = precision.add([declaredCashUSD, Number(declaration.looseCoins)]);
             }
-        });
-        if (declaration.looseCoins) {
-            declaredCashUSD = precision.add([declaredCashUSD, Number(declaration.looseCoins)]);
         }
         declaredCashUSD = precision.round(declaredCashUSD);
 
@@ -1133,11 +1139,30 @@ module.exports = {
         const declaredMobile = precision.round(Number(declaration.mobile) || 0);
 
         const result = await sequelize.transaction(async (t) => {
-            const currentShift = await CashShift.findOne({
-                where: { id: String(shiftId), companyId },
-                lock: t.LOCK.UPDATE,
-                transaction: t
-            });
+            let currentShift = null;
+            if (shiftId) {
+                currentShift = await CashShift.findOne({
+                    where: { id: String(shiftId), companyId },
+                    lock: t.LOCK.UPDATE,
+                    transaction: t
+                });
+            }
+            if (!currentShift && closingData.registerId) {
+                currentShift = await CashShift.findOne({
+                    where: { registerId: String(closingData.registerId), companyId, status: 'open' },
+                    order: [['openedAt', 'DESC']],
+                    lock: t.LOCK.UPDATE,
+                    transaction: t
+                });
+            }
+            if (!currentShift) {
+                currentShift = await CashShift.findOne({
+                    where: { userId: String(userId), companyId, status: 'open' },
+                    order: [['openedAt', 'DESC']],
+                    lock: t.LOCK.UPDATE,
+                    transaction: t
+                });
+            }
 
             if (!currentShift) throw new Error('Turno de caja no encontrado.');
             if (currentShift.status !== 'open') throw new Error('El turno ya se encuentra cerrado.');
@@ -1370,8 +1395,9 @@ module.exports = {
 
             // 4. Crear firma/hash inmutable (Pseudo-hash con crypto)
             const crypto = require('crypto');
+            const effectiveShiftId = currentShift.id;
             const payloadString = JSON.stringify({
-                shiftId, declaredCashUSD, declaredCashVES, declaredZelle, declaredCard, declaredMobile,
+                shiftId: effectiveShiftId, declaredCashUSD, declaredCashVES, declaredZelle, declaredCard, declaredMobile,
                 expectedCashUSD, expectedCashVES, expectedZelle, expectedCard, expectedMobile
             });
             const hash = crypto.createHash('sha256').update(payloadString + Date.now().toString()).digest('hex');
@@ -1381,7 +1407,7 @@ module.exports = {
             const storedDeclarationNotes = notes ? `${notes} ${digitalAuditNote}` : digitalAuditNote;
             await CashDeclaration.create({
                 id: generateRobustId(),
-                shiftId,
+                shiftId: effectiveShiftId,
                 userId: String(reqUser.id),
                 companyId,
                 declaredCashUSD, declaredCashVES, declaredZelle, declaredCard, declaredMobile,

@@ -7,19 +7,47 @@ import secureMobileStorage from '../utils/secureMobileStorage';
 import { getTerminalId } from '../utils/terminalIdentity';
 import { normalizeTerminalId, validateLicenseKeyLocally } from '../utils/clientLicenseValidator';
 import { IDLE_LOCK_CHANGED_EVENT, getIdleLockTimeoutMs } from '../utils/idleLockSettings';
+import { db as primaryDb } from '../services/db';
+import localDb from '../db/localDb';
 
 const OFFLINE_VERIFIERS_KEY = 'isaac_pos_offline_verifiers';
 const LEGACY_OFFLINE_BIO_HASHES_KEY = 'isaac_pos_offline_bio_hashes';
 const OFFLINE_LOGIN_LOCKOUT_KEY = 'isaac_pos_offline_login_attempts';
+const SESSION_REVOKED_KEY = 'isaac_pos_session_revoked';
+const LAST_ONLINE_AUTH_KEY = 'isaac_pos_last_online_auth_at';
+const MAX_OFFLINE_SESSION_MS = 24 * 60 * 60 * 1000;
 const MAX_OFFLINE_LOGIN_ATTEMPTS = 5;
 const OFFLINE_LOGIN_LOCK_MS = 5 * 60 * 1000;
 let memoryOfflineAttempts = { count: 0, lockUntil: 0 };
 
+function markOnlineAuthSuccess() {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem(SESSION_REVOKED_KEY);
+            localStorage.setItem(LAST_ONLINE_AUTH_KEY, String(Date.now()));
+        }
+    } catch (_storageErr) {
+        // Storage restringido
+    }
+}
+
+function isOfflineSessionWindowValid() {
+    try {
+        if (typeof localStorage === 'undefined') return false;
+        if (localStorage.getItem(SESSION_REVOKED_KEY) === 'true') return false;
+        const rawTs = Number(localStorage.getItem(LAST_ONLINE_AUTH_KEY) || '0');
+        if (!Number.isFinite(rawTs) || rawTs <= 0) return true;
+        return (Date.now() - rawTs) <= MAX_OFFLINE_SESSION_MS;
+    } catch {
+        return false;
+    }
+}
+
 function getOfflineLoginLockState() {
     let state = { ...memoryOfflineAttempts };
     try {
-        if (typeof sessionStorage !== 'undefined') {
-            const raw = sessionStorage.getItem(OFFLINE_LOGIN_LOCKOUT_KEY);
+        if (typeof localStorage !== 'undefined') {
+            const raw = localStorage.getItem(OFFLINE_LOGIN_LOCKOUT_KEY);
             if (raw) {
                 const parsed = JSON.parse(raw);
                 if (parsed && typeof parsed === 'object') {
@@ -31,7 +59,7 @@ function getOfflineLoginLockState() {
             }
         }
     } catch (_storageErr) {
-        // Ignorar error de acceso a sessionStorage restringido
+        // Ignorar error de acceso a localStorage restringido
     }
     if (state.lockUntil > 0 && Date.now() >= state.lockUntil) {
         state = { count: 0, lockUntil: 0 };
@@ -43,21 +71,23 @@ function getOfflineLoginLockState() {
 function saveOfflineLoginLockState(nextState) {
     memoryOfflineAttempts = { count: Number(nextState?.count) || 0, lockUntil: Number(nextState?.lockUntil) || 0 };
     try {
-        if (typeof sessionStorage !== 'undefined') {
+        if (typeof localStorage !== 'undefined') {
             if (memoryOfflineAttempts.count === 0 && memoryOfflineAttempts.lockUntil === 0) {
-                sessionStorage.removeItem(OFFLINE_LOGIN_LOCKOUT_KEY);
+                localStorage.removeItem(OFFLINE_LOGIN_LOCKOUT_KEY);
             } else {
-                sessionStorage.setItem(OFFLINE_LOGIN_LOCKOUT_KEY, JSON.stringify(memoryOfflineAttempts));
+                localStorage.setItem(OFFLINE_LOGIN_LOCKOUT_KEY, JSON.stringify(memoryOfflineAttempts));
             }
         }
     } catch (_storageErr) {
-        // Ignorar error de escritura en sessionStorage restringido
+        // Ignorar error de escritura en localStorage restringido
     }
 }
 
-function pureSha256Hex(asciiInput) {
+function pureSha256Bytes(inputBytes) {
     const rightRotate = (value, amount) => (value >>> amount) | (value << (32 - amount));
-    const bytes = new TextEncoder().encode(String(asciiInput || ''));
+    const bytes = inputBytes instanceof Uint8Array
+        ? inputBytes
+        : new TextEncoder().encode(String(inputBytes || ''));
     const bitLen = bytes.length * 8;
     const paddedLen = Math.ceil((bytes.length + 9) / 64) * 64;
     const padded = new Uint8Array(paddedLen);
@@ -99,7 +129,59 @@ function pureSha256Hex(asciiInput) {
         h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
         h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0;
     }
-    return h.map(v => v.toString(16).padStart(8, '0')).join('');
+    const out = new Uint8Array(32);
+    const outView = new DataView(out.buffer);
+    for (let i = 0; i < 8; i++) outView.setUint32(i * 4, h[i], false);
+    return out;
+}
+
+function pureSha256Hex(asciiInput) {
+    return Array.from(pureSha256Bytes(asciiInput)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function pureHmacSha256Bytes(keyBytes, messageBytes) {
+    const blockSize = 64;
+    let normalizedKey = keyBytes.length > blockSize ? pureSha256Bytes(keyBytes) : keyBytes;
+    const keyBlock = new Uint8Array(blockSize);
+    keyBlock.set(normalizedKey);
+    const oKeyPad = new Uint8Array(blockSize);
+    const iKeyPad = new Uint8Array(blockSize);
+    for (let i = 0; i < blockSize; i++) {
+        oKeyPad[i] = keyBlock[i] ^ 0x5c;
+        iKeyPad[i] = keyBlock[i] ^ 0x36;
+    }
+    const inner = new Uint8Array(blockSize + messageBytes.length);
+    inner.set(iKeyPad, 0);
+    inner.set(messageBytes, blockSize);
+    const innerHash = pureSha256Bytes(inner);
+    const outer = new Uint8Array(blockSize + 32);
+    outer.set(oKeyPad, 0);
+    outer.set(innerHash, blockSize);
+    return pureSha256Bytes(outer);
+}
+
+/**
+ * PBKDF2-HMAC-SHA256 en JS puro (RFC 2898) para HTTP LAN sin crypto.subtle.
+ * Evita degradar contraseñas offline a un solo SHA-256 rápido.
+ */
+function purePbkdf2Sha256Hex(secret, saltHex, iterations) {
+    const enc = new TextEncoder();
+    const passBytes = enc.encode(String(secret || ''));
+    const saltBytes = enc.encode(String(saltHex || ''));
+    const saltWithBlockIdx = new Uint8Array(saltBytes.length + 4);
+    saltWithBlockIdx.set(saltBytes, 0);
+    saltWithBlockIdx[saltBytes.length + 3] = 1; // INT(1) para 256 bits (1 bloque SHA-256)
+
+    let u = pureHmacSha256Bytes(passBytes, saltWithBlockIdx);
+    const dk = new Uint8Array(u);
+    const totalIter = Math.max(1, Number(iterations) || 10000);
+    for (let i = 1; i < totalIter; i++) {
+        u = pureHmacSha256Bytes(passBytes, u);
+        for (let j = 0; j < 32; j++) {
+            dk[j] ^= u[j];
+        }
+    }
+    return Array.from(dk).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function computeSha256Hex(input) {
@@ -116,6 +198,7 @@ async function computeSha256Hex(input) {
 }
 
 const OFFLINE_PBKDF2_ITERATIONS = 100000;
+const OFFLINE_PURE_JS_PBKDF2_ITERATIONS = 10000;
 
 async function computePbkdf2Hex(secret, saltHex, iterations = OFFLINE_PBKDF2_ITERATIONS) {
     if (typeof window !== 'undefined' && window.crypto?.subtle) {
@@ -140,10 +223,10 @@ async function computePbkdf2Hex(secret, saltHex, iterations = OFFLINE_PBKDF2_ITE
             );
             return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
         } catch (cryptoErr) {
-            console.warn('[Auth] crypto.subtle PBKDF2 no disponible, usando SHA-256 fallback:', cryptoErr?.message);
+            console.warn('[Auth] crypto.subtle PBKDF2 no disponible, usando PBKDF2-HMAC-SHA256 JS puro:', cryptoErr?.message);
         }
     }
-    return computeSha256Hex(`${saltHex}:${secret}`);
+    return purePbkdf2Sha256Hex(secret, saltHex, iterations);
 }
 
 function generateSaltHex() {
@@ -160,14 +243,13 @@ async function saveOfflinePasswordVerifier(userObj, rawPassword) {
     try {
         const verifiers = JSON.parse(localStorage.getItem(OFFLINE_VERIFIERS_KEY) || '{}');
         const salt = generateSaltHex();
-        const kdf = (typeof window !== 'undefined' && window.crypto?.subtle) ? 'pbkdf2' : 'sha256';
-        const hash = kdf === 'pbkdf2'
-            ? await computePbkdf2Hex(`${String(userObj.id)}:${rawPassword}`, salt, OFFLINE_PBKDF2_ITERATIONS)
-            : await computeSha256Hex(`${salt}:${String(userObj.id)}:${rawPassword}`);
+        const hasSubtle = typeof window !== 'undefined' && Boolean(window.crypto?.subtle);
+        const iterations = hasSubtle ? OFFLINE_PBKDF2_ITERATIONS : OFFLINE_PURE_JS_PBKDF2_ITERATIONS;
+        const hash = await computePbkdf2Hex(`${String(userObj.id)}:${rawPassword}`, salt, iterations);
         const entry = {
-            ver: kdf === 'pbkdf2' ? 2 : 1,
-            kdf,
-            iterations: kdf === 'pbkdf2' ? OFFLINE_PBKDF2_ITERATIONS : 1,
+            ver: 2,
+            kdf: 'pbkdf2',
+            iterations,
             salt,
             hash,
             userId: String(userObj.id),
@@ -298,6 +380,7 @@ export const AuthProvider = ({ children }) => {
                         secureMobileStorage.setUserProfile(bioData.user);
                     }
                     sessionExpiredRef.current = false;
+                    markOnlineAuthSuccess();
                     setIsLocked(false);
                     secureMobileStorage.setSessionActive(true);
                     return { success: true };
@@ -347,6 +430,7 @@ export const AuthProvider = ({ children }) => {
                         secureMobileStorage.setToken(response.data.token);
                     }
                     sessionExpiredRef.current = false;
+                    markOnlineAuthSuccess();
                     secureMobileStorage.setSessionActive(true);
                     setUser(response.data.user);
                     secureMobileStorage.setUserProfile(response.data.user);
@@ -396,6 +480,35 @@ export const AuthProvider = ({ children }) => {
         }
         sessionStorage.removeItem('isaac_pos_session_active');
         secureMobileStorage.removeToken();
+        try {
+            localStorage.removeItem('isaac_pos_is_offline_mode');
+            // Purgar caché sensible (costos en productos / ventas ya sincronizadas) preservando ventas pending_sync
+            if (primaryDb && typeof primaryDb.clear === 'function') {
+                await primaryDb.clear('products').catch(() => {});
+                if (typeof primaryDb.getAll === 'function' && typeof primaryDb.delete === 'function') {
+                    const cachedSales = await primaryDb.getAll('sales').catch(() => []);
+                    for (const s of (cachedSales || [])) {
+                        if (s?.id && s.status !== 'pending_sync' && !String(s.id).startsWith('off_')) {
+                            await primaryDb.delete('sales', s.id).catch(() => {});
+                        }
+                    }
+                }
+            }
+            if (localDb?.products?.clear) {
+                await localDb.products.clear().catch(() => {});
+            }
+            if (localDb?.sales?.where) {
+                const dexieSales = await localDb.sales.toArray().catch(() => []);
+                const syncedIds = (dexieSales || [])
+                    .filter((s) => s?.id && s.status !== 'pending_sync' && !String(s.id).startsWith('off_'))
+                    .map((s) => s.id);
+                if (syncedIds.length > 0 && typeof localDb.sales.bulkDelete === 'function') {
+                    await localDb.sales.bulkDelete(syncedIds).catch(() => {});
+                }
+            }
+        } catch (_purgeErr) {
+            // Limpieza best-effort en entornos sin IndexedDB/SQLite
+        }
         const isMobileClient = typeof window !== 'undefined' && (
             Boolean(window.Capacitor?.isNativePlatform?.()) ||
             window.location.hash.includes('/mobile') ||
@@ -470,14 +583,12 @@ export const AuthProvider = ({ children }) => {
                 return blockedState;
             }
 
-            const isNativeMobile = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
-            const hasOfflineProfile = Boolean(secureMobileStorage.getUserProfile() || localStorage.getItem('isaac_pos_cached_cashiers'));
             const hasInheritedServerActivation = Boolean(savedActivated && latestStoredInfo?.isInherited);
 
-            if (savedKey || hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile)) {
-                // Exigir prueba verificable offline (llave RSA válida, herencia registrada del servidor o perfil móvil ya sincronizado);
-                // nunca confiar en el booleano `isaac_pos_license_activated=true` desnudo en localStorage
-                let isLocallyValid = Boolean(hasInheritedServerActivation || (isNativeMobile && hasOfflineProfile));
+            if (savedKey || hasInheritedServerActivation) {
+                // Exigir prueba verificable offline (llave RSA válida o herencia registrada del servidor sin bloqueo);
+                // nunca otorgar activación offline por la sola presencia de un perfil cacheado o booleano en localStorage.
+                let isLocallyValid = Boolean(hasInheritedServerActivation);
                 if (savedKey) {
                     try {
                         const localCheck = await validateLicenseKeyLocally(savedKey, currentTerminalId);
@@ -633,9 +744,21 @@ export const AuthProvider = ({ children }) => {
 
             let isSessionActive = secureMobileStorage.isSessionActive();
             const isNativeCapacitor = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
+            const wasSessionRevoked = localStorage.getItem(SESSION_REVOKED_KEY) === 'true';
+
+            if (isNativeCapacitor) {
+                secureMobileStorage.restoreSyncKeyFromNative().catch(() => {});
+            }
+
+            if (wasSessionRevoked) {
+                // Si el servidor revocó la sesión (401/force_logout), nunca restaurar sesión desde Keystore ni modo offline
+                secureMobileStorage.removeToken();
+                secureMobileStorage.setSessionActive(false);
+                isSessionActive = false;
+            }
 
             // En Android nativo, restaurar el JWT desde Android Keystore (AES-256-GCM) antes de invalidar la sesión
-            if (!isSessionActive && isNativeCapacitor) {
+            if (!isSessionActive && !wasSessionRevoked && isNativeCapacitor) {
                 const restoredNativeToken = await secureMobileStorage.restoreTokenFromNative();
                 if (restoredNativeToken) {
                     secureMobileStorage.setSessionActive(true);
@@ -659,14 +782,16 @@ export const AuthProvider = ({ children }) => {
 
             const isOfflineMode = localStorage.getItem('isaac_pos_is_offline_mode') === 'true';
             const savedProfileObj = secureMobileStorage.getUserProfile();
+            const offlineAllowed = isOfflineSessionWindowValid();
 
-            if (isOfflineMode && savedProfileObj) {
+            if (isOfflineMode && savedProfileObj && offlineAllowed) {
                 setUser({ ...savedProfileObj, isOfflineMode: true });
             } else {
                 try {
                     const res = await api.get('/auth/me', savedProfileObj ? { timeout: 3500 } : undefined);
                     if (res.data?.user) {
                         sessionExpiredRef.current = false;
+                        markOnlineAuthSuccess();
                         setUser(res.data.user);
                         secureMobileStorage.setUserProfile(res.data.user);
                         if (res.data.user.companyId) {
@@ -679,16 +804,25 @@ export const AuthProvider = ({ children }) => {
                         // El servidor respondió explícitamente que el token expiró o fue revocado
                         secureMobileStorage.removeToken();
                         secureMobileStorage.setSessionActive(false);
+                        localStorage.setItem(SESSION_REVOKED_KEY, 'true');
                         setUser(null);
-                    } else if (savedProfileObj) {
+                    } else if (savedProfileObj && offlineAllowed) {
                         setUser({ ...savedProfileObj, isOfflineMode: true });
                     } else {
+                        secureMobileStorage.removeToken();
+                        secureMobileStorage.setSessionActive(false);
                         setUser(null);
                     }
-                } catch {
-                    if (savedProfileObj) {
+                } catch (meErr) {
+                    if (meErr?.response?.status === 401) {
+                        secureMobileStorage.removeToken();
+                        secureMobileStorage.setSessionActive(false);
+                        setUser(null);
+                    } else if (savedProfileObj && offlineAllowed) {
                         setUser({ ...savedProfileObj, isOfflineMode: true });
                     } else {
+                        secureMobileStorage.removeToken();
+                        secureMobileStorage.setSessionActive(false);
                         setUser(null);
                     }
                 }
@@ -759,16 +893,26 @@ export const AuthProvider = ({ children }) => {
         return () => window.removeEventListener('license-required', handleLicenseRequired);
     }, []);
 
-    // Listen to global unauthorized event
+    // Listen to global unauthorized event (401 o force_logout WebSocket)
     useEffect(() => {
-        const handleUnauthorized = () => {
-            if (isLocked) return;
+        const handleUnauthorized = (event) => {
+            const isForcedRevoke = Boolean(event?.detail?.forced);
             sessionExpiredRef.current = true;
-            const token = secureMobileStorage.getToken();
-            if (user && token) {
-                setIsLocked(true);
-            } else if (!token) {
+            // Purgar credenciales de inmediato para impedir que un reinicio offline re-auto-loguee una sesión revocada
+            secureMobileStorage.removeToken();
+            secureMobileStorage.setSessionActive(false);
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(SESSION_REVOKED_KEY, 'true');
+                }
+            } catch (_err) { /* noop */ }
+
+            if (isForcedRevoke || !user) {
                 logout(true);
+                return;
+            }
+            if (!isLocked) {
+                setIsLocked(true);
             }
         };
         window.addEventListener('auth-unauthorized', handleUnauthorized);
@@ -902,6 +1046,7 @@ export const AuthProvider = ({ children }) => {
                 secureMobileStorage.setToken(token);
             }
             sessionExpiredRef.current = false;
+            markOnlineAuthSuccess();
             saveOfflineLoginLockState({ count: 0, lockUntil: 0 });
             if (userData) {
                 await saveOfflinePasswordVerifier(userData, password);
@@ -949,6 +1094,7 @@ export const AuthProvider = ({ children }) => {
                 secureMobileStorage.setToken(token);
             }
             sessionExpiredRef.current = false;
+            markOnlineAuthSuccess();
             saveOfflineLoginLockState({ count: 0, lockUntil: 0 });
             if (userData) {
                 secureMobileStorage.setUserProfile(userData);

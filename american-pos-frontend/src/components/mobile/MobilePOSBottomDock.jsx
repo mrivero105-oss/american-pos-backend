@@ -7,6 +7,7 @@ import {
     Wallet
 } from 'lucide-react';
 import { triggerHaptic } from '../../utils/haptics';
+import { isDollarOnlyCountry } from '../../utils/format';
 
 export default function MobilePOSBottomDock({
     isLight,
@@ -14,6 +15,7 @@ export default function MobilePOSBottomDock({
     totalItemsCount,
     totalUSD,
     totalBS,
+    isDollarCountry: isDollarCountryProp,
     setIsMobileCartOpen,
     handleSelectPaymentMethod,
     setIsCheckoutOpen,
@@ -22,6 +24,9 @@ export default function MobilePOSBottomDock({
     pendingSalesCount,
     setIsScannerOpen
 }) {
+    const isDollarCountry = isDollarCountryProp !== undefined
+        ? Boolean(isDollarCountryProp)
+        : isDollarOnlyCountry(typeof localStorage !== 'undefined' ? localStorage.getItem('pos_country') : '');
     return (
         <div
             className={`px-3 pt-1.5 pb-1.5 border-t shrink-0 z-20 ${
@@ -50,9 +55,11 @@ export default function MobilePOSBottomDock({
                                     <span className="text-sm sm:text-base font-black font-mono text-white tabular-nums">
                                         ${totalUSD.toFixed(2)}
                                     </span>
-                                    <span className="text-[11px] font-extrabold font-mono text-amber-300 tabular-nums truncate">
-                                        • Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </span>
+                                    {!isDollarCountry && (
+                                        <span className="text-[11px] font-extrabold font-mono text-amber-300 tabular-nums truncate">
+                                            • Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </span>
+                                    )}
                                 </div>
                                 <span className="text-[10px] font-bold text-slate-400 block truncate">
                                     Toca para ver detalle del ticket ({totalItemsCount} {totalItemsCount === 1 ? 'ítem' : 'ítems'})
@@ -129,7 +136,8 @@ export default function MobilePOSBottomDock({
                                 }
                                 setIsScannerOpen(true);
                             }}
-                            className="w-12 h-9 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-md active:scale-90 transition-transform cursor-pointer border border-emerald-300/60"
+                            aria-label="Escanear código de barras con cámara"
+                            className="w-12 h-11 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-md active:scale-90 transition-transform cursor-pointer border border-emerald-300/60"
                             title="Escanear código de barras con cámara"
                         >
                             <ScanBarcode size={20} className="stroke-[2.4]" />

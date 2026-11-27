@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   ArrowLeft, 
   FileText, 
@@ -29,6 +29,8 @@ import { db as primaryDb } from '../../services/db';
 import mobilePrinterService from '../../services/mobilePrinterService';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { isDollarOnlyCountry } from '../../utils/format';
+import VirtualMobileList from './VirtualMobileList';
 
 export default function MobileSalesView({
   sales = [],
@@ -46,6 +48,7 @@ export default function MobileSalesView({
   exchangeRate = 950,
   onBackToPOS
 }) {
+  const isDollarCountry = isDollarOnlyCountry(typeof localStorage !== 'undefined' ? localStorage.getItem('pos_country') : null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'synced' | 'offline' | 'cancelled'
   const [methodFilter, setMethodFilter] = useState('all'); // 'all' | 'Efectivo' | 'Pago Móvil' | 'Zelle' | 'Tarjeta' | 'Crédito' | 'Mixto'
@@ -210,16 +213,6 @@ export default function MobileSalesView({
       return true;
     });
   }, [sales, searchQuery, statusFilter, methodFilter, dateFilter, customStartDate, customEndDate]);
-
-  const [displayLimit, setDisplayLimit] = useState(30);
-
-  useEffect(() => {
-    setDisplayLimit(30);
-  }, [searchQuery, statusFilter, methodFilter, dateFilter]);
-
-  const visibleSales = useMemo(() => {
-    return filteredSales.slice(0, displayLimit);
-  }, [filteredSales, displayLimit]);
 
   // Totales y desglose financiero de alto nivel
   const totals = useMemo(() => {
@@ -386,7 +379,7 @@ export default function MobileSalesView({
     try {
       const isOfflineSale = saleToCancel.status === 'pending_sync' || saleToCancel.isOffline;
       const saleId = saleToCancel.id;
-      const itemsList = saleToCancel.items || saleToCancel.SaleItems || [];
+      let itemsList = saleToCancel.items || saleToCancel.SaleItems || [];
 
       if (isOfflineSale) {
         const updated = { ...saleToCancel, status: 'cancelled', isOffline: false };
@@ -400,6 +393,21 @@ export default function MobileSalesView({
         onSaleCancelled?.(saleId, updated);
         showToast?.('✅ Venta offline anulada y stock devuelto al catálogo');
       } else {
+        // Si la venta vino de un listado resumido sin SaleItems, recuperar el detalle antes de anular
+        if (!Array.isArray(itemsList) || itemsList.length === 0) {
+          try {
+            const detailRes = await api.get(`/sales/${saleId}`, { timeout: 5000 });
+            const fetchedSale = detailRes?.data?.sale || detailRes?.data || null;
+            itemsList = fetchedSale?.SaleItems || fetchedSale?.items || [];
+          } catch (_fetchDetailErr) {
+            // Se validará abajo antes de encolar un /refunds vacío
+          }
+        }
+        if (!Array.isArray(itemsList) || itemsList.length === 0) {
+          showToast?.('⚠️ Conéctate al servidor PC para descargar los renglones de esta factura antes de anularla.');
+          setIsCancelling(false);
+          return;
+        }
         const payload = {
           saleId: saleToCancel.id,
           reason: `${cancelReason}${cancelNotes ? ` - ${cancelNotes}` : ''}`,
@@ -490,7 +498,7 @@ export default function MobileSalesView({
       `👤 Operador: ${user?.name || user?.username || 'Cajero Móvil'}`,
       `--------------------------------`,
       `💰 *VENTAS TOTALES:* $${totals.totalUsd.toFixed(2)}`,
-      `🇻🇪 *Equivalente Bs:* Bs. ${totals.totalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      !isDollarCountry ? `🇻🇪 *Equivalente Bs:* Bs. ${totals.totalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
       `🧾 Transacciones: ${totals.count} ventas (${totals.totalItemsSold} artículos)`,
       `🎯 Ticket Promedio: $${totals.avgUsd.toFixed(2)}`,
       `--------------------------------`,
@@ -500,9 +508,9 @@ export default function MobileSalesView({
       `--------------------------------`,
       `💳 *DETALLE POR FORMA DE PAGO:*`,
       totals.cashUsd > 0 ? `• Efectivo USD: $${totals.cashUsd.toFixed(2)}` : null,
-      totals.cashBs > 0 ? `• Efectivo Bs: Bs. ${totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
-      totals.pagoMovilBs > 0 ? `• Pago Móvil: Bs. ${totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
-      totals.cardBs > 0 ? `• Punto / Débito: Bs. ${totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
+      !isDollarCountry && totals.cashBs > 0 ? `• Efectivo Bs: Bs. ${totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
+      !isDollarCountry && totals.pagoMovilBs > 0 ? `• Pago Móvil: Bs. ${totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
+      !isDollarCountry && totals.cardBs > 0 ? `• Punto / Débito: Bs. ${totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
       totals.zelleUsd > 0 ? `• Zelle: $${totals.zelleUsd.toFixed(2)}` : null,
       totals.mixedUsd > 0 ? `• Pago Mixto: $${totals.mixedUsd.toFixed(2)}` : null,
       `--------------------------------`,
@@ -513,7 +521,7 @@ export default function MobileSalesView({
     ].filter(Boolean);
 
     return lines.join('\n');
-  }, [dateFilter, totals, user, isAdminOrSupervisor]);
+  }, [dateFilter, totals, user, isAdminOrSupervisor, isDollarCountry]);
 
   // Enviar Reporte X por WhatsApp al Dueño / Gerente
   const handleShareXReportWhatsApp = () => {
@@ -639,9 +647,11 @@ export default function MobileSalesView({
             <div className="font-black text-base sm:text-lg text-emerald-600 dark:text-emerald-400 mt-0.5">
               ${totals.realCobradoUsd.toFixed(2)}
             </div>
-            <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
-              Bs. {totals.realCobradoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
+            {!isDollarCountry && (
+              <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
+                Bs. {totals.realCobradoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            )}
           </div>
 
           {/* Card Ventas a Crédito (Fiado) */}
@@ -681,9 +691,11 @@ export default function MobileSalesView({
             <div className="font-black text-base text-slate-800 dark:text-slate-200 mt-0.5">
               ${totals.avgUsd.toFixed(2)}
             </div>
-            <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
-              Tasa: Bs. {exchangeRate.toFixed(2)}
-            </span>
+            {!isDollarCountry && (
+              <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
+                Tasa: Bs. {exchangeRate.toFixed(2)}
+              </span>
+            )}
           </div>
         </div>
 
@@ -712,18 +724,24 @@ export default function MobileSalesView({
                   <span className={`${T.textSecondary} font-semibold`}>💵 Efectivo USD:</span>
                   <span className="font-black text-emerald-500">${totals.cashUsd.toFixed(2)}</span>
                 </div>
-                <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
-                  <span className={`${T.textSecondary} font-semibold`}>🇻🇪 Efectivo Bs:</span>
-                  <span className="font-black text-amber-500">Bs. {totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
-                  <span className={`${T.textSecondary} font-semibold`}>📲 Pago Móvil:</span>
-                  <span className="font-black text-blue-500">Bs. {totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
-                  <span className={`${T.textSecondary} font-semibold`}>💳 Punto Débito:</span>
-                  <span className="font-black text-indigo-500">Bs. {totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
+                {!isDollarCountry && (
+                  <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
+                    <span className={`${T.textSecondary} font-semibold`}>🇻🇪 Efectivo Bs:</span>
+                    <span className="font-black text-amber-500">Bs. {totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {!isDollarCountry && (
+                  <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
+                    <span className={`${T.textSecondary} font-semibold`}>📲 Pago Móvil:</span>
+                    <span className="font-black text-blue-500">Bs. {totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {!isDollarCountry && (
+                  <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
+                    <span className={`${T.textSecondary} font-semibold`}>💳 Punto Débito:</span>
+                    <span className="font-black text-indigo-500">Bs. {totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
                 <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
                   <span className={`${T.textSecondary} font-semibold`}>⚡ Zelle:</span>
                   <span className="font-black text-violet-500">${totals.zelleUsd.toFixed(2)}</span>
@@ -852,213 +870,208 @@ export default function MobileSalesView({
         </div>
       </div>
 
-      {/* 4. LISTADO DE VENTAS CRONOLÓGICAS PROFESIONAL */}
-      <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-        {filteredSales.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center p-8 text-center text-xs space-y-2">
-            <Receipt size={38} className={T.textMuted} />
-            <p className={`font-black text-sm ${T.textPrimary}`}>No hay ventas registradas</p>
-            <p className={`text-[11px] ${T.textMuted} max-w-xs`}>
-              {searchQuery || statusFilter !== 'all' || methodFilter !== 'all' || dateFilter !== 'all'
-                ? 'No se encontraron ventas para los filtros o rango seleccionado'
-                : 'Las ventas cobradas desde esta terminal aparecerán aquí en tiempo real'}
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {visibleSales.map((sale, index) => {
-              const isOffline = sale.status === 'pending_sync' || sale.isOffline;
-              const isCancelled = sale.status === 'refunded' || sale.status === 'cancelled';
-              const saleTotalUSD = Number(sale.totalUSD || sale.total || 0);
-              const saleRate = Number(sale.exchangeRate || exchangeRate) || exchangeRate;
-              const saleTotalBS = Number(sale.totalBS || (saleTotalUSD * saleRate));
-              const dateStr = sale.date || sale.created_at || 'Hoy';
-              
-              const rawMethod = (sale.method || sale.paymentMethod || '').toLowerCase();
-              const isCredit = Boolean(
-                sale.isCredit || 
-                sale.credit || 
-                rawMethod.includes('fiado') || 
-                rawMethod.includes('credito') || 
-                rawMethod.includes('credit')
-              );
+      {/* 4. LISTADO VIRTUALIZADO DE VENTAS CRONOLÓGICAS PROFESIONAL */}
+      {filteredSales.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-xs space-y-2">
+          <Receipt size={38} className={T.textMuted} />
+          <p className={`font-black text-sm ${T.textPrimary}`}>No hay ventas registradas</p>
+          <p className={`text-[11px] ${T.textMuted} max-w-xs`}>
+            {searchQuery || statusFilter !== 'all' || methodFilter !== 'all' || dateFilter !== 'all'
+              ? 'No se encontraron ventas para los filtros o rango seleccionado'
+              : 'Las ventas cobradas desde esta terminal aparecerán aquí en tiempo real'}
+          </p>
+        </div>
+      ) : (
+        <VirtualMobileList
+          items={filteredSales}
+          estimateSize={192}
+          gap={10}
+          columnsMd={2}
+          columnsXl={3}
+          className="flex-1"
+          paddingClass="p-3"
+          getItemKey={(sale, index) => sale.id || index}
+          renderItem={(sale) => {
+            const isOffline = sale.status === 'pending_sync' || sale.isOffline;
+            const isCancelled = sale.status === 'refunded' || sale.status === 'cancelled';
+            const saleTotalUSD = Number(sale.totalUSD || sale.total || 0);
+            const saleRate = Number(sale.exchangeRate || exchangeRate) || exchangeRate;
+            const saleTotalBS = Number(sale.totalBS || (saleTotalUSD * saleRate));
+            const dateStr = sale.date || sale.created_at || 'Hoy';
 
-              const itemsList = Array.isArray(sale.items) ? sale.items : Array.isArray(sale.SaleItems) ? sale.SaleItems : [];
+            const rawMethod = (sale.method || sale.paymentMethod || '').toLowerCase();
+            const isCredit = Boolean(
+              sale.isCredit ||
+              sale.credit ||
+              rawMethod.includes('fiado') ||
+              rawMethod.includes('credito') ||
+              rawMethod.includes('credit')
+            );
 
-              return (
-                <div 
-                  key={sale.id || index}
-                  className={`${T.ticketItemBg} p-3 rounded-2xl border ${
-                    isCancelled 
-                      ? 'border-rose-500/30 opacity-75' 
-                      : isCredit 
-                      ? 'border-amber-500/40 shadow-2xs' 
-                      : T.border
-                  } space-y-2.5 hover:border-emerald-500/30 transition-all flex flex-col justify-between`}
-                >
-                  {/* Encabezado de la Tarjeta */}
-                  <div className="flex items-center justify-between gap-1.5">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-mono text-xs font-black text-blue-500 truncate">
-                        {sale.invoiceNumber || `#${String(sale.id).slice(-6)}`}
-                      </span>
+            const itemsList = Array.isArray(sale.items) ? sale.items : Array.isArray(sale.SaleItems) ? sale.SaleItems : [];
 
-                      {/* Badge de Contado vs Crédito */}
-                      {isCredit ? (
-                        <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0 flex items-center gap-1">
-                          <Handshake size={10} />
-                          <span>Crédito</span>
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                          Contado
-                        </span>
-                      )}
-
-                      {/* Badge de Estado Sync */}
-                      {isCancelled ? (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-500 border border-rose-500/30 shrink-0">
-                          Anulada
-                        </span>
-                      ) : isOffline ? (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/20 text-amber-500 border border-amber-500/30 shrink-0">
-                          Offline
-                        </span>
-                      ) : (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-500/10 text-emerald-500 shrink-0">
-                          En PC
-                        </span>
-                      )}
-                    </div>
-
-                    <span className={`text-[10px] font-bold ${T.textMuted} shrink-0`}>
-                      {formatDateLabel(dateStr)}
+            return (
+              <div
+                className={`${T.ticketItemBg} p-3 rounded-2xl border ${
+                  isCancelled
+                    ? 'border-rose-500/30 opacity-75'
+                    : isCredit
+                    ? 'border-amber-500/40 shadow-2xs'
+                    : T.border
+                } space-y-2.5 hover:border-emerald-500/30 transition-all flex flex-col justify-between`}
+              >
+                {/* Encabezado de la Tarjeta */}
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-mono text-xs font-black text-blue-500 truncate">
+                      {sale.invoiceNumber || `#${String(sale.id).slice(-6)}`}
                     </span>
+
+                    {/* Badge de Contado vs Crédito */}
+                    {isCredit ? (
+                      <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0 flex items-center gap-1">
+                        <Handshake size={10} />
+                        <span>Crédito</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
+                        Contado
+                      </span>
+                    )}
+
+                    {/* Badge de Estado Sync */}
+                    {isCancelled ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-500 border border-rose-500/30 shrink-0">
+                        Anulada
+                      </span>
+                    ) : isOffline ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/20 text-amber-500 border border-amber-500/30 shrink-0">
+                        Offline
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-500/10 text-emerald-500 shrink-0">
+                        En PC
+                      </span>
+                    )}
                   </div>
 
-                  {/* Cliente y Monto */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate leading-tight`}>
-                        {sale.customerName || 'Consumidor Final'}
-                      </p>
-                      
-                      <div className="flex items-center gap-2 mt-1 text-[11px]">
-                        <span className={`${T.textMuted} font-semibold truncate`}>
-                          {formatPaymentMethodLabel(sale.method || sale.paymentMethod, isCredit)}
-                        </span>
-                        
-                        {(sale.table || sale.mesa) && (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded shrink-0">
-                            <Utensils size={10} />
-                            <span>{sale.table || sale.mesa}</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                  <span className={`text-[10px] font-bold ${T.textMuted} shrink-0`}>
+                    {formatDateLabel(dateStr)}
+                  </span>
+                </div>
 
-                    <div className="text-right shrink-0">
-                      <div className={`font-black text-sm sm:text-base ${isCancelled ? 'text-rose-500 line-through' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                        ${saleTotalUSD.toFixed(2)}
-                      </div>
+                {/* Cliente y Monto */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate leading-tight`}>
+                      {sale.customerName || 'Consumidor Final'}
+                    </p>
+
+                    <div className="flex items-center gap-2 mt-1 text-[11px]">
+                      <span className={`${T.textMuted} font-semibold truncate`}>
+                        {formatPaymentMethodLabel(sale.method || sale.paymentMethod, isCredit)}
+                      </span>
+
+                      {(sale.table || sale.mesa) && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded shrink-0">
+                          <Utensils size={10} />
+                          <span>{sale.table || sale.mesa}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <div className={`font-black text-sm sm:text-base ${isCancelled ? 'text-rose-500 line-through' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                      ${saleTotalUSD.toFixed(2)}
+                    </div>
+                    {!isDollarCountry && (
                       <div className={`text-[10px] font-bold ${T.textMuted}`}>
                         Bs. {saleTotalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
-                    </div>
+                    )}
                   </div>
+                </div>
 
-                  {/* Vista Rápida de Artículos en la Tarjeta */}
-                  {itemsList.length > 0 && (
-                    <div className={`p-2 rounded-xl ${isLight ? 'bg-slate-50' : 'bg-slate-900/60'} border ${T.border} text-[11px]`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-400 flex items-center gap-1">
-                          <Package size={11} />
-                          <span>Artículos ({itemsList.length})</span>
-                        </span>
-                        {sale.cashierName && (
-                          <span className="text-[10px] text-slate-400 font-semibold truncate max-w-[120px]">
-                            Cajero: {sale.cashierName}
-                          </span>
-                        )}
-                      </div>
-                      <p className={`line-clamp-2 text-[11px] font-semibold leading-relaxed ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
-                        {itemsList.map(it => `${Number(it.quantity || 1)}x ${it.name || it.product?.name || 'Producto'}`).join(' • ')}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Acciones de la Tarjeta */}
-                  <div className={`flex items-center justify-between pt-2 border-t ${T.border}`}>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenDetail(sale)}
-                      className={`px-2.5 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} font-bold text-xs flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all`}
-                    >
-                      <Eye size={13} className="text-blue-500" />
-                      <span>Detalle</span>
-                    </button>
-
-                    <div className="flex items-center gap-1">
-                      {/* Botón Reimprimir Térmico Bluetooth */}
-                      <button
-                        type="button"
-                        onClick={() => handlePrint(sale)}
-                        className={`p-2 rounded-xl ${T.btnGhost} border ${T.border} text-blue-500 hover:text-blue-400 text-xs font-bold flex items-center gap-1 cursor-pointer active:scale-95`}
-                        title="Reimprimir en ticketera térmica"
-                      >
-                        <Printer size={13} />
-                      </button>
-
-                      {/* Botón WhatsApp */}
-                      <button
-                        type="button"
-                        onClick={() => onShareWhatsApp?.(sale)}
-                        className="p-2 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
-                        title="Enviar comprobante por WhatsApp"
-                      >
-                        <Share2 size={13} />
-                      </button>
-
-                      {/* Botón Anular Venta */}
-                      {!isCancelled ? (
-                        <button
-                          type="button"
-                          onClick={() => handleInitiateCancel(sale)}
-                          className="p-2 rounded-xl bg-rose-600/15 hover:bg-rose-600/25 text-rose-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
-                          title="Anular venta y retornar inventario"
-                        >
-                          <RotateCcw size={13} />
-                        </button>
-                      ) : (
-                        <span className="text-[10px] font-black text-rose-400 px-2 py-1 bg-rose-500/10 rounded-lg">
-                          Anulada
+                {/* Vista Rápida de Artículos en la Tarjeta */}
+                {itemsList.length > 0 && (
+                  <div className={`p-2 rounded-xl ${isLight ? 'bg-slate-50' : 'bg-slate-900/60'} border ${T.border} text-[11px]`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 flex items-center gap-1">
+                        <Package size={11} />
+                        <span>Artículos ({itemsList.length})</span>
+                      </span>
+                      {sale.cashierName && (
+                        <span className="text-[10px] text-slate-400 font-semibold truncate max-w-[120px]">
+                          Cajero: {sale.cashierName}
                         </span>
                       )}
                     </div>
+                    <p className={`line-clamp-2 text-[11px] font-semibold leading-relaxed ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
+                      {itemsList.map(it => `${Number(it.quantity || 1)}x ${it.name || it.product?.name || 'Producto'}`).join(' • ')}
+                    </p>
+                  </div>
+                )}
+
+                {/* Acciones de la Tarjeta */}
+                <div className={`flex items-center justify-between pt-2 border-t ${T.border}`}>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDetail(sale)}
+                    className={`px-2.5 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} font-bold text-xs flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all`}
+                  >
+                    <Eye size={13} className="text-blue-500" />
+                    <span>Detalle</span>
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    {/* Botón Reimprimir Térmico Bluetooth */}
+                    <button
+                      type="button"
+                      onClick={() => handlePrint(sale)}
+                      className={`p-2 rounded-xl ${T.btnGhost} border ${T.border} text-blue-500 hover:text-blue-400 text-xs font-bold flex items-center gap-1 cursor-pointer active:scale-95`}
+                      title="Reimprimir en ticketera térmica"
+                    >
+                      <Printer size={13} />
+                    </button>
+
+                    {/* Botón WhatsApp */}
+                    <button
+                      type="button"
+                      onClick={() => onShareWhatsApp?.(sale)}
+                      className="p-2 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
+                      title="Enviar comprobante por WhatsApp"
+                    >
+                      <Share2 size={13} />
+                    </button>
+
+                    {/* Botón Anular Venta */}
+                    {!isCancelled ? (
+                      <button
+                        type="button"
+                        onClick={() => handleInitiateCancel(sale)}
+                        className="p-2 rounded-xl bg-rose-600/15 hover:bg-rose-600/25 text-rose-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
+                        title="Anular venta y retornar inventario"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    ) : (
+                      <span className="text-[10px] font-black text-rose-400 px-2 py-1 bg-rose-500/10 rounded-lg">
+                        Anulada
+                      </span>
+                    )}
                   </div>
                 </div>
-              );
-            })}
-
-            {visibleSales.length < filteredSales.length && (
-              <div className="py-4 col-span-full flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => setDisplayLimit(prev => prev + 30)}
-                  className={`px-5 py-2.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-2 active:scale-95 transition-all shadow-2xs cursor-pointer`}
-                >
-                  <span>Cargar más ventas ({filteredSales.length - visibleSales.length} restantes)</span>
-                </button>
               </div>
-            )}
-          </div>
-        )}
-      </div>
+            );
+          }}
+        />
+      )}
 
       {/* 5. MODAL DETALLE COMPLETO DE VENTA */}
       {selectedSaleDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/70 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-md sm:max-w-lg rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden`}>
+          <div role="dialog" aria-modal="true" aria-label="Detalle de Venta" className={`w-full max-w-md sm:max-w-lg rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden`}>
             
             {/* Cabecera del Detalle */}
             <div className={`p-4 border-b ${T.border} flex items-center justify-between shrink-0 ${T.subPanelBg}`}>
@@ -1184,12 +1197,14 @@ export default function MobileSalesView({
                   <span className="text-blue-500">TOTAL USD:</span>
                   <span className="text-emerald-500">${Number(selectedSaleDetail.totalUSD || selectedSaleDetail.total || 0).toFixed(2)}</span>
                 </div>
-                <div className="flex items-center justify-between font-bold text-xs">
-                  <span className={T.textMuted}>TOTAL BS:</span>
-                  <span className="text-amber-500 font-mono">
-                    Bs. {Number(selectedSaleDetail.totalBS || (Number(selectedSaleDetail.totalUSD || selectedSaleDetail.total || 0) * (selectedSaleDetail.exchangeRate || exchangeRate))).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                </div>
+                {!isDollarCountry && (
+                  <div className="flex items-center justify-between font-bold text-xs">
+                    <span className={T.textMuted}>TOTAL BS:</span>
+                    <span className="text-amber-500 font-mono">
+                      Bs. {Number(selectedSaleDetail.totalBS || (Number(selectedSaleDetail.totalUSD || selectedSaleDetail.total || 0) * (selectedSaleDetail.exchangeRate || exchangeRate))).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 

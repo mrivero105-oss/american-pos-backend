@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { User } = require('../database/models');
 const { isAdmin, isSuperAdmin, invalidateUserAuthCache } = require('../middleware/auth');
+const { disconnectUserSockets } = require('../services/SocketGateway');
+const { revokeSession } = require('../utils/sessionRegistry');
 const { generateRobustId, safeSecretEqual } = require('../utils/helpers');
 const validate = require('../middleware/validate');
 const { createUserSchema, updateUserSchema, supervisorPinSchema } = require('../schemas/userSchema');
@@ -268,8 +270,8 @@ router.put('/:id', validate(updateUserSchema), async (req, res) => {
             }
         }
 
-        if (allowedUpdates.password || (allowedUpdates.status && allowedUpdates.status !== 'active')) {
-            const { revokeSession } = require('../utils/sessionRegistry');
+        const shouldForceLogout = Boolean(allowedUpdates.password || (allowedUpdates.status && allowedUpdates.status !== 'active'));
+        if (shouldForceLogout) {
             allowedUpdates.currentSessionId = revokeSession(null, null, { allDevices: true });
         }
 
@@ -283,6 +285,10 @@ router.put('/:id', validate(updateUserSchema), async (req, res) => {
 
         if (updated) {
             invalidateUserAuthCache(id);
+            const ioForce = req.app.get('io') || global.io;
+            if (shouldForceLogout && ioForce) {
+                disconnectUserSockets(ioForce, id, allowedUpdates.status !== 'active' ? 'Cuenta desactivada por administrador' : 'Contraseña actualizada por administrador');
+            }
             const freshUser = await User.findOne({
                 where: { id, companyId: companyCondition },
                 attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash', 'currentSessionId'] }
@@ -359,10 +365,15 @@ router.delete('/:id', async (req, res) => {
             });
         }
 
-        // Si el usuario está activo, el primer clic en eliminar lo desactiva (Soft Delete)
+        // Si el usuario está activo, el primer clic en eliminar lo desactiva (Soft Delete) y revoca todas sus sesiones
         if (targetUser.status !== 'inactive') {
-            await targetUser.update({ status: 'inactive' });
+            await targetUser.update({
+                status: 'inactive',
+                currentSessionId: revokeSession(null, null, { allDevices: true })
+            });
             invalidateUserAuthCache(id);
+            const io = req.app.get('io') || global.io;
+            if (io) disconnectUserSockets(io, id, 'Cuenta desactivada por administrador');
             return res.json({ message: 'Usuario desactivado correctamente' });
         }
 
@@ -370,6 +381,8 @@ router.delete('/:id', async (req, res) => {
         try {
             await targetUser.destroy();
             invalidateUserAuthCache(id);
+            const io = req.app.get('io') || global.io;
+            if (io) disconnectUserSockets(io, id, 'Cuenta eliminada por administrador');
             return res.json({ message: 'Usuario eliminado definitivamente del sistema' });
         } catch (fkError) {
             // Si tiene registros históricos (ventas, turnos, auditoría) que impiden el borrado físico:
@@ -393,6 +406,8 @@ router.delete('/:id', async (req, res) => {
 
             await targetUser.destroy();
             invalidateUserAuthCache(targetUser.id);
+            const io = req.app.get('io') || global.io;
+            if (io) disconnectUserSockets(io, targetUser.id, 'Cuenta eliminada por administrador');
             return res.json({ message: 'Usuario eliminado definitivamente (historial reasignado al administrador)' });
         }
     } catch (error) {
@@ -496,8 +511,16 @@ router.patch('/:id/toggle-status', async (req, res) => {
         }
 
         const newStatus = targetUser.status === 'active' ? 'inactive' : 'active';
-        await targetUser.update({ status: newStatus });
+        const statusUpdate = { status: newStatus };
+        if (newStatus !== 'active') {
+            statusUpdate.currentSessionId = revokeSession(null, null, { allDevices: true });
+        }
+        await targetUser.update(statusUpdate);
         invalidateUserAuthCache(targetUser.id);
+        if (newStatus !== 'active') {
+            const io = req.app.get('io') || global.io;
+            if (io) disconnectUserSockets(io, targetUser.id, 'Cuenta suspendida por administrador');
+        }
 
         res.json({ success: true, status: newStatus, message: `Usuario ${newStatus === 'active' ? 'activado' : 'desactivado'} con éxito.` });
     } catch (error) {

@@ -32,7 +32,7 @@ export default function HardwareScannerModal({
         try {
             setLoadingDevices(true);
             setErrorMsg('');
-            const res = await api.get('/scanner/devices');
+            const res = await api.get('/scanner/devices', { timeout: 25000 });
             const list = res.data?.devices || [];
             setDevices(list);
             if (list.length > 0) {
@@ -52,7 +52,7 @@ export default function HardwareScannerModal({
             setErrorMsg('');
             const res = await api.post('/scanner/scan', {
                 deviceId: selectedDevice?.id || null
-            });
+            }, { timeout: 120000 });
 
             if (res.data?.success && res.data?.invoiceUrl) {
                 setScannedResult(res.data);

@@ -12,7 +12,9 @@ const FRONTEND = path.join(ROOT, 'american-pos-frontend');
 const BACKEND_PUBLIC = path.join(ROOT, 'american-pos-backend', 'public');
 const DIST_MOBILE = path.join(FRONTEND, 'dist-mobile');
 const APK_PATH = path.join(ROOT, 'dist_installers', 'Isaac-POS-Mobile.apk');
-const LOCAL_OTA_DIR = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Isaac POS', 'resources', 'mobile-ota');
+const LOCAL_OTA_DIR = process.env.LOCALAPPDATA
+  ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Isaac POS', 'resources', 'mobile-ota')
+  : '';
 
 const require = createRequire(import.meta.url);
 const AdmZip = require(path.join(FRONTEND, 'node_modules', 'adm-zip'));
@@ -20,6 +22,23 @@ const AdmZip = require(path.join(FRONTEND, 'node_modules', 'adm-zip'));
 const SKIP_BUILD_CHECKS = process.argv.includes('--artifacts-only');
 const MAX_APK_MB = Number(process.env.MOBILE_MAX_APK_MB || 16);
 const MAX_OTA_MB = Number(process.env.MOBILE_MAX_OTA_MB || 3.8);
+
+function compareSemverParts(a, b) {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
+function readGradleVersionName() {
+  const gradleSrc = fs.readFileSync(path.join(FRONTEND, 'android', 'app', 'build.gradle'), 'utf8');
+  const m = gradleSrc.match(/\bversionName\s+["']([^"']+)["']/);
+  return m ? m[1].trim() : '';
+}
 
 const results = [];
 
@@ -75,14 +94,26 @@ function checkElf16KbAlignment(elfBuf) {
 }
 
 function findApkSigner() {
-  const sdkRoot = path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'build-tools');
-  if (!fs.existsSync(sdkRoot)) return null;
-  const dirs = fs.readdirSync(sdkRoot).sort().reverse();
-  for (const d of dirs) {
-    const bat = path.join(sdkRoot, d, 'apksigner.bat');
-    if (fs.existsSync(bat)) return bat;
-    const bin = path.join(sdkRoot, d, 'apksigner');
-    if (fs.existsSync(bin)) return bin;
+  const sdkCandidates = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk') : null,
+    process.env.HOME ? path.join(process.env.HOME, 'Android', 'Sdk') : null,
+    process.env.HOME ? path.join(process.env.HOME, 'Library', 'Android', 'sdk') : null
+  ].filter(Boolean);
+
+  for (const sdkBase of sdkCandidates) {
+    const sdkRoot = path.join(sdkBase, 'build-tools');
+    if (!fs.existsSync(sdkRoot)) continue;
+    const dirs = fs.readdirSync(sdkRoot).sort().reverse();
+    for (const d of dirs) {
+      const preferred = process.platform === 'win32'
+        ? [path.join(sdkRoot, d, 'apksigner.bat'), path.join(sdkRoot, d, 'apksigner')]
+        : [path.join(sdkRoot, d, 'apksigner'), path.join(sdkRoot, d, 'apksigner.bat')];
+      for (const candidate of preferred) {
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
   }
   return null;
 }
@@ -108,12 +139,17 @@ async function main() {
       fail('Gate 2/8 Vitest', err.message);
     }
 
-    // Gate 3: Gradle JUnit + Lint Release (JDK 21)
+    // Gate 3: Gradle JUnit + Lint Release (JDK 21 multiplataforma)
     try {
-      const jdk21 = 'C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.10002-hotspot';
-      const javaHome = fs.existsSync(jdk21) ? jdk21 : process.env.JAVA_HOME;
-      const envPatch = javaHome ? { JAVA_HOME: javaHome, PATH: `${path.join(javaHome, 'bin')};${process.env.PATH}` } : {};
-      runShell('.\\gradlew.bat', ['testDebugUnitTest', 'lintRelease'], path.join(FRONTEND, 'android'), envPatch);
+      const winJdk21 = 'C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.10002-hotspot';
+      const javaHome = (process.platform === 'win32' && fs.existsSync(winJdk21))
+        ? winJdk21
+        : process.env.JAVA_HOME;
+      const envPatch = javaHome
+        ? { JAVA_HOME: javaHome, PATH: `${path.join(javaHome, 'bin')}${path.delimiter}${process.env.PATH || ''}` }
+        : {};
+      const gradleCmd = process.platform === 'win32' ? '.\\gradlew.bat' : './gradlew';
+      runShell(gradleCmd, ['testDebugUnitTest', 'lintRelease'], path.join(FRONTEND, 'android'), envPatch);
       pass('Gate 3/8 Gradle JUnit + lintRelease', 'BUILD SUCCESSFUL (0 errores Lint)');
     } catch (err) {
       fail('Gate 3/8 Gradle JUnit + lintRelease', err.message);
@@ -157,10 +193,14 @@ async function main() {
   try {
     const marker = JSON.parse(fs.readFileSync(path.join(DIST_MOBILE, '.build-version'), 'utf8'));
     const backendManifest = JSON.parse(fs.readFileSync(path.join(BACKEND_PUBLIC, 'version.json'), 'utf8'));
+    const gradleVersionName = readGradleVersionName();
     if (!marker.version || marker.version !== backendManifest.version) {
       throw new Error(`Desfase: .build-version=${marker.version} vs backend version.json=${backendManifest.version}`);
     }
-    if (fs.existsSync(path.join(LOCAL_OTA_DIR, 'version.json'))) {
+    if (gradleVersionName && compareSemverParts(marker.version, gradleVersionName) < 0) {
+      throw new Error(`Desfase OTA/APK: build OTA (${marker.version}) es menor que versionName del APK (${gradleVersionName}); el APK bloquearía futuras OTAs como downgrade`);
+    }
+    if (LOCAL_OTA_DIR && fs.existsSync(path.join(LOCAL_OTA_DIR, 'version.json'))) {
       const localManifest = JSON.parse(fs.readFileSync(path.join(LOCAL_OTA_DIR, 'version.json'), 'utf8'));
       if (localManifest.version !== marker.version) {
         throw new Error(`Desfase con PC local: local=${localManifest.version} vs build=${marker.version}`);
@@ -174,7 +214,7 @@ async function main() {
   // Gate 7: Firma RSA-SHA256 + SHA-256 de OTA y firma APK con apksigner
   try {
     const { OTA_PUBLIC_KEY_PEM } = await import(new URL('../american-pos-frontend/src/config/otaPublicKey.js', import.meta.url));
-    const dirsToVerify = [BACKEND_PUBLIC, ...(fs.existsSync(path.join(LOCAL_OTA_DIR, 'version.json')) ? [LOCAL_OTA_DIR] : [])];
+    const dirsToVerify = [BACKEND_PUBLIC, ...(LOCAL_OTA_DIR && fs.existsSync(path.join(LOCAL_OTA_DIR, 'version.json')) ? [LOCAL_OTA_DIR] : [])];
     for (const dir of dirsToVerify) {
       const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'version.json'), 'utf8'));
       const zipBuf = fs.readFileSync(path.join(dir, 'dist.zip'));

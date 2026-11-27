@@ -126,17 +126,43 @@ const api = axios.create({
     withCredentials: true
 });
 
+const PAIRED_SERVER_FP_KEY = 'isaac_pos_paired_server_fingerprint';
+
+export const getPairedServerFingerprint = () => {
+    try {
+        return typeof localStorage !== 'undefined' ? (localStorage.getItem(PAIRED_SERVER_FP_KEY) || '') : '';
+    } catch {
+        return '';
+    }
+};
+
+export const setPairedServerFingerprint = (fingerprint) => {
+    try {
+        if (typeof localStorage === 'undefined') return;
+        const clean = String(fingerprint || '').trim();
+        if (clean) localStorage.setItem(PAIRED_SERVER_FP_KEY, clean);
+        else localStorage.removeItem(PAIRED_SERVER_FP_KEY);
+    } catch { /* noop */ }
+};
+
 // Update baseURL on the fly if needed
-export const updateApiBaseUrl = (newIp) => {
+export const updateApiBaseUrl = (newIp, options = {}) => {
     if (newIp && newIp.trim()) {
         const finalUrl = formatServerUrl(newIp);
         api.defaults.baseURL = finalUrl;
         localStorage.setItem('isaac_pos_server_ip', newIp.trim());
         localStorage.removeItem('isaac_pos_server_ip_explicitly_cleared');
+        if (options.serverFingerprint) {
+            setPairedServerFingerprint(options.serverFingerprint);
+        } else if (options.manualChange) {
+            // Al configurar manualmente una nueva IP, permitir re-emparejar su huella en el próximo /hello
+            setPairedServerFingerprint('');
+        }
     } else {
         localStorage.removeItem('isaac_pos_server_ip');
         localStorage.removeItem('american_pos_server_ip');
         localStorage.setItem('isaac_pos_server_ip_explicitly_cleared', 'true');
+        setPairedServerFingerprint('');
         api.defaults.baseURL = '';
     }
     if (typeof window !== 'undefined') {
@@ -146,7 +172,7 @@ export const updateApiBaseUrl = (newIp) => {
     }
 };
 
-// Check server health quickly via /hello endpoint (instant latency + real DB readiness)
+// Check server health quickly via /hello endpoint (instant latency + real DB readiness + anti-rogue server fingerprint)
 export const checkServerHealth = async (customUrl = null, options = {}) => {
     const targetUrl = customUrl ? formatServerUrl(customUrl) : (api.defaults.baseURL || getBaseUrl() || 'http://127.0.0.1:3005');
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -157,6 +183,22 @@ export const checkServerHealth = async (customUrl = null, options = {}) => {
             recordNetworkLatency(elapsed);
             if (res.data && res.data.dbReady === false) return false;
             if (options.requireMasterHost && res.data?.role === 'LAN_SPOKE') return false;
+            const remoteFp = String(res.data?.serverFingerprint || '').trim();
+            if (options.verifyPairedFingerprint && remoteFp) {
+                const pairedFp = getPairedServerFingerprint();
+                if (pairedFp && pairedFp !== remoteFp) {
+                    console.warn(`[API] 🛡️ Servidor LAN rechazado en auto-discovery (fingerprint distinto al emparejado): ${targetUrl}`);
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('rogue-server-detected', {
+                            detail: { url: targetUrl, expectedFingerprint: pairedFp, remoteFingerprint: remoteFp, hostname: res.data?.hostname }
+                        }));
+                    }
+                    return false;
+                }
+            }
+            if (remoteFp && !getPairedServerFingerprint() && !options.skipFingerprintPin) {
+                setPairedServerFingerprint(remoteFp);
+            }
             return true;
         }
     } catch {
@@ -183,6 +225,9 @@ export const checkServerDetailedHealth = async (customUrl = null, timeoutMs = 30
                 error: isDbReady ? null : 'Servidor alcanzable, pero la base de datos no está conectada',
                 server: res.data.server || 'isaac-pos',
                 hostname: res.data.hostname || 'Servidor Isaac POS',
+                companyId: res.data.companyId || null,
+                serverFingerprint: res.data.serverFingerprint || null,
+                identitySignature: res.data.identitySignature || null,
                 role: res.data.role || 'MASTER_CLOUD_HUB',
                 ips: res.data.ips || [],
                 dbDialect: res.data.dbDialect || 'postgres',
@@ -253,6 +298,21 @@ export const scanLocalSubnetServers = async (progressCb = null, onFound = null) 
             }
         } catch (e) {
             console.warn('[API] Error en descubrimiento UDP LAN:', e?.message);
+        }
+    }
+
+    // 1b. En Android Nativo (Capacitor), escuchar beacons UDP 41234 para descubrir cualquier IP de la subred al instante
+    if (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform() && typeof PosNativeHardware?.discoverLanServersUdp === 'function') {
+        try {
+            if (progressCb) progressCb({ percent: 12, message: 'Escuchando señal UDP LAN (puerto 41234)...' });
+            const udpRes = await PosNativeHardware.discoverLanServersUdp({ timeoutMs: 2200 });
+            if (Array.isArray(udpRes?.servers)) {
+                udpRes.servers.forEach((srv) => {
+                    if (srv?.ip) candidates.add(String(srv.ip).trim());
+                });
+            }
+        } catch (udpNativeErr) {
+            console.warn('[API] Aviso en discoverLanServersUdp:', udpNativeErr?.message);
         }
     }
 
@@ -423,6 +483,31 @@ export const autoDiscoverServer = async () => {
             }
         }
 
+        // 0b. En Android Nativo (Capacitor), probar descubrimiento UDP 41234 antes de sondear subred HTTP
+        if (!isDesktop && typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform() && typeof PosNativeHardware?.discoverLanServersUdp === 'function') {
+            try {
+                const udpNativeRes = await PosNativeHardware.discoverLanServersUdp({ timeoutMs: 2500 });
+                const udpServers = Array.isArray(udpNativeRes?.servers) ? udpNativeRes.servers : [];
+                for (const srv of udpServers) {
+                    if (!srv?.ip) continue;
+                    const proto = srv.protocol === 'https' ? 'https' : 'http';
+                    const targetUrl = `${proto}://${srv.ip}:${srv.port || 3005}`;
+                    const isHealthy = await checkServerHealth(targetUrl, {
+                        requireMasterHost: currentRole === 'client',
+                        verifyPairedFingerprint: true
+                    });
+                    if (isHealthy) {
+                        updateApiBaseUrl(targetUrl, { serverFingerprint: srv.serverFingerprint });
+                        window.dispatchEvent(new CustomEvent('server-discovered', { detail: { url: targetUrl, via: 'udp' } }));
+                        isDiscovering = false;
+                        return targetUrl;
+                    }
+                }
+            } catch (udpNativeErr) {
+                console.warn('[API] Falló discoverLanServersUdp en autoDiscoverServer:', udpNativeErr?.message);
+            }
+        }
+
         // Localhost only if server role
         if (currentRole === 'server' || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))) {
             hostCandidates.add('http://127.0.0.1');
@@ -494,7 +579,10 @@ export const autoDiscoverServer = async () => {
             const batch = primaryCandidates.slice(i, i + batchSize);
             const promises = batch.flatMap(host => 
                 ports.map(port => 
-                    checkServerHealth(`${host}:${port}`, { requireMasterHost: currentRole === 'client' })
+                    checkServerHealth(`${host}:${port}`, {
+                        requireMasterHost: currentRole === 'client',
+                        verifyPairedFingerprint: true
+                    })
                         .then(ok => ok ? `${host}:${port}` : null)
                         .catch(() => null)
                 )
@@ -542,12 +630,15 @@ api.interceptors.request.use((config) => {
     if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
         config.headers['Authorization'] = `Bearer ${token}`;
     }
-    const envSyncKey = localStorage.getItem('sync_secret_key');
+    const envSyncKey = secureMobileStorage.getSyncKey();
     if (envSyncKey && !config.headers['x-sync-key'] && !config.headers['X-Sync-Key']) {
         config.headers['x-sync-key'] = envSyncKey;
     }
     const rawCompanyId = localStorage.getItem('companyId');
-    const activeCompanyId = (rawCompanyId && rawCompanyId.length < 10 && rawCompanyId !== 'null' && rawCompanyId !== 'undefined') ? rawCompanyId : '2';
+    const trimmedCompanyId = rawCompanyId ? String(rawCompanyId).trim() : '';
+    const activeCompanyId = (trimmedCompanyId && trimmedCompanyId !== 'null' && trimmedCompanyId !== 'undefined')
+        ? trimmedCompanyId
+        : '2';
     if (!config.headers['x-company-id'] && !config.headers['X-Company-Id']) {
         config.headers['x-company-id'] = activeCompanyId;
     }

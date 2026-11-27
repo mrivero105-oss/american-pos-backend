@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import capCfg from '../../capacitor.config.json';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const mockUpdater = vi.hoisted(() => ({
   notifyAppReady: vi.fn().mockResolvedValue(undefined),
@@ -82,6 +85,11 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
   const sampleZipBytes = new Uint8Array(Buffer.from('PK\x03\x04isaac-pos-ota-bundle-valid-payload'));
   const validSha256 = crypto.createHash('sha256').update(sampleZipBytes).digest('hex');
   const validSignature = crypto.sign('sha256', Buffer.from(sampleZipBytes), privateKey).toString('base64');
+  const defaultBuildTime = '2026-11-24T05:00:00.000Z';
+  const signManifest = (version, checksum = validSha256, buildTime = defaultBuildTime) => ({
+    buildTime,
+    otaManifestSignature: crypto.sign('sha256', Buffer.from(`${version}|${checksum}|${buildTime}`, 'utf8'), privateKey).toString('base64')
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -149,7 +157,8 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
             version: '24.4.0.201',
             bundleUrl: '/dist.zip',
             checksum: tamperedSha256,
-            otaSignature: validSignature
+            otaSignature: validSignature,
+            ...signManifest('24.4.0.201', tamperedSha256)
           }
         };
       }
@@ -169,6 +178,32 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
     expect(result.error.message).toContain('Firma criptográfica RSA-SHA256');
     expect(mockUpdater.download).not.toHaveBeenCalled();
     expect(mockUpdater.set).not.toHaveBeenCalled();
+  });
+
+  it('rechaza fail-closed manifiesto OTA sin otaManifestSignature obligatorio (cierra ataque de replay/downgrade de metadatos)', async () => {
+    mockAxiosGet.mockImplementation(async (url) => {
+      if (String(url).includes('/version.json')) {
+        return {
+          data: {
+            version: '24.4.0.203',
+            bundleUrl: '/dist.zip',
+            checksum: validSha256,
+            otaSignature: validSignature
+          }
+        };
+      }
+      throw new Error(`No debió descargar bundle sin otaManifestSignature: ${url}`);
+    });
+
+    const result = await otaUpdateService.checkForUpdates({
+      silent: true,
+      publicKeyPem: publicKey
+    });
+
+    expect(result.updateAvailable).toBe(false);
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error.message).toContain('otaManifestSignature');
+    expect(mockUpdater.download).not.toHaveBeenCalled();
   });
 
   it('falla cerrado y rechaza manifiesto sin otaSignature (cierra bypass MITM en LAN HTTP)', async () => {
@@ -252,7 +287,8 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
         version: '24.4.0.250',
         bundleUrl: '/dist.zip',
         checksum: validSha256,
-        otaSignature: validSignature
+        otaSignature: validSignature,
+        ...signManifest('24.4.0.250')
       }
     };
     const signedCloudOlder = {
@@ -262,7 +298,8 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
         version: '24.4.0.200',
         bundleUrl: 'https://cloud.example/dist.zip',
         checksum: validSha256,
-        otaSignature: validSignature
+        otaSignature: validSignature,
+        ...signManifest('24.4.0.200')
       }
     };
     const signedCloudSame = {
@@ -272,7 +309,8 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
         version: '24.4.0.250',
         bundleUrl: 'https://cloud.example/dist.zip',
         checksum: validSha256,
-        otaSignature: validSignature
+        otaSignature: validSignature,
+        ...signManifest('24.4.0.250')
       }
     };
 
@@ -308,7 +346,8 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
             version: '24.4.0.300',
             bundleUrl: '/dist.zip',
             checksum: validSha256,
-            otaSignature: validSignature
+            otaSignature: validSignature,
+            ...signManifest('24.4.0.300')
           }
         };
       }
@@ -387,5 +426,20 @@ describe('Fase M2 — OTA Update Service (Firma RSA-SHA256 Obligatoria y Anti-Do
     expect(res.alreadyStaged).toBe(true);
     expect(mockUpdater.download).not.toHaveBeenCalled();
     expect(mockUpdater.set).not.toHaveBeenCalled();
+  });
+
+  it('mantiene paridad semver entre package.json y android/app/build.gradle versionName para evitar bloqueo de futuras OTAs', () => {
+    const testDir = path.dirname(fileURLToPath(import.meta.url));
+    const frontendRoot = path.resolve(testDir, '../..');
+    const pkg = JSON.parse(fs.readFileSync(path.join(frontendRoot, 'package.json'), 'utf8'));
+    const gradle = fs.readFileSync(path.join(frontendRoot, 'android/app/build.gradle'), 'utf8');
+    const versionNameMatch = gradle.match(/\bversionName\s+["']([^"']+)["']/);
+    expect(versionNameMatch).not.toBeNull();
+    const gradleVersionName = versionNameMatch[1];
+
+    // package.json nunca debe quedar debajo de versionName del APK
+    expect(compareOtaVersions(pkg.version, gradleVersionName)).toBeGreaterThanOrEqual(0);
+    // Un OTA generado sobre pkg.version.<timestamp> debe ser estrictamente mayor que versionName
+    expect(compareOtaVersions(`${pkg.version}.1795765000`, gradleVersionName)).toBe(1);
   });
 });

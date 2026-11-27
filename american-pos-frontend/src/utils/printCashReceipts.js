@@ -173,6 +173,7 @@ const executeReceiptPrint = async (htmlContent, printerName = '', options = {}) 
 
 const createPrintIframe = (htmlContent) => {
     const iframe = document.createElement('iframe');
+    iframe.setAttribute('sandbox', 'allow-modals allow-same-origin');
     iframe.style.position = 'fixed';
     iframe.style.right = '0';
     iframe.style.bottom = '0';

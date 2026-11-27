@@ -69,4 +69,35 @@ export function setTerminalId(customId) {
     }
 }
 
+/**
+ * Genera un registerId único por dispositivo móvil (p. ej. MOB-A1B2C3)
+ * para evitar colisiones de caja cuando varios teléfonos facturan simultáneamente.
+ */
+export function getMobileRegisterId() {
+    const rawId = String(getTerminalId() || 'TERM-MOBILE').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const suffix = (rawId.slice(-6) || 'MOBILE').padStart(6, '0');
+    return `MOB-${suffix}`;
+}
+
+/**
+ * Devuelve el registerId del turno móvil actualmente abierto (preservando compatibilidad
+ * si existe un turno heredado bajo 'Caja Móvil'), o el registerId único del terminal.
+ */
+export function getActiveMobileRegisterId() {
+    if (typeof window !== 'undefined') {
+        try {
+            const rawShift = localStorage.getItem('pos_mobile_current_shift');
+            if (rawShift) {
+                const parsed = JSON.parse(rawShift);
+                if (parsed && (!parsed.status || parsed.status === 'open') && !parsed.closedAt && parsed.registerId) {
+                    return String(parsed.registerId);
+                }
+            }
+        } catch {
+            // Ignorar JSON corrupto y usar registerId del terminal
+        }
+    }
+    return getMobileRegisterId();
+}
+
 export default getTerminalId;

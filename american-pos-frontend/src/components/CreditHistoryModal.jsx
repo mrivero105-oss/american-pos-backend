@@ -41,8 +41,9 @@ export default function CreditHistoryModal({ isOpen, onClose, customerId, onView
         try {
             setPrinting(true);
             const printContent = pdfRef.current.innerHTML;
-            const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+            const printWindow = window.open('', '_blank');
             if (!printWindow) return;
+            try { printWindow.opener = null; } catch { /* noop */ }
             const safeTitleName = escapeHtml(String(customerInfo.name || '').replace(/\s+/g, '_'));
             
             printWindow.document.write(`

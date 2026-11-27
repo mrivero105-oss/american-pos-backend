@@ -164,6 +164,11 @@ public class MainActivity extends BridgeActivity {
             // Reproducción de cámara/escáner sin toque adicional
             settings.setMediaPlaybackRequiresUserGesture(false);
 
+            // Endurecimiento WebView: bloquear acceso arbitrario a file://, content:// y geolocalización web
+            settings.setAllowFileAccess(false);
+            settings.setAllowContentAccess(false);
+            settings.setGeolocationEnabled(false);
+
             // Permitir peticiones a servidores LAN RFC1918 desde origen HTTPS local de Capacitor
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
 

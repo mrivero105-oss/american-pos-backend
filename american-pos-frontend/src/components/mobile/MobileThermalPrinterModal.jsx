@@ -254,9 +254,8 @@ export default function MobileThermalPrinterModal({
         showToast?.('✅ Ticket de prueba enviado a impresora Wi-Fi/Red');
       } else if (mobilePrinterService.isNativePlatform()) {
         const base64Data = mobilePrinterService.toBase64(cp858Bytes);
-        const { registerPlugin } = await import('@capacitor/core');
-        const PosNativeHardware = registerPlugin('PosNativeHardware');
-        const res = await PosNativeHardware.printBluetooth({
+        const nativePlugin = mobilePrinterService.getNativePlugin();
+        const res = await nativePlugin.printBluetooth({
           address: selectedAddress || '',
           data: base64Data,
           transport: selectedTransport || 'auto'
@@ -296,6 +295,9 @@ export default function MobileThermalPrinterModal({
       style={modalOverlayStyle}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Configurar impresora térmica"
         className={`w-full max-w-md ${T?.cardBg || 'bg-slate-900'} rounded-2xl sm:rounded-xl border ${T?.border || 'border-slate-800'} shadow-2xl overflow-hidden flex flex-col max-h-[90dvh] my-auto`}
         style={modalCardMaxHeightStyle}
       >
@@ -640,8 +642,9 @@ export default function MobileThermalPrinterModal({
           <button
             type="button"
             onClick={handlePrintTestTicket}
-            disabled={isPrintingTest}
-            className="w-full min-h-[44px] py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-colors disabled:opacity-50"
+            disabled={isPrintingTest || !isConfigured}
+            title={!isConfigured ? 'Selecciona una impresora Bluetooth o ingresa la IP de red primero' : undefined}
+            className="w-full min-h-[44px] py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isPrintingTest ? (
               <RefreshCw size={15} className="animate-spin" />

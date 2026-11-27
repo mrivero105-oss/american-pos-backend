@@ -16,9 +16,23 @@ public final class NativeHardwareUtils {
     public static final int DEFAULT_BLE_MTU = 23;
     public static final int MIN_BLE_CHUNK_BYTES = 20;
     public static final int MAX_BLE_CHUNK_BYTES = 244;
-    public static final int MIN_PRINTER_TCP_PORT = 1024;
-    public static final int MAX_PRINTER_TCP_PORT = 65535;
+    public static final int MIN_PRINTER_TCP_PORT = 515;
+    public static final int MAX_PRINTER_TCP_PORT = 9102;
+    public static final int MAX_SHARED_PNG_BYTES = 10 * 1024 * 1024;
     public static final long DEFAULT_BURST_COOLDOWN_MS = 1400L;
+
+    public static final Set<Integer> ALLOWED_PRINTER_TCP_PORTS = Collections.unmodifiableSet(
+        new HashSet<>(Arrays.asList(9100, 9101, 9102, 515, 631))
+    );
+
+    public static final Set<String> EXCLUDED_STANDARD_GATT_SERVICE_UUIDS = Collections.unmodifiableSet(
+        new HashSet<>(Arrays.asList(
+            "00001800-0000-1000-8000-00805f9b34fb", // Generic Access
+            "00001801-0000-1000-8000-00805f9b34fb", // Generic Attribute
+            "0000180a-0000-1000-8000-00805f9b34fb", // Device Information
+            "0000180f-0000-1000-8000-00805f9b34fb"  // Battery Service
+        ))
+    );
 
     public static final Set<String> KNOWN_THERMAL_BLE_SERVICE_UUIDS = Collections.unmodifiableSet(
         new HashSet<>(Arrays.asList(
@@ -100,10 +114,65 @@ public final class NativeHardwareUtils {
     }
 
     /**
-     * Valida que el puerto TCP para impresión térmica esté en rango no privilegiado seguro (ej. 9100).
+     * Valida una IP literal YA resuelta post-DNS para impresoras térmicas LAN (anti DNS-rebinding y SSRF):
+     * permite exclusivamente direcciones IPv4 RFC1918 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16).
+     */
+    public static boolean isAllowedResolvedPrinterIp(String resolvedIp) {
+        if (resolvedIp == null) return false;
+        String ip = resolvedIp.trim().toLowerCase(Locale.ROOT);
+        if (ip.isEmpty() || ip.contains(":")) return false;
+        if (ip.startsWith("127.") || ip.startsWith("169.254.") || ip.startsWith("0.")) {
+            return false;
+        }
+        String[] parts = ip.split("\\.");
+        if (parts.length != 4) return false;
+        int[] octets = new int[4];
+        try {
+            for (int i = 0; i < 4; i++) {
+                if (parts[i].isEmpty() || parts[i].length() > 3) return false;
+                octets[i] = Integer.parseInt(parts[i]);
+                if (octets[i] < 0 || octets[i] > 255) return false;
+            }
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        int a = octets[0];
+        int b = octets[1];
+        if (a == 10) return true;
+        if (a == 192 && b == 168) return true;
+        return a == 172 && b >= 16 && b <= 31;
+    }
+
+    /**
+     * Valida que el puerto TCP pertenezca estrictamente a la allowlist de impresión térmica/red (9100, 9101, 9102, 515, 631).
      */
     public static boolean isValidPrinterPort(int port) {
-        return port >= MIN_PRINTER_TCP_PORT && port <= MAX_PRINTER_TCP_PORT;
+        return ALLOWED_PRINTER_TCP_PORTS.contains(port);
+    }
+
+    /**
+     * Verifica si un UUID de servicio GATT corresponde a servicios estándar del sistema que jamás deben escribirse en impresión BLE.
+     */
+    public static boolean isExcludedStandardGattServiceUuid(String rawUuid) {
+        if (rawUuid == null) return false;
+        return EXCLUDED_STANDARD_GATT_SERVICE_UUIDS.contains(rawUuid.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Valida magic bytes PNG (89 50 4E 47 0D 0A 1A 0A) y límite máximo de tamaño (10 MB).
+     */
+    public static boolean isValidPngPayload(byte[] data) {
+        if (data == null || data.length < 8 || data.length > MAX_SHARED_PNG_BYTES) {
+            return false;
+        }
+        return (data[0] & 0xFF) == 0x89
+            && (data[1] & 0xFF) == 0x50
+            && (data[2] & 0xFF) == 0x4E
+            && (data[3] & 0xFF) == 0x47
+            && (data[4] & 0xFF) == 0x0D
+            && (data[5] & 0xFF) == 0x0A
+            && (data[6] & 0xFF) == 0x1A
+            && (data[7] & 0xFF) == 0x0A;
     }
 
     /**

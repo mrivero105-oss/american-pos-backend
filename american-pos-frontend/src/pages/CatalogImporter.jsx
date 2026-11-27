@@ -537,7 +537,7 @@ export default function CatalogImporter() {
             const { data } = await api.post('/products/reparse-invoice', {
                 invoiceUrl: historyInvoice.invoiceUrl,
                 supplierId: historyInvoice.supplierId
-            });
+            }, { timeout: 180000 });
             const success = applyExtractedCatalogData(data);
             if (success) {
                 toast.success(`Factura #${historyInvoice.referenceNumber} cargada con ${data.items?.length || 0} renglones`, { id: toastId });
@@ -931,7 +931,7 @@ export default function CatalogImporter() {
             const { data } = await api.post('/products/new/search-images-ia', {
                 name: searchName,
                 category: 'General'
-            });
+            }, { timeout: 45000 });
             setCandidateImages(data.images || []);
             if (!data.images || data.images.length === 0) {
                 toast.error('No se encontraron imágenes candidatas en la web');
@@ -958,7 +958,7 @@ export default function CatalogImporter() {
             const { data } = await api.post('/products/new/search-images-ia', {
                 name: query,
                 category: 'General'
-            });
+            }, { timeout: 45000 });
             setCandidateImages(data.images || []);
             if (!data.images || data.images.length === 0) {
                 toast.error('No se encontraron imágenes para este término');
@@ -1004,13 +1004,13 @@ export default function CatalogImporter() {
                 const { data } = await api.post('/products/new/search-images-ia', {
                     name: searchName,
                     category: 'General'
-                });
+                }, { timeout: 45000 });
                 if (data?.images && data.images.length > 0) {
                     const firstImg = data.images[0];
                     const selRes = await api.post('/products/new/select-image-ia', {
                         imageUrl: firstImg,
                         name: searchName
-                    });
+                    }, { timeout: 30000 });
                     newItems[i] = {
                         ...newItems[i],
                         image: selRes.data?.imageUri || selRes.data?.imageUrl || firstImg
@@ -1663,20 +1663,22 @@ export default function CatalogImporter() {
                                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">Captura por Dispositivo</h3>
 
                                 <div className="space-y-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowPrinterModal(true)}
-                                        disabled={isScanningPrinter}
-                                        className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-left transition-all flex items-center gap-3.5 cursor-pointer disabled:opacity-50 group"
-                                    >
-                                        <div className="p-2.5 rounded-lg bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 shrink-0 group-hover:text-primary-600 transition-colors">
-                                            {isScanningPrinter ? <Loader2 size={18} className="animate-spin" /> : <Printer size={18} />}
-                                        </div>
-                                        <div className="min-w-0">
-                                            <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">Escanear desde Impresora</h4>
-                                            <p className="text-[11px] text-slate-500 truncate">Captura directa desde escáner USB o Red</p>
-                                        </div>
-                                    </button>
+                                    {!(typeof window !== 'undefined' && !window.electronAPI && (Boolean(window.Capacitor?.isNativePlatform?.()) || window.location.hash.includes('/mobile') || window.location.pathname.includes('/mobile'))) && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPrinterModal(true)}
+                                            disabled={isScanningPrinter}
+                                            className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-left transition-all flex items-center gap-3.5 cursor-pointer disabled:opacity-50 group"
+                                        >
+                                            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 shrink-0 group-hover:text-primary-600 transition-colors">
+                                                {isScanningPrinter ? <Loader2 size={18} className="animate-spin" /> : <Printer size={18} />}
+                                            </div>
+                                            <div className="min-w-0">
+                                                <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">Escanear desde Impresora</h4>
+                                                <p className="text-[11px] text-slate-500 truncate">Captura directa desde escáner USB o Red</p>
+                                            </div>
+                                        </button>
+                                    )}
 
                                     <button
                                         type="button"
@@ -1688,7 +1690,7 @@ export default function CatalogImporter() {
                                         </div>
                                         <div className="min-w-0">
                                             <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">Capturar con Cámara</h4>
-                                            <p className="text-[11px] text-slate-500 truncate">Fotografía la factura física con la cámara web</p>
+                                            <p className="text-[11px] text-slate-500 truncate">Fotografía la factura física con la cámara</p>
                                         </div>
                                     </button>
                                 </div>
@@ -1701,7 +1703,7 @@ export default function CatalogImporter() {
                                 onDragOver={onDragOver}
                                 onDragLeave={onDragLeave}
                                 onDrop={onDrop}
-                                className={`min-h-[380px] border-2 border-dashed rounded-2xl transition-all flex flex-col items-center justify-center text-center p-8 relative overflow-hidden ${
+                                className={`min-h-[180px] sm:min-h-[380px] border-2 border-dashed rounded-2xl transition-all flex flex-col items-center justify-center text-center p-5 sm:p-8 relative overflow-hidden ${
                                     isDragging
                                         ? 'border-primary-500 bg-primary-50/50 dark:bg-primary-950/20 shadow-inner'
                                         : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-primary-400 dark:hover:border-slate-600 shadow-xs'

@@ -8,8 +8,29 @@ const GS = '\x1d';
 
 // ESC @ (Init) + FS . (Desactiva modo chino/Kanji de fábrica) + ESC t 19 (CP858 / PC858 Español + Euro)
 export const ESC_INIT_CP858 = ESC + '@' + FS + '.' + ESC + 't\x13';
+// ESC @ (Init) + FS . (Desactiva modo chino/Kanji de fábrica) + ESC t 2 (CP850 / PC850 Español clásico)
+export const ESC_INIT_CP850 = ESC + '@' + FS + '.' + ESC + 't\x02';
 // ESC @ (Init) + FS . (Desactiva modo chino/Kanji de fábrica) + ESC t 0 (Selecciona tabla PC437 estándar)
 export const ESC_INIT = ESC + '@' + FS + '.' + ESC + 't\x00';
+
+export function resolveEscPosEncoding(options = {}, business = {}) {
+    let stored = '';
+    try {
+        if (typeof localStorage !== 'undefined') {
+            stored = localStorage.getItem('pos_printer_encoding') || '';
+        }
+    } catch { /* noop */ }
+    const raw = String(options?.encoding || business?.escposEncoding || stored || 'cp858').trim().toLowerCase();
+    if (raw === 'ascii' || raw === 'pc437') return 'ascii';
+    if (raw === 'cp850' || raw === 'pc850') return 'cp850';
+    return 'cp858';
+}
+
+export function getEscPosInitForEncoding(encoding = 'cp858') {
+    if (encoding === 'ascii') return ESC_INIT;
+    if (encoding === 'cp850') return ESC_INIT_CP850;
+    return ESC_INIT_CP858;
+}
 export const ESC_ALIGN_LEFT = ESC + 'a\x00';
 export const ESC_ALIGN_CENTER = ESC + 'a\x01';
 export const ESC_ALIGN_RIGHT = ESC + 'a\x02';
@@ -169,14 +190,15 @@ export function formatCenter(text, width, options = {}) {
 /**
  * Standardizes multi-line paragraphs (like footers or headers) to fit a specific width.
  */
-export function formatParagraph(text, width, align = 'center') {
+export function formatParagraph(text, width, align = 'center', options = {}) {
     if (!text) return '';
+    const cleaner = options?.preserveCp858 === false ? cleanAscii : cleanCp858Text;
     return String(text)
         .split('\n')
         .map(line => {
-            const trimmed = line.trim();
+            const trimmed = cleaner(line).trim();
             if (!trimmed) return '';
-            if (align === 'center') return formatCenter(trimmed, width);
+            if (align === 'center') return formatCenter(trimmed, width, { preserveCp858: options?.preserveCp858 !== false });
             if (align === 'right') return trimmed.substring(0, width).padStart(width, ' ');
             return trimmed.substring(0, width);
         })
@@ -209,16 +231,21 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
     const moneyConfig = { rate: effectiveExchangeRate, currencyMode: effectiveCurrencyMode };
     const formatMoneyLocal = (val, force = null) => formatMoney(val, isUsdOnly ? 'USD' : force, moneyConfig);
 
+    const escEncoding = resolveEscPosEncoding(options, business);
+    const preserveCp858 = escEncoding !== 'ascii';
+    const cleanText = preserveCp858 ? cleanCp858Text : cleanAscii;
+    const fmtOpt = { preserveCp858 };
+
     const buildSingleTicket = (ticketRole = 'STANDARD') => {
         let ticket = '';
         
-        // 1. Initialize Printer
-        ticket += ESC_INIT;
+        // 1. Initialize Printer (CP858 español por defecto, configurable CP850/ASCII)
+        ticket += getEscPosInitForEncoding(escEncoding);
         
         // 2. Business Header (Bold and Centered)
         ticket += ESC_ALIGN_CENTER + ESC_BOLD_ON;
         if (business.name) {
-            ticket += GS_TEXT_DOUBLE + cleanAscii(business.name).toUpperCase() + '\n' + GS_TEXT_NORMAL;
+            ticket += GS_TEXT_DOUBLE + cleanText(business.name).toUpperCase() + '\n' + GS_TEXT_NORMAL;
         } else {
             ticket += GS_TEXT_DOUBLE + 'ISAAC POS\n' + GS_TEXT_NORMAL;
         }
@@ -227,9 +254,9 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
         // 3. Tax / Contact Information (Centered)
         const taxIdLabel = getTaxIdLabel(effectiveCountry);
         const clientDocLabel = getCustomerDocLabel(effectiveCountry);
-        if (business.rif) ticket += `${taxIdLabel}: ${cleanAscii(business.rif).toUpperCase()}\n`;
-        if (business.address) ticket += formatParagraph(business.address, cols, 'center') + '\n';
-        if (business.phone) ticket += `TEL: ${cleanAscii(business.phone)}\n`;
+        if (business.rif) ticket += `${taxIdLabel}: ${cleanText(business.rif).toUpperCase()}\n`;
+        if (business.address) ticket += formatParagraph(business.address, cols, 'center', fmtOpt) + '\n';
+        if (business.phone) ticket += `TEL: ${cleanText(business.phone)}\n`;
         
         // 4. Custom Header (if configured)
         if (business.receiptHeader) {
@@ -246,7 +273,7 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
                 .replace(/\{\{hora\}\}/gi, formattedTime)
                 .replace(/\{\{nro_recibo\}\}/gi, receiptNum);
                 
-            ticket += formatParagraph(headerParsed, cols, 'center') + '\n';
+            ticket += formatParagraph(headerParsed, cols, 'center', fmtOpt) + '\n';
         }
         
         ticket += ESC_ALIGN_LEFT;
@@ -255,19 +282,19 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
         // 4B. Distintivo de Copia o Reimpresión Antifraude
         if (sale.isReprint || sale.reprintCount > 0) {
             ticket += ESC_ALIGN_CENTER + ESC_BOLD_ON;
-            ticket += GS_TEXT_DOUBLE + '*** COPIA / REIMPRESION ***\n' + GS_TEXT_NORMAL;
-            ticket += formatCenter('NO VALIDO COMO COMPROBANTE ORIGINAL', cols) + '\n';
+            ticket += GS_TEXT_DOUBLE + cleanText('*** COPIA / REIMPRESIÓN ***') + '\n' + GS_TEXT_NORMAL;
+            ticket += formatCenter('NO VÁLIDO COMO COMPROBANTE ORIGINAL', cols, fmtOpt) + '\n';
             ticket += ESC_BOLD_OFF + ESC_ALIGN_LEFT;
             ticket += '-'.repeat(cols) + '\n';
         } else if (ticketRole === 'CONTROL') {
             ticket += ESC_ALIGN_CENTER + ESC_BOLD_ON;
             ticket += GS_TEXT_DOUBLE + '*** COPIA / CONTROL ***\n' + GS_TEXT_NORMAL;
-            ticket += formatCenter('USO INTERNO DEL COMERCIO', cols) + '\n';
+            ticket += formatCenter('USO INTERNO DEL COMERCIO', cols, fmtOpt) + '\n';
             ticket += ESC_BOLD_OFF + ESC_ALIGN_LEFT;
             ticket += '-'.repeat(cols) + '\n';
         } else if (ticketRole === 'ORIGINAL') {
             ticket += ESC_ALIGN_CENTER + ESC_BOLD_ON;
-            ticket += formatCenter('*** ORIGINAL - CLIENTE ***', cols) + '\n';
+            ticket += formatCenter('*** ORIGINAL - CLIENTE ***', cols, fmtOpt) + '\n';
             ticket += ESC_BOLD_OFF + ESC_ALIGN_LEFT;
             ticket += '-'.repeat(cols) + '\n';
         }
@@ -275,25 +302,25 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
         // 5. Transaction Metadata (Left aligned)
         ticket += ESC_BOLD_ON;
         if (dailyTicketNum) {
-            ticket += formatLine('NUMERO DE TICKET:', `#${dailyTicketNum}`, cols) + '\n';
+            ticket += formatLine('NÚMERO DE TICKET:', `#${dailyTicketNum}`, cols, fmtOpt) + '\n';
         }
-        ticket += formatLine('DOCUMENTO:', docTitle, cols) + '\n';
-        ticket += formatLine('RECIBO:', dailyTicketNum ? `#${dailyTicketNum} (${receiptNum})` : `#${receiptNum}`, cols) + '\n';
+        ticket += formatLine('DOCUMENTO:', docTitle, cols, fmtOpt) + '\n';
+        ticket += formatLine('RECIBO:', dailyTicketNum ? `#${dailyTicketNum} (${receiptNum})` : `#${receiptNum}`, cols, fmtOpt) + '\n';
         ticket += ESC_BOLD_OFF;
-        ticket += formatLine('FECHA/HORA:', `${formattedDate} ${formattedTime}`, cols) + '\n';
+        ticket += formatLine('FECHA/HORA:', `${formattedDate} ${formattedTime}`, cols, fmtOpt) + '\n';
         
         const cashier = sale.cashierName || sale.userName || sale.User?.name || business.cashierName;
         if (cashier) {
-            ticket += formatLine('CAJERO:', cleanAscii(cashier).toUpperCase(), cols) + '\n';
+            ticket += formatLine('CAJERO:', cleanText(cashier).toUpperCase(), cols, fmtOpt) + '\n';
         }
         
         if (!isUsdOnly && currencyMode === 'BOTH' && !isOnlyBs) {
-            ticket += formatLine('TASA DE CAMBIO:', `${formatBs(effectiveExchangeRate).replace('Bs.S ', '').replace('Bs. ', '').replace('Bs.', '').trim()} BS/$`, cols) + '\n';
+            ticket += formatLine('TASA DE CAMBIO:', `${formatBs(effectiveExchangeRate).replace('Bs.S ', '').replace('Bs. ', '').replace('Bs.', '').trim()} BS/$`, cols, fmtOpt) + '\n';
         }
 
-        ticket += formatLine('CLIENTE:', (sale.customerName || 'CLIENTE OCASIONAL').toUpperCase(), cols) + '\n';
+        ticket += formatLine('CLIENTE:', (sale.customerName || 'CLIENTE OCASIONAL').toUpperCase(), cols, fmtOpt) + '\n';
         if (sale.customerDoc) {
-            ticket += formatLine(`${clientDocLabel}:`, cleanAscii(sale.customerDoc).toUpperCase(), cols) + '\n';
+            ticket += formatLine(`${clientDocLabel}:`, cleanText(sale.customerDoc).toUpperCase(), cols, fmtOpt) + '\n';
         }
         
         ticket += '-'.repeat(cols) + '\n';
@@ -303,43 +330,43 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
         const totalUnits = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
 
         items.forEach(item => {
-            let nameClean = cleanAscii(item.name).toUpperCase();
+            let nameClean = cleanText(item.name).toUpperCase();
             if (item.isBulk) {
-                const bulkLabel = cleanAscii(item.bulkUnitName || 'PAQ').toUpperCase();
+                const bulkLabel = cleanText(item.bulkUnitName || 'PAQ').toUpperCase();
                 nameClean = `[${bulkLabel}${item.unitsPerBulk ? ' x' + item.unitsPerBulk : ''}] ${nameClean}`;
             } else if (item.isMidBulk) {
-                const midLabel = cleanAscii(item.midBulkUnitName || 'MEDIA').toUpperCase();
+                const midLabel = cleanText(item.midBulkUnitName || 'MEDIA').toUpperCase();
                 nameClean = `[${midLabel}${item.unitsPerMidBulk ? ' x' + item.unitsPerMidBulk : ''}] ${nameClean}`;
             }
             const priceClean = formatMoneyLocal(item.price);
             const subtotalClean = formatMoneyLocal(item.subtotal || item.price * item.quantity);
             
             // Linea 1: Nombre del producto (izq) y Subtotal (der) en negrita
-            const itemLine = formatLine(nameClean, subtotalClean, cols);
+            const itemLine = formatLine(nameClean, subtotalClean, cols, fmtOpt);
             ticket += ESC_BOLD_ON + itemLine + ESC_BOLD_OFF + '\n';
             
             // Linea 2: Detalle de Cantidad x Precio unitario (izq)
             const unitTag = item.isBulk 
-                ? ` ${cleanAscii(item.bulkUnitName || 'Paq')}` 
+                ? ` ${cleanText(item.bulkUnitName || 'Paq')}` 
                 : item.isMidBulk 
-                    ? ` ${cleanAscii(item.midBulkUnitName || 'Med')}` 
+                    ? ` ${cleanText(item.midBulkUnitName || 'Med')}` 
                     : '';
-            const qtyPart = cleanAscii(`  ${formatStock(item.quantity)}${unitTag} x ${priceClean}`);
+            const qtyPart = cleanText(`  ${formatStock(item.quantity)}${unitTag} x ${priceClean}`);
             ticket += qtyPart.substring(0, cols) + '\n';
             
             // Linea 3: Lote y Vencimiento (opcional)
             if (item.batchNumber || item.expirationDate) {
                 let lotInfo = '  ';
-                if (item.batchNumber) lotInfo += `Lote: ${cleanAscii(item.batchNumber)} `;
-                if (item.expirationDate) lotInfo += `Venc: ${cleanAscii(item.expirationDate)}`;
+                if (item.batchNumber) lotInfo += `Lote: ${cleanText(item.batchNumber)} `;
+                if (item.expirationDate) lotInfo += `Venc: ${cleanText(item.expirationDate)}`;
                 ticket += lotInfo.substring(0, cols) + '\n';
             }
 
             // Linea 4: Detalle de Promocion / Oferta Aplicada (2x1, Volumen)
             if (item.appliedPromoName || item.promoDiscount > 0) {
-                const promoTag = `  * PROMO: ${cleanAscii(item.appliedPromoName || 'OFERTA')}`;
-                const saveTag = item.promoDiscount ? ` (-${cleanAscii(formatMoneyLocal(item.promoDiscount))})` : '';
-                ticket += cleanAscii(promoTag + saveTag).substring(0, cols) + '\n';
+                const promoTag = `  * PROMO: ${cleanText(item.appliedPromoName || 'OFERTA')}`;
+                const saveTag = item.promoDiscount ? ` (-${cleanText(formatMoneyLocal(item.promoDiscount))})` : '';
+                ticket += cleanText(promoTag + saveTag).substring(0, cols) + '\n';
             }
         });
         
@@ -517,12 +544,12 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
                 .replace(/\{\{hora\}\}/gi, formattedTime)
                 .replace(/\{\{nro_recibo\}\}/gi, receiptNum);
                 
-            ticket += formatParagraph(footerParsed, cols, 'center') + '\n';
+            ticket += formatParagraph(footerParsed, cols, 'center', fmtOpt) + '\n';
         } else {
-            ticket += 'GRACIAS POR SU COMPRA!\n';
+            ticket += cleanText('¡GRACIAS POR SU COMPRA!') + '\n';
         }
         
-        ticket += formatParagraph('Isaac POS', cols, 'center') + '\n';
+        ticket += formatParagraph('Isaac POS', cols, 'center', fmtOpt) + '\n';
         
         // 10. Feed & Paper Cut (feed some lines so it exits the printer head, then cut)
         ticket += '\n\n\n\n\n' + GS_CUT;
@@ -557,10 +584,14 @@ export function formatSaleToEscPos(sale, business = {}, exchangeRate = 1, curren
  * factores de empaque mayores (>= 100) o flags de bulto.
  * NO incluye corte inicial para evitar doble corte con la guillotina al unirse al recibo del cliente.
  */
-export function formatWarehouseDispatchSlip(sale, business = {}) {
+export function formatWarehouseDispatchSlip(sale, business = {}, options = {}) {
     if (!sale) return '';
     const is80mm = business.receiptWidth === '80mm';
     const cols = is80mm ? 48 : 32;
+    const escEncoding = resolveEscPosEncoding(options, business);
+    const preserveCp858 = escEncoding !== 'ascii';
+    const cleanText = preserveCp858 ? cleanCp858Text : cleanAscii;
+    const fmtOpt = { preserveCp858 };
 
     const items = sale.items || sale.SaleItems || [];
     const bulkItems = items.filter(item => {
@@ -577,15 +608,15 @@ export function formatWarehouseDispatchSlip(sale, business = {}) {
     if (bulkItems.length === 0) return '';
 
     let slip = '';
-    // Inicializar estilos limpios para el talón
-    slip += ESC_INIT;
+    // Inicializar estilos limpios para el talón con CP858 por defecto
+    slip += getEscPosInitForEncoding(escEncoding);
     slip += ESC_ALIGN_CENTER;
     slip += GS_TEXT_DOUBLE;
-    slip += cleanAscii('VALE DE DESPACHO') + '\n';
-    slip += cleanAscii('RETIRO EN DEPOSITO') + '\n';
+    slip += cleanText('VALE DE DESPACHO') + '\n';
+    slip += cleanText('RETIRO EN DEPÓSITO') + '\n';
     slip += GS_TEXT_NORMAL;
     slip += ESC_BOLD_ON;
-    slip += cleanAscii(business.name || 'DEPOSITO PRINCIPAL') + '\n';
+    slip += cleanText(business.name || 'DEPÓSITO PRINCIPAL') + '\n';
     slip += ESC_BOLD_OFF;
 
     const dateVal = sale.date || sale.timestamp || sale.createdAt || new Date();
@@ -595,21 +626,21 @@ export function formatWarehouseDispatchSlip(sale, business = {}) {
 
     slip += '-'.repeat(cols) + '\n';
     if (dailyTicketNum) {
-        slip += ESC_BOLD_ON + `NUMERO DE TICKET: #${dailyTicketNum}\n` + ESC_BOLD_OFF;
+        slip += ESC_BOLD_ON + cleanText(`NÚMERO DE TICKET: #${dailyTicketNum}`) + '\n' + ESC_BOLD_OFF;
     }
-    slip += formatLine(`Numero de Ticket: ${dailyTicketNum ? `#${dailyTicketNum} (${receiptNum})` : receiptNum}`, formattedDate, cols) + '\n';
-    slip += formatLine(`Cliente: ${cleanAscii(sale.customerName || 'Cliente Ocasional')}`, `Caja: ${cleanAscii(sale.cashierName || '1')}`, cols) + '\n';
+    slip += formatLine(`Número de Ticket: ${dailyTicketNum ? `#${dailyTicketNum} (${receiptNum})` : receiptNum}`, formattedDate, cols, fmtOpt) + '\n';
+    slip += formatLine(`Cliente: ${cleanText(sale.customerName || 'Cliente Ocasional')}`, `Caja: ${cleanText(sale.cashierName || '1')}`, cols, fmtOpt) + '\n';
     slip += '-'.repeat(cols) + '\n';
     slip += ESC_ALIGN_LEFT;
     slip += ESC_BOLD_ON;
-    slip += cleanAscii('MERCANCIA A RETIRAR / DESPACHAR:') + '\n';
+    slip += cleanText('MERCANCÍA A RETIRAR / DESPACHAR:') + '\n';
     slip += '-'.repeat(cols) + '\n';
 
     for (const item of bulkItems) {
         const factor = Number(item.factorConversion || item.unitsMultiplier || item.unitsPerBulk || 1);
         const qty = Number(item.quantity) || 1;
-        const pName = cleanAscii(item.name || item.nombre || 'Producto');
-        const packLabel = cleanAscii(item.presentationName || (item.isBulk ? 'BULTO CERRADO' : 'EMPAQUE'));
+        const pName = cleanText(item.name || item.nombre || 'Producto');
+        const packLabel = cleanText(item.presentationName || (item.isBulk ? 'BULTO CERRADO' : 'EMPAQUE'));
 
         slip += `${qty}x [${packLabel}] ${pName}\n`;
         if (factor > 1) {
@@ -621,8 +652,8 @@ export function formatWarehouseDispatchSlip(sale, business = {}) {
     slip += '-'.repeat(cols) + '\n';
     slip += ESC_ALIGN_CENTER;
     slip += '\n\n';
-    slip += cleanAscii('Firma Almacenero: ___________________') + '\n';
-    slip += cleanAscii('Firma Cliente:    ___________________') + '\n\n\n\n';
+    slip += cleanText('Firma Almacenero: ___________________') + '\n';
+    slip += cleanText('Firma Cliente:    ___________________') + '\n\n\n\n';
     slip += GS_CUT;
 
     return slip;
@@ -670,6 +701,8 @@ export function formatProductLabelToEscPos(product, config = {}, exchangeRate = 
     if (!product) return '';
     const cols = is58mm ? 32 : 48;
     const separator = '-'.repeat(cols);
+    const escEncoding = resolveEscPosEncoding(config, {});
+    const cleanText = escEncoding === 'ascii' ? cleanAscii : cleanCp858Text;
 
     let label = '';
     label += ESC_ALIGN_CENTER;
@@ -677,7 +710,7 @@ export function formatProductLabelToEscPos(product, config = {}, exchangeRate = 
     // 1. Nombre del producto
     if (config.showName !== false && product.name) {
         label += ESC_BOLD_ON;
-        const cleanName = cleanAscii(product.name).toUpperCase();
+        const cleanName = cleanText(product.name).toUpperCase();
         if (cleanName.length <= cols) {
             label += cleanName + '\n';
         } else {
@@ -754,10 +787,11 @@ export function formatProductLabelToEscPos(product, config = {}, exchangeRate = 
  */
 export function formatBatchProductLabelsToEscPos(products = [], config = {}, exchangeRate = 1, is58mm = false) {
     if (!Array.isArray(products) || products.length === 0) return '';
+    const escEncoding = resolveEscPosEncoding(config, {});
 
     let batch = '';
-    // Inicializar impresora limpia
-    batch += ESC_INIT;
+    // Inicializar impresora limpia con soporte CP858 real por defecto
+    batch += getEscPosInitForEncoding(escEncoding);
 
     for (const item of products) {
         const copies = Number(item.labelCopies) || 1;

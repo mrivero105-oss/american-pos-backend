@@ -10,6 +10,13 @@ const auditController = require('../controllers/audit');
 const { verifyLicense } = require('../middleware/licenseMiddleware');
 const { invalidateUserAuthCache } = require('../middleware/auth');
 const { generateSessionId, addSession, revokeSession, isSessionValid } = require('../utils/sessionRegistry');
+const { disconnectUserSockets } = require('../services/SocketGateway');
+const {
+    BIOMETRIC_V2_PREFIX,
+    parseEcdsaP256SpkiPublicKey,
+    issueBiometricChallenge,
+    verifyEcdsaBiometricChallenge
+} = require('../utils/biometricChallengeStore');
 const validate = require('../middleware/validate');
 const {
     loginSchema,
@@ -489,13 +496,21 @@ router.post('/change-pin', require('../middleware/auth').verifyToken, validate(c
             return res.status(401).json({ error: 'PIN actual incorrecto' });
         }
 
-        await user.update({ password: newPin }); // El hook beforeUpdate del modelo lo encripta automáticamente
+        const revokedSessions = revokeSession(user.currentSessionId, null, { allDevices: true });
+        await user.update({
+            password: newPin,
+            currentSessionId: revokedSessions
+        }); // El hook beforeUpdate del modelo encripta password automáticamente
         try {
-            require('../middleware/auth').invalidateUserAuthCache(req.user.id);
+            invalidateUserAuthCache(req.user.id);
         } catch (cErr) {}
+        try {
+            const io = req.app?.get?.('io');
+            disconnectUserSockets(io, user.id, 'Tu PIN o contraseña fue actualizado. Inicia sesión nuevamente.');
+        } catch (_sockErr) {}
 
-        console.log(`[AUTH] PIN updated for user: ${user.username}`);
-        res.json({ success: true, message: 'PIN actualizado correctamente' });
+        console.log(`[AUTH] PIN updated and sessions revoked for user: ${user.username}`);
+        res.json({ success: true, message: 'PIN actualizado correctamente', sessionsRevoked: true });
     } catch (error) {
         console.error('Change pin error:', error);
         res.status(500).json({ error: 'Error al cambiar el PIN' });
@@ -696,36 +711,6 @@ router.post('/set-quick-pin', require('../middleware/auth').verifyToken, validat
 // y verifica firmas ECDSA SHA-256 sobre retos de un solo uso con TTL de 60s.
 // ============================================================================
 
-const BIOMETRIC_V2_PREFIX = 'v2:ecdsa:';
-const BIOMETRIC_CHALLENGE_TTL_MS = 60 * 1000;
-const biometricChallenges = new Map(); // challengeId -> { challenge, userId, username, ip, expiresAt }
-const bioChallengeCleanupTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [id, entry] of biometricChallenges.entries()) {
-        if (!entry || entry.expiresAt <= now) {
-            biometricChallenges.delete(id);
-        }
-    }
-}, 60 * 1000);
-if (typeof bioChallengeCleanupTimer.unref === 'function') bioChallengeCleanupTimer.unref();
-
-const parseEcdsaP256SpkiPublicKey = (spkiBase64) => {
-    if (!spkiBase64 || typeof spkiBase64 !== 'string') return null;
-    const cleanB64 = spkiBase64.trim();
-    if (cleanB64.length < 64 || cleanB64.length > 240) return null;
-    try {
-        const derBuf = Buffer.from(cleanB64, 'base64');
-        if (!derBuf.length) return null;
-        const pubKey = crypto.createPublicKey({ key: derBuf, format: 'der', type: 'spki' });
-        if (pubKey.asymmetricKeyType !== 'ec') return null;
-        const curve = pubKey.asymmetricKeyDetails?.namedCurve;
-        if (curve && curve !== 'prime256v1' && curve !== 'P-256') return null;
-        return { pubKey, canonicalBase64: derBuf.toString('base64') };
-    } catch (_) {
-        return null;
-    }
-};
-
 // POST /auth/biometrics/challenge - Emite un reto criptográfico de un solo uso (TTL 60s)
 router.post('/biometrics/challenge', quickUnlockLimiter, async (req, res) => {
     const clientIp = (req.ip || req.connection?.remoteAddress || '127.0.0.1').replace('::ffff:', '');
@@ -741,30 +726,13 @@ router.post('/biometrics/challenge', quickUnlockLimiter, async (req, res) => {
     }
 
     const { userId = null, username = null } = req.body || {};
-    if (biometricChallenges.size >= 1000) {
-        const oldestKey = biometricChallenges.keys().next().value;
-        if (oldestKey) biometricChallenges.delete(oldestKey);
-    }
-
-    const challengeId = typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : crypto.randomBytes(16).toString('hex');
-    const challenge = crypto.randomBytes(32).toString('base64');
-    const expiresAt = Date.now() + BIOMETRIC_CHALLENGE_TTL_MS;
-
-    biometricChallenges.set(challengeId, {
-        challenge,
-        userId: userId ? String(userId).trim() : null,
-        username: username ? String(username).trim().toLowerCase() : null,
-        ip: clientIp,
-        expiresAt
-    });
+    const issued = issueBiometricChallenge({ userId, username, ip: clientIp });
 
     return res.json({
         success: true,
-        challengeId,
-        challenge,
-        expiresInMs: BIOMETRIC_CHALLENGE_TTL_MS
+        challengeId: issued.challengeId,
+        challenge: issued.challenge,
+        expiresInMs: issued.expiresInMs
     });
 });
 
@@ -871,16 +839,6 @@ router.post('/biometrics/login', async (req, res) => {
         });
     }
 
-    // Consumo atómico de un solo uso del reto (anti-replay incluso ante fallos)
-    const challengeEntry = biometricChallenges.get(String(challengeId));
-    biometricChallenges.delete(String(challengeId));
-    if (!challengeEntry || challengeEntry.expiresAt <= Date.now()) {
-        return res.status(401).json({
-            code: 'BIOMETRIC_CHALLENGE_EXPIRED',
-            error: 'El reto criptográfico biométrico expiró o ya fue utilizado. Intente nuevamente.'
-        });
-    }
-
     try {
         let user = null;
         if (userId) {
@@ -899,15 +857,12 @@ router.post('/biometrics/login', async (req, res) => {
         }
 
         if (!user) {
+            verifyEcdsaBiometricChallenge({ challengeId, userId: null, signature: '', storedBiometricTokenHash: '' });
             return res.status(404).json({ error: 'Usuario no encontrado' });
         }
         if (user.status !== 'active') {
+            verifyEcdsaBiometricChallenge({ challengeId, userId: user.id, signature: '', storedBiometricTokenHash: '' });
             return res.status(401).json({ error: 'Cuenta desactivada o suspendida. Contacta al administrador.' });
-        }
-
-        // Validar que el reto emitido corresponda al mismo usuario si se ató al solicitarlo
-        if (challengeEntry.userId && String(challengeEntry.userId) !== String(user.id)) {
-            return res.status(401).json({ error: 'El reto biométrico no corresponde a este usuario.' });
         }
 
         // 🛡️ Bloqueo Progresivo de cuenta
@@ -921,28 +876,28 @@ router.post('/biometrics/login', async (req, res) => {
             });
         }
 
-        const storedKeyRaw = String(user.biometricTokenHash || '');
-        if (!storedKeyRaw) {
-            return res.status(400).json({ error: 'Este usuario no tiene huella dactilar registrada en el sistema. Ingrese con contraseña.' });
-        }
-        if (!storedKeyRaw.startsWith(BIOMETRIC_V2_PREFIX)) {
-            return res.status(401).json({
-                code: 'BIOMETRIC_V2_REQUIRED',
-                error: 'Tu registro biométrico anterior (v1) caducó por actualización de seguridad. Ingresa con contraseña y vuelve a registrar tu huella.'
-            });
-        }
+        const verifyRes = verifyEcdsaBiometricChallenge({
+            challengeId,
+            userId: user.id,
+            signature,
+            storedBiometricTokenHash: user.biometricTokenHash
+        });
 
-        const parsedPubKey = parseEcdsaP256SpkiPublicKey(storedKeyRaw.slice(BIOMETRIC_V2_PREFIX.length));
-        let isMatch = false;
-        if (parsedPubKey) {
-            try {
-                const sigBuf = Buffer.from(String(signature).trim(), 'base64');
-                const challengeBuf = Buffer.from(String(challengeEntry.challenge), 'utf8');
-                isMatch = crypto.verify('sha256', challengeBuf, parsedPubKey.pubKey, sigBuf);
-            } catch (_verifyErr) {
-                isMatch = false;
+        if (!verifyRes.valid) {
+            if (verifyRes.code === 'BIOMETRIC_CHALLENGE_EXPIRED' || verifyRes.code === 'BIOMETRIC_CHALLENGE_MISMATCH') {
+                return res.status(401).json({ code: verifyRes.code, error: verifyRes.error });
+            }
+            if (verifyRes.code === 'BIOMETRIC_NOT_ENROLLED') {
+                return res.status(400).json({ error: 'Este usuario no tiene huella dactilar registrada en el sistema. Ingrese con contraseña.' });
+            }
+            if (verifyRes.code === 'BIOMETRIC_V2_REQUIRED') {
+                return res.status(401).json({
+                    code: 'BIOMETRIC_V2_REQUIRED',
+                    error: 'Tu registro biométrico anterior (v1) caducó por actualización de seguridad. Ingresa con contraseña y vuelve a registrar tu huella.'
+                });
             }
         }
+        const isMatch = verifyRes.valid;
 
         if (!isMatch) {
             const attempts = (Number(user.failedLoginAttempts) || 0) + 1;

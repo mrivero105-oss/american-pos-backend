@@ -8,10 +8,11 @@ import { evaluateCartPromotions } from '../../utils/promotionsEngine';
 import { getRegionConfig } from '../../utils/regionConfig';
 import { triggerHaptic } from '../../utils/haptics';
 import { playScanSound, playSuccessSound, playErrorSound } from '../../utils/sounds';
-import { getTerminalId } from '../../utils/terminalIdentity';
+import { getTerminalId, getActiveMobileRegisterId } from '../../utils/terminalIdentity';
 import { normalizeMobileCartItems } from '../../store/useMobilePosStore';
+import VortexMathEngine from '../../utils/VortexMathEngine';
 
-const round2 = (v) => Math.round((Number(v || 0) + Number.EPSILON) * 100) / 100;
+const round2 = (v) => VortexMathEngine.round(v, 2);
 
 /**
  * Normaliza etiquetas de UI o alias legados a IDs canónicos del backend
@@ -26,6 +27,7 @@ export function canonicalizeMobilePaymentMethod(rawMethod) {
     .replace(/\s+/g, '_');
 
   if (!clean || clean === 'efectivo_usd' || clean === 'cash_usd' || clean === 'cash' || clean === 'efectivo') return 'cash_usd';
+  if (clean === 'efectivo_eur' || clean === 'cash_eur' || clean === 'euros' || clean === 'eur') return 'cash_eur';
   if (clean === 'efectivo_bs' || clean === 'cash_bs' || clean === 'cash_ves' || clean === 'bs' || clean === 'ves') return 'cash_bs';
   if (clean === 'pago_movil' || clean === 'pagomovil' || clean === 'mobile') return 'pago_movil';
   if (clean === 'tarjeta' || clean === 'punto_de_venta' || clean === 'punto' || clean === 'debit' || clean === 'debito' || clean === 'card') return 'debit';
@@ -108,6 +110,36 @@ export function useMobileCheckoutFlow({
     return live > 0 ? live : 1;
   }, [lockedExchangeRate, exchangeRate]);
 
+  const effectiveBinanceRate = useMemo(() => {
+    const raw = Number(businessInfo?.binanceRate ?? businessInfo?.taxConfig?.binanceRate ?? 0);
+    return Number.isFinite(raw) && raw > 0 ? raw : effectiveRate;
+  }, [businessInfo, effectiveRate]);
+
+  const effectiveEuroRate = useMemo(() => {
+    const raw = Number(businessInfo?.euroRate ?? businessInfo?.taxConfig?.euroRate ?? 0);
+    return Number.isFinite(raw) && raw > 0 ? raw : 0;
+  }, [businessInfo]);
+
+  const convertBinanceUsdtToUsd = useCallback((usdtAmount) => {
+    const amt = Number(usdtAmount) || 0;
+    if (amt <= 0) return 0;
+    if (!isDollarCountry && effectiveBinanceRate > 0 && effectiveRate > 0 && Math.abs(effectiveBinanceRate - effectiveRate) > 0.0001) {
+      const bsEq = round2(VortexMathEngine.multiply(amt, effectiveBinanceRate));
+      return round2(VortexMathEngine.divide(bsEq, effectiveRate));
+    }
+    return round2(amt);
+  }, [isDollarCountry, effectiveBinanceRate, effectiveRate]);
+
+  const convertEuroToUsd = useCallback((eurAmount) => {
+    const amt = Number(eurAmount) || 0;
+    if (amt <= 0) return 0;
+    if (!isDollarCountry && effectiveEuroRate > 0 && effectiveRate > 0) {
+      const bsEq = round2(VortexMathEngine.multiply(amt, effectiveEuroRate));
+      return round2(VortexMathEngine.divide(bsEq, effectiveRate));
+    }
+    return round2(amt);
+  }, [isDollarCountry, effectiveEuroRate, effectiveRate]);
+
   const regionCfg = useMemo(() => getRegionConfig(businessInfo?.country), [businessInfo?.country]);
 
   const { isIvaEnabled, effectiveIvaRate, taxLabel } = useMemo(() => {
@@ -126,6 +158,23 @@ export function useMobileCheckoutFlow({
     return canonicalizeMobilePaymentMethod(selectedMethod);
   }, [checkoutMode, selectedMethod]);
 
+  const dominantSplitPaymentHint = useMemo(() => {
+    if (checkoutMode !== 'split' || !splitPayments) return null;
+    const candidates = [
+      { method: 'cash_usd', usd: parseFloat(splitPayments.cash_usd) || 0 },
+      { method: 'cash_eur', usd: convertEuroToUsd(parseFloat(splitPayments.cash_eur) || 0) },
+      { method: 'cash_bs', usd: VortexMathEngine.divide(parseFloat(splitPayments.cash_bs) || 0, effectiveRate) },
+      { method: 'pago_movil', usd: VortexMathEngine.divide(parseFloat(splitPayments.pago_movil) || 0, effectiveRate) },
+      { method: 'debit', usd: isDollarCountry ? (parseFloat(splitPayments.tarjeta) || 0) : VortexMathEngine.divide(parseFloat(splitPayments.tarjeta) || 0, effectiveRate) },
+      { method: 'zelle', usd: parseFloat(splitPayments.zelle) || 0 },
+      { method: 'binance_usdt', usd: convertBinanceUsdtToUsd(parseFloat(splitPayments.binance) || 0) },
+      { method: 'fiado', usd: parseFloat(splitPayments.credito) || 0 }
+    ].filter((c) => c.usd > 0);
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => b.usd - a.usd);
+    return candidates[0].method;
+  }, [checkoutMode, splitPayments, convertEuroToUsd, convertBinanceUsdtToUsd, effectiveRate, isDollarCountry]);
+
   const safeCart = useMemo(() => normalizeMobileCartItems(cart), [cart]);
 
   const promoResult = useMemo(() => {
@@ -138,9 +187,9 @@ export function useMobileCheckoutFlow({
       quantity: Number(item.quantity) || 1,
       category: item.product.category || item.product.categoria || ''
     }));
-    const paymentHint = checkoutMode === 'express' ? canonicalSelectedMethod : null;
+    const paymentHint = checkoutMode === 'express' ? canonicalSelectedMethod : dominantSplitPaymentHint;
     return evaluateCartPromotions(flattenedItems, promotions, paymentHint);
-  }, [safeCart, promotions, checkoutMode, canonicalSelectedMethod]);
+  }, [safeCart, promotions, checkoutMode, canonicalSelectedMethod, dominantSplitPaymentHint]);
 
   const {
     rawSubtotalUSD,
@@ -155,43 +204,48 @@ export function useMobileCheckoutFlow({
     totalItemsCount
   } = useMemo(() => {
     const rawSub = round2(
-      safeCart.reduce((acc, item) => acc + (Number(item.product.price || item.product.precio || 0) * Number(item.quantity || 1)), 0)
+      VortexMathEngine.add(
+        safeCart.map((item) => VortexMathEngine.multiply(Number(item.product.price || item.product.precio || 0), Number(item.quantity || 1)))
+      )
     );
     const promoSavings = round2(promoResult.totalPromoSavings || 0);
     const subBeforeDisc = promoResult.finalCartSubtotal !== undefined ? round2(promoResult.finalCartSubtotal) : rawSub;
-    const cartDisc = round2(subBeforeDisc * (Number(cartDiscountPercent || 0) / 100));
-    const subUSD = round2(Math.max(0, subBeforeDisc - cartDisc));
+    const cartDisc = round2(VortexMathEngine.multiply(subBeforeDisc, VortexMathEngine.divide(Number(cartDiscountPercent || 0), 100)));
+    const subUSD = round2(Math.max(0, VortexMathEngine.subtract(subBeforeDisc, cartDisc)));
 
     const promoItems = Array.isArray(promoResult.itemsWithPromotions) ? promoResult.itemsWithPromotions : [];
     const enriched = safeCart.map((item, idx) => {
       const promoItem = promoItems[idx] && String(promoItems[idx].id) === String(item.product.id)
         ? promoItems[idx]
         : promoItems.find(p => String(p.id) === String(item.product.id));
+      const fallbackSub = VortexMathEngine.multiply(Number(item.product.price || item.product.precio || 0), Number(item.quantity || 1));
       return {
         ...item,
         appliedPromoName: promoItem?.appliedPromoName || null,
         promoDiscount: round2(promoItem?.promoDiscount || 0),
-        finalSubtotal: round2(promoItem?.finalSubtotal ?? (Number(item.product.price || item.product.precio || 0) * Number(item.quantity || 1)))
+        finalSubtotal: round2(promoItem?.finalSubtotal ?? fallbackSub)
       };
     });
 
-    const taxableSubBeforeDisc = enriched.reduce((acc, item) => {
-      const isExempt = item.product.taxStatus === 'exento' || Boolean(item.product.isExempt) || Boolean(item.product.is_exempt) || Boolean(item.product.taxExempt);
-      return isExempt ? acc : acc + Number(item.finalSubtotal || 0);
-    }, 0);
+    const taxableSubBeforeDisc = VortexMathEngine.add(
+      enriched.map((item) => {
+        const isExempt = item.product.taxStatus === 'exento' || Boolean(item.product.isExempt) || Boolean(item.product.is_exempt) || Boolean(item.product.taxExempt);
+        return isExempt ? 0 : Number(item.finalSubtotal || 0);
+      })
+    );
 
-    const discRatio = subBeforeDisc > 0 ? (subUSD / subBeforeDisc) : 1;
-    const effTaxable = round2(taxableSubBeforeDisc * discRatio);
+    const discRatio = subBeforeDisc > 0 ? VortexMathEngine.divide(subUSD, subBeforeDisc) : 1;
+    const effTaxable = round2(VortexMathEngine.multiply(taxableSubBeforeDisc, discRatio));
 
-    const ivaDivisor = 1 + (effectiveIvaRate / 100);
+    const ivaDivisor = VortexMathEngine.add([1, VortexMathEngine.divide(effectiveIvaRate, 100)]);
     const tUSD = (isIvaEnabled && effectiveIvaRate > 0)
-      ? round2(Math.max(0, effTaxable - (effTaxable / ivaDivisor)))
+      ? round2(Math.max(0, VortexMathEngine.subtract(effTaxable, VortexMathEngine.divide(effTaxable, ivaDivisor))))
       : 0;
-    const baseImp = round2(Math.max(0, effTaxable - tUSD));
-    const exUSD = round2(Math.max(0, subUSD - effTaxable));
+    const baseImp = round2(Math.max(0, VortexMathEngine.subtract(effTaxable, tUSD)));
+    const exUSD = round2(Math.max(0, VortexMathEngine.subtract(subUSD, effTaxable)));
     const totUSD = subUSD;
-    const totBS = round2(totUSD * effectiveRate);
-    const totItems = safeCart.reduce((acc, item) => acc + Number(item.quantity || 0), 0);
+    const totBS = round2(VortexMathEngine.multiply(totUSD, effectiveRate));
+    const totItems = VortexMathEngine.add(safeCart.map((item) => Number(item.quantity || 0)));
 
     return {
       rawSubtotalUSD: rawSub,
@@ -229,14 +283,16 @@ export function useMobileCheckoutFlow({
 
   const currentIgtfUSD = useMemo(() => {
     if (!isIgtfEnabled || igtfRatePct <= 0 || documentType === 'cotizacion' || totalUSD <= 0) return 0;
-    const factor = 1 + (igtfRatePct / 100);
+    const rateFrac = VortexMathEngine.divide(igtfRatePct, 100);
+    const factor = VortexMathEngine.add([1, rateFrac]);
     if (checkoutMode === 'split') {
       const sUsd = parseFloat(splitPayments.cash_usd) || 0;
-      const sBinance = isBinanceIgtfEnabled ? (parseFloat(splitPayments.binance) || 0) : 0;
-      const foreignSubjectTotal = sUsd + sBinance;
+      const sEurUsd = convertEuroToUsd(parseFloat(splitPayments.cash_eur) || 0);
+      const sBinanceUsd = isBinanceIgtfEnabled ? convertBinanceUsdtToUsd(parseFloat(splitPayments.binance) || 0) : 0;
+      const foreignSubjectTotal = VortexMathEngine.add([sUsd, sEurUsd, sBinanceUsd]);
       if (foreignSubjectTotal <= 0) return 0;
-      const appliedPrincipal = Math.min(totalUSD, foreignSubjectTotal / factor);
-      return round2(appliedPrincipal * (igtfRatePct / 100));
+      const appliedPrincipal = Math.min(totalUSD, VortexMathEngine.divide(foreignSubjectTotal, factor));
+      return round2(VortexMathEngine.multiply(appliedPrincipal, rateFrac));
     }
 
     const methodNorm = canonicalSelectedMethod;
@@ -245,49 +301,58 @@ export function useMobileCheckoutFlow({
     const isVesOnly = ['cash_bs', 'pago_movil', 'debit', 'biopago', 'transfer'].includes(methodNorm);
     if (isExemptUsd || isVesOnly) return 0;
 
-    const enteredUsd = parseFloat(amountPaidUSD) || 0;
+    const enteredUsdRaw = parseFloat(amountPaidUSD) || 0;
+    const enteredUsd = methodNorm === 'cash_eur'
+      ? convertEuroToUsd(enteredUsdRaw)
+      : (isCrypto ? convertBinanceUsdtToUsd(enteredUsdRaw) : enteredUsdRaw);
     const enteredBs = parseFloat(amountPaidBS) || 0;
 
     if (methodNorm === 'mixto') {
       if (enteredUsd <= 0) return 0;
-      const appliedPrincipal = Math.min(totalUSD, enteredUsd / factor);
-      return round2(appliedPrincipal * (igtfRatePct / 100));
+      const appliedPrincipal = Math.min(totalUSD, VortexMathEngine.divide(enteredUsd, factor));
+      return round2(VortexMathEngine.multiply(appliedPrincipal, rateFrac));
     }
     if (enteredBs > 0 && enteredUsd <= 0) return 0;
     if (enteredUsd > 0) {
-      const appliedPrincipal = Math.min(totalUSD, enteredUsd / factor);
-      return round2(appliedPrincipal * (igtfRatePct / 100));
+      const appliedPrincipal = Math.min(totalUSD, VortexMathEngine.divide(enteredUsd, factor));
+      return round2(VortexMathEngine.multiply(appliedPrincipal, rateFrac));
     }
-    return round2(totalUSD * (igtfRatePct / 100));
-  }, [isIgtfEnabled, isBinanceIgtfEnabled, igtfRatePct, documentType, totalUSD, checkoutMode, splitPayments, canonicalSelectedMethod, amountPaidUSD, amountPaidBS]);
+    return round2(VortexMathEngine.multiply(totalUSD, rateFrac));
+  }, [isIgtfEnabled, isBinanceIgtfEnabled, igtfRatePct, documentType, totalUSD, checkoutMode, splitPayments, canonicalSelectedMethod, amountPaidUSD, amountPaidBS, convertEuroToUsd, convertBinanceUsdtToUsd]);
 
-  const totalDueUSD = useMemo(() => round2(totalUSD + currentIgtfUSD), [totalUSD, currentIgtfUSD]);
-  const totalDueBS = useMemo(() => round2(totalDueUSD * effectiveRate), [totalDueUSD, effectiveRate]);
+  const totalDueUSD = useMemo(() => round2(VortexMathEngine.add([totalUSD, currentIgtfUSD])), [totalUSD, currentIgtfUSD]);
+  const totalDueBS = useMemo(() => round2(VortexMathEngine.multiply(totalDueUSD, effectiveRate)), [totalDueUSD, effectiveRate]);
 
   const { paidUSD, paidBS, totalPaidInUSD, changeUSD, changeBS } = useMemo(() => {
     const pUSD = parseFloat(amountPaidUSD) || 0;
     const pBS = parseFloat(amountPaidBS) || 0;
-    const totPaidUSD = pUSD + (pBS / effectiveRate);
-    const chUSD = round2(Math.max(0, totPaidUSD - totalDueUSD));
-    const chBS = round2(chUSD * effectiveRate);
+    const pForeignInUsd = canonicalSelectedMethod === 'cash_eur'
+      ? convertEuroToUsd(pUSD)
+      : (canonicalSelectedMethod === 'binance_usdt' ? convertBinanceUsdtToUsd(pUSD) : pUSD);
+    const bsInUsd = VortexMathEngine.divide(pBS, effectiveRate);
+    const totPaidUSD = VortexMathEngine.add([pForeignInUsd, bsInUsd]);
+    const chUSD = round2(Math.max(0, VortexMathEngine.subtract(totPaidUSD, totalDueUSD)));
+    const chBS = round2(VortexMathEngine.multiply(chUSD, effectiveRate));
     return { paidUSD: pUSD, paidBS: pBS, totalPaidInUSD: totPaidUSD, changeUSD: chUSD, changeBS: chBS };
-  }, [amountPaidUSD, amountPaidBS, effectiveRate, totalDueUSD]);
+  }, [amountPaidUSD, amountPaidBS, canonicalSelectedMethod, convertEuroToUsd, convertBinanceUsdtToUsd, effectiveRate, totalDueUSD]);
 
   const splitPaidUSD = useMemo(() => {
     const usdCash = parseFloat(splitPayments.cash_usd) || 0;
+    const eurUsd = convertEuroToUsd(parseFloat(splitPayments.cash_eur) || 0);
     const zelle = parseFloat(splitPayments.zelle) || 0;
-    const binance = parseFloat(splitPayments.binance) || 0;
+    const binanceUsd = convertBinanceUsdtToUsd(parseFloat(splitPayments.binance) || 0);
     const credit = parseFloat(splitPayments.credito) || 0;
     const bsCash = parseFloat(splitPayments.cash_bs) || 0;
     const pagoMovil = parseFloat(splitPayments.pago_movil) || 0;
-    const debit = parseFloat(splitPayments.tarjeta) || 0;
-    const bsTotalInUSD = (bsCash + pagoMovil + debit) / effectiveRate;
-    return usdCash + zelle + binance + credit + bsTotalInUSD;
-  }, [splitPayments, effectiveRate]);
+    const debitRaw = parseFloat(splitPayments.tarjeta) || 0;
+    const debitUsd = isDollarCountry ? debitRaw : VortexMathEngine.divide(debitRaw, effectiveRate);
+    const bsTotalInUSD = VortexMathEngine.divide(VortexMathEngine.add([bsCash, pagoMovil]), effectiveRate);
+    return VortexMathEngine.add([usdCash, eurUsd, zelle, binanceUsd, credit, debitUsd, bsTotalInUSD]);
+  }, [splitPayments, effectiveRate, isDollarCountry, convertEuroToUsd, convertBinanceUsdtToUsd]);
 
-  const splitRemainingUSD = useMemo(() => round2(Math.max(0, totalDueUSD - splitPaidUSD)), [totalDueUSD, splitPaidUSD]);
-  const splitChangeUSD = useMemo(() => round2(Math.max(0, splitPaidUSD - totalDueUSD)), [totalDueUSD, splitPaidUSD]);
-  const splitChangeBS = useMemo(() => round2(splitChangeUSD * effectiveRate), [splitChangeUSD, effectiveRate]);
+  const splitRemainingUSD = useMemo(() => round2(Math.max(0, VortexMathEngine.subtract(totalDueUSD, splitPaidUSD))), [totalDueUSD, splitPaidUSD]);
+  const splitChangeUSD = useMemo(() => round2(Math.max(0, VortexMathEngine.subtract(splitPaidUSD, totalDueUSD))), [totalDueUSD, splitPaidUSD]);
+  const splitChangeBS = useMemo(() => round2(VortexMathEngine.multiply(splitChangeUSD, effectiveRate)), [splitChangeUSD, effectiveRate]);
 
   const handleApplyDiscount = useCallback((pct) => {
     if (pct > 0 && !canApplyDiscounts) {
@@ -316,32 +381,45 @@ export function useMobileCheckoutFlow({
   const handleSelectPaymentMethod = useCallback((method) => {
     setSelectedMethod(method);
     const canon = canonicalizeMobilePaymentMethod(method);
+    const igtfMultiplier = VortexMathEngine.add([1, VortexMathEngine.divide(igtfRatePct, 100)]);
     if (['cash_bs', 'pago_movil', 'debit', 'biopago', 'transfer'].includes(canon)) {
       setAmountPaidBS(totalBS.toFixed(2));
       setAmountPaidUSD('');
     } else if (canon === 'cash_usd') {
-      const usdDue = isIgtfEnabled && igtfRatePct > 0 ? round2(totalUSD * (1 + (igtfRatePct / 100))) : totalUSD;
+      const usdDue = isIgtfEnabled && igtfRatePct > 0 ? round2(VortexMathEngine.multiply(totalUSD, igtfMultiplier)) : totalUSD;
       setAmountPaidUSD(usdDue.toFixed(2));
+      setAmountPaidBS('');
+    } else if (canon === 'cash_eur') {
+      const usdDue = isIgtfEnabled && igtfRatePct > 0 ? round2(VortexMathEngine.multiply(totalUSD, igtfMultiplier)) : totalUSD;
+      const eurDue = (!isDollarCountry && effectiveEuroRate > 0)
+        ? round2(VortexMathEngine.divide(VortexMathEngine.multiply(usdDue, effectiveRate), effectiveEuroRate))
+        : usdDue;
+      setAmountPaidUSD(eurDue.toFixed(2));
       setAmountPaidBS('');
     } else if (canon === 'binance_usdt') {
       const usdDue = (isIgtfEnabled && isBinanceIgtfEnabled && igtfRatePct > 0)
-        ? round2(totalUSD * (1 + (igtfRatePct / 100)))
+        ? round2(VortexMathEngine.multiply(totalUSD, igtfMultiplier))
         : totalUSD;
-      setAmountPaidUSD(usdDue.toFixed(2));
+      const usdtDue = (!isDollarCountry && effectiveBinanceRate > 0 && Math.abs(effectiveBinanceRate - effectiveRate) > 0.0001)
+        ? round2(VortexMathEngine.divide(VortexMathEngine.multiply(usdDue, effectiveRate), effectiveBinanceRate))
+        : usdDue;
+      setAmountPaidUSD(usdtDue.toFixed(2));
       setAmountPaidBS('');
     } else if (canon === 'zelle') {
       setAmountPaidUSD(totalUSD.toFixed(2));
       setAmountPaidBS('');
     } else if (canon === 'mixto') {
-      const halfUSD = totalUSD / 2;
-      const halfIgtf = isIgtfEnabled && igtfRatePct > 0 ? round2(halfUSD * (igtfRatePct / 100)) : 0;
-      setAmountPaidUSD((halfUSD + halfIgtf).toFixed(2));
-      setAmountPaidBS((halfUSD * effectiveRate).toFixed(2));
+      const halfUSD = VortexMathEngine.divide(totalUSD, 2);
+      const halfIgtf = isIgtfEnabled && igtfRatePct > 0
+        ? round2(VortexMathEngine.multiply(halfUSD, VortexMathEngine.divide(igtfRatePct, 100)))
+        : 0;
+      setAmountPaidUSD(round2(VortexMathEngine.add([halfUSD, halfIgtf])).toFixed(2));
+      setAmountPaidBS(round2(VortexMathEngine.multiply(halfUSD, effectiveRate)).toFixed(2));
     } else if (canon === 'fiado') {
       setAmountPaidUSD('0.00');
       setAmountPaidBS('0.00');
     }
-  }, [setSelectedMethod, totalBS, setAmountPaidBS, setAmountPaidUSD, isIgtfEnabled, isBinanceIgtfEnabled, totalUSD, igtfRatePct, effectiveRate]);
+  }, [setSelectedMethod, totalBS, setAmountPaidBS, setAmountPaidUSD, isIgtfEnabled, isBinanceIgtfEnabled, totalUSD, igtfRatePct, effectiveRate, effectiveBinanceRate, effectiveEuroRate, isDollarCountry]);
 
   const resetCheckoutTransientState = useCallback(() => {
     setCart([]);
@@ -353,7 +431,7 @@ export function useMobileCheckoutFlow({
     setAmountPaidUSD('');
     setAmountPaidBS('');
     if (typeof setSplitPayments === 'function') {
-      setSplitPayments({ cash_usd: '', cash_bs: '', pago_movil: '', tarjeta: '', zelle: '', binance: '', credito: '' });
+      setSplitPayments({ cash_usd: '', cash_eur: '', cash_bs: '', pago_movil: '', tarjeta: '', zelle: '', binance: '', credito: '', refs: {} });
     }
     if (typeof setCheckoutMode === 'function') setCheckoutMode('express');
     if (typeof setDocumentType === 'function') setDocumentType('factura');
@@ -534,35 +612,65 @@ export function useMobileCheckoutFlow({
       return;
     }
 
+    const resolvedCustomerId = selectedCustomer?.id
+      || (customerName && customerName !== 'Consumidor Final' && Array.isArray(customers)
+        ? customers.find(c => c.name === customerName)?.id || null
+        : null);
+
+    // Bloqueo estricto de venta a crédito (fiado) sin cliente real registrado
+    const hasCreditPayment = checkoutMode === 'split'
+      ? (parseFloat(splitPayments.credito) || 0) > 0
+      : canonicalSelectedMethod === 'fiado';
+    if (hasCreditPayment && !resolvedCustomerId) {
+      triggerHaptic(30);
+      playErrorSound();
+      showToast('⚠️ Debes seleccionar un cliente registrado para procesar una venta a crédito (Fiado)');
+      return;
+    }
+
     if (checkoutMode === 'split') {
-      if (splitPaidUSD < totalDueUSD - 0.02) {
+      if (VortexMathEngine.subtract(totalDueUSD, splitPaidUSD) > 0.01) {
         triggerHaptic(30);
         playErrorSound();
-        showToast(`⚠️ Pago incompleto: faltan $${Math.max(0, totalDueUSD - splitPaidUSD).toFixed(2)}`);
+        showToast(`⚠️ Pago incompleto: faltan $${Math.max(0, VortexMathEngine.subtract(totalDueUSD, splitPaidUSD)).toFixed(2)}`);
         return;
       }
     } else if (canonicalSelectedMethod !== 'fiado') {
       const hasEnteredTender = String(amountPaidUSD || '').trim() !== '' || String(amountPaidBS || '').trim() !== '';
-      if (hasEnteredTender && totalPaidInUSD < totalDueUSD - 0.02) {
+      if (hasEnteredTender && VortexMathEngine.subtract(totalDueUSD, totalPaidInUSD) > 0.01) {
         triggerHaptic(30);
         playErrorSound();
-        showToast(`⚠️ Monto recibido insuficiente: faltan $${Math.max(0, totalDueUSD - totalPaidInUSD).toFixed(2)}`);
+        showToast(`⚠️ Monto recibido insuficiente: faltan $${Math.max(0, VortexMathEngine.subtract(totalDueUSD, totalPaidInUSD)).toFixed(2)}`);
         return;
       }
     }
 
-    const isRefRequired = checkoutMode === 'express'
-      ? ['pago_movil', 'debit', 'zelle', 'transfer', 'biopago', 'binance_usdt'].includes(canonicalSelectedMethod)
-      : ((parseFloat(splitPayments.pago_movil) || 0) > 0
-        || (parseFloat(splitPayments.tarjeta) || 0) > 0
-        || (parseFloat(splitPayments.zelle) || 0) > 0
-        || (parseFloat(splitPayments.binance) || 0) > 0);
+    const splitRefs = (splitPayments && typeof splitPayments.refs === 'object' && splitPayments.refs) ? splitPayments.refs : {};
+    const cleanRef = paymentReference ? String(paymentReference).trim() : '';
+    const getSplitRef = (key) => String(splitRefs[key] || cleanRef || '').trim();
 
-    if (isRefRequired && !String(paymentReference || '').trim()) {
-      triggerHaptic(30);
-      playErrorSound();
-      showToast('⚠️ Ingrese el número de referencia para liquidar este pago');
-      return;
+    if (checkoutMode === 'express') {
+      const isExpressRefRequired = ['pago_movil', 'debit', 'zelle', 'transfer', 'biopago', 'binance_usdt'].includes(canonicalSelectedMethod);
+      if (isExpressRefRequired && !cleanRef) {
+        triggerHaptic(30);
+        playErrorSound();
+        showToast('⚠️ Ingrese el número de referencia para liquidar este pago');
+        return;
+      }
+    } else {
+      const requiredSplitElec = [
+        { key: 'pago_movil', label: 'Pago Móvil', amt: parseFloat(splitPayments.pago_movil) || 0 },
+        { key: 'tarjeta', label: 'Tarjeta', amt: parseFloat(splitPayments.tarjeta) || 0 },
+        { key: 'zelle', label: 'Zelle', amt: parseFloat(splitPayments.zelle) || 0 },
+        { key: 'binance', label: 'Binance', amt: parseFloat(splitPayments.binance) || 0 }
+      ].filter((e) => e.amt > 0);
+      const missingElec = requiredSplitElec.find((e) => !getSplitRef(e.key));
+      if (missingElec) {
+        triggerHaptic(30);
+        playErrorSound();
+        showToast(`⚠️ Ingrese el número de referencia para ${missingElec.label}`);
+        return;
+      }
     }
 
     setIsProcessingSale(true);
@@ -587,11 +695,42 @@ export function useMobileCheckoutFlow({
     const finalChangeBS = checkoutMode === 'split' ? splitChangeBS : changeBS;
     const isVesMethod = ['pago_movil', 'cash_bs', 'debit', 'biopago', 'transfer'].includes(effectiveCanonicalMethod);
 
+    const buildBinancePaymentObj = (usdtAmt, ref) => {
+      const amountUsdt = round2(usdtAmt);
+      const convertedBs = round2(VortexMathEngine.multiply(amountUsdt, effectiveBinanceRate));
+      const convertedUsd = convertBinanceUsdtToUsd(amountUsdt);
+      return {
+        method: 'binance_usdt',
+        amount: amountUsdt,
+        currency: 'USDT',
+        cryptoRate: effectiveBinanceRate,
+        convertedAmountBs: convertedBs,
+        convertedAmountUsd: convertedUsd,
+        reference: ref
+      };
+    };
+
+    const buildEuroPaymentObj = (eurAmt) => {
+      const amountEur = round2(eurAmt);
+      const eurRateUsed = effectiveEuroRate > 0 ? effectiveEuroRate : effectiveRate;
+      const convertedBs = round2(VortexMathEngine.multiply(amountEur, eurRateUsed));
+      const convertedUsd = convertEuroToUsd(amountEur);
+      return {
+        method: 'cash_eur',
+        amount: amountEur,
+        currency: 'EUR',
+        eurRate: eurRateUsed,
+        convertedAmountBs: convertedBs,
+        convertedAmountUsd: convertedUsd,
+        reference: ''
+      };
+    };
+
     let normalizedPaymentMethods = [];
-    const cleanRef = paymentReference ? String(paymentReference).trim() : '';
 
     if (checkoutMode === 'split') {
       const sUsd = parseFloat(splitPayments.cash_usd) || 0;
+      const sEur = parseFloat(splitPayments.cash_eur) || 0;
       const sBs = parseFloat(splitPayments.cash_bs) || 0;
       const sPm = parseFloat(splitPayments.pago_movil) || 0;
       const sCard = parseFloat(splitPayments.tarjeta) || 0;
@@ -600,39 +739,86 @@ export function useMobileCheckoutFlow({
       const sCred = parseFloat(splitPayments.credito) || 0;
 
       if (sUsd > 0) normalizedPaymentMethods.push({ method: 'cash_usd', amount: round2(sUsd), currency: 'USD', convertedAmountUsd: round2(sUsd), reference: '' });
-      if (sBs > 0) normalizedPaymentMethods.push({ method: 'cash_bs', amount: round2(sBs), currency: 'VES', convertedAmountUsd: round2(sBs / effectiveRate), reference: '' });
-      if (sPm > 0) normalizedPaymentMethods.push({ method: 'pago_movil', amount: round2(sPm), currency: 'VES', convertedAmountUsd: round2(sPm / effectiveRate), reference: cleanRef });
-      if (sCard > 0) normalizedPaymentMethods.push({ method: 'debit', amount: round2(sCard), currency: 'VES', convertedAmountUsd: round2(sCard / effectiveRate), reference: cleanRef });
-      if (sZelle > 0) normalizedPaymentMethods.push({ method: 'zelle', amount: round2(sZelle), currency: 'USD', convertedAmountUsd: round2(sZelle), reference: cleanRef });
-      if (sBinance > 0) normalizedPaymentMethods.push({ method: 'binance_usdt', amount: round2(sBinance), currency: 'USDT', convertedAmountUsd: round2(sBinance), reference: cleanRef });
+      if (sEur > 0) normalizedPaymentMethods.push(buildEuroPaymentObj(sEur));
+      if (sBs > 0) normalizedPaymentMethods.push({ method: 'cash_bs', amount: round2(sBs), currency: 'VES', convertedAmountUsd: round2(VortexMathEngine.divide(sBs, effectiveRate)), reference: '' });
+      if (sPm > 0) normalizedPaymentMethods.push({ method: 'pago_movil', amount: round2(sPm), currency: 'VES', convertedAmountUsd: round2(VortexMathEngine.divide(sPm, effectiveRate)), reference: getSplitRef('pago_movil') });
+      if (sCard > 0) normalizedPaymentMethods.push({
+        method: 'debit',
+        amount: round2(sCard),
+        currency: isDollarCountry ? 'USD' : 'VES',
+        convertedAmountUsd: isDollarCountry ? round2(sCard) : round2(VortexMathEngine.divide(sCard, effectiveRate)),
+        reference: getSplitRef('tarjeta')
+      });
+      if (sZelle > 0) normalizedPaymentMethods.push({ method: 'zelle', amount: round2(sZelle), currency: 'USD', convertedAmountUsd: round2(sZelle), reference: getSplitRef('zelle') });
+      if (sBinance > 0) normalizedPaymentMethods.push(buildBinancePaymentObj(sBinance, getSplitRef('binance')));
       if (sCred > 0) normalizedPaymentMethods.push({ method: 'fiado', amount: round2(sCred), currency: 'USD', convertedAmountUsd: round2(sCred), reference: '' });
       if (normalizedPaymentMethods.length === 0) {
         normalizedPaymentMethods.push({ method: 'cash_usd', amount: totalDueUSD, currency: 'USD', convertedAmountUsd: totalDueUSD, reference: '' });
       }
     } else if (effectiveCanonicalMethod === 'mixto') {
-      if (paidUSD > 0) normalizedPaymentMethods.push({ method: 'cash_usd', amount: round2(paidUSD), currency: 'USD', convertedAmountUsd: round2(paidUSD), reference: '' });
-      if (paidBS > 0) normalizedPaymentMethods.push({ method: 'cash_bs', amount: round2(paidBS), currency: 'VES', convertedAmountUsd: round2(paidBS / effectiveRate), reference: '' });
+      const selectedVesPart = ['pago_movil', 'debit', 'biopago', 'transfer', 'cash_bs'].includes(canonicalSelectedMethod)
+        ? canonicalSelectedMethod
+        : 'cash_bs';
+      const selectedForeignPart = ['zelle', 'binance_usdt', 'cash_eur', 'cash_usd'].includes(canonicalSelectedMethod)
+        ? canonicalSelectedMethod
+        : 'cash_usd';
+
+      if (paidUSD > 0) {
+        if (selectedForeignPart === 'binance_usdt') {
+          normalizedPaymentMethods.push(buildBinancePaymentObj(paidUSD, cleanRef));
+        } else if (selectedForeignPart === 'cash_eur') {
+          normalizedPaymentMethods.push(buildEuroPaymentObj(paidUSD));
+        } else {
+          normalizedPaymentMethods.push({
+            method: selectedForeignPart,
+            amount: round2(paidUSD),
+            currency: 'USD',
+            convertedAmountUsd: round2(paidUSD),
+            reference: selectedForeignPart === 'zelle' ? cleanRef : ''
+          });
+        }
+      }
+      if (paidBS > 0) {
+        normalizedPaymentMethods.push({
+          method: selectedVesPart,
+          amount: round2(paidBS),
+          currency: 'VES',
+          convertedAmountUsd: round2(VortexMathEngine.divide(paidBS, effectiveRate)),
+          reference: selectedVesPart === 'cash_bs' ? '' : cleanRef
+        });
+      }
       if (normalizedPaymentMethods.length === 0) {
         normalizedPaymentMethods.push({ method: 'cash_usd', amount: totalDueUSD, currency: 'USD', convertedAmountUsd: totalDueUSD, reference: '' });
       }
+    } else if (effectiveCanonicalMethod === 'binance_usdt') {
+      const usdtAmt = paidUSD > 0
+        ? paidUSD
+        : ((!isDollarCountry && effectiveBinanceRate > 0 && Math.abs(effectiveBinanceRate - effectiveRate) > 0.0001)
+            ? round2(VortexMathEngine.divide(totalDueBS, effectiveBinanceRate))
+            : totalDueUSD);
+      normalizedPaymentMethods = [buildBinancePaymentObj(usdtAmt, cleanRef)];
+    } else if (effectiveCanonicalMethod === 'cash_eur') {
+      const eurAmt = paidUSD > 0
+        ? paidUSD
+        : ((!isDollarCountry && effectiveEuroRate > 0)
+            ? round2(VortexMathEngine.divide(totalDueBS, effectiveEuroRate))
+            : totalDueUSD);
+      normalizedPaymentMethods = [buildEuroPaymentObj(eurAmt)];
     } else {
       normalizedPaymentMethods = [{
         method: effectiveCanonicalMethod,
-        amount: isVesMethod ? totalDueBS : totalDueUSD,
-        currency: effectiveCanonicalMethod === 'binance_usdt' ? 'USDT' : (isVesMethod ? 'VES' : 'USD'),
-        convertedAmountUsd: totalDueUSD,
+        amount: isVesMethod ? (paidBS > 0 ? round2(paidBS) : totalDueBS) : (paidUSD > 0 ? round2(paidUSD) : totalDueUSD),
+        currency: isVesMethod ? 'VES' : 'USD',
+        convertedAmountUsd: isVesMethod && paidBS > 0 ? round2(VortexMathEngine.divide(paidBS, effectiveRate)) : totalDueUSD,
         reference: cleanRef
       }];
     }
 
-    const resolvedCustomerId = selectedCustomer?.id
-      || (customerName && customerName !== 'Consumidor Final' && Array.isArray(customers)
-        ? customers.find(c => c.name === customerName)?.id || null
-        : null);
-
     const receivedAmountFinal = checkoutMode === 'split'
       ? round2(splitPaidUSD > 0 ? splitPaidUSD : totalDueUSD)
       : round2(totalPaidInUSD > 0 ? totalPaidInUSD : totalDueUSD);
+
+    const activeRegisterId = getActiveMobileRegisterId();
 
     const salePayload = {
       id: persistentTransactionId,
@@ -689,7 +875,7 @@ export function useMobileCheckoutFlow({
       splitDetails: checkoutMode === 'split' ? splitPayments : null,
       customerName: customerName || 'Consumidor Final',
       customerDoc: customerDoc || (isDollarCountry ? '0000000000' : 'V-00000000'),
-      registerId: 'Caja Móvil',
+      registerId: activeRegisterId,
       terminalId: getTerminalId(),
       notes: cleanRef ? `Ref: ${cleanRef}` : (documentType === 'nota_entrega' ? 'Nota de Entrega' : 'Venta Terminal Móvil')
     };
@@ -871,7 +1057,8 @@ export function useMobileCheckoutFlow({
     isProcessingSale, safeCart, documentType, handleSaveQuotation, checkoutMode,
     splitPaidUSD, totalDueUSD, canonicalSelectedMethod, amountPaidUSD, amountPaidBS,
     totalPaidInUSD, splitPayments, paymentReference, setIsProcessingSale,
-    paidBS, paidUSD, splitChangeUSD, splitChangeBS, changeUSD, changeBS, effectiveRate, totalDueBS,
+    paidBS, paidUSD, splitChangeUSD, splitChangeBS, changeUSD, changeBS, effectiveRate,
+    effectiveBinanceRate, effectiveEuroRate, convertBinanceUsdtToUsd, convertEuroToUsd, totalDueBS,
     selectedCustomer?.id, customers, customerName, customerDoc, enrichedCart,
     rawSubtotalUSD, subtotalUSD, cartDiscountAmountUSD, cartDiscountPercent,
     totalPromoSavings, promoResult.appliedPromotions, discountSupervisorApprovalId,

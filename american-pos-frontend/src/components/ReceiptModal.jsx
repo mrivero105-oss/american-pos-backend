@@ -340,7 +340,7 @@ export default function ReceiptModal({ isOpen, onClose, sale, businessSettings =
                         .logo-print { max-width: 45mm; max-height: 25mm; display: block; margin: 0 auto 6px auto; filter: grayscale(100%) contrast(1.3); }
                         svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
                         @media print {
-                            body { width: ${printWidth}; margin: 0; padding: 0; }
+                            body { width: ${safeWidth}; margin: 0; padding: 0; }
                             @page { margin: 0; }
                         }
                     </style>

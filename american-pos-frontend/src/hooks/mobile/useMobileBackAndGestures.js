@@ -32,13 +32,13 @@ export function useMobileBackAndGestures({
       return 'handled';
     }
 
-    // 2. Si algún submódulo embebido tiene un modal abierto en el DOM, cerrarlo primero
+    // 2. Si algún submódulo embebido tiene un diálogo ARIA explícito abierto, cerrarlo sin DOM scraping de SVG
     if (typeof document !== 'undefined') {
-      const subOverlays = Array.from(document.querySelectorAll('.fixed.inset-0, [role="dialog"]'));
-      if (subOverlays.length > 0) {
-        const topOverlay = subOverlays[subOverlays.length - 1];
-        const closeBtn = topOverlay.querySelector('button svg.lucide-x')?.closest('button');
-        if (closeBtn) {
+      const subDialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+      if (subDialogs.length > 0) {
+        const topDialog = subDialogs[subDialogs.length - 1];
+        const closeBtn = topDialog.querySelector('[data-modal-close], button[aria-label*="Cerrar" i], button[aria-label*="Close" i]');
+        if (closeBtn && typeof closeBtn.click === 'function') {
           closeBtn.click();
           return 'handled';
         }
@@ -120,13 +120,22 @@ export function useMobileBackAndGestures({
       });
     }
 
+    let scrollRafId = null;
     const onScroll = () => {
-      if (catalogScrollRef.current) {
-        useMobilePosStore.getState().setModuleScrollPosition('pos', catalogScrollRef.current.scrollTop);
-      }
+      if (scrollRafId !== null) return;
+      scrollRafId = requestAnimationFrame(() => {
+        scrollRafId = null;
+        if (catalogScrollRef.current) {
+          useMobilePosStore.getState().setModuleScrollPosition('pos', catalogScrollRef.current.scrollTop);
+        }
+      });
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => {
+      if (scrollRafId !== null) {
+        cancelAnimationFrame(scrollRafId);
+        scrollRafId = null;
+      }
       if (el) {
         useMobilePosStore.getState().setModuleScrollPosition('pos', el.scrollTop);
         el.removeEventListener('scroll', onScroll);
@@ -216,8 +225,9 @@ export function useMobileBackAndGestures({
       try {
         await onPullRefresh?.();
         showToast('✅ Catálogo y tasas actualizados');
-      } catch {
-        showToast('Catálogo actualizado');
+      } catch (refreshErr) {
+        console.warn('[MobileGestures] Falló pull-to-refresh:', refreshErr?.message || refreshErr);
+        showToast('⚠️ No se pudo actualizar el catálogo. Verifica la conexión con la PC.');
       } finally {
         setTimeout(() => {
           if (pullIndicatorRef.current) {
@@ -234,9 +244,19 @@ export function useMobileBackAndGestures({
   }, [isPullRefreshing, onPullRefresh, showToast]);
 
   const handleEdgeTouchStart = useCallback((e) => {
-    if (e.touches && e.touches[0] && e.touches[0].clientX < 28) {
-      edgeSwipeStartXRef.current = e.touches[0].clientX;
-      edgeSwipeStartYRef.current = e.touches[0].clientY;
+    const touch = e.touches && e.touches[0];
+    if (!touch) {
+      edgeSwipeStartXRef.current = null;
+      return;
+    }
+    // Respetar zona reservada del gesto Atrás del sistema Android 10+ (clientX < 28px en app nativa)
+    const isNativeAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
+    const inSafeSwipeZone = isNativeAndroid
+      ? (touch.clientX >= 28 && touch.clientX <= 72)
+      : (touch.clientX >= 0 && touch.clientX < 36);
+    if (inSafeSwipeZone) {
+      edgeSwipeStartXRef.current = touch.clientX;
+      edgeSwipeStartYRef.current = touch.clientY;
     } else {
       edgeSwipeStartXRef.current = null;
     }

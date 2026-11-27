@@ -78,6 +78,7 @@ vi.mock('../../src/services/db', () => ({
 vi.mock('../../src/utils/secureMobileStorage', () => ({
   default: {
     getToken: vi.fn(() => 'jwt-token-test'),
+    getSyncKey: vi.fn(() => null),
     getUserProfile: vi.fn(() => ({ id: 'u-1', companyId: '2' }))
   }
 }));

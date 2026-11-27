@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { Banknote, CreditCard, RefreshCw, FileText, Share2, UserCheck, AlertTriangle, X, CheckCircle, Zap } from 'lucide-react';
 import { useMobileKeyboardViewport, handleMobileFormEnterAdvance } from '../../hooks/useMobileKeyboardViewport';
+import VortexMathEngine from '../../utils/VortexMathEngine';
 
 export default function MobileCheckoutModal({
   isOpen,
@@ -67,11 +68,15 @@ export default function MobileCheckoutModal({
     handleFieldFocusCapture
   } = useMobileKeyboardViewport({ enabled: isOpen });
 
-  const round2 = (v) => Math.round((Number(v || 0) + Number.EPSILON) * 100) / 100;
+  const round2 = (v) => VortexMathEngine.round(v, 2);
   const principalUSD = baseTotalUSD !== null && baseTotalUSD !== undefined ? Number(baseTotalUSD) : Number(totalUSD || 0);
+  const effectiveRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
+  const binanceRate = Number(businessInfo?.binanceRate ?? businessInfo?.taxConfig?.binanceRate ?? 0) || effectiveRate;
+  const euroRate = Number(businessInfo?.euroRate ?? businessInfo?.taxConfig?.euroRate ?? 0);
+  const hasEuroRate = !isDollarCountry && euroRate > 0;
   const effectiveChangeUSD = checkoutMode === 'split' ? splitChangeUSD : changeUSD;
-  const effectiveChangeBS = checkoutMode === 'split' ? (splitChangeBS || round2(splitChangeUSD * (exchangeRate || 1))) : changeBS;
-  const igtfFactor = (isIgtfEnabled && Number(igtfRate) > 0) ? (1 + (Number(igtfRate) / 100)) : 1;
+  const effectiveChangeBS = checkoutMode === 'split' ? (splitChangeBS || round2(VortexMathEngine.multiply(splitChangeUSD, effectiveRate))) : changeBS;
+  const igtfFactor = (isIgtfEnabled && Number(igtfRate) > 0) ? VortexMathEngine.add([1, VortexMathEngine.divide(Number(igtfRate), 100)]) : 1;
   const isBinanceIgtfActive = Boolean(businessInfo?.binanceIgtfEnabled ?? businessInfo?.taxConfig?.binanceIgtfEnabled);
   const selectedMethodNorm = String(selectedMethod || '').toLowerCase();
   const isCashOrMixedExpress = checkoutMode === 'express' && (
@@ -79,18 +84,50 @@ export default function MobileCheckoutModal({
     selectedMethodNorm.includes('mixto') ||
     selectedMethodNorm === ''
   );
+  const isEuroExpress = checkoutMode === 'express' && (selectedMethodNorm.includes('eur'));
+  const isBinanceExpress = checkoutMode === 'express' && selectedMethodNorm.includes('binance');
   const exactUsdTarget = (() => {
     const isExemptUsd = selectedMethodNorm.includes('zelle') || selectedMethodNorm.includes('crédito') || selectedMethodNorm.includes('credito') || selectedMethodNorm.includes('fiado')
       || (selectedMethodNorm.includes('binance') && !isBinanceIgtfActive);
-    return (!isExemptUsd && igtfFactor > 1) ? round2(principalUSD * igtfFactor) : round2(principalUSD);
+    return (!isExemptUsd && igtfFactor > 1) ? round2(VortexMathEngine.multiply(principalUSD, igtfFactor)) : round2(principalUSD);
   })();
+  const exactUsdtTarget = (!isDollarCountry && binanceRate > 0 && Math.abs(binanceRate - effectiveRate) > 0.0001)
+    ? round2(VortexMathEngine.divide(VortexMathEngine.multiply(exactUsdTarget, effectiveRate), binanceRate))
+    : exactUsdTarget;
+  const exactEurTarget = hasEuroRate
+    ? round2(VortexMathEngine.divide(VortexMathEngine.multiply(exactUsdTarget, effectiveRate), euroRate))
+    : exactUsdTarget;
+
+  const hasCreditTender = checkoutMode === 'express'
+    ? (selectedMethodNorm.includes('crédito') || selectedMethodNorm.includes('credito') || selectedMethodNorm.includes('fiado'))
+    : (parseFloat(splitPayments.credito) || 0) > 0;
+  const hasValidCustomerForCredit = Boolean(
+    customerName &&
+    String(customerName).trim() !== '' &&
+    String(customerName).trim().toLowerCase() !== 'consumidor final' &&
+    String(customerName).trim().toLowerCase() !== 'cliente ocasional'
+  );
+  const isMissingCreditCustomer = hasCreditTender && !hasValidCustomerForCredit;
+
+  const splitRefs = (splitPayments && typeof splitPayments.refs === 'object' && splitPayments.refs) ? splitPayments.refs : {};
+  const activeElectronicSplitMethods = checkoutMode === 'split'
+    ? [
+        { key: 'pago_movil', label: 'Pago Móvil', amt: parseFloat(splitPayments.pago_movil) || 0 },
+        { key: 'tarjeta', label: 'Tarjeta / Punto', amt: parseFloat(splitPayments.tarjeta) || 0 },
+        { key: 'zelle', label: 'Zelle', amt: parseFloat(splitPayments.zelle) || 0 },
+        { key: 'binance', label: 'Binance USDT', amt: parseFloat(splitPayments.binance) || 0 }
+      ].filter((e) => e.amt > 0)
+    : [];
   const isRefRequired = checkoutMode === 'express'
     ? ['pago móvil', 'pago movil', 'tarjeta', 'punto de venta', 'zelle', 'transferencia', 'biopago', 'binance'].some(m => selectedMethodNorm.includes(m))
-    : ((parseFloat(splitPayments.pago_movil) || 0) > 0 || (parseFloat(splitPayments.tarjeta) || 0) > 0 || (parseFloat(splitPayments.zelle) || 0) > 0 || (parseFloat(splitPayments.binance) || 0) > 0);
-  const isMissingRequiredRef = isRefRequired && !String(paymentReference || '').trim();
+    : activeElectronicSplitMethods.length > 0;
+  const isMissingRequiredRef = checkoutMode === 'express'
+    ? (isRefRequired && !String(paymentReference || '').trim())
+    : activeElectronicSplitMethods.some((e) => !String(splitRefs[e.key] || paymentReference || '').trim());
   const canSubmitSale = !isProcessingSale &&
-    !(checkoutMode === 'split' && splitRemainingUSD > 0.02) &&
-    !isMissingRequiredRef;
+    !(checkoutMode === 'split' && splitRemainingUSD > 0.01) &&
+    !isMissingRequiredRef &&
+    !isMissingCreditCustomer;
 
   // Al cambiar a un método electrónico en modo Express, hacer scroll y foco automático al N° de Referencia obligatorio
   useEffect(() => {
@@ -113,18 +150,24 @@ export default function MobileCheckoutModal({
     triggerHaptic(12);
     playScanSound();
     if (isBolivares) {
-      const addBs = round2(splitRemainingUSD * (exchangeRate || 1));
+      const addBs = round2(VortexMathEngine.multiply(splitRemainingUSD, effectiveRate));
       setSplitPayments((p) => ({
         ...p,
-        [fieldKey]: round2((parseFloat(p[fieldKey]) || 0) + addBs).toFixed(2)
+        [fieldKey]: round2(VortexMathEngine.add([parseFloat(p[fieldKey]) || 0, addBs])).toFixed(2)
       }));
       return;
     }
-    const appliesIgtf = igtfFactor > 1 && (fieldKey === 'cash_usd' || (fieldKey === 'binance' && isBinanceIgtfActive));
-    const addUsd = appliesIgtf ? round2(splitRemainingUSD * igtfFactor) : round2(splitRemainingUSD);
+    const appliesIgtf = igtfFactor > 1 && (fieldKey === 'cash_usd' || fieldKey === 'cash_eur' || (fieldKey === 'binance' && isBinanceIgtfActive));
+    const usdTarget = appliesIgtf ? round2(VortexMathEngine.multiply(splitRemainingUSD, igtfFactor)) : round2(splitRemainingUSD);
+    let addNative = usdTarget;
+    if (fieldKey === 'cash_eur' && hasEuroRate) {
+      addNative = round2(VortexMathEngine.divide(VortexMathEngine.multiply(usdTarget, effectiveRate), euroRate));
+    } else if (fieldKey === 'binance' && !isDollarCountry && binanceRate > 0 && Math.abs(binanceRate - effectiveRate) > 0.0001) {
+      addNative = round2(VortexMathEngine.divide(VortexMathEngine.multiply(usdTarget, effectiveRate), binanceRate));
+    }
     setSplitPayments((p) => ({
       ...p,
-      [fieldKey]: round2((parseFloat(p[fieldKey]) || 0) + addUsd).toFixed(2)
+      [fieldKey]: round2(VortexMathEngine.add([parseFloat(p[fieldKey]) || 0, addNative])).toFixed(2)
     }));
   };
 
@@ -132,12 +175,14 @@ export default function MobileCheckoutModal({
     triggerHaptic(10);
     setSplitPayments({
       cash_usd: '',
+      cash_eur: '',
       cash_bs: '',
       pago_movil: '',
       tarjeta: '',
       zelle: '',
       binance: '',
-      credito: ''
+      credito: '',
+      refs: {}
     });
   };
 
@@ -172,6 +217,9 @@ export default function MobileCheckoutModal({
               className="fixed inset-0 bg-black/85 cursor-pointer"
             />
             <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Cobro de Venta"
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
@@ -327,7 +375,7 @@ export default function MobileCheckoutModal({
             ) : (
               <>
                 {/* 2. Selector de Modo de Cobro: Express vs Dividido (Split) */}
-                <div className="flex items-center justify-between border-b border-slate-700/40 pb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/40 pb-2">
                   <label className={`text-xs font-extrabold ${T.textSecondary}`}>Modo de Pago:</label>
                   <div className="flex items-center gap-1">
                     <button
@@ -363,7 +411,7 @@ export default function MobileCheckoutModal({
                       <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 text-xs">
                         {(isDollarCountry 
                           ? ['Efectivo USD', 'Tarjeta', 'Zelle', 'Binance', 'Transferencia', 'Mixto', 'Crédito'] 
-                          : ['Efectivo USD', 'Efectivo Bs', 'Tarjeta', 'Pago Móvil', 'Biopago', 'Zelle', 'Binance', 'Mixto', 'Crédito']
+                          : ['Efectivo USD', ...(hasEuroRate ? ['Efectivo EUR'] : []), 'Efectivo Bs', 'Tarjeta', 'Pago Móvil', 'Biopago', 'Zelle', 'Binance', 'Mixto', 'Crédito']
                         ).map(m => (
                           <button 
                             key={m}
@@ -386,13 +434,48 @@ export default function MobileCheckoutModal({
 
                     {/* Aviso de Venta a Crédito si está seleccionado */}
                     {selectedMethod === 'Crédito' && (
-                      <div className="bg-amber-500/10 border border-amber-500/25 p-2.5 rounded-xl text-xs space-y-1">
-                        <p className="font-extrabold text-amber-600 dark:text-amber-400 text-[11px] uppercase">
+                      <div className={`${isMissingCreditCustomer ? 'bg-rose-500/15 border-rose-500/35' : 'bg-amber-500/10 border-amber-500/25'} border p-2.5 rounded-xl text-xs space-y-1.5`}>
+                        <p className={`font-extrabold ${isMissingCreditCustomer ? 'text-rose-500' : 'text-amber-600 dark:text-amber-400'} text-[11px] uppercase`}>
                           Venta a Crédito (Cuentas por Cobrar):
                         </p>
-                        <p className={`text-[11px] ${T.textSecondary}`}>
-                          El saldo de <b className="text-amber-600 dark:text-amber-400">${totalUSD.toFixed(2)}</b> quedará registrado a nombre de <b className={T.textPrimary}>{customerName}</b> para su cobro posterior.
-                        </p>
+                        {isMissingCreditCustomer ? (
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] text-rose-400 font-bold">
+                              ⚠️ Debes seleccionar un cliente registrado antes de procesar un pago Fiado / Crédito.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => onOpenCustomerSelect?.()}
+                              className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer active:scale-95"
+                            >
+                              Seleccionar Cliente Ahora
+                            </button>
+                          </div>
+                        ) : (
+                          <p className={`text-[11px] ${T.textSecondary}`}>
+                            El saldo de <b className="text-amber-600 dark:text-amber-400">${totalUSD.toFixed(2)}</b> quedará registrado a nombre de <b className={T.textPrimary}>{customerName}</b> para su cobro posterior.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Desglose Binance USDT / Euro BCV si aplica */}
+                    {isBinanceExpress && !isDollarCountry && Math.abs(binanceRate - effectiveRate) > 0.0001 && (
+                      <div className="bg-amber-500/10 border border-amber-500/30 p-2.5 rounded-xl text-xs flex items-center justify-between">
+                        <div>
+                          <span className="font-extrabold text-amber-500 text-[10px] uppercase block">Tasa Binance USDT Activa</span>
+                          <span className={`text-[10px] ${T.textSecondary}`}>Bs. {binanceRate.toFixed(2)} / USDT</span>
+                        </div>
+                        <span className="font-mono font-black text-amber-400 text-sm">{exactUsdtTarget.toFixed(2)} USDT</span>
+                      </div>
+                    )}
+                    {isEuroExpress && hasEuroRate && (
+                      <div className="bg-indigo-500/10 border border-indigo-500/30 p-2.5 rounded-xl text-xs flex items-center justify-between">
+                        <div>
+                          <span className="font-extrabold text-indigo-400 text-[10px] uppercase block">Tasa Euro BCV Activa</span>
+                          <span className={`text-[10px] ${T.textSecondary}`}>Bs. {euroRate.toFixed(2)} / EUR</span>
+                        </div>
+                        <span className="font-mono font-black text-indigo-300 text-sm">€{exactEurTarget.toFixed(2)} EUR</span>
                       </div>
                     )}
 
@@ -459,7 +542,7 @@ export default function MobileCheckoutModal({
                           {/* Billetes USD */}
                           <div className="space-y-1">
                             <span className={`text-[9px] font-black ${T.textSecondary} uppercase tracking-wider block`}>Billetes en Dólares ($):</span>
-                            <div className="grid grid-cols-7 gap-1">
+                            <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                               {/* Exacto $ */}
                               <button
                                 type="button"
@@ -674,11 +757,12 @@ export default function MobileCheckoutModal({
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       {[
                         { key: 'cash_usd', label: 'Efectivo USD ($)', isBs: false, step: '0.01', show: true },
+                        { key: 'cash_eur', label: `Efectivo EUR (€ • ${euroRate.toFixed(2)})`, isBs: false, step: '0.01', show: hasEuroRate },
                         { key: 'cash_bs', label: 'Efectivo Bs (Bs)', isBs: true, step: '0.1', show: !isDollarCountry },
                         { key: 'pago_movil', label: 'Pago Móvil (Bs)', isBs: true, step: '0.1', show: !isDollarCountry },
                         { key: 'tarjeta', label: isDollarCountry ? 'Punto / Tarjeta ($)' : 'Punto / Tarjeta (Bs)', isBs: !isDollarCountry, step: '0.1', show: true },
                         { key: 'zelle', label: 'Zelle ($)', isBs: false, step: '0.01', show: true },
-                        { key: 'binance', label: 'Binance USDT ($)', isBs: false, step: '0.01', show: true },
+                        { key: 'binance', label: !isDollarCountry && Math.abs(binanceRate - effectiveRate) > 0.0001 ? `Binance USDT (${binanceRate.toFixed(2)})` : 'Binance USDT ($)', isBs: false, step: '0.01', show: true },
                         { key: 'credito', label: 'Crédito / Fiado ($)', isBs: false, step: '0.01', show: true }
                       ].filter((field) => field.show).map((field) => (
                         <div key={field.key}>
@@ -719,7 +803,7 @@ export default function MobileCheckoutModal({
                       {splitRemainingUSD > 0.01 ? (
                         <div className="flex justify-between text-rose-400 font-bold">
                           <span>Faltante por Cubrir:</span>
-                          <span>${splitRemainingUSD.toFixed(2)}{!isDollarCountry ? ` (Bs. ${(splitRemainingUSD * exchangeRate).toFixed(2)})` : ''}</span>
+                          <span>${splitRemainingUSD.toFixed(2)}{!isDollarCountry ? ` (Bs. ${(splitRemainingUSD * effectiveRate).toFixed(2)})` : ''}</span>
                         </div>
                       ) : (
                         <div className="flex justify-between text-emerald-400 font-bold">
@@ -728,6 +812,50 @@ export default function MobileCheckoutModal({
                         </div>
                       )}
                     </div>
+
+                    {isMissingCreditCustomer && (
+                      <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-xs flex items-center justify-between gap-2">
+                        <span className="text-rose-400 font-bold text-[11px]">⚠️ Crédito en Split requiere cliente registrado.</span>
+                        <button
+                          type="button"
+                          onClick={() => onOpenCustomerSelect?.()}
+                          className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black shrink-0 cursor-pointer"
+                        >
+                          Elegir Cliente
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Referencias independientes cuando hay múltiples métodos electrónicos en Split */}
+                    {activeElectronicSplitMethods.length > 1 && (
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-[10px] font-black uppercase text-amber-500 block">
+                          Referencias Individuales por Método Electrónico
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {activeElectronicSplitMethods.map((m) => (
+                            <div key={m.key}>
+                              <label className={`text-[10px] font-bold ${T.textSecondary} block mb-0.5`}>
+                                Ref. {m.label} *
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="text"
+                                value={splitRefs[m.key] ?? ''}
+                                placeholder={`Comprobante ${m.label}`}
+                                onChange={(e) => setSplitPayments((p) => ({
+                                  ...p,
+                                  refs: { ...(p.refs || {}), [m.key]: e.target.value }
+                                }))}
+                                className={`w-full min-h-[40px] ${T.inputBg} border rounded-xl p-2 text-xs font-bold font-mono outline-none ${
+                                  !String(splitRefs[m.key] || paymentReference || '').trim() ? 'border-amber-500' : 'border-emerald-500'
+                                }`}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
