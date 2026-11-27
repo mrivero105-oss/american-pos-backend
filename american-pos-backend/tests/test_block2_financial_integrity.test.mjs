@@ -91,6 +91,7 @@ test('Bloque 2A — AccountingEngineService.generateSaleEntry cuadra Debe y Habe
 
 test('Bloque 2B — SaleService.processSale bloquea price: 0 sin permiso, evita doble conteo de fiado y rechaza descuento > subtotal', async () => {
     const origSaleFindByPk = models.Sale.findByPk;
+    const origBranchFindOne = models.Branch.findOne;
     const origCashShiftFindOne = models.CashShift.findOne;
     const origFindAllProducts = models.Product.findAll;
     const origFindAllPresentations = models.ProductPresentation.findAll;
@@ -98,6 +99,7 @@ test('Bloque 2B — SaleService.processSale bloquea price: 0 sin permiso, evita 
 
     try {
         models.Sale.findByPk = async () => null;
+        models.Branch.findOne = async () => ({ id: 'branch-1', companyId: 'default', isMain: true });
         models.CashShift.findOne = async () => ({ id: 'shift-open-1', registerId: '1', status: 'open', allowedCategories: [] });
         models.ProductPresentation.findAll = async () => ([]);
         models.Product.findAll = async () => ([
@@ -165,6 +167,7 @@ test('Bloque 2B — SaleService.processSale bloquea price: 0 sin permiso, evita 
         );
     } finally {
         models.Sale.findByPk = origSaleFindByPk;
+        models.Branch.findOne = origBranchFindOne;
         models.CashShift.findOne = origCashShiftFindOne;
         models.Product.findAll = origFindAllProducts;
         models.ProductPresentation.findAll = origFindAllPresentations;
@@ -176,8 +179,10 @@ test('Bloque 2C — CashService.getCurrentShift no duplica la resta de devolucio
     const origShiftFindOne = models.CashShift.findOne;
     const origSaleFindAll = models.Sale.findAll;
     const origRefundFindAll = models.Refund.findAll;
+    const origCashMovFindAll = models.CashMovement.findAll;
 
     try {
+        models.CashMovement.findAll = async () => [];
         const openedAtIso = new Date(Date.now() - 3600_000).toISOString();
         const fakeShift = {
             id: 'shift-1',
@@ -239,6 +244,7 @@ test('Bloque 2C — CashService.getCurrentShift no duplica la resta de devolucio
         models.CashShift.findOne = origShiftFindOne;
         models.Sale.findAll = origSaleFindAll;
         models.Refund.findAll = origRefundFindAll;
+        models.CashMovement.findAll = origCashMovFindAll;
     }
 });
 

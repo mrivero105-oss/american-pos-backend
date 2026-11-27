@@ -160,6 +160,24 @@ class CloudMirrorService {
         if (trimmed.startsWith('\\\\') || trimmed.startsWith('//')) {
             throw new Error('No se permiten rutas de red UNC (\\\\servidor\\recurso) como carpeta espejo. Use una carpeta local sincronizada (OneDrive, Google Drive o disco local).');
         }
+        // Bloquear raíz de unidad Windows (ej. C:\ o C:/) en cualquier plataforma
+        if (/^[a-zA-Z]:[\\/]*$/.test(trimmed)) {
+            throw new Error('No se puede utilizar la raíz completa de una unidad como carpeta espejo. Seleccione una subcarpeta dedicada.');
+        }
+        // Bloquear directorios críticos de Windows en cualquier plataforma (normalizando separadores)
+        const winNormalized = trimmed.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+        const forbiddenWinPrefixes = [
+            'c:\\windows',
+            'c:\\program files',
+            'c:\\program files (x86)',
+            'c:\\programdata',
+            'c:\\system volume information',
+            'c:\\$recycle.bin'
+        ];
+        if (forbiddenWinPrefixes.some((p) => winNormalized === p || winNormalized.startsWith(`${p}\\`))) {
+            throw new Error('No se permiten directorios críticos del sistema operativo como carpeta espejo.');
+        }
+
         const resolved = path.resolve(trimmed);
         const parsed = path.parse(resolved);
         // Bloquear raíz de unidad completa (ej. C:\ o /)
@@ -168,15 +186,7 @@ class CloudMirrorService {
         }
         if (process.platform === 'win32') {
             const lower = resolved.toLowerCase();
-            const forbiddenPrefixes = [
-                'c:\\windows',
-                'c:\\program files',
-                'c:\\program files (x86)',
-                'c:\\programdata',
-                'c:\\system volume information',
-                'c:\\$recycle.bin'
-            ];
-            if (forbiddenPrefixes.some((p) => lower === p || lower.startsWith(`${p}\\`))) {
+            if (forbiddenWinPrefixes.some((p) => lower === p || lower.startsWith(`${p}\\`))) {
                 throw new Error('No se permiten directorios críticos del sistema operativo como carpeta espejo.');
             }
         } else {

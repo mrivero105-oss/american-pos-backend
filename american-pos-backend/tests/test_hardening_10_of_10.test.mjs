@@ -523,6 +523,12 @@ test('Suite Integral de Hardening 10/10 (Seguridad, Finanzas, Licencias, Variant
         );
         fs.rmSync(tmpRoot, { recursive: true, force: true });
 
+        // Sembrar fixtures temporales en isolatedUserDataDir/mobile-ota para validar HTTP HEAD en entornos CI limpios
+        const runtimeOtaDir = path.join(isolatedUserDataDir, 'mobile-ota');
+        fs.mkdirSync(runtimeOtaDir, { recursive: true });
+        fs.writeFileSync(path.join(runtimeOtaDir, 'dist.zip'), Buffer.from('PK\x05\x06' + '\x00'.repeat(18), 'binary'));
+        fs.writeFileSync(path.join(runtimeOtaDir, 'Isaac-POS-Mobile.apk'), Buffer.from('PK\x03\x04isaac-apk-fixture', 'binary'));
+
         const zipRes = await fetch(`${posUrl}/dist.zip`, { method: 'HEAD' });
         assert.equal(zipRes.status, 200, 'GET/HEAD /dist.zip debe responder 200');
         assert.match(zipRes.headers.get('content-type') || '', /zip/i);

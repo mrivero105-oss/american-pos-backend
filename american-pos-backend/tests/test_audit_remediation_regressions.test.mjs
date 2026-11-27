@@ -475,8 +475,12 @@ test('R9. DbConfigManager migra esquema dpapi legado sin ReferenceError y routes
         assert.equal(res.status, 0, `Subproceso de migración DPAPI falló: ${res.stderr || res.stdout}`);
         assert.match(res.stdout, /MIGRATED_PASS_OK=true/);
         const migratedJson = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-        assert.equal(migratedJson.passwordEncScheme, 'aes256gcm_dpapi', 'db-config.json legado dpapi debe migrar a aes256gcm_dpapi');
-        assert.equal(fs.existsSync(path.join(tmpCfgDir, '.dbcfg.key.dpapi')), true, 'Debe generarse .dbcfg.key.dpapi al migrar');
+        if (process.platform === 'win32') {
+            assert.equal(migratedJson.passwordEncScheme, 'aes256gcm_dpapi', 'db-config.json legado dpapi debe migrar a aes256gcm_dpapi');
+            assert.equal(fs.existsSync(path.join(tmpCfgDir, '.dbcfg.key.dpapi')), true, 'Debe generarse .dbcfg.key.dpapi al migrar');
+        } else {
+            assert.equal(migratedJson.passwordEncScheme, 'dpapi', 'Fuera de Windows no existe DPAPI nativo y debe preservarse sin corrupción');
+        }
     } finally {
         try { fs.rmSync(tmpCfgDir, { recursive: true, force: true }); } catch (_) {}
     }

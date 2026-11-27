@@ -47,6 +47,9 @@ jobs:
         run: node tests/test_unified_db.cjs
 
       - name: Build production Desktop (Chrome 130+) & Mobile (Android WebView) bundles
+        # Permite empaquetar dist.zip sin llave privada RSA OTA en runners de CI (producción sigue exigiendo firma RSA-SHA256)
+        env:
+          ALLOW_UNSIGNED_OTA_DEV: 'true'
         run: |
           npm run build
           npm run build:mobile
@@ -115,11 +118,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: american-pos-backend/package-lock.json
+          cache-dependency-path: |
+            american-pos-backend/package-lock.json
+            american-pos-frontend/package-lock.json
+            cloud_license_server/node-server/package-lock.json
 
-      - name: Install backend dependencies
-        working-directory: american-pos-backend
-        run: npm ci
+      - name: Install backend, license gateway & test client dependencies
+        run: |
+          npm --prefix american-pos-backend ci
+          npm --prefix american-pos-frontend ci
+          npm --prefix cloud_license_server/node-server ci
 
       - name: Generate ephemeral CI test secrets
         run: |
@@ -208,10 +216,11 @@ jobs:
         with:
           name: frontend-dist
 
-      - name: Install backend & frontend dependencies
+      - name: Install backend, frontend & license gateway dependencies
         run: |
           npm --prefix american-pos-backend ci
           npm --prefix american-pos-frontend ci
+          npm --prefix cloud_license_server/node-server ci
 
       - name: Install Playwright Chromium browser
         working-directory: american-pos-frontend
