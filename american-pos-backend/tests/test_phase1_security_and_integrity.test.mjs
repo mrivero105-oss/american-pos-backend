@@ -331,6 +331,12 @@ test('Fase 1: Seguridad IDOR, RBAC, x-sync-key allowlist, fail-closed Bearer, Br
     });
 
     // 8. Motor Zero-Trust unificado en POST /sync/offline-sales
+    // Inicializar tasa vigente de compA de forma determinista (en BD virgen de CI el fallback es 1.00)
+    await SettingsStoreService.persistCompanySettings(compA, {
+        exchangeRate: 36.5,
+        businessInfo: { name: 'Comercio Fase 1 Init', country: 'Venezuela' }
+    });
+
     // 8a: Cajero sin canModifyPrices intenta manipular price: 0.01 -> debe ser rechazado (errors)
     const tamperedOfflineId = `p1-off-tampered-${ts}`;
     const tamperedRes = await fetch(`${baseUrl}/sync/offline-sales`, {

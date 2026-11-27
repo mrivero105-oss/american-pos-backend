@@ -28,17 +28,19 @@ android {
             def ksStorePass = keystoreProperties['storePassword'] ?: System.getenv('KEYSTORE_PASSWORD') ?: ''
             def ksKeyAlias = keystoreProperties['keyAlias'] ?: System.getenv('KEY_ALIAS') ?: 'isaacpos'
             def ksKeyPass = keystoreProperties['keyPassword'] ?: System.getenv('KEY_PASSWORD') ?: ''
+            def resolvedKs = file(ksFilePath)
             def isReleaseTaskRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') && !it.toLowerCase().contains('lint') }
             if (isReleaseTaskRequested) {
-                def resolvedKs = file(ksFilePath)
                 if (!resolvedKs.exists() || !ksStorePass || !ksKeyPass) {
                     throw new GradleException("Faltan credenciales de firma release (keystore.properties o KEYSTORE_PASSWORD/KEY_PASSWORD) o el archivo keystore no existe: ${resolvedKs.path}")
                 }
             }
-            storeFile file(ksFilePath)
-            storePassword ksStorePass
-            keyAlias ksKeyAlias
-            keyPassword ksKeyPass
+            if (resolvedKs.exists()) {
+                storeFile resolvedKs
+                storePassword ksStorePass
+                keyAlias ksKeyAlias
+                keyPassword ksKeyPass
+            }
             v2SigningEnabled true
         }
     }
