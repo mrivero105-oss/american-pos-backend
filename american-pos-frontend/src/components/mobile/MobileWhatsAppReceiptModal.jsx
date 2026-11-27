@@ -242,6 +242,9 @@ export default function MobileWhatsAppReceiptModal({
             style={modalOverlayStyle}
           >
             <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Recibo Digital WhatsApp"
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -264,7 +267,8 @@ export default function MobileWhatsAppReceiptModal({
                 <button
                   type="button"
                   onClick={() => onClose()}
-                  className="p-1 rounded-full text-slate-400 hover:text-white cursor-pointer"
+                  aria-label="Cerrar recibo WhatsApp"
+                  className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-full text-slate-400 hover:text-white cursor-pointer"
                 >
                   <X size={18} />
                 </button>
@@ -332,17 +336,23 @@ export default function MobileWhatsAppReceiptModal({
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
                       triggerHaptic(15);
                       const fullText = generateEcoReceiptText(whatsAppModalData);
                       try {
-                        navigator.clipboard.writeText(fullText);
+                        if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.copyToClipboard) {
+                          await window.Capacitor.Plugins.PosNativeHardware.copyToClipboard({ text: fullText });
+                        } else if (navigator?.clipboard?.writeText) {
+                          await navigator.clipboard.writeText(fullText);
+                        } else {
+                          throw new Error('Clipboard no disponible');
+                        }
                         showToast('📋 Recibo copiado al portapapeles');
-                      } catch (_) {
-                        showToast('No se pudo copiar');
+                      } catch {
+                        showToast('⚠️ No se pudo copiar al portapapeles');
                       }
                     }}
-                    className={`flex-1 py-2.5 rounded-xl border ${T.btnGhost} text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95`}
+                    className={`flex-1 min-h-[44px] py-2.5 rounded-xl border ${T.btnGhost} text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95`}
                   >
                     <Copy size={13} />
                     <span>Copiar Texto</span>

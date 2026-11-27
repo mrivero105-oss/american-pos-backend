@@ -815,7 +815,8 @@ const startServer = (ports, userDataPath = null) => {
             app.get(['/display', '/customer-display'], (req, res) => {
                 res.redirect('/#/display');
             });
-            app.get('/hello', (req, res) => {
+            const getServerIdentityMetadata = () => {
+                const crypto = require('crypto');
                 const os = require('os');
                 const interfaces = os.networkInterfaces();
                 const localIps = [];
@@ -826,15 +827,43 @@ const startServer = (ports, userDataPath = null) => {
                         }
                     }
                 }
+                const companyId = String(process.env.DEFAULT_COMPANY_ID || '2');
+                const seedSecret = String(process.env.SYNC_SECRET_KEY || process.env.JWT_SECRET || os.hostname());
+                const serverFingerprint = crypto
+                    .createHash('sha256')
+                    .update(`${os.hostname()}|${companyId}|${seedSecret.slice(0, 16)}`)
+                    .digest('hex')
+                    .slice(0, 24);
+                const ts = Date.now();
+                const identitySignature = process.env.SYNC_SECRET_KEY
+                    ? crypto.createHmac('sha256', String(process.env.SYNC_SECRET_KEY))
+                        .update(`${serverFingerprint}|${companyId}|${ts}`)
+                        .digest('hex')
+                    : null;
+                return {
+                    hostname: os.hostname(),
+                    localIps,
+                    companyId,
+                    serverFingerprint,
+                    identitySignature,
+                    timestamp: ts
+                };
+            };
+
+            app.get('/hello', (req, res) => {
+                const meta = getServerIdentityMetadata();
                 res.json({
                     status: 'ready',
                     server: 'isaac-pos',
-                    hostname: os.hostname(),
+                    hostname: meta.hostname,
+                    companyId: meta.companyId,
+                    serverFingerprint: meta.serverFingerprint,
+                    identitySignature: meta.identitySignature,
                     role: process.env.POS_NODE_ROLE || 'MASTER_CLOUD_HUB',
-                    ips: localIps,
+                    ips: meta.localIps,
                     dbDialect: process.env.DB_DIALECT || 'postgres',
                     dbReady,
-                    timestamp: Date.now()
+                    timestamp: meta.timestamp
                 });
             });
             app.get(['/api/time', '/time'], (req, res) => res.json({
@@ -1490,6 +1519,47 @@ const startServer = (ports, userDataPath = null) => {
 
             // 1. Iniciar inmediatamente el puerto principal para que la UI cargue en < 500ms
             const boundPrimary = await bindSinglePort(portList[0]);
+
+            // 1b. Responder UDP LAN (puerto 41234) para descubrimiento instantáneo de terminales Android en toda la subred
+            if (boundPrimary && process.env.DISABLE_BACKGROUND_WORKERS !== 'true' && process.env.ISAAC_TEST_ISOLATED !== '1') {
+                try {
+                    const dgram = require('dgram');
+                    const udpPort = Number(process.env.LAN_UDP_DISCOVERY_PORT) || 41234;
+                    const udpServer = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+                    udpServer.on('error', (udpErr) => {
+                        console.warn(`[LAN-UDP] Aviso en listener UDP ${udpPort}:`, udpErr?.message);
+                    });
+                    udpServer.on('message', (msg, rinfo) => {
+                        try {
+                            const text = String(msg || '').trim();
+                            if (!text.includes('ISAAC_POS_DISCOVER')) return;
+                            const meta = getServerIdentityMetadata();
+                            const primaryLanIp = meta.localIps[0] || '';
+                            const beacon = JSON.stringify({
+                                type: 'ISAAC_POS_BEACON',
+                                app: 'isaac-pos',
+                                port: boundPrimary.port,
+                                protocol: isHttps ? 'https' : 'http',
+                                ip: primaryLanIp,
+                                hostname: meta.hostname,
+                                companyId: meta.companyId,
+                                serverFingerprint: meta.serverFingerprint,
+                                hmac: meta.identitySignature || ''
+                            });
+                            const buf = Buffer.from(beacon, 'utf8');
+                            udpServer.send(buf, 0, buf.length, rinfo.port, rinfo.address);
+                        } catch (_udpMsgErr) {
+                            // Ignorar paquetes malformados en red local
+                        }
+                    });
+                    udpServer.bind(udpPort, () => {
+                        try { udpServer.setBroadcast(true); } catch (_) {}
+                        console.log(`📡 [LAN-UDP] Discovery responder activo en puerto UDP ${udpPort}`);
+                    });
+                } catch (udpInitErr) {
+                    console.warn('[LAN-UDP] No se pudo inicializar discovery UDP:', udpInitErr?.message);
+                }
+            }
             const primaryPort = boundPrimary ? boundPrimary.port : portList[0];
 
             // Create a virtual "io" hub that forwards emissions to all port instances

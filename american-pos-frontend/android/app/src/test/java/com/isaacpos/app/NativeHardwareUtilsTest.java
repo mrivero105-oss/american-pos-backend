@@ -58,12 +58,59 @@ public class NativeHardwareUtilsTest {
         assertFalse(NativeHardwareUtils.isAllowedLanPrinterHost(null));
 
         assertTrue(NativeHardwareUtils.isValidPrinterPort(9100));
-        assertTrue(NativeHardwareUtils.isValidPrinterPort(1024));
-        assertTrue(NativeHardwareUtils.isValidPrinterPort(65535));
+        assertTrue(NativeHardwareUtils.isValidPrinterPort(9101));
+        assertTrue(NativeHardwareUtils.isValidPrinterPort(9102));
+        assertTrue(NativeHardwareUtils.isValidPrinterPort(515));
+        assertTrue(NativeHardwareUtils.isValidPrinterPort(631));
+        assertFalse(NativeHardwareUtils.isValidPrinterPort(1024));
+        assertFalse(NativeHardwareUtils.isValidPrinterPort(65535));
         assertFalse(NativeHardwareUtils.isValidPrinterPort(80));
         assertFalse(NativeHardwareUtils.isValidPrinterPort(22));
         assertFalse(NativeHardwareUtils.isValidPrinterPort(0));
         assertFalse(NativeHardwareUtils.isValidPrinterPort(70000));
+    }
+
+    @Test
+    public void isAllowedResolvedPrinterIp_allowsOnlyRfc1918PostDns() {
+        assertTrue(NativeHardwareUtils.isAllowedResolvedPrinterIp("192.168.1.200"));
+        assertTrue(NativeHardwareUtils.isAllowedResolvedPrinterIp("10.0.0.15"));
+        assertTrue(NativeHardwareUtils.isAllowedResolvedPrinterIp("172.16.0.1"));
+        assertTrue(NativeHardwareUtils.isAllowedResolvedPrinterIp("172.31.255.254"));
+
+        // Bloquear DNS rebinding hacia loopback, metadata cloud, público o IPv6
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp("127.0.0.1"));
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp("169.254.169.254"));
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp("0.0.0.0"));
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp("172.32.0.1"));
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp("8.8.8.8"));
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp("::1"));
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp("impresora.local"));
+        assertFalse(NativeHardwareUtils.isAllowedResolvedPrinterIp(null));
+    }
+
+    @Test
+    public void isExcludedStandardGattServiceUuid_blocksGenericAccessAndBatteryServices() {
+        assertTrue(NativeHardwareUtils.isExcludedStandardGattServiceUuid("00001800-0000-1000-8000-00805F9B34FB"));
+        assertTrue(NativeHardwareUtils.isExcludedStandardGattServiceUuid("00001801-0000-1000-8000-00805f9b34fb"));
+        assertTrue(NativeHardwareUtils.isExcludedStandardGattServiceUuid("0000180a-0000-1000-8000-00805f9b34fb"));
+        assertTrue(NativeHardwareUtils.isExcludedStandardGattServiceUuid("0000180f-0000-1000-8000-00805f9b34fb"));
+
+        assertFalse(NativeHardwareUtils.isExcludedStandardGattServiceUuid("000018f0-0000-1000-8000-00805f9b34fb"));
+        assertFalse(NativeHardwareUtils.isExcludedStandardGattServiceUuid("e7810a71-73ae-499d-8c15-faa9aef0c3f2"));
+        assertFalse(NativeHardwareUtils.isExcludedStandardGattServiceUuid(null));
+    }
+
+    @Test
+    public void isValidPngPayload_validatesMagicBytesAndSize() {
+        byte[] validPng = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01 };
+        byte[] jpegHeader = new byte[] { (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0x00, 0x10, 0x4A, 0x46 };
+        byte[] shortPayload = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47 };
+
+        assertTrue(NativeHardwareUtils.isValidPngPayload(validPng));
+        assertFalse(NativeHardwareUtils.isValidPngPayload(jpegHeader));
+        assertFalse(NativeHardwareUtils.isValidPngPayload(shortPayload));
+        assertFalse(NativeHardwareUtils.isValidPngPayload(new byte[0]));
+        assertFalse(NativeHardwareUtils.isValidPngPayload(null));
     }
 
     @Test

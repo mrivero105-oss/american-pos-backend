@@ -184,7 +184,7 @@ class MobilePrinterService {
      * Checks characteristic.properties.writeWithoutResponse before choosing write method.
      * Avoids calling requestDevice() without user gesture when invoked from background spooler.
      */
-    async printBluetooth(escPosData, { allowConnectPrompt = true } = {}) {
+    async printBluetooth(escPosData, { allowConnectPrompt = true, chunkSize = null } = {}) {
         if (!this.characteristic || !this.bluetoothDevice?.gatt?.connected) {
             if (!allowConnectPrompt) {
                 throw new Error('Impresora Web Bluetooth desconectada. Conéctala manualmente desde Configuración de Impresora.');
@@ -203,7 +203,14 @@ class MobilePrinterService {
         );
         const supportsWriteWithResponse = typeof this.characteristic.writeValueWithResponse === 'function';
 
-        const CHUNK_SIZE = 120;
+        let configuredChunk = Number(chunkSize || 0);
+        if (!configuredChunk && typeof localStorage !== 'undefined') {
+            try {
+                configuredChunk = Number(localStorage.getItem('pos_ble_chunk_size') || 0);
+            } catch { /* noop */ }
+        }
+        // Default 20 bytes (MTU ATT 23 universal compatible con el 100% de impresoras térmicas BLE)
+        const CHUNK_SIZE = Math.max(20, Math.min(244, configuredChunk || 20));
         for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
             const chunk = bytes.slice(i, i + CHUNK_SIZE);
             if (supportsWriteWithoutResponse) {
@@ -354,6 +361,7 @@ class MobilePrinterService {
 
         return new Promise((resolve) => {
             const iframe = document.createElement('iframe');
+            iframe.setAttribute('sandbox', 'allow-modals allow-same-origin');
             iframe.style.position = 'fixed';
             iframe.style.top = '-9999px';
             iframe.style.left = '-9999px';

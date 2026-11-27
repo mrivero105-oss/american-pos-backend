@@ -217,6 +217,9 @@ export default function MobileCheckoutModal({
               className="fixed inset-0 bg-black/85 cursor-pointer"
             />
             <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Cobro de Venta"
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
@@ -372,7 +375,7 @@ export default function MobileCheckoutModal({
             ) : (
               <>
                 {/* 2. Selector de Modo de Cobro: Express vs Dividido (Split) */}
-                <div className="flex items-center justify-between border-b border-slate-700/40 pb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/40 pb-2">
                   <label className={`text-xs font-extrabold ${T.textSecondary}`}>Modo de Pago:</label>
                   <div className="flex items-center gap-1">
                     <button
@@ -539,7 +542,7 @@ export default function MobileCheckoutModal({
                           {/* Billetes USD */}
                           <div className="space-y-1">
                             <span className={`text-[9px] font-black ${T.textSecondary} uppercase tracking-wider block`}>Billetes en Dólares ($):</span>
-                            <div className="grid grid-cols-7 gap-1">
+                            <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                               {/* Exacto $ */}
                               <button
                                 type="button"

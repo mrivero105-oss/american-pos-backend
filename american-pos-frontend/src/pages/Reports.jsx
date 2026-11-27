@@ -23,7 +23,11 @@ import AIPredictiveAnalytics from '../components/dashboard/AIPredictiveAnalytics
 
 export default function Reports() {
     const { socket } = useSocket();
-    const { user } = useAuth();
+    const { user, hasPermission } = useAuth();
+    const canAccessReports = Boolean(
+        hasPermission?.('canViewReports') ||
+        ['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'master', 'supervisor'].includes(String(user?.role || '').toLowerCase())
+    );
     const [settings, setSettings] = useState({ currencyMode: 'BOTH', rate: 1 });
      const [range, setRange] = useState('today');
     const [isCustomRange, setIsCustomRange] = useState(false);
@@ -32,6 +36,7 @@ export default function Reports() {
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [reportError, setReportError] = useState('');
     const [lowStock, setLowStock] = useState([]);
     const [rankingMode, setRankingMode] = useState('quantity'); // 'quantity' or 'profit'
     const [rankingSearch, setRankingSearch] = useState('');
@@ -43,11 +48,15 @@ export default function Reports() {
     }, []);
 
     const fetchReport = useCallback(async (silent = false) => {
-        if (!['admin', 'superadmin'].includes(user?.role?.toLowerCase())) {
+        if (!canAccessReports) {
+            setLoading(false);
             return;
         }
         try {
-            if (!silent) setLoading(true);
+            if (!silent) {
+                setLoading(true);
+                setReportError('');
+            }
             const startOfDay = new Date();
             startOfDay.setHours(0, 0, 0, 0);
             
@@ -66,19 +75,25 @@ export default function Reports() {
 
             setData(reportRes.data);
             setLowStock(lowStockRes.data?.items || []);
+            setReportError('');
         } catch (error) {
             console.error('Error fetching BI reports:', error);
+            if (!silent) {
+                setReportError(error?.response?.data?.error || error?.message || 'No se pudieron cargar los reportes. Verifica la conexión con el servidor.');
+            }
         } finally {
             if (!silent) setLoading(false);
         }
-    }, [user?.role, isCustomRange, startDate, endDate, range]);
+    }, [canAccessReports, isCustomRange, startDate, endDate, range]);
 
     useEffect(() => {
-        if (['admin', 'superadmin'].includes(user?.role?.toLowerCase())) {
+        if (canAccessReports) {
             fetchSettings();
             fetchReport();
+        } else {
+            setLoading(false);
         }
-    }, [user?.role, fetchSettings, fetchReport]);
+    }, [canAccessReports, fetchSettings, fetchReport]);
 
     useEffect(() => {
         if (!socket) return;
@@ -141,7 +156,7 @@ export default function Reports() {
         return [];
     }, [isToday, data, range]);
 
-    if (user?.role === 'user') {
+    if (!canAccessReports) {
         return (
             <div className="flex flex-col items-center justify-center h-[60vh] gap-6 px-6 text-center">
                 <div className="p-5 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 rounded-xl shadow-xs relative">
@@ -150,7 +165,7 @@ export default function Reports() {
                 <div className="max-w-md">
                     <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">Acceso Restringido</h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-                        Esta sección contiene indicadores financieros críticos y solo está disponible para personal administrativo.
+                        Esta sección contiene indicadores financieros críticos y solo está disponible para personal autorizado con permiso de reportes.
                     </p>
                 </div>
             </div>
@@ -179,7 +194,24 @@ export default function Reports() {
                 }
             }
             
-            const blob = new Blob([response.data], { type: response.headers['content-type'] || 'text/csv' });
+            const mimeType = response.headers['content-type'] || 'text/csv;charset=utf-8';
+            const blob = new Blob([response.data], { type: mimeType });
+
+            // Compatibilidad WebView Android: priorizar Web Share API con archivo o portapapeles CSV si está en Capacitor
+            const isNativeMobile = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
+            if (isNativeMobile) {
+                const file = new File([blob], filename, { type: mimeType });
+                if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare?.({ files: [file] })) {
+                    await navigator.share({ files: [file], title: filename });
+                    return;
+                }
+                const csvText = await blob.text();
+                if (window.Capacitor?.Plugins?.PosNativeHardware?.copyToClipboard) {
+                    await window.Capacitor.Plugins.PosNativeHardware.copyToClipboard({ text: csvText });
+                    return;
+                }
+            }
+
             const downloadUrl = window.URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = downloadUrl;
@@ -209,6 +241,27 @@ export default function Reports() {
                     <p className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest animate-pulse">Sincronizando Reportes de Negocio</p>
                     <p className="text-[9px] font-black text-slate-500 dark:text-slate-400 dark:text-slate-600 uppercase tracking-tighter mt-1">Procesando Nodos Analíticos...</p>
                 </div>
+            </div>
+        );
+    }
+
+    if (reportError && !data) {
+        return (
+            <div className="flex flex-col items-center justify-center h-[60vh] gap-4 px-6 text-center">
+                <div className="p-4 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-xl">
+                    <AlertCircle size={36} className="text-rose-500" />
+                </div>
+                <div className="max-w-sm space-y-1.5">
+                    <h2 className="text-base font-bold text-slate-900 dark:text-white">No se pudieron cargar los reportes</h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{reportError}</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => fetchReport(false)}
+                    className="min-h-[44px] px-5 py-2.5 rounded-xl bg-primary-600 hover:bg-primary-500 text-white font-bold text-xs uppercase tracking-wider cursor-pointer active:scale-95 transition-transform"
+                >
+                    Reintentar
+                </button>
             </div>
         );
     }

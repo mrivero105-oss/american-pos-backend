@@ -7,6 +7,7 @@ const FOCUSABLE_FIELD_SELECTOR = [
 ].join(', ');
 
 const NATIVE_KEYBOARD_EVENT = 'isaac-native-keyboard';
+let activeKeyboardViewportUsers = 0;
 
 function readNativeKeyboardSnapshot() {
   if (typeof window === 'undefined') {
@@ -249,6 +250,7 @@ export function useMobileKeyboardViewport({ enabled = true, compactThresholdPx =
       }
     };
 
+    activeKeyboardViewportUsers += 1;
     updateMetrics();
     window.addEventListener('resize', updateMetrics);
     window.addEventListener(NATIVE_KEYBOARD_EVENT, handleNativeKeyboardEvent);
@@ -256,11 +258,15 @@ export function useMobileKeyboardViewport({ enabled = true, compactThresholdPx =
     vv?.addEventListener('scroll', updateMetrics);
 
     return () => {
+      activeKeyboardViewportUsers = Math.max(0, activeKeyboardViewportUsers - 1);
       window.removeEventListener('resize', updateMetrics);
       window.removeEventListener(NATIVE_KEYBOARD_EVENT, handleNativeKeyboardEvent);
       vv?.removeEventListener('resize', updateMetrics);
       vv?.removeEventListener('scroll', updateMetrics);
-      applyRootOverlapVar(0);
+      // Solo resetear la variable CSS global cuando se desmonte el ÚLTIMO consumidor activo (evita reseteos al cerrar modales anidados)
+      if (activeKeyboardViewportUsers === 0) {
+        applyRootOverlapVar(0);
+      }
       clearPendingScrolls();
     };
   }, [enabled, compactThresholdPx, clearPendingScrolls, scrollFieldIntoView]);

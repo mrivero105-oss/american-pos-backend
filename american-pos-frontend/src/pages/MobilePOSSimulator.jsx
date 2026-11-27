@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import toast from 'react-hot-toast';
 import { playScanSound, toggleSoundMute } from '../utils/sounds';
 import { useAuth } from '../hooks/AuthContext';
 import { useTheme } from '../hooks/ThemeContext';
@@ -226,6 +227,21 @@ export default function MobilePOSSimulator() {
       } catch { /* noop */ }
     }
   }, [modals.isThermalPrinterModalOpen, setCheckoutField]);
+
+  // Escuchar apertura directa del gestor de impresora térmica móvil desde Settings embebido y alertas anti-rogue LAN
+  useEffect(() => {
+    const openMobilePrinter = () => modalSetters.setIsThermalPrinterModalOpen(true);
+    const onRogueServer = (ev) => {
+      const host = ev?.detail?.hostname || ev?.detail?.url || 'desconocido';
+      toast.error(`Servidor LAN rechazado (${host}): identidad distinta al servidor emparejado.`, { duration: 6000 });
+    };
+    window.addEventListener('isaac-open-mobile-printer', openMobilePrinter);
+    window.addEventListener('rogue-server-detected', onRogueServer);
+    return () => {
+      window.removeEventListener('isaac-open-mobile-printer', openMobilePrinter);
+      window.removeEventListener('rogue-server-detected', onRogueServer);
+    };
+  }, [modalSetters]);
 
   // 3. Permisos RBAC móviles derivados
   const roleLower = String(user?.role || '').toLowerCase();

@@ -151,47 +151,59 @@ export default function MiniCalendar({ startDate, endDate, onSelectRange, onClos
     };
 
     return (
-        <div className="absolute top-full right-0 mt-2 w-[calc(100vw-2rem)] sm:w-72 max-w-[300px] bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden z-[200] animate-in fade-in slide-in-from-top-2 duration-150">
-            {renderHeader()}
-            {renderDays()}
-            {renderCells()}
-            
-            <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center gap-2">
-                <div className="text-[11px] sm:text-[10px] text-slate-500 font-medium truncate">
-                    {selectingStart ? '1 día seleccionado' : (start && !end ? 'Selecciona fin...' : 'Rango personalizado')}
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                    <button 
-                        type="button"
-                        onClick={() => {
-                            const today = format(new Date(), 'yyyy-MM-dd');
-                            onSelectRange(today, today);
-                        }}
-                        className="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg text-xs sm:text-[10px] font-black text-slate-700 dark:text-slate-200 uppercase active:scale-95 transition-all"
-                    >
-                        Hoy
-                    </button>
-                    {(selectingStart || start) && (
+        <>
+            <div
+                className="fixed inset-0 bg-black/45 z-[199] sm:hidden"
+                onClick={onClose}
+                aria-hidden="true"
+            />
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Selector de rango de fechas"
+                className="fixed inset-x-4 top-1/2 -translate-y-1/2 mx-auto sm:mx-0 sm:inset-x-auto sm:translate-y-0 sm:absolute sm:top-full sm:right-0 sm:mt-2 w-[min(calc(100vw-2rem),320px)] sm:w-72 max-w-[320px] bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden z-[200] animate-in fade-in slide-in-from-top-2 duration-150"
+            >
+                {renderHeader()}
+                {renderDays()}
+                {renderCells()}
+                
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center gap-2">
+                    <div className="text-[11px] sm:text-[10px] text-slate-500 font-medium truncate">
+                        {selectingStart ? '1 día seleccionado' : (start && !end ? 'Selecciona fin...' : 'Rango personalizado')}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
                         <button 
                             type="button"
                             onClick={() => {
-                                if (selectingStart) {
-                                    const dStr = format(selectingStart, 'yyyy-MM-dd');
-                                    onSelectRange(dStr, dStr);
-                                } else if (start && !end) {
-                                    const dStr = format(start, 'yyyy-MM-dd');
-                                    onSelectRange(dStr, dStr);
-                                } else {
-                                    onClose();
-                                }
+                                const today = format(new Date(), 'yyyy-MM-dd');
+                                onSelectRange(today, today);
                             }}
-                            className="px-2.5 py-1 bg-primary-600 hover:bg-primary-500 rounded-lg text-xs sm:text-[10px] font-black text-white uppercase active:scale-95 transition-all shadow-sm shadow-primary-500/30"
+                            className="px-2.5 py-1.5 min-h-[36px] bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg text-xs sm:text-[10px] font-black text-slate-700 dark:text-slate-200 uppercase active:scale-95 transition-all"
                         >
-                            Aplicar
+                            Hoy
                         </button>
-                    )}
+                        {(selectingStart || start) && (
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    if (selectingStart) {
+                                        const dStr = format(selectingStart, 'yyyy-MM-dd');
+                                        onSelectRange(dStr, dStr);
+                                    } else if (start && !end) {
+                                        const dStr = format(start, 'yyyy-MM-dd');
+                                        onSelectRange(dStr, dStr);
+                                    } else {
+                                        onClose();
+                                    }
+                                }}
+                                className="px-2.5 py-1.5 min-h-[36px] bg-primary-600 hover:bg-primary-500 rounded-lg text-xs sm:text-[10px] font-black text-white uppercase active:scale-95 transition-all shadow-sm shadow-primary-500/30"
+                            >
+                                Aplicar
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
-        </div>
+        </>
     );
 }

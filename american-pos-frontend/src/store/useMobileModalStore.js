@@ -33,15 +33,49 @@ const INITIAL_MODAL_STATE = {
   selectedProductForBulk: null,
   isCustomerSelectModalOpen: false,
   isQuantityModalOpen: false,
-  quantityModalItem: null
+  quantityModalItem: null,
+  overlayStack: []
 };
+
+const OVERLAY_CLOSED_VALUES = {
+  supervisorAuthRequest: null,
+  printedReceipt: null,
+  unregisteredBarcodeNotice: null,
+  isScannerOpen: false,
+  isCheckoutOpen: false,
+  isCustomerSelectModalOpen: false,
+  isQuantityModalOpen: false,
+  priceCheckerProduct: null,
+  isPriceCheckerModalOpen: false,
+  isHeldSalesModalOpen: false,
+  isManualItemModalOpen: false,
+  isQuickProductModalOpen: false,
+  isThermalPrinterModalOpen: false,
+  isExchangeRateModalOpen: false,
+  isImageSearchModalOpen: false,
+  previewProductImage: null,
+  selectedProductForVariant: null,
+  selectedProductForControlledMed: null,
+  selectedProductForBulk: null,
+  whatsAppModalData: null,
+  preSaleSentModal: null,
+  isTableSelectModalOpen: false,
+  isBiometricsModalOpen: false,
+  showServerModal: false,
+  isSideNavOpen: false,
+  isMobileCartOpen: false
+};
+
+const FALLBACK_OVERLAY_PRIORITY = Object.keys(OVERLAY_CLOSED_VALUES);
 
 const resolveUpdater = (updater, current) =>
   typeof updater === 'function' ? updater(current) : updater;
 
 export const selectHasActiveOverlay = (s) => Boolean(
+  (Array.isArray(s.overlayStack) && s.overlayStack.length > 0) ||
   s.supervisorAuthRequest ||
   s.printedReceipt ||
+  s.unregisteredBarcodeNotice ||
   s.isScannerOpen ||
   s.isCheckoutOpen ||
   s.isCustomerSelectModalOpen ||
@@ -67,6 +101,17 @@ export const selectHasActiveOverlay = (s) => Boolean(
   s.isTableSelectModalOpen
 );
 
+function buildClosePatchForOverlay(field) {
+  const patch = { [field]: OVERLAY_CLOSED_VALUES[field] };
+  if (field === 'isQuantityModalOpen') {
+    patch.quantityModalItem = null;
+  } else if (field === 'isPriceCheckerModalOpen' || field === 'priceCheckerProduct') {
+    patch.isPriceCheckerModalOpen = false;
+    patch.priceCheckerProduct = null;
+  }
+  return patch;
+}
+
 export const useMobileModalStore = create((set, get) => ({
   ...INITIAL_MODAL_STATE,
 
@@ -74,44 +119,53 @@ export const useMobileModalStore = create((set, get) => ({
     set((state) => {
       const next = resolveUpdater(updater, state[field]);
       if (Object.is(next, state[field])) return state;
-      return { [field]: next };
+
+      const patch = { [field]: next };
+      if (field === 'isQuantityModalOpen' && !next) {
+        patch.quantityModalItem = null;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(OVERLAY_CLOSED_VALUES, field)) {
+        const currentStack = Array.isArray(state.overlayStack) ? state.overlayStack : [];
+        const withoutField = currentStack.filter((item) => item !== field);
+        patch.overlayStack = next ? [...withoutField, field] : withoutField;
+      }
+
+      return patch;
     }),
 
   /**
-   * Cierra el overlay superior en orden LIFO estricto.
+   * Cierra el overlay superior respetando el orden LIFO real de apertura (`overlayStack`).
    * Devuelve true si cerró algún modal, false si no había ninguno abierto.
    */
   closeTopOverlay: () => {
     const s = get();
-    if (s.supervisorAuthRequest) { set({ supervisorAuthRequest: null }); return true; }
-    if (s.printedReceipt) { set({ printedReceipt: null }); return true; }
-    if (s.isScannerOpen) { set({ isScannerOpen: false }); return true; }
-    if (s.isCheckoutOpen) { set({ isCheckoutOpen: false }); return true; }
-    if (s.isCustomerSelectModalOpen) { set({ isCustomerSelectModalOpen: false }); return true; }
-    if (s.isQuantityModalOpen) { set({ isQuantityModalOpen: false }); return true; }
-    if (s.priceCheckerProduct) { set({ priceCheckerProduct: null }); return true; }
-    if (s.isPriceCheckerModalOpen) { set({ isPriceCheckerModalOpen: false }); return true; }
-    if (s.isHeldSalesModalOpen) { set({ isHeldSalesModalOpen: false }); return true; }
-    if (s.isManualItemModalOpen) { set({ isManualItemModalOpen: false }); return true; }
-    if (s.isQuickProductModalOpen) { set({ isQuickProductModalOpen: false }); return true; }
-    if (s.isThermalPrinterModalOpen) { set({ isThermalPrinterModalOpen: false }); return true; }
-    if (s.isExchangeRateModalOpen) { set({ isExchangeRateModalOpen: false }); return true; }
-    if (s.isImageSearchModalOpen) { set({ isImageSearchModalOpen: false }); return true; }
-    if (s.previewProductImage) { set({ previewProductImage: null }); return true; }
-    if (s.selectedProductForVariant) { set({ selectedProductForVariant: null }); return true; }
-    if (s.selectedProductForControlledMed) { set({ selectedProductForControlledMed: null }); return true; }
-    if (s.selectedProductForBulk) { set({ selectedProductForBulk: null }); return true; }
-    if (s.whatsAppModalData) { set({ whatsAppModalData: null }); return true; }
-    if (s.preSaleSentModal) { set({ preSaleSentModal: null }); return true; }
-    if (s.isTableSelectModalOpen) { set({ isTableSelectModalOpen: false }); return true; }
-    if (s.isBiometricsModalOpen) { set({ isBiometricsModalOpen: false }); return true; }
-    if (s.showServerModal) { set({ showServerModal: false }); return true; }
-    if (s.isSideNavOpen) { set({ isSideNavOpen: false }); return true; }
-    if (s.isMobileCartOpen) { set({ isMobileCartOpen: false }); return true; }
+    const stack = Array.isArray(s.overlayStack) ? [...s.overlayStack] : [];
+
+    // 1. Pop real del stack LIFO descartando entradas que ya estuvieran cerradas
+    while (stack.length > 0) {
+      const topField = stack.pop();
+      if (s[topField]) {
+        const closePatch = buildClosePatchForOverlay(topField);
+        const remainingStack = stack.filter((f) => !(f in closePatch));
+        set({ ...closePatch, overlayStack: remainingStack });
+        return true;
+      }
+    }
+
+    // 2. Fallback seguro por prioridad si algún overlay quedó activo fuera del stack
+    for (const field of FALLBACK_OVERLAY_PRIORITY) {
+      if (s[field]) {
+        const closePatch = buildClosePatchForOverlay(field);
+        set({ ...closePatch, overlayStack: [] });
+        return true;
+      }
+    }
+
     return false;
   },
 
-  resetAllModals: () => set({ ...INITIAL_MODAL_STATE })
+  resetAllModals: () => set({ ...INITIAL_MODAL_STATE, overlayStack: [] })
 }));
 
 export default useMobileModalStore;

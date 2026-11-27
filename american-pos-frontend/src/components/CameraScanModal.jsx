@@ -39,6 +39,13 @@ export default function CameraScanModal({
         setCameraError('');
         stopCamera();
         try {
+            if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.ensureCameraPermission) {
+                const perm = await window.Capacitor.Plugins.PosNativeHardware.ensureCameraPermission();
+                if (!perm?.granted) {
+                    setCameraError('Permiso de cámara denegado en Android. Habilita el acceso a cámara en los ajustes de la aplicación.');
+                    return;
+                }
+            }
             let mediaStream;
             try {
                 mediaStream = await navigator.mediaDevices.getUserMedia({

@@ -19,6 +19,7 @@ import localDb from '../../db/localDb';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
+import { isDollarOnlyCountry } from '../../utils/format';
 
 const LOCAL_EXPENSES_KEY = 'isaac_pos_mobile_expenses';
 
@@ -69,6 +70,7 @@ export default function MobileExpensesView({
   onOpenSyncCenter = null,
   showToast
 }) {
+  const isDollarCountry = isDollarOnlyCountry(typeof localStorage !== 'undefined' ? localStorage.getItem('pos_country') : null);
   const [expenses, setExpenses] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -430,7 +432,7 @@ export default function MobileExpensesView({
 
       {/* 2. TARJETAS DE RESUMEN Y TOTALES */}
       <div className={`p-3 border-b ${T.border} shrink-0 space-y-2.5 ${T.subPanelBg}`}>
-        <div className="grid grid-cols-2 gap-2">
+        <div className={`grid ${isDollarCountry ? 'grid-cols-1' : 'grid-cols-2'} gap-2`}>
           <div className={`${T.modalSubCard} p-2.5 rounded-2xl border ${T.border}`}>
             <span className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
               Total Egresos USD
@@ -443,17 +445,19 @@ export default function MobileExpensesView({
             </span>
           </div>
 
-          <div className={`${T.modalSubCard} p-2.5 rounded-2xl border ${T.border}`}>
-            <span className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
-              Total en Bolívares
-            </span>
-            <div className={`font-black text-base sm:text-lg ${T.textPrimary} mt-0.5 truncate`}>
-              Bs. {totals.bs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {!isDollarCountry && (
+            <div className={`${T.modalSubCard} p-2.5 rounded-2xl border ${T.border}`}>
+              <span className={`text-[10px] font-bold ${T.textSecondary} uppercase tracking-wider block`}>
+                Total en Bolívares
+              </span>
+              <div className={`font-black text-base sm:text-lg ${T.textPrimary} mt-0.5 truncate`}>
+                Bs. {totals.bs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <span className={`text-[10px] ${T.textMuted} font-semibold block`}>
+                Tasa: Bs. {exchangeRate.toFixed(2)}
+              </span>
             </div>
-            <span className={`text-[10px] ${T.textMuted} font-semibold block`}>
-              Tasa: Bs. {exchangeRate.toFixed(2)}
-            </span>
-          </div>
+          )}
         </div>
 
         {/* Buscador de Gastos */}
@@ -562,9 +566,11 @@ export default function MobileExpensesView({
                       <p className="font-black text-sm text-rose-500">
                         -${amtUSD.toFixed(2)}
                       </p>
-                      <p className={`text-[10px] font-bold ${T.textSecondary}`}>
-                        Bs. {amtBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </p>
+                      {!isDollarCountry && (
+                        <p className={`text-[10px] font-bold ${T.textSecondary}`}>
+                          Bs. {amtBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -615,6 +621,9 @@ export default function MobileExpensesView({
           style={modalOverlayStyle}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={editingExpense ? 'Editar Gasto' : 'Registrar Gasto de Caja'}
             className={`w-full max-w-sm ${T.modalCard} rounded-2xl sm:rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar my-auto`}
             style={modalCardMaxHeightStyle}
           >
@@ -673,25 +682,27 @@ export default function MobileExpensesView({
                       autoFocus
                     />
                   </div>
-                  <div className="flex rounded-xl p-1 bg-slate-800 text-xs font-black">
-                    <button
-                      type="button"
-                      onClick={() => setCurrency('USD')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'USD' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
-                    >
-                      USD
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCurrency('VES')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'VES' || currency === 'BS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
-                    >
-                      Bs (VES)
-                    </button>
-                  </div>
+                  {!isDollarCountry && (
+                    <div className="flex rounded-xl p-1 bg-slate-800 text-xs font-black">
+                      <button
+                        type="button"
+                        onClick={() => setCurrency('USD')}
+                        className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'USD' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                      >
+                        USD
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCurrency('VES')}
+                        className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'VES' || currency === 'BS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                      >
+                        Bs (VES)
+                      </button>
+                    </div>
+                  )}
                 </div>
                 {/* Equivalencia en tiempo real */}
-                {parseFloat(amount) > 0 && (
+                {!isDollarCountry && parseFloat(amount) > 0 && (
                   <p className={`text-[10px] ${T.textMuted} text-right mt-1`}>
                     ≈ {currency === 'USD' 
                       ? `Bs. ${(parseFloat(amount) * exchangeRate).toLocaleString('es-VE', { minimumFractionDigits: 2 })}` 
@@ -748,8 +759,8 @@ export default function MobileExpensesView({
                   className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none cursor-pointer`}
                 >
                   <option value="Efectivo USD">Efectivo USD</option>
-                  <option value="Efectivo Bs">Efectivo Bs</option>
-                  <option value="Pago Móvil">Pago Móvil</option>
+                  {!isDollarCountry && <option value="Efectivo Bs">Efectivo Bs</option>}
+                  {!isDollarCountry && <option value="Pago Móvil">Pago Móvil</option>}
                   <option value="Punto de Venta">Punto de Venta / Tarjeta</option>
                   <option value="Zelle">Zelle</option>
                   <option value="Transferencia">Transferencia Bancaria</option>
@@ -807,7 +818,7 @@ export default function MobileExpensesView({
       {/* 5. MODAL: DETALLE / FICHA DE COMPROBANTE DE GASTO */}
       {detailExpense && (
         <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-sm ${T.modalCard} rounded-xl p-5 shadow-2xl space-y-4 max-h-[92dvh] overflow-y-auto custom-scrollbar`}>
+          <div role="dialog" aria-modal="true" aria-label="Comprobante de Egreso" className={`w-full max-w-sm ${T.modalCard} rounded-xl p-5 shadow-2xl space-y-4 max-h-[92dvh] overflow-y-auto custom-scrollbar`}>
             {/* Header del comprobante */}
             <div className={`flex items-start justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2.5">
@@ -850,9 +861,11 @@ export default function MobileExpensesView({
                   <div className="text-2xl font-bold text-rose-500">
                     -${usdVal.toFixed(2)} USD
                   </div>
-                  <div className={`text-xs font-semibold ${T.textSecondary}`}>
-                    ≈ Bs. {bsVal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </div>
+                  {!isDollarCountry && (
+                    <div className={`text-xs font-semibold ${T.textSecondary}`}>
+                      ≈ Bs. {bsVal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                  )}
                 </div>
               );
             })()}

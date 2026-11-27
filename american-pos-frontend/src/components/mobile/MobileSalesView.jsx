@@ -29,6 +29,7 @@ import { db as primaryDb } from '../../services/db';
 import mobilePrinterService from '../../services/mobilePrinterService';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { isDollarOnlyCountry } from '../../utils/format';
 
 export default function MobileSalesView({
   sales = [],
@@ -46,6 +47,7 @@ export default function MobileSalesView({
   exchangeRate = 950,
   onBackToPOS
 }) {
+  const isDollarCountry = isDollarOnlyCountry(typeof localStorage !== 'undefined' ? localStorage.getItem('pos_country') : null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'synced' | 'offline' | 'cancelled'
   const [methodFilter, setMethodFilter] = useState('all'); // 'all' | 'Efectivo' | 'Pago Móvil' | 'Zelle' | 'Tarjeta' | 'Crédito' | 'Mixto'
@@ -505,7 +507,7 @@ export default function MobileSalesView({
       `👤 Operador: ${user?.name || user?.username || 'Cajero Móvil'}`,
       `--------------------------------`,
       `💰 *VENTAS TOTALES:* $${totals.totalUsd.toFixed(2)}`,
-      `🇻🇪 *Equivalente Bs:* Bs. ${totals.totalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      !isDollarCountry ? `🇻🇪 *Equivalente Bs:* Bs. ${totals.totalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
       `🧾 Transacciones: ${totals.count} ventas (${totals.totalItemsSold} artículos)`,
       `🎯 Ticket Promedio: $${totals.avgUsd.toFixed(2)}`,
       `--------------------------------`,
@@ -515,9 +517,9 @@ export default function MobileSalesView({
       `--------------------------------`,
       `💳 *DETALLE POR FORMA DE PAGO:*`,
       totals.cashUsd > 0 ? `• Efectivo USD: $${totals.cashUsd.toFixed(2)}` : null,
-      totals.cashBs > 0 ? `• Efectivo Bs: Bs. ${totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
-      totals.pagoMovilBs > 0 ? `• Pago Móvil: Bs. ${totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
-      totals.cardBs > 0 ? `• Punto / Débito: Bs. ${totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
+      !isDollarCountry && totals.cashBs > 0 ? `• Efectivo Bs: Bs. ${totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
+      !isDollarCountry && totals.pagoMovilBs > 0 ? `• Pago Móvil: Bs. ${totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
+      !isDollarCountry && totals.cardBs > 0 ? `• Punto / Débito: Bs. ${totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
       totals.zelleUsd > 0 ? `• Zelle: $${totals.zelleUsd.toFixed(2)}` : null,
       totals.mixedUsd > 0 ? `• Pago Mixto: $${totals.mixedUsd.toFixed(2)}` : null,
       `--------------------------------`,
@@ -528,7 +530,7 @@ export default function MobileSalesView({
     ].filter(Boolean);
 
     return lines.join('\n');
-  }, [dateFilter, totals, user, isAdminOrSupervisor]);
+  }, [dateFilter, totals, user, isAdminOrSupervisor, isDollarCountry]);
 
   // Enviar Reporte X por WhatsApp al Dueño / Gerente
   const handleShareXReportWhatsApp = () => {
@@ -654,9 +656,11 @@ export default function MobileSalesView({
             <div className="font-black text-base sm:text-lg text-emerald-600 dark:text-emerald-400 mt-0.5">
               ${totals.realCobradoUsd.toFixed(2)}
             </div>
-            <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
-              Bs. {totals.realCobradoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
+            {!isDollarCountry && (
+              <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
+                Bs. {totals.realCobradoBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            )}
           </div>
 
           {/* Card Ventas a Crédito (Fiado) */}
@@ -696,9 +700,11 @@ export default function MobileSalesView({
             <div className="font-black text-base text-slate-800 dark:text-slate-200 mt-0.5">
               ${totals.avgUsd.toFixed(2)}
             </div>
-            <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
-              Tasa: Bs. {exchangeRate.toFixed(2)}
-            </span>
+            {!isDollarCountry && (
+              <span className={`text-[10px] ${T.textMuted} font-semibold block truncate`}>
+                Tasa: Bs. {exchangeRate.toFixed(2)}
+              </span>
+            )}
           </div>
         </div>
 
@@ -727,18 +733,24 @@ export default function MobileSalesView({
                   <span className={`${T.textSecondary} font-semibold`}>💵 Efectivo USD:</span>
                   <span className="font-black text-emerald-500">${totals.cashUsd.toFixed(2)}</span>
                 </div>
-                <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
-                  <span className={`${T.textSecondary} font-semibold`}>🇻🇪 Efectivo Bs:</span>
-                  <span className="font-black text-amber-500">Bs. {totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
-                  <span className={`${T.textSecondary} font-semibold`}>📲 Pago Móvil:</span>
-                  <span className="font-black text-blue-500">Bs. {totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
-                  <span className={`${T.textSecondary} font-semibold`}>💳 Punto Débito:</span>
-                  <span className="font-black text-indigo-500">Bs. {totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
+                {!isDollarCountry && (
+                  <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
+                    <span className={`${T.textSecondary} font-semibold`}>🇻🇪 Efectivo Bs:</span>
+                    <span className="font-black text-amber-500">Bs. {totals.cashBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {!isDollarCountry && (
+                  <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
+                    <span className={`${T.textSecondary} font-semibold`}>📲 Pago Móvil:</span>
+                    <span className="font-black text-blue-500">Bs. {totals.pagoMovilBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {!isDollarCountry && (
+                  <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
+                    <span className={`${T.textSecondary} font-semibold`}>💳 Punto Débito:</span>
+                    <span className="font-black text-indigo-500">Bs. {totals.cardBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
                 <div className={`p-2 rounded-lg border ${T.border} flex items-center justify-between`}>
                   <span className={`${T.textSecondary} font-semibold`}>⚡ Zelle:</span>
                   <span className="font-black text-violet-500">${totals.zelleUsd.toFixed(2)}</span>
@@ -976,9 +988,11 @@ export default function MobileSalesView({
                       <div className={`font-black text-sm sm:text-base ${isCancelled ? 'text-rose-500 line-through' : 'text-emerald-600 dark:text-emerald-400'}`}>
                         ${saleTotalUSD.toFixed(2)}
                       </div>
-                      <div className={`text-[10px] font-bold ${T.textMuted}`}>
-                        Bs. {saleTotalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </div>
+                      {!isDollarCountry && (
+                        <div className={`text-[10px] font-bold ${T.textMuted}`}>
+                          Bs. {saleTotalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1073,7 +1087,7 @@ export default function MobileSalesView({
       {/* 5. MODAL DETALLE COMPLETO DE VENTA */}
       {selectedSaleDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/70 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-md sm:max-w-lg rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden`}>
+          <div role="dialog" aria-modal="true" aria-label="Detalle de Venta" className={`w-full max-w-md sm:max-w-lg rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden`}>
             
             {/* Cabecera del Detalle */}
             <div className={`p-4 border-b ${T.border} flex items-center justify-between shrink-0 ${T.subPanelBg}`}>
@@ -1199,12 +1213,14 @@ export default function MobileSalesView({
                   <span className="text-blue-500">TOTAL USD:</span>
                   <span className="text-emerald-500">${Number(selectedSaleDetail.totalUSD || selectedSaleDetail.total || 0).toFixed(2)}</span>
                 </div>
-                <div className="flex items-center justify-between font-bold text-xs">
-                  <span className={T.textMuted}>TOTAL BS:</span>
-                  <span className="text-amber-500 font-mono">
-                    Bs. {Number(selectedSaleDetail.totalBS || (Number(selectedSaleDetail.totalUSD || selectedSaleDetail.total || 0) * (selectedSaleDetail.exchangeRate || exchangeRate))).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                </div>
+                {!isDollarCountry && (
+                  <div className="flex items-center justify-between font-bold text-xs">
+                    <span className={T.textMuted}>TOTAL BS:</span>
+                    <span className="text-amber-500 font-mono">
+                      Bs. {Number(selectedSaleDetail.totalBS || (Number(selectedSaleDetail.totalUSD || selectedSaleDetail.total || 0) * (selectedSaleDetail.exchangeRate || exchangeRate))).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 

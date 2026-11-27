@@ -1231,13 +1231,13 @@ export default function AccountingGeneral() {
                                 </div>
 
                                 {newEntryForm.lines.map((line, idx) => (
-                                    <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-slate-50 dark:bg-slate-800/40 p-2 rounded border border-slate-200 dark:border-slate-800">
-                                        <div className="col-span-5">
+                                    <div key={idx} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-slate-50 dark:bg-slate-800/40 p-2 rounded border border-slate-200 dark:border-slate-800">
+                                        <div className="sm:col-span-5">
                                             <select
                                                 required
                                                 value={line.accountId}
                                                 onChange={(e) => handleManualLineChange(idx, 'accountId', e.target.value)}
-                                                className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-xs font-semibold"
+                                                className="w-full h-10 sm:h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-xs font-semibold"
                                             >
                                                 <option value="">Seleccionar cuenta PUC...</option>
                                                 {accounts.filter(a => a.isSelectable).map(acc => (
@@ -1247,31 +1247,34 @@ export default function AccountingGeneral() {
                                                 ))}
                                             </select>
                                         </div>
-                                        <div className="col-span-3">
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                placeholder="Debe USD"
-                                                value={line.debit}
-                                                onChange={(e) => handleManualLineChange(idx, 'debit', e.target.value)}
-                                                className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono font-bold text-right"
-                                            />
+                                        <div className="grid grid-cols-2 sm:contents gap-2">
+                                            <div className="sm:col-span-3">
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    placeholder="Debe USD"
+                                                    value={line.debit}
+                                                    onChange={(e) => handleManualLineChange(idx, 'debit', e.target.value)}
+                                                    className="w-full h-10 sm:h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono font-bold text-right"
+                                                />
+                                            </div>
+                                            <div className="sm:col-span-3">
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    placeholder="Haber USD"
+                                                    value={line.credit}
+                                                    onChange={(e) => handleManualLineChange(idx, 'credit', e.target.value)}
+                                                    className="w-full h-10 sm:h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono font-bold text-right"
+                                                />
+                                            </div>
                                         </div>
-                                        <div className="col-span-3">
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                placeholder="Haber USD"
-                                                value={line.credit}
-                                                onChange={(e) => handleManualLineChange(idx, 'credit', e.target.value)}
-                                                className="w-full h-8 px-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded font-mono font-bold text-right"
-                                            />
-                                        </div>
-                                        <div className="col-span-1 text-center">
+                                        <div className="sm:col-span-1 text-right sm:text-center">
                                             <button
                                                 type="button"
+                                                aria-label="Eliminar renglón contable"
                                                 onClick={() => handleRemoveLineFromManualEntry(idx)}
-                                                className="text-slate-400 hover:text-rose-600 font-bold"
+                                                className="min-w-[36px] min-h-[36px] inline-flex items-center justify-center text-slate-400 hover:text-rose-600 font-bold"
                                             >
                                                 ✕
                                             </button>
@@ -1280,9 +1283,9 @@ export default function AccountingGeneral() {
                                 ))}
                             </div>
 
-                            <div className="bg-slate-100 dark:bg-slate-800 p-3 rounded flex items-center justify-between font-mono text-xs">
+                            <div className="bg-slate-100 dark:bg-slate-800 p-3 rounded flex flex-wrap items-center justify-between gap-2 font-mono text-xs">
                                 <span>Totales del Comprobante:</span>
-                                <div className="flex gap-6">
+                                <div className="flex flex-wrap gap-4 sm:gap-6">
                                     <span>Debe: <strong>{fmtUSD(manualEntryTotals.debits)}</strong> ({fmtBs(manualEntryTotals.debits)})</span>
                                     <span>Haber: <strong>{fmtUSD(manualEntryTotals.credits)}</strong> ({fmtBs(manualEntryTotals.credits)})</span>
                                 </div>

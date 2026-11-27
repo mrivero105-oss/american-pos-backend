@@ -166,9 +166,10 @@ class BiometricService {
         });
 
         // 3. Guardar solo metadatos no secretos en localStorage (sin llaves ni tokens)
+        const effectiveAlias = keyResult?.alias || keyAlias;
         const credential = {
             version: BIOMETRIC_VERSION,
-            keyAlias,
+            keyAlias: effectiveAlias,
             userId: currentUser.id,
             username: currentUser.username || currentUser.email,
             name: currentUser.name || currentUser.username,

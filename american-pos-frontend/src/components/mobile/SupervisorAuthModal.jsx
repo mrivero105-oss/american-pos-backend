@@ -283,6 +283,9 @@ export default function SupervisorAuthModal({
 
         {/* Panel Bottom Sheet / Modal */}
         <motion.div
+          role="dialog"
+          aria-modal="true"
+          aria-label={title || 'Autorización de Supervisor'}
           initial={{ y: '100%', opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: '100%', opacity: 0 }}
@@ -304,9 +307,11 @@ export default function SupervisorAuthModal({
               </div>
             </div>
             <button
+              type="button"
               onClick={onClose}
               disabled={loading}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+              aria-label="Cerrar autorización de supervisor"
+              className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
             >
               <X size={18} />
             </button>

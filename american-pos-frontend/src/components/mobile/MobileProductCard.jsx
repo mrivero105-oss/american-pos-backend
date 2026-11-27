@@ -2,6 +2,7 @@ import { memo, useEffect, useRef } from 'react';
 import { Minus, Package, Plus } from 'lucide-react';
 import { CachedImage } from '../CachedImage';
 import { triggerHaptic } from '../../utils/haptics';
+import { isDollarOnlyCountry } from '../../utils/format';
 
 /**
  * MobileProductCard — Next-Gen Tactical UI (60/120 FPS Hardware Accelerated)
@@ -17,6 +18,7 @@ function MobileProductCardComponent({
   businessMode,
   posMode,
   isLight,
+  isDollarCountry: isDollarCountryProp,
   onAddToCart,
   onDecrementFromCart,
   onOpenBulkPicker,
@@ -39,13 +41,18 @@ function MobileProductCardComponent({
     };
   }, []);
 
+  const isDollarCountry = isDollarCountryProp !== undefined
+    ? Boolean(isDollarCountryProp)
+    : isDollarOnlyCountry(typeof localStorage !== 'undefined' ? localStorage.getItem('pos_country') : '');
   const priceUSD = Number(product.price || product.precio || 0);
   const priceBS = Number(product.priceBs) > 0 ? Number(product.priceBs) : (priceUSD * (exchangeRate || 1));
   const committedInCart = Number(cartQuantity || 0);
   const isSelected = committedInCart > 0;
+  const normalizedCategory = String(product.category || product.categoria || '').trim().toLowerCase();
+  const isServiceItem = normalizedCategory === 'servicios' || product.trackStock === false || product.isService === true;
   const physicalStock = Number(product.stockQuantity ?? product.stock ?? 0);
   const availableStock = Math.max(0, physicalStock - committedInCart);
-  const isExhausted = availableStock <= 0;
+  const isExhausted = !isServiceItem && availableStock <= 0;
   const rawImage = product.imageUrl || product.imageUri || product.image || '';
   const hasImage = Boolean(rawImage && String(rawImage).trim());
 
@@ -139,6 +146,10 @@ function MobileProductCardComponent({
     if (now - lastImageTapRef.current < 320) {
       e.stopPropagation();
       lastImageTapRef.current = 0;
+      // Revertir el +1 accidental que disparó el primer tap del doble-tap sobre la imagen
+      if (posMode !== 'PRICE_CHECKER' && onDecrementFromCart && committedInCart > 0) {
+        onDecrementFromCart(product);
+      }
       triggerHaptic(15);
       onPreviewImage({
         product,
@@ -227,13 +238,15 @@ function MobileProductCardComponent({
             </span>
             <span className="text-slate-300 dark:text-slate-700 text-[10px]">•</span>
             <span className={`text-[9.5px] font-black px-1.5 py-0.5 rounded-md border leading-none ${
-              isExhausted
+              isServiceItem
+                ? (isLight ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-blue-950/70 text-blue-300 border-blue-800/70')
+                : isExhausted
                 ? (isLight ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-rose-950/80 text-rose-300 border-rose-800/70')
                 : availableStock <= 5
                 ? (isLight ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-amber-950/80 text-amber-300 border-amber-800/70')
                 : (isLight ? 'bg-slate-100 text-slate-700 border-slate-200' : 'bg-[#1a2230] text-slate-300 border-[#283244]')
             }`}>
-              {isExhausted ? 'AGOTADO' : `${availableStock.toFixed(0)} disp.`}
+              {isServiceItem ? 'Servicio' : (isExhausted ? 'AGOTADO' : `${availableStock.toFixed(0)} disp.`)}
             </span>
 
             {hasVariants && (
@@ -285,11 +298,13 @@ function MobileProductCardComponent({
             }`}>
               ${priceUSD.toFixed(2)}
             </span>
-            <span className={`mt-1 text-[10.5px] font-bold font-mono leading-none tabular-nums ${
-              isLight ? 'text-slate-500' : 'text-amber-300/90'
-            }`}>
-              Bs. {priceBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
+            {!isDollarCountry && (
+              <span className={`mt-1 text-[10.5px] font-bold font-mono leading-none tabular-nums ${
+                isLight ? 'text-slate-500' : 'text-amber-300/90'
+              }`}>
+                Bs. {priceBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            )}
           </div>
 
           {isSelected && onDecrementFromCart ? (
@@ -418,13 +433,15 @@ function MobileProductCardComponent({
               {categoryLabel}
             </span>
             <span className={`text-[9.5px] font-extrabold font-mono shrink-0 ${
-              isExhausted
+              isServiceItem
+                ? (isLight ? 'text-blue-600' : 'text-blue-400')
+                : isExhausted
                 ? (isLight ? 'text-rose-600' : 'text-rose-400')
                 : availableStock <= 5
                 ? (isLight ? 'text-amber-600' : 'text-amber-400')
                 : (isLight ? 'text-slate-500' : 'text-slate-400')
             }`}>
-              {isExhausted ? '0 disp.' : `${availableStock.toFixed(0)} disp.`}
+              {isServiceItem ? 'Servicio' : (isExhausted ? '0 disp.' : `${availableStock.toFixed(0)} disp.`)}
             </span>
           </div>
         </div>
@@ -523,11 +540,13 @@ function MobileProductCardComponent({
               }`}>
                 ${priceUSD.toFixed(2)}
               </span>
-              <span className={`text-[10px] font-bold font-mono mt-0.5 tabular-nums truncate ${
-                isLight ? 'text-slate-500' : 'text-amber-300/90'
-              }`}>
-                Bs. {priceBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
+              {!isDollarCountry && (
+                <span className={`text-[10px] font-bold font-mono mt-0.5 tabular-nums truncate ${
+                  isLight ? 'text-slate-500' : 'text-amber-300/90'
+                }`}>
+                  Bs. {priceBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              )}
             </div>
             <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
               isExhausted
@@ -566,6 +585,10 @@ export const MobileProductCard = memo(MobileProductCardComponent, (prev, next) =
     prev.product.image === next.product.image &&
     prev.exchangeRate === next.exchangeRate &&
     prev.isLight === next.isLight &&
+    prev.isDollarCountry === next.isDollarCountry &&
+    prev.product.category === next.product.category &&
+    prev.product.categoria === next.product.categoria &&
+    prev.product.trackStock === next.product.trackStock &&
     prev.posMode === next.posMode &&
     prev.businessMode === next.businessMode
   );

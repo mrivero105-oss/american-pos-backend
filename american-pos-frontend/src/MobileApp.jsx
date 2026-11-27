@@ -10,6 +10,7 @@ import { useAuth } from './hooks/AuthContext';
 import { useTheme } from './hooks/ThemeContext';
 import { otaUpdateService } from './services/otaUpdateService';
 import lanSyncService from './services/lanSyncService';
+import { useMobileKeyboardViewport } from './hooks/useMobileKeyboardViewport';
 
 const MobilePOSSimulator = lazy(() => import('./pages/MobilePOSSimulator'));
 
@@ -63,6 +64,9 @@ function AutoDismissToast({ toast: t }) {
  * y menor huella de memoria RAM en dispositivos móviles.
  */
 export default function MobileApp() {
+  // Instancia raíz de teclado virtual (mantiene --isaac-keyboard-overlap activo en los 16 módulos ERP)
+  useMobileKeyboardViewport({ enabled: true });
+
   const { theme } = useTheme();
   const isDark = theme === 'dark' || theme === '2025' || theme === 'glass' || theme === 'oled' || theme === 'titanium';
   const {
