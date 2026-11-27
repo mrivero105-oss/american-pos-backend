@@ -160,10 +160,11 @@ jobs:
 
       - name: Run Real Express + PG16 + Socket.IO, Security Hardening, Regressions & Online Licensing E2E
         working-directory: american-pos-backend
+        # Secuencial (--test-concurrency=1) porque las suites E2E comparten la BD americanpos_test y el machineId del runner (licencias/turnos/DDL inicial)
         run: |
           node --check ../cloud_license_server/node-server/server.js
           node --check ../cloud_license_server/node-server/licenseStore.js
-          node --test \
+          node --test --test-concurrency=1 \
             tests/test_e2e_api_and_socket.test.mjs \
             tests/test_block2_security_hardening.test.mjs \
             tests/test_audit_remediation_regressions.test.mjs \
