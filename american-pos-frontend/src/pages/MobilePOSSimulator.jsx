@@ -548,7 +548,8 @@ export default function MobilePOSSimulator() {
     }
     setLoginUi((prev) => ({ ...prev, isLoggingIn: true, error: null }));
     try {
-      const isKnownOffline = syncDomain.serverHealth === false || (typeof navigator !== 'undefined' && !navigator.onLine) || !syncDomain.socketConnected;
+      // El socket requiere JWT autenticado y no conecta antes del login; nunca usarlo como indicador offline aquí
+      const isKnownOffline = syncDomain.serverHealth === false || (typeof navigator !== 'undefined' && !navigator.onLine);
       const res = await login(loginUi.username.trim(), loginUi.password.trim(), { preferOffline: isKnownOffline });
       if (!res.success) {
         setLoginUi((prev) => ({ ...prev, error: res.message || 'Credenciales incorrectas' }));

@@ -3,8 +3,17 @@ import { AlertCircle, RefreshCw, CheckCircle2, ShieldCheck, Wifi, X } from 'luci
 import { motion, AnimatePresence } from 'framer-motion';
 import { createPortal } from 'react-dom';
 import { syncService } from '../services/syncService';
+import { checkServerHealth } from '../services/api';
+import { useAuth } from '../hooks/AuthContext';
 
 export default function CloudSyncIndicator({ compact = false }) {
+    const { user } = useAuth();
+    const canReadCloudStats = Boolean(
+        user && (
+            ['superadmin', 'admin', 'owner', 'dueño', 'dueno'].includes(String(user.role || '').toLowerCase()) ||
+            user.permissions?.canManageSettings === true
+        )
+    );
     const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
     const [syncData, setSyncData] = useState({
         stats: { PENDING: 0, SYNCED: 0, RETRYING: 0, FAILED: 0 },
@@ -17,6 +26,18 @@ export default function CloudSyncIndicator({ compact = false }) {
     const fetchStats = useCallback(async () => {
         try {
             setIsRefreshing(true);
+            if (!canReadCloudStats) {
+                const isOfflineFlag = localStorage.getItem('isaac_pos_is_offline_mode') === 'true';
+                if (isOfflineFlag) {
+                    setSyncData({ stats: { PENDING: 0, SYNCED: 0, RETRYING: 0, FAILED: 0 }, isOnline: false, cloudConfigured: false });
+                    setIsOnline(false);
+                    return;
+                }
+                const healthy = await checkServerHealth();
+                setSyncData({ stats: { PENDING: 0, SYNCED: 0, RETRYING: 0, FAILED: 0 }, isOnline: Boolean(healthy), cloudConfigured: false });
+                setIsOnline(Boolean(healthy));
+                return;
+            }
             const data = await syncService.getCloudSyncStats();
             if (data && data.stats) {
                 setSyncData(data);
@@ -30,7 +51,7 @@ export default function CloudSyncIndicator({ compact = false }) {
         } finally {
             setTimeout(() => setIsRefreshing(false), 800);
         }
-    }, []);
+    }, [canReadCloudStats]);
 
     // Instant Online / Offline reactive listeners
     useEffect(() => {
