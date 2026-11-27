@@ -80,6 +80,7 @@ jobs:
           name: frontend-dist
           path: |
             american-pos-frontend/dist
+            american-pos-frontend/dist-mobile
             american-pos-backend/public
           retention-days: 3
 
@@ -165,6 +166,7 @@ jobs:
           node --check ../cloud_license_server/node-server/server.js
           node --check ../cloud_license_server/node-server/licenseStore.js
           node --test --test-concurrency=1 \
+            tests/test_mobile_audit_remediation.test.mjs \
             tests/test_e2e_api_and_socket.test.mjs \
             tests/test_block2_security_hardening.test.mjs \
             tests/test_audit_remediation_regressions.test.mjs \
@@ -173,6 +175,47 @@ jobs:
             tests/test_online_licensing.test.mjs \
             tests/test_hardening_10_of_10.test.mjs \
             tests/test_phase3_modern_stack.test.mjs
+
+  android-native-ci:
+    name: Android Native CI (Capacitor Sync, JUnit, LintRelease & Debug APK)
+    runs-on: ubuntu-latest
+    needs: [frontend-lint-and-build]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: american-pos-frontend/package-lock.json
+
+      - name: Setup JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore built frontend assets (including dist-mobile)
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+
+      - name: Install frontend dependencies & sync Capacitor Android
+        working-directory: american-pos-frontend
+        run: |
+          npm ci
+          npx cap sync android
+
+      - name: Run Android JUnit, LintRelease & Debug APK compilation
+        working-directory: american-pos-frontend/android
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest lintRelease assembleDebug --no-daemon
 
   e2e-playwright:
     name: Full-Stack Real Browser E2E (Playwright + PG16)

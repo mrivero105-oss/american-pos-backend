@@ -18,7 +18,19 @@ function mobileEntrypointHtmlPlugin() {
     transformIndexHtml: {
       order: 'pre',
       handler(html) {
-        return html
+        // Remover el bloque de registro de Service Worker PWA en el bundle nativo móvil (dist-mobile)
+        // para eliminar la contradicción con MobileApp.jsx (que desregistra SW heredados en APK/Capacitor).
+        const withoutSwRegistration = html.replace(
+          /<script>\s*if\s*\('serviceWorker'\s+in\s+navigator[\s\S]*?<\/script>/i,
+          `<script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          for (const reg of regs) reg.unregister().catch(() => {});
+        }).catch(() => {});
+      }
+    </script>`
+        );
+        return withoutSwRegistration
           .replace('/src/main.jsx', '/src/mobile-main.jsx')
           .replace('<title>Isaac POS V24.04</title>', '<title>Isaac POS Mobile</title>');
       }
@@ -256,6 +268,7 @@ export default defineConfig(({ command }) => {
             ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/', '/node_modules/zustand/']],
             ['vendor-icons', ['/node_modules/lucide-react/']],
             ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
+            ['vendor-virtual', ['/node_modules/@tanstack/react-virtual/', '/node_modules/@tanstack/virtual-core/']],
             ['vendor-realtime', ['/node_modules/socket.io-client/', '/node_modules/engine.io-client/', '/node_modules/socket.io-parser/']],
             ['vendor-capacitor', ['/node_modules/@capacitor/core/', '/node_modules/@capacitor/clipboard/', '/node_modules/@capgo/capacitor-updater/']],
             ['vendor-qr', ['/node_modules/qrcode/', '/node_modules/jsbarcode/']],

@@ -1,9 +1,8 @@
 import { useState, useEffect, Suspense, lazy } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import { Routes, Route } from 'react-router-dom';
+import { LazyMotion, domAnimation } from 'framer-motion';
 import toast, { Toaster, ToastBar } from 'react-hot-toast';
-import LockScreen from './components/LockScreen';
-import ActivationPortal from './components/ActivationPortal';
 import SplashScreen from './components/SplashScreen';
 import { syncManager } from './services/syncManager';
 import { useAuth } from './hooks/AuthContext';
@@ -13,6 +12,8 @@ import lanSyncService from './services/lanSyncService';
 import { useMobileKeyboardViewport } from './hooks/useMobileKeyboardViewport';
 
 const MobilePOSSimulator = lazy(() => import('./pages/MobilePOSSimulator'));
+const LockScreen = lazy(() => import('./components/LockScreen'));
+const ActivationPortal = lazy(() => import('./components/ActivationPortal'));
 
 function AutoDismissToast({ toast: t }) {
   useEffect(() => {
@@ -167,7 +168,7 @@ export default function MobileApp() {
   }, [isLocked]);
 
   return (
-    <>
+    <LazyMotion features={domAnimation}>
       <Toaster
         position="top-center"
         containerStyle={{
@@ -199,7 +200,7 @@ export default function MobileApp() {
         {(t) => <AutoDismissToast toast={t} />}
       </Toaster>
 
-      {showSplash && <SplashScreen onFinished={() => setShowSplash(false)} minDuration={650} />}
+      {showSplash && <SplashScreen onFinished={() => setShowSplash(false)} minDuration={200} />}
 
       {/* Banner persistente de Actualización OTA verificada lista para aplicar */}
       {otaReadyVersion && !otaBannerDismissed && !showSplash && (
@@ -250,17 +251,6 @@ export default function MobileApp() {
             {licenseLoading ? 'Verificando Licencia...' : 'Verificando Sesión...'}
           </p>
         </div>
-      ) : !isActivated ? (
-        <ActivationPortal
-          machineId={machineId}
-          licenseInfo={licenseInfo}
-          onActivated={async () => {
-            setIsActivated(true);
-            if (checkLicense) await checkLicense();
-          }}
-        />
-      ) : isLocked && user ? (
-        <LockScreen user={user} onUnlock={appUnlock} onLogout={logout} />
       ) : (
         <Suspense
           fallback={
@@ -272,14 +262,27 @@ export default function MobileApp() {
             </div>
           }
         >
-          <Routes>
-            <Route path="/mobile" element={<MobilePOSSimulator />} />
-            <Route path="/mobile-pos" element={<MobilePOSSimulator />} />
-            <Route path="/login" element={<MobilePOSSimulator />} />
-            <Route path="*" element={<MobilePOSSimulator />} />
-          </Routes>
+          {!isActivated ? (
+            <ActivationPortal
+              machineId={machineId}
+              licenseInfo={licenseInfo}
+              onActivated={async () => {
+                setIsActivated(true);
+                if (checkLicense) await checkLicense();
+              }}
+            />
+          ) : isLocked && user ? (
+            <LockScreen user={user} onUnlock={appUnlock} onLogout={logout} />
+          ) : (
+            <Routes>
+              <Route path="/mobile" element={<MobilePOSSimulator />} />
+              <Route path="/mobile-pos" element={<MobilePOSSimulator />} />
+              <Route path="/login" element={<MobilePOSSimulator />} />
+              <Route path="*" element={<MobilePOSSimulator />} />
+            </Routes>
+          )}
         </Suspense>
       )}
-    </>
+    </LazyMotion>
   );
 }

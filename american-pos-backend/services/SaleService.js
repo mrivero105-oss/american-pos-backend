@@ -445,8 +445,11 @@ class SaleService {
             if (dbProd && hasExplicitPrice && Math.abs(requestedPrice - officialPrice) > priceTolerance) {
                 const canModifyPrices = isServiceItem || ['superadmin', 'admin', 'owner', 'supervisor'].includes((reqUser.role || '').toLowerCase()) || reqUser.permissions?.canModifyPrices === true;
                 if (!canModifyPrices && !saleData.supervisorApprovalId && !options.forceOverridePrice) {
-                    if (isOfflineSync && requestedPrice > 0) {
-                        // Política A3: Aceptar precio histórico del momento de la venta offline (siendo > 0) y registrar alerta + auditoría de drift
+                    const priceDriftRatio = officialPrice > 0
+                        ? Math.abs(requestedPrice - officialPrice) / officialPrice
+                        : 0;
+                    if (isOfflineSync && requestedPrice > 0 && priceDriftRatio <= 0.35) {
+                        // Política A3: Aceptar precio histórico válido (dentro de ±35%) del momento de la venta offline y registrar alerta + auditoría de drift
                         offlinePriceDrifts.push({
                             productId: prodId,
                             productName: dbProd.name || item.name || 'Producto',
@@ -1599,12 +1602,12 @@ class SaleService {
                             { offlinePrices: offlinePriceDrifts }
                         ).catch(() => {});
                         AlertService.triggerAlert({
-                            type: 'OFFLINE_PRICE_DRIFT',
+                            type: 'financial_mismatch',
                             severity: hasSevereDrop ? 'high' : 'medium',
                             message: `Venta offline #${clientTransactionId.slice(-6)} con cambio de precio: ${driftSummary}`,
                             userId,
                             companyId,
-                            metadata: { saleId: clientTransactionId, drifts: offlinePriceDrifts, saleDate }
+                            metadata: { subtype: 'OFFLINE_PRICE_DRIFT', saleId: clientTransactionId, drifts: offlinePriceDrifts, saleDate }
                         }).catch(() => {});
                     }
                     if (offlineRateDrift) {
@@ -1617,12 +1620,12 @@ class SaleService {
                             offlineRateDrift
                         ).catch(() => {});
                         AlertService.triggerAlert({
-                            type: 'OFFLINE_RATE_DRIFT',
+                            type: 'financial_mismatch',
                             severity: offlineRateDrift.driftPercent > 15 ? 'high' : 'medium',
                             message: `Venta offline #${clientTransactionId.slice(-6)} registrada con tasa histórica Bs. ${offlineRateDrift.offlineRate.toFixed(2)} (vigente: Bs. ${offlineRateDrift.officialRate.toFixed(2)}, ${offlineRateDrift.driftPercent}%)`,
                             userId,
                             companyId,
-                            metadata: { saleId: clientTransactionId, ...offlineRateDrift, saleDate }
+                            metadata: { subtype: 'OFFLINE_RATE_DRIFT', saleId: clientTransactionId, ...offlineRateDrift, saleDate }
                         }).catch(() => {});
                     }
                 } catch (driftAlertErr) {

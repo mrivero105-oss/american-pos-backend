@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   ArrowLeft, 
   FileText, 
@@ -30,6 +30,7 @@ import mobilePrinterService from '../../services/mobilePrinterService';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { isDollarOnlyCountry } from '../../utils/format';
+import VirtualMobileList from './VirtualMobileList';
 
 export default function MobileSalesView({
   sales = [],
@@ -212,16 +213,6 @@ export default function MobileSalesView({
       return true;
     });
   }, [sales, searchQuery, statusFilter, methodFilter, dateFilter, customStartDate, customEndDate]);
-
-  const [displayLimit, setDisplayLimit] = useState(30);
-
-  useEffect(() => {
-    setDisplayLimit(30);
-  }, [searchQuery, statusFilter, methodFilter, dateFilter]);
-
-  const visibleSales = useMemo(() => {
-    return filteredSales.slice(0, displayLimit);
-  }, [filteredSales, displayLimit]);
 
   // Totales y desglose financiero de alto nivel
   const totals = useMemo(() => {
@@ -879,210 +870,203 @@ export default function MobileSalesView({
         </div>
       </div>
 
-      {/* 4. LISTADO DE VENTAS CRONOLÓGICAS PROFESIONAL */}
-      <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-        {filteredSales.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center p-8 text-center text-xs space-y-2">
-            <Receipt size={38} className={T.textMuted} />
-            <p className={`font-black text-sm ${T.textPrimary}`}>No hay ventas registradas</p>
-            <p className={`text-[11px] ${T.textMuted} max-w-xs`}>
-              {searchQuery || statusFilter !== 'all' || methodFilter !== 'all' || dateFilter !== 'all'
-                ? 'No se encontraron ventas para los filtros o rango seleccionado'
-                : 'Las ventas cobradas desde esta terminal aparecerán aquí en tiempo real'}
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {visibleSales.map((sale, index) => {
-              const isOffline = sale.status === 'pending_sync' || sale.isOffline;
-              const isCancelled = sale.status === 'refunded' || sale.status === 'cancelled';
-              const saleTotalUSD = Number(sale.totalUSD || sale.total || 0);
-              const saleRate = Number(sale.exchangeRate || exchangeRate) || exchangeRate;
-              const saleTotalBS = Number(sale.totalBS || (saleTotalUSD * saleRate));
-              const dateStr = sale.date || sale.created_at || 'Hoy';
-              
-              const rawMethod = (sale.method || sale.paymentMethod || '').toLowerCase();
-              const isCredit = Boolean(
-                sale.isCredit || 
-                sale.credit || 
-                rawMethod.includes('fiado') || 
-                rawMethod.includes('credito') || 
-                rawMethod.includes('credit')
-              );
+      {/* 4. LISTADO VIRTUALIZADO DE VENTAS CRONOLÓGICAS PROFESIONAL */}
+      {filteredSales.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-xs space-y-2">
+          <Receipt size={38} className={T.textMuted} />
+          <p className={`font-black text-sm ${T.textPrimary}`}>No hay ventas registradas</p>
+          <p className={`text-[11px] ${T.textMuted} max-w-xs`}>
+            {searchQuery || statusFilter !== 'all' || methodFilter !== 'all' || dateFilter !== 'all'
+              ? 'No se encontraron ventas para los filtros o rango seleccionado'
+              : 'Las ventas cobradas desde esta terminal aparecerán aquí en tiempo real'}
+          </p>
+        </div>
+      ) : (
+        <VirtualMobileList
+          items={filteredSales}
+          estimateSize={192}
+          gap={10}
+          columnsMd={2}
+          columnsXl={3}
+          className="flex-1"
+          paddingClass="p-3"
+          getItemKey={(sale, index) => sale.id || index}
+          renderItem={(sale) => {
+            const isOffline = sale.status === 'pending_sync' || sale.isOffline;
+            const isCancelled = sale.status === 'refunded' || sale.status === 'cancelled';
+            const saleTotalUSD = Number(sale.totalUSD || sale.total || 0);
+            const saleRate = Number(sale.exchangeRate || exchangeRate) || exchangeRate;
+            const saleTotalBS = Number(sale.totalBS || (saleTotalUSD * saleRate));
+            const dateStr = sale.date || sale.created_at || 'Hoy';
 
-              const itemsList = Array.isArray(sale.items) ? sale.items : Array.isArray(sale.SaleItems) ? sale.SaleItems : [];
+            const rawMethod = (sale.method || sale.paymentMethod || '').toLowerCase();
+            const isCredit = Boolean(
+              sale.isCredit ||
+              sale.credit ||
+              rawMethod.includes('fiado') ||
+              rawMethod.includes('credito') ||
+              rawMethod.includes('credit')
+            );
 
-              return (
-                <div 
-                  key={sale.id || index}
-                  className={`${T.ticketItemBg} p-3 rounded-2xl border ${
-                    isCancelled 
-                      ? 'border-rose-500/30 opacity-75' 
-                      : isCredit 
-                      ? 'border-amber-500/40 shadow-2xs' 
-                      : T.border
-                  } space-y-2.5 hover:border-emerald-500/30 transition-all flex flex-col justify-between`}
-                >
-                  {/* Encabezado de la Tarjeta */}
-                  <div className="flex items-center justify-between gap-1.5">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-mono text-xs font-black text-blue-500 truncate">
-                        {sale.invoiceNumber || `#${String(sale.id).slice(-6)}`}
+            const itemsList = Array.isArray(sale.items) ? sale.items : Array.isArray(sale.SaleItems) ? sale.SaleItems : [];
+
+            return (
+              <div
+                className={`${T.ticketItemBg} p-3 rounded-2xl border ${
+                  isCancelled
+                    ? 'border-rose-500/30 opacity-75'
+                    : isCredit
+                    ? 'border-amber-500/40 shadow-2xs'
+                    : T.border
+                } space-y-2.5 hover:border-emerald-500/30 transition-all flex flex-col justify-between`}
+              >
+                {/* Encabezado de la Tarjeta */}
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-mono text-xs font-black text-blue-500 truncate">
+                      {sale.invoiceNumber || `#${String(sale.id).slice(-6)}`}
+                    </span>
+
+                    {/* Badge de Contado vs Crédito */}
+                    {isCredit ? (
+                      <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0 flex items-center gap-1">
+                        <Handshake size={10} />
+                        <span>Crédito</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
+                        Contado
+                      </span>
+                    )}
+
+                    {/* Badge de Estado Sync */}
+                    {isCancelled ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-500 border border-rose-500/30 shrink-0">
+                        Anulada
+                      </span>
+                    ) : isOffline ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/20 text-amber-500 border border-amber-500/30 shrink-0">
+                        Offline
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-500/10 text-emerald-500 shrink-0">
+                        En PC
+                      </span>
+                    )}
+                  </div>
+
+                  <span className={`text-[10px] font-bold ${T.textMuted} shrink-0`}>
+                    {formatDateLabel(dateStr)}
+                  </span>
+                </div>
+
+                {/* Cliente y Monto */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate leading-tight`}>
+                      {sale.customerName || 'Consumidor Final'}
+                    </p>
+
+                    <div className="flex items-center gap-2 mt-1 text-[11px]">
+                      <span className={`${T.textMuted} font-semibold truncate`}>
+                        {formatPaymentMethodLabel(sale.method || sale.paymentMethod, isCredit)}
                       </span>
 
-                      {/* Badge de Contado vs Crédito */}
-                      {isCredit ? (
-                        <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0 flex items-center gap-1">
-                          <Handshake size={10} />
-                          <span>Crédito</span>
+                      {(sale.table || sale.mesa) && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded shrink-0">
+                          <Utensils size={10} />
+                          <span>{sale.table || sale.mesa}</span>
                         </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-md text-[9.5px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                          Contado
-                        </span>
-                      )}
-
-                      {/* Badge de Estado Sync */}
-                      {isCancelled ? (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-500 border border-rose-500/30 shrink-0">
-                          Anulada
-                        </span>
-                      ) : isOffline ? (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/20 text-amber-500 border border-amber-500/30 shrink-0">
-                          Offline
-                        </span>
-                      ) : (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-500/10 text-emerald-500 shrink-0">
-                          En PC
-                        </span>
-                      )}
-                    </div>
-
-                    <span className={`text-[10px] font-bold ${T.textMuted} shrink-0`}>
-                      {formatDateLabel(dateStr)}
-                    </span>
-                  </div>
-
-                  {/* Cliente y Monto */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate leading-tight`}>
-                        {sale.customerName || 'Consumidor Final'}
-                      </p>
-                      
-                      <div className="flex items-center gap-2 mt-1 text-[11px]">
-                        <span className={`${T.textMuted} font-semibold truncate`}>
-                          {formatPaymentMethodLabel(sale.method || sale.paymentMethod, isCredit)}
-                        </span>
-                        
-                        {(sale.table || sale.mesa) && (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded shrink-0">
-                            <Utensils size={10} />
-                            <span>{sale.table || sale.mesa}</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="text-right shrink-0">
-                      <div className={`font-black text-sm sm:text-base ${isCancelled ? 'text-rose-500 line-through' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                        ${saleTotalUSD.toFixed(2)}
-                      </div>
-                      {!isDollarCountry && (
-                        <div className={`text-[10px] font-bold ${T.textMuted}`}>
-                          Bs. {saleTotalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Vista Rápida de Artículos en la Tarjeta */}
-                  {itemsList.length > 0 && (
-                    <div className={`p-2 rounded-xl ${isLight ? 'bg-slate-50' : 'bg-slate-900/60'} border ${T.border} text-[11px]`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-400 flex items-center gap-1">
-                          <Package size={11} />
-                          <span>Artículos ({itemsList.length})</span>
-                        </span>
-                        {sale.cashierName && (
-                          <span className="text-[10px] text-slate-400 font-semibold truncate max-w-[120px]">
-                            Cajero: {sale.cashierName}
-                          </span>
-                        )}
+                  <div className="text-right shrink-0">
+                    <div className={`font-black text-sm sm:text-base ${isCancelled ? 'text-rose-500 line-through' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                      ${saleTotalUSD.toFixed(2)}
+                    </div>
+                    {!isDollarCountry && (
+                      <div className={`text-[10px] font-bold ${T.textMuted}`}>
+                        Bs. {saleTotalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
-                      <p className={`line-clamp-2 text-[11px] font-semibold leading-relaxed ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
-                        {itemsList.map(it => `${Number(it.quantity || 1)}x ${it.name || it.product?.name || 'Producto'}`).join(' • ')}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Acciones de la Tarjeta */}
-                  <div className={`flex items-center justify-between pt-2 border-t ${T.border}`}>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenDetail(sale)}
-                      className={`px-2.5 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} font-bold text-xs flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all`}
-                    >
-                      <Eye size={13} className="text-blue-500" />
-                      <span>Detalle</span>
-                    </button>
-
-                    <div className="flex items-center gap-1">
-                      {/* Botón Reimprimir Térmico Bluetooth */}
-                      <button
-                        type="button"
-                        onClick={() => handlePrint(sale)}
-                        className={`p-2 rounded-xl ${T.btnGhost} border ${T.border} text-blue-500 hover:text-blue-400 text-xs font-bold flex items-center gap-1 cursor-pointer active:scale-95`}
-                        title="Reimprimir en ticketera térmica"
-                      >
-                        <Printer size={13} />
-                      </button>
-
-                      {/* Botón WhatsApp */}
-                      <button
-                        type="button"
-                        onClick={() => onShareWhatsApp?.(sale)}
-                        className="p-2 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
-                        title="Enviar comprobante por WhatsApp"
-                      >
-                        <Share2 size={13} />
-                      </button>
-
-                      {/* Botón Anular Venta */}
-                      {!isCancelled ? (
-                        <button
-                          type="button"
-                          onClick={() => handleInitiateCancel(sale)}
-                          className="p-2 rounded-xl bg-rose-600/15 hover:bg-rose-600/25 text-rose-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
-                          title="Anular venta y retornar inventario"
-                        >
-                          <RotateCcw size={13} />
-                        </button>
-                      ) : (
-                        <span className="text-[10px] font-black text-rose-400 px-2 py-1 bg-rose-500/10 rounded-lg">
-                          Anulada
-                        </span>
-                      )}
-                    </div>
+                    )}
                   </div>
                 </div>
-              );
-            })}
 
-            {visibleSales.length < filteredSales.length && (
-              <div className="py-4 col-span-full flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => setDisplayLimit(prev => prev + 30)}
-                  className={`px-5 py-2.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-2 active:scale-95 transition-all shadow-2xs cursor-pointer`}
-                >
-                  <span>Cargar más ventas ({filteredSales.length - visibleSales.length} restantes)</span>
-                </button>
+                {/* Vista Rápida de Artículos en la Tarjeta */}
+                {itemsList.length > 0 && (
+                  <div className={`p-2 rounded-xl ${isLight ? 'bg-slate-50' : 'bg-slate-900/60'} border ${T.border} text-[11px]`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 flex items-center gap-1">
+                        <Package size={11} />
+                        <span>Artículos ({itemsList.length})</span>
+                      </span>
+                      {sale.cashierName && (
+                        <span className="text-[10px] text-slate-400 font-semibold truncate max-w-[120px]">
+                          Cajero: {sale.cashierName}
+                        </span>
+                      )}
+                    </div>
+                    <p className={`line-clamp-2 text-[11px] font-semibold leading-relaxed ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
+                      {itemsList.map(it => `${Number(it.quantity || 1)}x ${it.name || it.product?.name || 'Producto'}`).join(' • ')}
+                    </p>
+                  </div>
+                )}
+
+                {/* Acciones de la Tarjeta */}
+                <div className={`flex items-center justify-between pt-2 border-t ${T.border}`}>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDetail(sale)}
+                    className={`px-2.5 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} font-bold text-xs flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all`}
+                  >
+                    <Eye size={13} className="text-blue-500" />
+                    <span>Detalle</span>
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    {/* Botón Reimprimir Térmico Bluetooth */}
+                    <button
+                      type="button"
+                      onClick={() => handlePrint(sale)}
+                      className={`p-2 rounded-xl ${T.btnGhost} border ${T.border} text-blue-500 hover:text-blue-400 text-xs font-bold flex items-center gap-1 cursor-pointer active:scale-95`}
+                      title="Reimprimir en ticketera térmica"
+                    >
+                      <Printer size={13} />
+                    </button>
+
+                    {/* Botón WhatsApp */}
+                    <button
+                      type="button"
+                      onClick={() => onShareWhatsApp?.(sale)}
+                      className="p-2 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
+                      title="Enviar comprobante por WhatsApp"
+                    >
+                      <Share2 size={13} />
+                    </button>
+
+                    {/* Botón Anular Venta */}
+                    {!isCancelled ? (
+                      <button
+                        type="button"
+                        onClick={() => handleInitiateCancel(sale)}
+                        className="p-2 rounded-xl bg-rose-600/15 hover:bg-rose-600/25 text-rose-500 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
+                        title="Anular venta y retornar inventario"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    ) : (
+                      <span className="text-[10px] font-black text-rose-400 px-2 py-1 bg-rose-500/10 rounded-lg">
+                        Anulada
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
-        )}
-      </div>
+            );
+          }}
+        />
+      )}
 
       {/* 5. MODAL DETALLE COMPLETO DE VENTA */}
       {selectedSaleDetail && (

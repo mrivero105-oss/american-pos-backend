@@ -1,8 +1,10 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertCircle, AlertTriangle, Check, CheckCircle, Copy, Plus, Printer, RefreshCw, Wifi, X, Zap } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Check, Copy, Plus, Printer, RefreshCw, Wifi, X, Zap } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import MobileSideNav from './MobileSideNav';
 import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import { useMobileModalStore } from '../../store/useMobileModalStore';
 
 const BiometricEnrollModal = lazy(() => import('../BiometricEnrollModal'));
 const ExchangeRateModal = lazy(() => import('../ExchangeRateModal'));
@@ -31,6 +33,127 @@ const MobileBulkSelectModal = lazy(() => import('./MobileBulkSelectModal'));
  * Capa modular de modales, barras flotantes, menú lateral y overlays para el POS Móvil.
  */
 export default function MobileSimulatorModals(props) {
+  // Suscripción atómica directa al store de modales (evita prop-drilling y re-renders del padre MobilePOSSimulator)
+  const {
+    showServerModal,
+    isCheckoutOpen,
+    printedReceipt,
+    isThermalPrinterModalOpen,
+    preSaleSentModal,
+    whatsAppModalData,
+    selectedProductForVariant,
+    selectedProductForBulk,
+    selectedProductForControlledMed,
+    isQuantityModalOpen,
+    quantityModalItem,
+    isScannerOpen,
+    scannerTarget,
+    isQuickProductModalOpen,
+    isImageSearchModalOpen,
+    unregisteredBarcodeNotice,
+    priceCheckerProduct,
+    isPriceCheckerModalOpen,
+    previewProductImage,
+    isManualItemModalOpen,
+    isHeldSalesModalOpen,
+    isSideNavOpen,
+    isBiometricsModalOpen,
+    isExchangeRateModalOpen,
+    supervisorAuthRequest,
+    isTableSelectModalOpen,
+    isCustomerSelectModalOpen,
+    setModalField
+  } = useMobileModalStore(
+    useShallow((s) => ({
+      showServerModal: s.showServerModal,
+      isCheckoutOpen: s.isCheckoutOpen,
+      printedReceipt: s.printedReceipt,
+      isThermalPrinterModalOpen: s.isThermalPrinterModalOpen,
+      preSaleSentModal: s.preSaleSentModal,
+      whatsAppModalData: s.whatsAppModalData,
+      selectedProductForVariant: s.selectedProductForVariant,
+      selectedProductForBulk: s.selectedProductForBulk,
+      selectedProductForControlledMed: s.selectedProductForControlledMed,
+      isQuantityModalOpen: s.isQuantityModalOpen,
+      quantityModalItem: s.quantityModalItem,
+      isScannerOpen: s.isScannerOpen,
+      scannerTarget: s.scannerTarget,
+      isQuickProductModalOpen: s.isQuickProductModalOpen,
+      isImageSearchModalOpen: s.isImageSearchModalOpen,
+      unregisteredBarcodeNotice: s.unregisteredBarcodeNotice,
+      priceCheckerProduct: s.priceCheckerProduct,
+      isPriceCheckerModalOpen: s.isPriceCheckerModalOpen,
+      previewProductImage: s.previewProductImage,
+      isManualItemModalOpen: s.isManualItemModalOpen,
+      isHeldSalesModalOpen: s.isHeldSalesModalOpen,
+      isSideNavOpen: s.isSideNavOpen,
+      isBiometricsModalOpen: s.isBiometricsModalOpen,
+      isExchangeRateModalOpen: s.isExchangeRateModalOpen,
+      supervisorAuthRequest: s.supervisorAuthRequest,
+      isTableSelectModalOpen: s.isTableSelectModalOpen,
+      isCustomerSelectModalOpen: s.isCustomerSelectModalOpen,
+      setModalField: s.setModalField
+    }))
+  );
+
+  const {
+    setShowServerModal,
+    setIsCheckoutOpen,
+    setPrintedReceipt,
+    setIsThermalPrinterModalOpen,
+    setPreSaleSentModal,
+    setWhatsAppModalData,
+    setSelectedProductForVariant,
+    setSelectedProductForBulk,
+    setSelectedProductForControlledMed,
+    setIsQuantityModalOpen,
+    setQuantityModalItem,
+    setIsScannerOpen,
+    setScannerTarget,
+    setIsQuickProductModalOpen,
+    setIsImageSearchModalOpen,
+    setUnregisteredBarcodeNotice,
+    setPriceCheckerProduct,
+    setIsPriceCheckerModalOpen,
+    setPreviewProductImage,
+    setIsManualItemModalOpen,
+    setIsHeldSalesModalOpen,
+    setIsSideNavOpen,
+    setIsBiometricsModalOpen,
+    setIsExchangeRateModalOpen,
+    setSupervisorAuthRequest,
+    setIsTableSelectModalOpen,
+    setIsCustomerSelectModalOpen
+  } = useMemo(() => ({
+    setShowServerModal: (v) => setModalField('showServerModal', v),
+    setIsCheckoutOpen: (v) => setModalField('isCheckoutOpen', v),
+    setPrintedReceipt: (v) => setModalField('printedReceipt', v),
+    setIsThermalPrinterModalOpen: (v) => setModalField('isThermalPrinterModalOpen', v),
+    setPreSaleSentModal: (v) => setModalField('preSaleSentModal', v),
+    setWhatsAppModalData: (v) => setModalField('whatsAppModalData', v),
+    setSelectedProductForVariant: (v) => setModalField('selectedProductForVariant', v),
+    setSelectedProductForBulk: (v) => setModalField('selectedProductForBulk', v),
+    setSelectedProductForControlledMed: (v) => setModalField('selectedProductForControlledMed', v),
+    setIsQuantityModalOpen: (v) => setModalField('isQuantityModalOpen', v),
+    setQuantityModalItem: (v) => setModalField('quantityModalItem', v),
+    setIsScannerOpen: (v) => setModalField('isScannerOpen', v),
+    setScannerTarget: (v) => setModalField('scannerTarget', v),
+    setIsQuickProductModalOpen: (v) => setModalField('isQuickProductModalOpen', v),
+    setIsImageSearchModalOpen: (v) => setModalField('isImageSearchModalOpen', v),
+    setUnregisteredBarcodeNotice: (v) => setModalField('unregisteredBarcodeNotice', v),
+    setPriceCheckerProduct: (v) => setModalField('priceCheckerProduct', v),
+    setIsPriceCheckerModalOpen: (v) => setModalField('isPriceCheckerModalOpen', v),
+    setPreviewProductImage: (v) => setModalField('previewProductImage', v),
+    setIsManualItemModalOpen: (v) => setModalField('isManualItemModalOpen', v),
+    setIsHeldSalesModalOpen: (v) => setModalField('isHeldSalesModalOpen', v),
+    setIsSideNavOpen: (v) => setModalField('isSideNavOpen', v),
+    setIsBiometricsModalOpen: (v) => setModalField('isBiometricsModalOpen', v),
+    setIsExchangeRateModalOpen: (v) => setModalField('isExchangeRateModalOpen', v),
+    setSupervisorAuthRequest: (v) => setModalField('supervisorAuthRequest', v),
+    setIsTableSelectModalOpen: (v) => setModalField('isTableSelectModalOpen', v),
+    setIsCustomerSelectModalOpen: (v) => setModalField('isCustomerSelectModalOpen', v)
+  }), [setModalField]);
+
   const {
     T,
     isLight,
@@ -51,8 +174,6 @@ export default function MobileSimulatorModals(props) {
     handleDeleteHeldSale,
     handleRestoreHeldSale,
     // Checkout
-    isCheckoutOpen,
-    setIsCheckoutOpen,
     documentType,
     setDocumentType,
     totalUSD,
@@ -71,7 +192,6 @@ export default function MobileSimulatorModals(props) {
     setCustomerName,
     setCustomerSearch,
     setIsCreatingCustomerInMobile,
-    setIsCustomerSelectModalOpen,
     isProcessingSale,
     handleSaveQuotation,
     checkoutMode,
@@ -99,19 +219,11 @@ export default function MobileSimulatorModals(props) {
     setPaymentReference,
     handleConfirmSale,
     // Recibos / Impresora / WhatsApp
-    printedReceipt,
-    setPrintedReceipt,
     handlePrintBluetoothReceipt,
-    setIsThermalPrinterModalOpen,
-    isThermalPrinterModalOpen,
     shareReceiptWhatsApp,
     printerSpoolerStatus,
-    preSaleSentModal,
-    setPreSaleSentModal,
     printPreSaleBluetoothReceipt,
     sharePreSaleWhatsApp,
-    whatsAppModalData,
-    setWhatsAppModalData,
     whatsAppPhoneInput,
     setWhatsAppPhoneInput,
     handleConfirmSendWhatsApp,
@@ -120,23 +232,9 @@ export default function MobileSimulatorModals(props) {
     generateEcoReceiptText,
     cleanWhatsAppPhone,
     // Variantes / Bultos / Farmacia / Cantidades
-    selectedProductForVariant,
-    setSelectedProductForVariant,
-    selectedProductForBulk,
-    setSelectedProductForBulk,
     handleSelectBulkPresentation,
-    selectedProductForControlledMed,
-    setSelectedProductForControlledMed,
-    isQuantityModalOpen,
-    setIsQuantityModalOpen,
-    quantityModalItem,
-    setQuantityModalItem,
     handleApplyQuantity,
     // Escáner / Producto rápido / Imágenes
-    isScannerOpen,
-    setIsScannerOpen,
-    scannerTarget,
-    setScannerTarget,
     posMode,
     setPosMode,
     handleBarcodeScanned,
@@ -144,34 +242,20 @@ export default function MobileSimulatorModals(props) {
     openEditProduct,
     canCreateProducts = true,
     canViewCosts = true,
-    isQuickProductModalOpen,
-    setIsQuickProductModalOpen,
     productFormData,
     setProductFormData,
     handleSaveProduct,
     isSavingProduct,
     isUploadingImage,
     handleProductImageUpload,
-    isImageSearchModalOpen,
-    setIsImageSearchModalOpen,
     generateInternalEanBarcode,
     isCustomCategoryMode,
     setIsCustomCategoryMode,
     selectableCategories,
-    unregisteredBarcodeNotice,
-    setUnregisteredBarcodeNotice,
     copyBarcodeToClipboard,
-    priceCheckerProduct,
-    setPriceCheckerProduct,
-    isPriceCheckerModalOpen,
-    setIsPriceCheckerModalOpen,
     priceCheckerSearch,
     setPriceCheckerSearch,
-    previewProductImage,
-    setPreviewProductImage,
     // Ítem manual y en espera
-    isManualItemModalOpen,
-    setIsManualItemModalOpen,
     manualItemName,
     setManualItemName,
     manualItemPrice,
@@ -181,19 +265,13 @@ export default function MobileSimulatorModals(props) {
     manualItemQty,
     setManualItemQty,
     handleAddManualItem,
-    isHeldSalesModalOpen,
-    setIsHeldSalesModalOpen,
     // Navegación / Biometría / Alertas / Mesas / Clientes / Servidor PC
-    showServerModal = false,
-    setShowServerModal = () => {},
     mobileServerIp = '',
     setMobileServerIp = () => {},
     serverFeedback = null,
     isTestingServer = false,
     handleAutoDiscoverServer = () => {},
     handleTestAndSaveServer = () => {},
-    isSideNavOpen,
-    setIsSideNavOpen,
     socketConnected,
     pendingSalesCount,
     drawerSearch,
@@ -201,11 +279,7 @@ export default function MobileSimulatorModals(props) {
     filteredNavSections,
     activeModule,
     setActiveModule,
-    setIsBiometricsModalOpen,
-    isBiometricsModalOpen,
     canManageSettings = false,
-    isExchangeRateModalOpen = false,
-    setIsExchangeRateModalOpen = () => {},
     activeCurrencyMode = 'USD',
     onExchangeRateUpdated = () => {},
     setEnrolledBioUser,
@@ -215,17 +289,11 @@ export default function MobileSimulatorModals(props) {
     theme,
     setTheme,
     logout,
-    toastMsg,
-    supervisorAuthRequest,
-    setSupervisorAuthRequest,
     lastHardwareScan,
-    isTableSelectModalOpen,
-    setIsTableSelectModalOpen,
     selectedTable,
     setSelectedTable,
     orderNotes,
     setOrderNotes,
-    isCustomerSelectModalOpen,
     customers,
     isCreatingCustomerInMobile,
     customerSearch,
@@ -655,13 +723,6 @@ export default function MobileSimulatorModals(props) {
         </Suspense>
       )}
 
-      {toastMsg && (
-        <div className="fixed bottom-5 right-5 bg-slate-900 border border-slate-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-2xl z-50 flex items-center gap-2 animate-slideUp">
-          <CheckCircle size={15} className="text-emerald-400" />
-          <span>{toastMsg}</span>
-        </div>
-      )}
-
       {supervisorAuthRequest && (
         <Suspense fallback={null}>
           <SupervisorAuthModal
@@ -833,6 +894,9 @@ export default function MobileSimulatorModals(props) {
           style={serverModalOverlayStyle}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="IP de la Computadora"
             className={`w-full max-w-xs ${T.modalCard} rounded-2xl p-5 border ${T.border} shadow-2xl space-y-4 max-h-[90dvh] overflow-y-auto my-auto`}
             style={serverModalCardStyle}
             onFocusCapture={handleServerFocusCapture}

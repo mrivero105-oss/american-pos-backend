@@ -20,6 +20,7 @@ import { VoiceMicButton } from '../../utils/voiceSearch';
 import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
 import { isDollarOnlyCountry } from '../../utils/format';
+import VirtualMobileList from './VirtualMobileList';
 
 const LOCAL_EXPENSES_KEY = 'isaac_pos_mobile_expenses';
 
@@ -510,109 +511,114 @@ export default function MobileExpensesView({
         </div>
       </div>
 
-      {/* 3. LISTADO DE GASTOS */}
-      <div className="flex-1 overflow-y-auto p-2.5 sm:p-3 custom-scrollbar">
-        {isLoading ? (
-          <div className="h-48 flex flex-col items-center justify-center gap-2">
-            <RefreshCw size={24} className="animate-spin text-rose-500" />
-            <p className={`text-xs font-bold ${T.textMuted}`}>Cargando egresos...</p>
-          </div>
-        ) : filteredExpenses.length === 0 ? (
-          <div className="h-full min-h-[200px] flex flex-col items-center justify-center p-6 text-center space-y-2">
-            <DollarSign size={36} className={T.textMuted} />
-            <p className={`font-bold text-xs sm:text-sm ${T.textPrimary}`}>
-              {searchQuery ? 'No se encontraron gastos con esa búsqueda' : 'No hay egresos registrados en esta categoría'}
-            </p>
-            <p className={`text-[11px] ${T.textMuted}`}>
-              Usa el botón &ldquo;+ Gasto&rdquo; arriba para registrar compras de caja chica
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {filteredExpenses.map((exp, idx) => {
-              const expAmt = Number(exp.amount || exp.monto || 0);
-              const isBs = (exp.currency || '').toUpperCase() === 'BS' || (exp.currency || '').toUpperCase() === 'VES';
-              const amtUSD = isBs ? (expAmt / exchangeRate) : expAmt;
-              const amtBS = isBs ? expAmt : (expAmt * exchangeRate);
-              const dateStr = new Date(exp.date || exp.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      {/* 3. LISTADO VIRTUALIZADO DE GASTOS */}
+      {isLoading ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2">
+          <RefreshCw size={24} className="animate-spin text-rose-500" />
+          <p className={`text-xs font-bold ${T.textMuted}`}>Cargando egresos...</p>
+        </div>
+      ) : filteredExpenses.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-2">
+          <DollarSign size={36} className={T.textMuted} />
+          <p className={`font-bold text-xs sm:text-sm ${T.textPrimary}`}>
+            {searchQuery ? 'No se encontraron gastos con esa búsqueda' : 'No hay egresos registrados en esta categoría'}
+          </p>
+          <p className={`text-[11px] ${T.textMuted}`}>
+            Usa el botón &ldquo;+ Gasto&rdquo; arriba para registrar compras de caja chica
+          </p>
+        </div>
+      ) : (
+        <VirtualMobileList
+          items={filteredExpenses}
+          estimateSize={132}
+          gap={10}
+          columnsMd={2}
+          columnsXl={3}
+          className="flex-1"
+          paddingClass="p-2.5 sm:p-3"
+          getItemKey={(exp, idx) => exp.id || idx}
+          renderItem={(exp) => {
+            const expAmt = Number(exp.amount || exp.monto || 0);
+            const isBs = (exp.currency || '').toUpperCase() === 'BS' || (exp.currency || '').toUpperCase() === 'VES';
+            const amtUSD = isBs ? (expAmt / exchangeRate) : expAmt;
+            const amtBS = isBs ? expAmt : (expAmt * exchangeRate);
+            const dateStr = new Date(exp.date || exp.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-              return (
-                <div 
-                  key={exp.id || idx}
-                  className={`${T.ticketItemBg} p-3 rounded-2xl border ${T.border} flex flex-col justify-between gap-2.5 hover:border-rose-500/30 transition-all shadow-2xs`}
-                >
-                  {/* Fila Superior: Concepto y Monto */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <h4 className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate`}>
-                        {exp.description || exp.concepto || 'Egreso'}
-                      </h4>
-                      <div className="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
-                        <span className="px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-500 font-black">
-                          {exp.category || exp.categoria || 'Operativo'}
+            return (
+              <div
+                className={`${T.ticketItemBg} p-3 rounded-2xl border ${T.border} flex flex-col justify-between gap-2.5 hover:border-rose-500/30 transition-all shadow-2xs`}
+              >
+                {/* Fila Superior: Concepto y Monto */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h4 className={`font-black text-xs sm:text-sm ${T.textPrimary} truncate`}>
+                      {exp.description || exp.concepto || 'Egreso'}
+                    </h4>
+                    <div className="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
+                      <span className="px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-500 font-black">
+                        {exp.category || exp.categoria || 'Operativo'}
+                      </span>
+                      <span className={`font-bold ${T.textMuted}`}>
+                        {exp.paymentMethod || 'Efectivo'}
+                      </span>
+                      {exp.registeredBy && (
+                        <span className={`text-[9.5px] ${T.textSecondary} truncate`}>
+                          • {exp.registeredBy}
                         </span>
-                        <span className={`font-bold ${T.textMuted}`}>
-                          {exp.paymentMethod || 'Efectivo'}
-                        </span>
-                        {exp.registeredBy && (
-                          <span className={`text-[9.5px] ${T.textSecondary} truncate`}>
-                            • {exp.registeredBy}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="text-right shrink-0">
-                      <p className="font-black text-sm text-rose-500">
-                        -${amtUSD.toFixed(2)}
-                      </p>
-                      {!isDollarCountry && (
-                        <p className={`text-[10px] font-bold ${T.textSecondary}`}>
-                          Bs. {amtBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </p>
                       )}
                     </div>
                   </div>
 
-                  {/* Fila Inferior: Botones de Acción (Editar, Eliminar, Ver Ficha) */}
-                  <div className={`pt-2 border-t ${T.border} flex items-center justify-between gap-1.5`}>
-                    <span className={`text-[10px] font-mono ${T.textMuted} flex items-center gap-1`}>
-                      <Clock size={11} />
-                      {dateStr}
-                    </span>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => setDetailExpense(exp)}
-                        className={`p-1.5 rounded-xl ${T.btnGhost} text-slate-400 hover:text-blue-500 transition-all cursor-pointer`}
-                        title="Ver Comprobante / Detalle"
-                      >
-                        <Eye size={13} />
-                      </button>
-
-                      <button
-                        onClick={() => handleOpenEdit(exp)}
-                        className={`p-1.5 rounded-xl ${T.btnGhost} text-amber-500 hover:bg-amber-500/15 transition-all cursor-pointer`}
-                        title="Editar Gasto"
-                      >
-                        <Edit2 size={13} />
-                      </button>
-
-                      <button
-                        onClick={() => handleRequestDelete(exp)}
-                        className={`p-1.5 rounded-xl ${T.btnGhost} text-rose-500 hover:bg-rose-500/15 transition-all cursor-pointer`}
-                        title="Eliminar Gasto"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-black text-sm text-rose-500">
+                      -${amtUSD.toFixed(2)}
+                    </p>
+                    {!isDollarCountry && (
+                      <p className={`text-[10px] font-bold ${T.textSecondary}`}>
+                        Bs. {amtBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </p>
+                    )}
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+
+                {/* Fila Inferior: Botones de Acción (Editar, Eliminar, Ver Ficha) */}
+                <div className={`pt-2 border-t ${T.border} flex items-center justify-between gap-1.5`}>
+                  <span className={`text-[10px] font-mono ${T.textMuted} flex items-center gap-1`}>
+                    <Clock size={11} />
+                    {dateStr}
+                  </span>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setDetailExpense(exp)}
+                      className={`p-1.5 rounded-xl ${T.btnGhost} text-slate-400 hover:text-blue-500 transition-all cursor-pointer`}
+                      title="Ver Comprobante / Detalle"
+                    >
+                      <Eye size={13} />
+                    </button>
+
+                    <button
+                      onClick={() => handleOpenEdit(exp)}
+                      className={`p-1.5 rounded-xl ${T.btnGhost} text-amber-500 hover:bg-amber-500/15 transition-all cursor-pointer`}
+                      title="Editar Gasto"
+                    >
+                      <Edit2 size={13} />
+                    </button>
+
+                    <button
+                      onClick={() => handleRequestDelete(exp)}
+                      className={`p-1.5 rounded-xl ${T.btnGhost} text-rose-500 hover:bg-rose-500/15 transition-all cursor-pointer`}
+                      title="Eliminar Gasto"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }}
+        />
+      )}
 
       {/* 4. MODAL: CREAR / EDITAR GASTO */}
       {isFormModalOpen && (

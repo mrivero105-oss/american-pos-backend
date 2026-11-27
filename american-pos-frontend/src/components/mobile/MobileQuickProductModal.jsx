@@ -10,7 +10,8 @@ import {
   ShieldAlert, 
   Layers, 
   Calendar, 
-  Scale
+  Scale,
+  Trash2
 } from 'lucide-react';
 import CachedImage from '../CachedImage';
 import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
@@ -42,7 +43,8 @@ export default function MobileQuickProductModal({
   selectableCategories = ['General'],
   exchangeRate = 1,
   triggerHaptic = () => {},
-  canViewCosts = true
+  canViewCosts = true,
+  onDelete = null
 }) {
   const [activeTab, setActiveTab] = useState('general'); // 'general' | 'bulk' | 'advanced'
   const imageFileInputRef = useRef(null);
@@ -70,6 +72,9 @@ export default function MobileQuickProductModal({
       style={modalOverlayStyle}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={productFormData.isNew ? 'Nuevo producto' : 'Editar producto'}
         className={`w-full max-w-md sm:max-w-lg ${T.modalCard} rounded-2xl p-4 sm:p-5 shadow-2xl flex flex-col max-h-[94dvh] overflow-hidden my-auto`}
         style={modalCardMaxHeightStyle}
       >
@@ -933,11 +938,22 @@ export default function MobileQuickProductModal({
           )}
 
           {/* Botón Guardar / Actualizar (Fijo al final de cada pestaña) */}
-          <div className="pt-2">
+          <div className="pt-2 flex items-center gap-2">
+            {onDelete && !productFormData.isNew && (
+              <button
+                type="button"
+                onClick={onDelete}
+                aria-label="Eliminar producto"
+                title="Eliminar este producto"
+                className="min-w-[44px] h-10.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-500 font-bold transition-all cursor-pointer flex items-center justify-center shrink-0"
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
             <button 
               type="submit"
               disabled={isSavingProduct}
-              className="w-full h-10.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] disabled:opacity-50 text-white font-bold rounded-xl text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-blue-600/20"
+              className="flex-1 h-10.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] disabled:opacity-50 text-white font-bold rounded-xl text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-blue-600/20"
             >
               {isSavingProduct ? (
                 <RefreshCw size={15} className="animate-spin" />

@@ -193,8 +193,8 @@ test('Fase 1.3 (A3) — SaleService isOfflineSync acepta precio/tasa históricos
         assert.equal(createdSaleData.changeAmount, 2, 'El vuelto debe recalcularse en el servidor ($12 - $10 = $2), ignorando 999');
         assert.ok(auditLogs.some(l => l.action === 'OFFLINE_PRICE_DRIFT'), 'Debe registrar AuditLog OFFLINE_PRICE_DRIFT');
         assert.ok(auditLogs.some(l => l.action === 'OFFLINE_RATE_DRIFT'), 'Debe registrar AuditLog OFFLINE_RATE_DRIFT');
-        assert.ok(triggeredAlerts.some(a => a.type === 'OFFLINE_PRICE_DRIFT'), 'Debe disparar Alert OFFLINE_PRICE_DRIFT');
-        assert.ok(triggeredAlerts.some(a => a.type === 'OFFLINE_RATE_DRIFT'), 'Debe disparar Alert OFFLINE_RATE_DRIFT');
+        assert.ok(triggeredAlerts.some(a => a.type === 'financial_mismatch' && a.metadata?.subtype === 'OFFLINE_PRICE_DRIFT'), 'Debe disparar Alert financial_mismatch/OFFLINE_PRICE_DRIFT');
+        assert.ok(triggeredAlerts.some(a => a.type === 'financial_mismatch' && a.metadata?.subtype === 'OFFLINE_RATE_DRIFT'), 'Debe disparar Alert financial_mismatch/OFFLINE_RATE_DRIFT');
         assert.equal(lanBroadcastPayload?.sourceTerminalId, 'TERM-MOB-TEST', 'Debe propagar sourceTerminalId en lan_stock_update');
 
         // Validar rechazo si la tasa offline supera ±35% (ej. 50 Bs vs 100 Bs = -50%)

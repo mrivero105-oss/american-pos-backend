@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeft, Users, X, Search, CheckCircle, RefreshCw, UserPlus, User, Phone, Edit3 } from 'lucide-react';
 import { VoiceMicButton } from '../../utils/voiceSearch';
 import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import VirtualMobileList from './VirtualMobileList';
 
 export default function MobileCustomerSelectModal({
   isOpen,
@@ -37,6 +38,9 @@ export default function MobileCustomerSelectModal({
             style={modalOverlayStyle}
           >
             <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label={isCreatingCustomerInMobile ? (newCustomerForm?.id ? 'Editar Cliente' : 'Nuevo Cliente') : 'Seleccionar Cliente'}
               initial={{ y: '100%', opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: '100%', opacity: 0 }}
@@ -192,54 +196,60 @@ export default function MobileCustomerSelectModal({
                     )}
                   </div>
 
-                  {/* Lista con Scroll de Clientes */}
-                  <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar pr-0.5 min-h-[160px]">
-                    {filteredCustomers.length === 0 ? (
-                      <div className="py-8 text-center space-y-2">
-                        <p className="text-xs text-slate-400">
-                          No se encontraron clientes para <b className="text-white">&ldquo;{customerSearch}&rdquo;</b>
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            triggerHaptic(15);
-                            const rawSearch = customerSearch.trim();
-                            const digitsOnly = rawSearch.replace(/\D/g, '');
-                            const isDocLike = digitsOnly.length >= 5 && (!/[a-zA-Z]{3,}/.test(rawSearch) || /^[VJEG]-?\d+/i.test(rawSearch));
+                  {/* Lista virtualizada con Scroll de Clientes */}
+                  {filteredCustomers.length === 0 ? (
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5 min-h-[160px] py-8 text-center space-y-2">
+                      <p className="text-xs text-slate-400">
+                        No se encontraron clientes para <b className="text-white">&ldquo;{customerSearch}&rdquo;</b>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerHaptic(15);
+                          const rawSearch = customerSearch.trim();
+                          const digitsOnly = rawSearch.replace(/\D/g, '');
+                          const isDocLike = digitsOnly.length >= 5 && (!/[a-zA-Z]{3,}/.test(rawSearch) || /^[VJEG]-?\d+/i.test(rawSearch));
 
-                            if (isDocLike) {
-                              let pref = 'V-';
-                              if (/^J/i.test(rawSearch)) pref = 'J-';
-                              else if (/^E/i.test(rawSearch)) pref = 'E-';
-                              else if (/^G/i.test(rawSearch)) pref = 'G-';
+                          if (isDocLike) {
+                            let pref = 'V-';
+                            if (/^J/i.test(rawSearch)) pref = 'J-';
+                            else if (/^E/i.test(rawSearch)) pref = 'E-';
+                            else if (/^G/i.test(rawSearch)) pref = 'G-';
 
-                              setNewCustomerForm({
-                                name: '',
-                                idDocument: isDollarCountry ? digitsOnly : `${pref}${digitsOnly}`,
-                                phone: '',
-                                address: '',
-                                email: '',
-                                creditLimit: '0'
-                              });
-                            } else {
-                              setNewCustomerForm({
-                                name: rawSearch,
-                                idDocument: isDollarCountry ? '' : 'V-',
-                                phone: '',
-                                address: '',
-                                email: '',
-                                creditLimit: '0'
-                              });
-                            }
-                            setIsCreatingCustomerInMobile(true);
-                          }}
-                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs cursor-pointer shadow-sm active:scale-95 transition-all"
-                        >
-                          Crear cliente &ldquo;{customerSearch}&rdquo; ahora
-                        </button>
-                      </div>
-                    ) : (
-                      filteredCustomers.map((c) => {
+                            setNewCustomerForm({
+                              name: '',
+                              idDocument: isDollarCountry ? digitsOnly : `${pref}${digitsOnly}`,
+                              phone: '',
+                              address: '',
+                              email: '',
+                              creditLimit: '0'
+                            });
+                          } else {
+                            setNewCustomerForm({
+                              name: rawSearch,
+                              idDocument: isDollarCountry ? '' : 'V-',
+                              phone: '',
+                              address: '',
+                              email: '',
+                              creditLimit: '0'
+                            });
+                          }
+                          setIsCreatingCustomerInMobile(true);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs cursor-pointer shadow-sm active:scale-95 transition-all"
+                      >
+                        Crear cliente &ldquo;{customerSearch}&rdquo; ahora
+                      </button>
+                    </div>
+                  ) : (
+                    <VirtualMobileList
+                      items={filteredCustomers}
+                      estimateSize={66}
+                      gap={6}
+                      className="flex-1 min-h-[160px]"
+                      paddingClass="pr-0.5"
+                      getItemKey={(c, idx) => c.id || `c_${c.name || c.nombre || idx}`}
+                      renderItem={(c) => {
                         const name = c.name || c.nombre || 'Cliente';
                         const doc = c.identification || c.idDocument || c.doc || c.rif;
                         const phone = c.phone || c.telefono;
@@ -248,7 +258,6 @@ export default function MobileCustomerSelectModal({
 
                         return (
                           <div
-                            key={c.id || `c_${name}`}
                             onClick={() => handleSelectCustomer(c)}
                             className={`p-2.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-2 active:scale-98 ${
                               isSelected
@@ -291,6 +300,7 @@ export default function MobileCustomerSelectModal({
                                   });
                                   setIsCreatingCustomerInMobile(true);
                                 }}
+                                aria-label={`Editar cliente ${name}`}
                                 className="p-1.5 rounded-xl hover:bg-slate-700/50 text-slate-400 hover:text-blue-400 cursor-pointer active:scale-90 transition-all"
                                 title="Editar datos del cliente"
                               >
@@ -312,9 +322,9 @@ export default function MobileCustomerSelectModal({
                             </div>
                           </div>
                         );
-                      })
-                    )}
-                  </div>
+                      }}
+                    />
+                  )}
                 </div>
               ) : (
                 /* VISTA B: FORMULARIO AÑADIR NUEVO CLIENTE */

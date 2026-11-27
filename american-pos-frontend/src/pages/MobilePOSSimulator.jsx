@@ -67,7 +67,15 @@ export default function MobilePOSSimulator() {
   const heldSales = useMobilePosStore((s) => s.heldSales);
   const setHeldSales = useMobilePosStore((s) => s.setHeldSales);
 
-  const modals = useMobileModalStore();
+  const isBiometricsModalOpen = useMobileModalStore((s) => s.isBiometricsModalOpen);
+  const isThermalPrinterModalOpen = useMobileModalStore((s) => s.isThermalPrinterModalOpen);
+  const isCheckoutOpen = useMobileModalStore((s) => s.isCheckoutOpen);
+  const whatsAppModalData = useMobileModalStore((s) => s.whatsAppModalData);
+  const scannerTarget = useMobileModalStore((s) => s.scannerTarget);
+  const isPriceCheckerModalOpen = useMobileModalStore((s) => s.isPriceCheckerModalOpen);
+  const isSideNavOpen = useMobileModalStore((s) => s.isSideNavOpen);
+  const showServerModal = useMobileModalStore((s) => s.showServerModal);
+  const isMobileCartOpen = useMobileModalStore((s) => s.isMobileCartOpen);
   const setModalField = useMobileModalStore((s) => s.setModalField);
   const modalSetters = useMemo(() => ({
     setIsBiometricsModalOpen: (v) => setModalField('isBiometricsModalOpen', v),
@@ -100,16 +108,17 @@ export default function MobilePOSSimulator() {
     setQuantityModalItem: (v) => setModalField('quantityModalItem', v)
   }), [setModalField]);
 
-  // 2. Cuatro estados locales livianos agrupados (frente a los 90 useState previos)
-  const [toastMsg, setToastMsg] = useState(null);
-  const toastTimerRef = useRef(null);
+  // 2. Toasts unificados en react-hot-toast (evita estado local redundante y re-renders en el padre)
   const showToast = useCallback((msg) => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToastMsg(msg);
-    toastTimerRef.current = setTimeout(() => {
-      setToastMsg(null);
-      toastTimerRef.current = null;
-    }, 2200);
+    if (!msg) return;
+    const text = String(msg);
+    if (text.startsWith('❌') || text.startsWith('⛔')) {
+      toast.error(text, { id: 'mobile-pos-toast', duration: 2800 });
+    } else if (text.startsWith('⚠️')) {
+      toast(text, { id: 'mobile-pos-toast', duration: 2600 });
+    } else {
+      toast.success(text, { id: 'mobile-pos-toast', duration: 2200 });
+    }
   }, []);
 
   const [loginUi, setLoginUi] = useState(() => ({
@@ -182,7 +191,7 @@ export default function MobilePOSSimulator() {
   // Refrescar biometría enrolada y permisos en tiempo real
   useEffect(() => {
     setLoginUi((prev) => ({ ...prev, enrolledBioUser: biometricService.getEnrolledCredential() }));
-  }, [user, modals.isBiometricsModalOpen]);
+  }, [user, isBiometricsModalOpen]);
 
   const hasRefreshedInitialUserRef = useRef(false);
   useEffect(() => {
@@ -220,13 +229,13 @@ export default function MobilePOSSimulator() {
 
   // Sincronizar autoPrint y lockedExchangeRate con sus modales
   useEffect(() => {
-    if (!modals.isThermalPrinterModalOpen) {
+    if (!isThermalPrinterModalOpen) {
       try {
         const saved = localStorage.getItem('pos_mobile_auto_print');
         setCheckoutField('autoPrint', saved === null ? true : saved === 'true');
       } catch { /* noop */ }
     }
-  }, [modals.isThermalPrinterModalOpen, setCheckoutField]);
+  }, [isThermalPrinterModalOpen, setCheckoutField]);
 
   // Escuchar apertura directa del gestor de impresora térmica móvil desde Settings embebido y alertas anti-rogue LAN
   useEffect(() => {
@@ -266,12 +275,12 @@ export default function MobilePOSSimulator() {
   });
 
   useEffect(() => {
-    if (modals.isCheckoutOpen) {
+    if (isCheckoutOpen) {
       setCheckoutField('lockedExchangeRate', (prev) => (prev && prev > 0 ? prev : syncDomain.exchangeRate));
     } else {
       setCheckoutField('lockedExchangeRate', null);
     }
-  }, [modals.isCheckoutOpen, syncDomain.exchangeRate, setCheckoutField]);
+  }, [isCheckoutOpen, syncDomain.exchangeRate, setCheckoutField]);
 
   // Categorías y búsqueda difusa off-main-thread
   const { normalizedCategories, categoryCounts } = useMemo(() => {
@@ -342,7 +351,7 @@ export default function MobilePOSSimulator() {
     setIsQuickProductModalOpen: modalSetters.setIsQuickProductModalOpen,
     setUnregisteredBarcodeNotice: modalSetters.setUnregisteredBarcodeNotice,
     setIsCustomerSelectModalOpen: modalSetters.setIsCustomerSelectModalOpen,
-    whatsAppModalData: modals.whatsAppModalData,
+    whatsAppModalData,
     setWhatsAppModalData: modalSetters.setWhatsAppModalData,
     showToast
   });
@@ -358,13 +367,13 @@ export default function MobilePOSSimulator() {
     exchangeRate: syncDomain.exchangeRate,
     businessMode: syncDomain.businessMode,
     posMode: catalogUi.posMode,
-    scannerTarget: modals.scannerTarget,
+    scannerTarget,
     setScannerTarget: modalSetters.setScannerTarget,
     setIsScannerOpen: modalSetters.setIsScannerOpen,
     setProductFormData: quickForms.setProductFormData,
     setUnregisteredBarcodeNotice: modalSetters.setUnregisteredBarcodeNotice,
     setPriceCheckerProduct: modalSetters.setPriceCheckerProduct,
-    isPriceCheckerModalOpen: modals.isPriceCheckerModalOpen,
+    isPriceCheckerModalOpen,
     setIsPriceCheckerModalOpen: modalSetters.setIsPriceCheckerModalOpen,
     setSelectedProductForVariant: modalSetters.setSelectedProductForVariant,
     setSelectedProductForControlledMed: modalSetters.setSelectedProductForControlledMed,
@@ -474,7 +483,7 @@ export default function MobilePOSSimulator() {
     catalogScrollRef,
     selectedCategory: catalogUi.selectedCategory,
     deferredSearchQuery,
-    isSideNavOpen: modals.isSideNavOpen,
+    isSideNavOpen,
     setIsSideNavOpen: modalSetters.setIsSideNavOpen,
     onPullRefresh: () => Promise.all([syncDomain.loadProducts(), syncDomain.loadSettings(), syncDomain.loadPromotions()]),
     showToast
@@ -518,8 +527,8 @@ export default function MobilePOSSimulator() {
   }, [setCatalogField]);
 
   const whatsAppMessagePreview = useMemo(
-    () => checkoutFlow.generateEcoReceiptText(modals.whatsAppModalData),
-    [modals.whatsAppModalData, checkoutFlow]
+    () => checkoutFlow.generateEcoReceiptText(whatsAppModalData),
+    [whatsAppModalData, checkoutFlow]
   );
   const handleConfirmSendWhatsApp = useMemo(
     () => quickForms.createConfirmSendWhatsApp(checkoutFlow.generateEcoReceiptText),
@@ -659,7 +668,7 @@ export default function MobilePOSSimulator() {
           serverHealth={syncDomain.serverHealth}
           mobileServerIp={syncDomain.mobileServerIp}
           setMobileServerIp={syncDomain.setMobileServerIp}
-          showServerModal={modals.showServerModal}
+          showServerModal={showServerModal}
           setShowServerModal={modalSetters.setShowServerModal}
           serverFeedback={syncDomain.serverFeedback}
           setServerFeedback={syncDomain.setServerFeedback}
@@ -807,7 +816,7 @@ export default function MobilePOSSimulator() {
       )}
 
       <MobileCartSheet
-        isOpen={modals.isMobileCartOpen}
+        isOpen={isMobileCartOpen}
         onClose={() => modalSetters.setIsMobileCartOpen(false)}
         T={T}
         triggerHaptic={triggerHaptic}
@@ -865,8 +874,6 @@ export default function MobilePOSSimulator() {
         T={T}
         isLight={isLight}
         isOledMode={isOledMode}
-        showServerModal={modals.showServerModal}
-        setShowServerModal={modalSetters.setShowServerModal}
         mobileServerIp={syncDomain.mobileServerIp}
         setMobileServerIp={syncDomain.setMobileServerIp}
         serverFeedback={syncDomain.serverFeedback}
@@ -888,8 +895,6 @@ export default function MobilePOSSimulator() {
         heldSales={heldSales}
         handleDeleteHeldSale={heldFlow.handleDeleteHeldSale}
         handleRestoreHeldSale={heldFlow.handleRestoreHeldSale}
-        isCheckoutOpen={modals.isCheckoutOpen}
-        setIsCheckoutOpen={modalSetters.setIsCheckoutOpen}
         documentType={checkoutUi.documentType}
         setDocumentType={(v) => setCheckoutField('documentType', v)}
         totalUSD={checkoutFlow.totalDueUSD}
@@ -908,7 +913,6 @@ export default function MobilePOSSimulator() {
         setCustomerName={quickForms.setCustomerName}
         setCustomerSearch={quickForms.setCustomerSearch}
         setIsCreatingCustomerInMobile={quickForms.setIsCreatingCustomerInMobile}
-        setIsCustomerSelectModalOpen={modalSetters.setIsCustomerSelectModalOpen}
         isProcessingSale={checkoutUi.isProcessingSale}
         handleSaveQuotation={checkoutFlow.handleSaveQuotation}
         checkoutMode={checkoutUi.checkoutMode}
@@ -935,41 +939,19 @@ export default function MobilePOSSimulator() {
         paymentReference={checkoutUi.paymentReference}
         setPaymentReference={(v) => setCheckoutField('paymentReference', v)}
         handleConfirmSale={checkoutFlow.handleConfirmSale}
-        printedReceipt={modals.printedReceipt}
-        setPrintedReceipt={modalSetters.setPrintedReceipt}
         handlePrintBluetoothReceipt={checkoutFlow.handlePrintBluetoothReceipt}
-        setIsThermalPrinterModalOpen={modalSetters.setIsThermalPrinterModalOpen}
-        isThermalPrinterModalOpen={modals.isThermalPrinterModalOpen}
         shareReceiptWhatsApp={quickForms.shareReceiptWhatsApp}
         printerSpoolerStatus={syncDomain.printerSpoolerStatus}
-        preSaleSentModal={modals.preSaleSentModal}
-        setPreSaleSentModal={modalSetters.setPreSaleSentModal}
         printPreSaleBluetoothReceipt={printPreSaleBluetoothReceipt}
         sharePreSaleWhatsApp={quickForms.sharePreSaleWhatsApp}
-        whatsAppModalData={modals.whatsAppModalData}
-        setWhatsAppModalData={modalSetters.setWhatsAppModalData}
         whatsAppPhoneInput={quickForms.whatsAppPhoneInput}
         setWhatsAppPhoneInput={quickForms.setWhatsAppPhoneInput}
         handleConfirmSendWhatsApp={handleConfirmSendWhatsApp}
         whatsAppMessagePreview={whatsAppMessagePreview}
         generateEcoReceiptText={checkoutFlow.generateEcoReceiptText}
         cleanWhatsAppPhone={quickForms.cleanWhatsAppPhone}
-        selectedProductForVariant={modals.selectedProductForVariant}
-        setSelectedProductForVariant={modalSetters.setSelectedProductForVariant}
-        selectedProductForBulk={modals.selectedProductForBulk}
-        setSelectedProductForBulk={modalSetters.setSelectedProductForBulk}
         handleSelectBulkPresentation={cartDomain.handleSelectBulkPresentation}
-        selectedProductForControlledMed={modals.selectedProductForControlledMed}
-        setSelectedProductForControlledMed={modalSetters.setSelectedProductForControlledMed}
-        isQuantityModalOpen={modals.isQuantityModalOpen}
-        setIsQuantityModalOpen={modalSetters.setIsQuantityModalOpen}
-        quantityModalItem={modals.quantityModalItem}
-        setQuantityModalItem={modalSetters.setQuantityModalItem}
         handleApplyQuantity={cartDomain.handleApplyQuantity}
-        isScannerOpen={modals.isScannerOpen}
-        setIsScannerOpen={modalSetters.setIsScannerOpen}
-        scannerTarget={modals.scannerTarget}
-        setScannerTarget={modalSetters.setScannerTarget}
         posMode={catalogUi.posMode}
         setPosMode={(v) => setCatalogField('posMode', v)}
         handleBarcodeScanned={cartDomain.handleBarcodeScanned}
@@ -977,33 +959,19 @@ export default function MobilePOSSimulator() {
         openEditProduct={quickForms.openEditProduct}
         canCreateProducts={canCreateProductsMobile}
         canViewCosts={canViewCostsMobile}
-        isQuickProductModalOpen={modals.isQuickProductModalOpen}
-        setIsQuickProductModalOpen={modalSetters.setIsQuickProductModalOpen}
         productFormData={quickForms.productFormData}
         setProductFormData={quickForms.setProductFormData}
         handleSaveProduct={quickForms.handleSaveProduct}
         isSavingProduct={quickForms.isSavingProduct}
         isUploadingImage={quickForms.isUploadingImage}
         handleProductImageUpload={quickForms.handleProductImageUpload}
-        isImageSearchModalOpen={modals.isImageSearchModalOpen}
-        setIsImageSearchModalOpen={modalSetters.setIsImageSearchModalOpen}
         generateInternalEanBarcode={quickForms.generateInternalEanBarcode}
         isCustomCategoryMode={quickForms.isCustomCategoryMode}
         setIsCustomCategoryMode={quickForms.setIsCustomCategoryMode}
         selectableCategories={quickForms.selectableCategories}
-        unregisteredBarcodeNotice={modals.unregisteredBarcodeNotice}
-        setUnregisteredBarcodeNotice={modalSetters.setUnregisteredBarcodeNotice}
         copyBarcodeToClipboard={quickForms.copyBarcodeToClipboard}
-        priceCheckerProduct={modals.priceCheckerProduct}
-        setPriceCheckerProduct={modalSetters.setPriceCheckerProduct}
-        isPriceCheckerModalOpen={modals.isPriceCheckerModalOpen}
-        setIsPriceCheckerModalOpen={modalSetters.setIsPriceCheckerModalOpen}
         priceCheckerSearch={catalogUi.priceCheckerSearch}
         setPriceCheckerSearch={(v) => setCatalogField('priceCheckerSearch', v)}
-        previewProductImage={modals.previewProductImage}
-        setPreviewProductImage={modalSetters.setPreviewProductImage}
-        isManualItemModalOpen={modals.isManualItemModalOpen}
-        setIsManualItemModalOpen={modalSetters.setIsManualItemModalOpen}
         manualItemName={cartDomain.manualItemName}
         setManualItemName={cartDomain.setManualItemName}
         manualItemPrice={cartDomain.manualItemPrice}
@@ -1013,10 +981,6 @@ export default function MobilePOSSimulator() {
         manualItemQty={cartDomain.manualItemQty}
         setManualItemQty={cartDomain.setManualItemQty}
         handleAddManualItem={cartDomain.handleAddManualItem}
-        isHeldSalesModalOpen={modals.isHeldSalesModalOpen}
-        setIsHeldSalesModalOpen={modalSetters.setIsHeldSalesModalOpen}
-        isSideNavOpen={modals.isSideNavOpen}
-        setIsSideNavOpen={modalSetters.setIsSideNavOpen}
         socketConnected={syncDomain.socketConnected}
         pendingSalesCount={syncDomain.pendingSalesCount}
         drawerSearch={catalogUi.drawerSearch}
@@ -1024,11 +988,7 @@ export default function MobilePOSSimulator() {
         filteredNavSections={filteredNavSections}
         activeModule={activeModule}
         setActiveModule={setActiveModule}
-        setIsBiometricsModalOpen={modalSetters.setIsBiometricsModalOpen}
-        isBiometricsModalOpen={modals.isBiometricsModalOpen}
         canManageSettings={canManageSettingsMobile}
-        isExchangeRateModalOpen={modals.isExchangeRateModalOpen}
-        setIsExchangeRateModalOpen={modalSetters.setIsExchangeRateModalOpen}
         activeCurrencyMode={checkoutFlow.activeCurrencyMode}
         onExchangeRateUpdated={() => syncDomain.loadSettings()}
         setEnrolledBioUser={(v) => setLoginUi((prev) => ({ ...prev, enrolledBioUser: typeof v === 'function' ? v(prev.enrolledBioUser) : v }))}
@@ -1038,17 +998,11 @@ export default function MobilePOSSimulator() {
         theme={theme}
         setTheme={setTheme}
         logout={logout}
-        toastMsg={toastMsg}
-        supervisorAuthRequest={modals.supervisorAuthRequest}
-        setSupervisorAuthRequest={modalSetters.setSupervisorAuthRequest}
         lastHardwareScan={cartDomain.lastHardwareScan}
-        isTableSelectModalOpen={modals.isTableSelectModalOpen}
-        setIsTableSelectModalOpen={modalSetters.setIsTableSelectModalOpen}
         selectedTable={checkoutUi.selectedTable}
         setSelectedTable={(v) => setCheckoutField('selectedTable', v)}
         orderNotes={checkoutUi.orderNotes}
         setOrderNotes={(v) => setCheckoutField('orderNotes', v)}
-        isCustomerSelectModalOpen={modals.isCustomerSelectModalOpen}
         customers={syncDomain.customers}
         isCreatingCustomerInMobile={quickForms.isCreatingCustomerInMobile}
         customerSearch={quickForms.customerSearch}
