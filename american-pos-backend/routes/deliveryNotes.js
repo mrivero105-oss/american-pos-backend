@@ -8,6 +8,11 @@ const { SETTINGS_FILE } = require('../config/paths');
 const precision = require('../utils/precision');
 const AccountingEngineService = require('../services/AccountingEngineService');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createDeliveryNoteSchema,
+    convertDeliveryNoteSchema
+} = require('../schemas/deliveryNotesSchema');
 
 router.use(requirePermission(['canViewSalesHistory', 'canAccessPOS']));
 
@@ -61,7 +66,7 @@ router.get('/:id', async (req, res) => {
 
 // POST Create Delivery Note (Albarán)
 // Similar to sale, but documentType is fixed to 'nota_entrega'
-router.post('/', async (req, res) => {
+router.post('/', validate(createDeliveryNoteSchema), async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const { total, items } = req.body;
@@ -175,7 +180,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT Convert Albarán to Factura
-router.put('/:id/convert', async (req, res) => {
+router.put('/:id/convert', validate(convertDeliveryNoteSchema), async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const note = await Sale.findOne({

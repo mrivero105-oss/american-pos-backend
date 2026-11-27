@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
-import { PauseCircle, X, Clock, Trash2, PlayCircle, AlertCircle, RefreshCw, ShoppingCart, ArrowRight } from 'lucide-react';
+import { PauseCircle, X, Clock, Trash2, PlayCircle, AlertCircle, RefreshCw, ArrowRight } from 'lucide-react';
 
 export default function MobileHeldSalesModal({
   isOpen,
@@ -127,13 +127,13 @@ export default function MobileHeldSalesModal({
                 </button>
               </div>
             ) : (
-              heldSales.map((sale) => {
+              heldSales.filter((sale) => sale && sale.id).map((sale) => {
                 const isSelectedForConfirm = confirmingSaleId === sale.id;
                 const isSelectedForDelete = deletingSaleId === sale.id;
                 const totalUsdVal = Number(sale.totalUSD || 0);
                 const totalBsVal = Number(sale.totalBS || 0);
-                const itemsList = Array.isArray(sale.items) ? sale.items : [];
-                const itemsCount = itemsList.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || sale.itemCount || 1;
+                const itemsList = Array.isArray(sale.items) ? sale.items.filter(Boolean) : [];
+                const itemsCount = itemsList.reduce((acc, it) => acc + (Number(it?.quantity ?? it?.qty) || 1), 0) || sale.itemCount || 1;
 
                 return (
                   <div
@@ -178,7 +178,7 @@ export default function MobileHeldSalesModal({
                           📦 {itemsCount} ítem(s):{' '}
                         </span>
                         <span className="italic">
-                          {itemsList.slice(0, 3).map((it) => `${it.product?.name || 'Ítem'} (x${it.quantity})`).join(', ')}
+                          {itemsList.slice(0, 3).map((it) => `${it?.product?.name || it?.product?.nombre || it?.name || it?.nombre || it?.productName || 'Ítem'} (x${it?.quantity ?? it?.qty ?? 1})`).join(', ')}
                           {itemsList.length > 3 ? ` + ${itemsList.length - 3} más` : ''}
                         </span>
                       </div>

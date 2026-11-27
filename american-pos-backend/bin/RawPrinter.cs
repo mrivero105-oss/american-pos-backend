@@ -95,6 +95,35 @@ namespace IsaacPOS.Hardware {
             return false;
         }
 
+        private static string DecodeThermalBytes(byte[] rawBytes) {
+            if (rawBytes == null || rawBytes.Length == 0) return "";
+            try {
+                // Primero intentar UTF-8 estricto; si hay secuencias ESC/POS en CP850/CP437/Win1252 lanzará DecoderFallbackException
+                Encoding utf8Strict = new UTF8Encoding(false, true);
+                return utf8Strict.GetString(rawBytes);
+            } catch (DecoderFallbackException) {
+                try {
+                    return Encoding.GetEncoding(850).GetString(rawBytes);
+                } catch {
+                    return Encoding.GetEncoding(1252).GetString(rawBytes);
+                }
+            }
+        }
+
+        private static void CleanupStaleTempFiles() {
+            try {
+                string tempDir = Path.GetTempPath();
+                DateTime threshold = DateTime.UtcNow.AddHours(-1);
+                foreach (string file in Directory.GetFiles(tempDir, "isaac_gdi_*.bin")) {
+                    try {
+                        if (File.GetCreationTimeUtc(file) < threshold) {
+                            File.Delete(file);
+                        }
+                    } catch { }
+                }
+            } catch { }
+        }
+
         public static List<ReceiptLine> ParseEscPosToLines(byte[] bytes) {
             List<ReceiptLine> lines = new List<ReceiptLine>();
             if (bytes == null || bytes.Length == 0) return lines;
@@ -105,7 +134,7 @@ namespace IsaacPOS.Hardware {
             List<byte> currentLineBytes = new List<byte>();
 
             Action flushLine = () => {
-                string text = Encoding.UTF8.GetString(currentLineBytes.ToArray()).Replace("\r", "");
+                string text = DecodeThermalBytes(currentLineBytes.ToArray()).Replace("\r", "");
                 ReceiptLine rl = new ReceiptLine();
                 rl.Text = text;
                 rl.Align = align;
@@ -524,6 +553,7 @@ namespace IsaacPOS.Hardware {
 
                     // Write worker temp file and spawn non-inheriting detached GDI worker
                     // so Node.js execFile resolves in <30ms even if Wi-Fi IPP negotiation takes 5-10 seconds
+                    CleanupStaleTempFiles();
                     string workerTemp = Path.Combine(Path.GetTempPath(), "isaac_gdi_" + Guid.NewGuid().ToString("N") + ".bin");
                     File.WriteAllBytes(workerTemp, bytes);
                     if (SpawnDetachedGdiWorker(printerName, workerTemp)) {

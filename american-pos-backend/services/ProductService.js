@@ -1,37 +1,3 @@
-
-function saveAndReplicateProductImage(filename, buffer) {
-    const path = require('path');
-    const fs = require('fs');
-    const candidates = [
-        path.join(__dirname, '..', 'product_images'),
-        process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'isaac-pos', 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'americanpos', 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'Isaac POS', 'product_images') : null,
-        process.env.APPDATA ? path.join(process.env.APPDATA, 'american-pos-backend', 'product_images') : null,
-    ].filter(Boolean);
-
-    const uniqueDirs = [...new Set(candidates)];
-    uniqueDirs.forEach(dir => {
-        try {
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(path.join(dir, filename), buffer);
-        } catch (e) {
-            console.warn(`[IMAGE SAVE] Error guardando copia en ${dir}:`, e.message);
-        }
-    });
-
-    // Replicar automáticamente a Supabase Storage en segundo plano
-    try {
-        const { uploadProductImageToSupabase } = require('./CloudStorageService');
-        uploadProductImageToSupabase(filename, buffer);
-    } catch (e) {
-        console.warn('[IMAGE SAVE] No se pudo invocar CloudStorageService:', e.message);
-    }
-
-    return `/product_images/${filename}`;
-}
-
 const { Product, BranchStock, Supplier, AuditLog, StockMovement, SupplierProductMapping, Branch, VarianteProducto, ProductPresentation, WarehouseStock } = require('../database/models');
 const { sequelize } = require('../database/connection');
 const { generateRobustId, readJson, readJsonAsync, getUserSettings } = require('../utils/helpers');
@@ -39,15 +5,49 @@ const { Op } = require('sequelize');
 const precision = require('../utils/precision');
 const cacheService = require('../utils/cacheService');
 const { SETTINGS_FILE } = require('../config/paths');
-const AIService = require('./AIService');
-const ImageSearchService = require('./ImageSearchService');
-const BarcodeSearchService = require('./BarcodeSearchService');
-// Native fetch is available in Node 18+ which is used in this project
-const fs = require('fs');
-const path = require('path');
+const productMediaService = require('./product/productMediaService');
+const productWasteAndAudit = require('./product/productWasteAndAudit');
+const ProductStockService = require('./products/ProductStockService');
+const ProductImportService = require('./products/ProductImportService');
 
 
 class ProductService {
+    constructor() {
+        this._serverBootMs = Date.now();
+        this._deletedProductsLog = new Map();
+    }
+
+    /**
+     * Registra un producto eliminado para sincronización delta (?since=)
+     */
+    recordDeletedProduct(companyId, productId) {
+        const compKey = String(companyId || 'default');
+        const now = Date.now();
+        let list = this._deletedProductsLog.get(compKey);
+        if (!list) {
+            list = [];
+            this._deletedProductsLog.set(compKey, list);
+        }
+        list.push({ id: String(productId), deletedAtMs: now });
+        // Podar entradas > 24h o exceso de tamaño para mantener memoria acotada
+        if (list.length > 500) {
+            const cutoff = now - (24 * 60 * 60 * 1000);
+            const pruned = list.filter(e => e.deletedAtMs >= cutoff).slice(-2000);
+            this._deletedProductsLog.set(compKey, pruned);
+        }
+    }
+
+    getDeletedProductsSince(companyId, sinceMs) {
+        const compKey = String(companyId || 'default');
+        const list = this._deletedProductsLog.get(compKey);
+        if (!Array.isArray(list) || list.length === 0) return [];
+        const ids = new Set();
+        for (const entry of list) {
+            if (entry.deletedAtMs >= sinceMs) ids.add(entry.id);
+        }
+        return Array.from(ids);
+    }
+
     /**
      * Evalúa si el usuario solicitante tiene autorización para visualizar costos de compra y márgenes.
      */
@@ -81,14 +81,22 @@ class ProductService {
         return p;
     }
 
+    invalidateCatalogCache() {
+        cacheService.delPrefix('catalog_full_');
+        cacheService.delPrefix('low_stock_');
+        cacheService.delPrefix('ai_catalog_');
+    }
+
     /**
      * Get all products with filtering and branch stock mapping.
      */
     async getAllProducts(reqUser, queryParams) {
         const { companyId, activeBranchId } = reqUser;
-        const { category, search, minimal, page = 1, limit = 0, supplierId, stockFilter, stockStatus, minPrice, maxPrice, status, es_controlado, expirationFilter, branchScoped, branchId: queryBranchId, missingCost } = queryParams;
+        const { category, search, minimal, page = 1, limit = 0, supplierId, stockFilter, stockStatus, minPrice, maxPrice, status, es_controlado, expirationFilter, branchScoped, branchId: queryBranchId, missingCost, since, delta } = queryParams;
         const currentStockFilter = stockFilter || stockStatus; 
         const isMinimal = minimal === 'true';
+        const isDeltaRequested = Boolean(since) || delta === 'true';
+        const serverTime = new Date().toISOString();
 
         const whereClause = { companyId };
 
@@ -237,14 +245,294 @@ class ProductService {
         };
 
         // Master Bypass: If fullCatalog is explicitly requested, we ignore limit/offset limits.
-        if (limit > 0 && !isMasterFullView) {
+        const hasPaginationLimit = Number(limit) > 0 && !isMasterFullView;
+        if (hasPaginationLimit) {
             options.limit = parseInt(limit);
             options.offset = (parseInt(page) - 1) * parseInt(limit);
         }
 
-        const { count, rows: productInstances } = await Product.findAndCountAll(options);
         const allowCosts = this.canUserViewCosts(reqUser);
-        const products = productInstances.map(p => p.get({ plain: true }));
+        const isSimpleCatalogRequest =
+            !hasPaginationLimit &&
+            !search &&
+            !minPrice &&
+            !maxPrice &&
+            !supplierId &&
+            !currentStockFilter &&
+            !expirationFilter &&
+            !missingCost &&
+            !es_controlado &&
+            (!category || category === 'Todas');
+
+        // FAST-PATH DELTA SYNC (?since=<ISO>): Transfiere únicamente los productos modificados/eliminados desde el último sync
+        if (since && isSimpleCatalogRequest) {
+            const parsedSince = new Date(String(since));
+            const sinceMs = parsedSince.getTime();
+            const canServeDelta = !Number.isNaN(sinceMs) && sinceMs >= (this._serverBootMs - 5000);
+
+            if (canServeDelta) {
+                const deltaAttrs = [...new Set([...options.attributes, 'status', 'updatedAt'])];
+                // Incluir tanto productos con updatedAt >= since como productos cuyo BranchStock cambió desde since
+                const [directChanged, changedBranchStocks] = await Promise.all([
+                    Product.findAll({
+                        where: { companyId, updatedAt: { [Op.gte]: parsedSince } },
+                        attributes: deltaAttrs,
+                        order: [['name', 'ASC']],
+                        raw: true
+                    }),
+                    BranchStock.findAll({
+                        where: { companyId, updatedAt: { [Op.gte]: parsedSince } },
+                        attributes: ['productId'],
+                        raw: true
+                    }).catch(() => [])
+                ]);
+
+                const directIds = new Set((directChanged || []).map(p => String(p.id)));
+                const extraStockProductIds = [...new Set(
+                    (changedBranchStocks || [])
+                        .map(bs => String(bs.productId))
+                        .filter(pid => pid && !directIds.has(pid))
+                )];
+
+                let extraProducts = [];
+                if (extraStockProductIds.length > 0) {
+                    extraProducts = await Product.findAll({
+                        where: { companyId, id: { [Op.in]: extraStockProductIds } },
+                        attributes: deltaAttrs,
+                        raw: true
+                    }).catch(() => []);
+                }
+
+                const combinedRows = [...(directChanged || []), ...(extraProducts || [])];
+                const targetStatus = status || 'active';
+                const deletedIdSet = new Set(this.getDeletedProductsSince(companyId, sinceMs));
+                const activeDeltaProducts = [];
+
+                for (const row of combinedRows) {
+                    if (row.status && row.status !== targetStatus) {
+                        deletedIdSet.add(String(row.id));
+                    } else {
+                        activeDeltaProducts.push(row);
+                    }
+                }
+
+                if (activeDeltaProducts.length > 0) {
+                    const deltaIds = activeDeltaProducts.map(p => p.id).filter(Boolean);
+                    const deltaSupIds = !isMinimal
+                        ? [...new Set(activeDeltaProducts.map(p => p.supplierId).filter(Boolean))]
+                        : [];
+
+                    const [bsRaw, varRaw, presRaw, supRaw] = await Promise.all([
+                        BranchStock.findAll({
+                            where: { productId: { [Op.in]: deltaIds } },
+                            attributes: ['productId', 'quantity', 'branchId'],
+                            raw: true
+                        }),
+                        VarianteProducto.findAll({
+                            where: { producto_id: { [Op.in]: deltaIds } },
+                            raw: true
+                        }).catch(() => []),
+                        ProductPresentation.findAll({
+                            where: { productId: { [Op.in]: deltaIds } },
+                            raw: true
+                        }).catch(() => []),
+                        deltaSupIds.length > 0
+                            ? Supplier.findAll({
+                                where: { id: { [Op.in]: deltaSupIds } },
+                                attributes: ['id', 'name'],
+                                raw: true
+                            }).catch(() => [])
+                            : Promise.resolve([])
+                    ]);
+
+                    const bsMap = new Map();
+                    for (const bs of (bsRaw || [])) {
+                        const k = String(bs.productId);
+                        let arr = bsMap.get(k);
+                        if (!arr) { arr = []; bsMap.set(k, arr); }
+                        arr.push({ quantity: bs.quantity, branchId: bs.branchId });
+                    }
+                    const varMap = new Map();
+                    for (const v of (varRaw || [])) {
+                        const k = String(v.producto_id);
+                        let arr = varMap.get(k);
+                        if (!arr) { arr = []; varMap.set(k, arr); }
+                        arr.push(v);
+                    }
+                    const presMap = new Map();
+                    for (const pr of (presRaw || [])) {
+                        const k = String(pr.productId);
+                        let arr = presMap.get(k);
+                        if (!arr) { arr = []; presMap.set(k, arr); }
+                        arr.push(pr);
+                    }
+                    const supMap = new Map();
+                    for (const s of (supRaw || [])) supMap.set(String(s.id), { name: s.name });
+
+                    for (const p of activeDeltaProducts) {
+                        const pid = String(p.id);
+                        p.BranchStocks = bsMap.get(pid) || [];
+                        p.Variantes = varMap.get(pid) || [];
+                        p.Presentations = presMap.get(pid) || [];
+                        if (!isMinimal) {
+                            p.Supplier = p.supplierId ? (supMap.get(String(p.supplierId)) || null) : null;
+                        }
+                        if (scopedBranch) {
+                            const branchRow = p.BranchStocks.find(s => String(s.branchId) === String(scopedBranch.id));
+                            p.stockQuantity = Number(branchRow ? branchRow.quantity : 0);
+                        } else {
+                            const hasBs = p.BranchStocks.length > 0;
+                            const totalBs = hasBs ? precision.add(p.BranchStocks.map(s => Number(s.quantity) || 0)) : 0;
+                            p.stockQuantity = Number(hasBs ? totalBs : (p.stockQuantity || p.stock || 0));
+                        }
+                        if (String(p.category || '').trim().toLowerCase() === 'servicios') {
+                            p.isService = true;
+                            p.isSoldByWeight = false;
+                            p.isFractional = false;
+                            p.stockUnit = 'un';
+                            p.allowNegative = true;
+                            p.stockQuantity = 0;
+                            p.minStock = 0;
+                        }
+                        this.sanitizeProductForUser(p, allowCosts);
+                    }
+                }
+
+                return {
+                    delta: true,
+                    fullSyncRequired: false,
+                    serverTime,
+                    products: activeDeltaProducts,
+                    deletedIds: Array.from(deletedIdSet),
+                    total: activeDeltaProducts.length,
+                    page: 1,
+                    totalPages: 1
+                };
+            }
+        }
+
+        const isCacheableFullCatalog =
+            process.env.ISAAC_TEST_ISOLATED !== '1' &&
+            isSimpleCatalogRequest;
+        const catalogCacheKey = isCacheableFullCatalog
+            ? `catalog_full_${companyId}_${status || 'active'}_${scopedBranch ? scopedBranch.id : 'global'}_${isMinimal ? 'min' : 'full'}`
+            : null;
+
+        if (catalogCacheKey) {
+            const cachedRaw = cacheService.get(catalogCacheKey);
+            if (Array.isArray(cachedRaw)) {
+                const cloned = cachedRaw.map(p => {
+                    const copy = { ...p };
+                    if (Array.isArray(p.Presentations)) {
+                        copy.Presentations = p.Presentations.map(pr => ({ ...pr }));
+                    }
+                    this.sanitizeProductForUser(copy, allowCosts);
+                    return copy;
+                });
+                return isDeltaRequested
+                    ? { delta: false, fullSyncRequired: true, serverTime, products: cloned, deletedIds: [], total: cloned.length, page: 1, totalPages: 1 }
+                    : { products: cloned, total: cloned.length, page: 1, totalPages: 1 };
+            }
+        }
+
+        let count = 0;
+        let products = [];
+
+        // Fast-Path Sin Producto Cartesiano ORM:
+        // En vez de 1 query gigante con 4 LEFT OUTER JOIN + instanciación pesada de Sequelize Models,
+        // ejecutamos consultas planas (raw: true) en paralelo y ensamblamos las relaciones en O(N).
+        const baseFindOptions = {
+            where: whereClause,
+            attributes: options.attributes,
+            order: options.order,
+            raw: true
+        };
+        if (hasPaginationLimit) {
+            baseFindOptions.limit = options.limit;
+            baseFindOptions.offset = options.offset;
+        }
+
+        if (hasPaginationLimit) {
+            const [rowsRaw, totalCount] = await Promise.all([
+                Product.findAll(baseFindOptions),
+                Product.count({ where: whereClause })
+            ]);
+            products = Array.isArray(rowsRaw) ? rowsRaw : [];
+            count = Number(totalCount) || 0;
+        } else {
+            const rowsRaw = await Product.findAll(baseFindOptions);
+            products = Array.isArray(rowsRaw) ? rowsRaw : [];
+            count = products.length;
+        }
+
+        if (products.length > 0) {
+            const productIds = products.map(p => p.id).filter(Boolean);
+            const supplierIds = !isMinimal
+                ? [...new Set(products.map(p => p.supplierId).filter(Boolean))]
+                : [];
+
+            const [branchStocksRaw, variantsRaw, presentationsRaw, suppliersRaw] = await Promise.all([
+                BranchStock.findAll({
+                    where: { productId: { [Op.in]: productIds } },
+                    attributes: ['productId', 'quantity', 'branchId'],
+                    raw: true
+                }),
+                VarianteProducto.findAll({
+                    where: { producto_id: { [Op.in]: productIds } },
+                    raw: true
+                }).catch(() => []),
+                ProductPresentation.findAll({
+                    where: { productId: { [Op.in]: productIds } },
+                    raw: true
+                }).catch(() => []),
+                supplierIds.length > 0
+                    ? Supplier.findAll({
+                        where: { id: { [Op.in]: supplierIds } },
+                        attributes: ['id', 'name'],
+                        raw: true
+                    }).catch(() => [])
+                    : Promise.resolve([])
+            ]);
+
+            const bsMap = new Map();
+            for (const bs of (branchStocksRaw || [])) {
+                const key = String(bs.productId);
+                let arr = bsMap.get(key);
+                if (!arr) { arr = []; bsMap.set(key, arr); }
+                arr.push({ quantity: bs.quantity, branchId: bs.branchId });
+            }
+
+            const varMap = new Map();
+            for (const v of (variantsRaw || [])) {
+                const key = String(v.producto_id);
+                let arr = varMap.get(key);
+                if (!arr) { arr = []; varMap.set(key, arr); }
+                arr.push(v);
+            }
+
+            const presMap = new Map();
+            for (const pr of (presentationsRaw || [])) {
+                const key = String(pr.productId);
+                let arr = presMap.get(key);
+                if (!arr) { arr = []; presMap.set(key, arr); }
+                arr.push(pr);
+            }
+
+            const supMap = new Map();
+            for (const s of (suppliersRaw || [])) {
+                supMap.set(String(s.id), { name: s.name });
+            }
+
+            for (const p of products) {
+                const pid = String(p.id);
+                p.BranchStocks = bsMap.get(pid) || [];
+                p.Variantes = varMap.get(pid) || [];
+                p.Presentations = presMap.get(pid) || [];
+                if (!isMinimal) {
+                    p.Supplier = p.supplierId ? (supMap.get(String(p.supplierId)) || null) : null;
+                }
+            }
+        }
 
         // Precise Stock Aggregation (por sucursal activa si branchScoped, o consolidado global)
         products.forEach(p => {
@@ -275,12 +563,36 @@ class ProductService {
                 p.stockQuantity = 0;
                 p.minStock = 0;
             }
+        });
+
+        if (catalogCacheKey) {
+            const snapshotToCache = products.map(p => ({
+                ...p,
+                Presentations: Array.isArray(p.Presentations) ? p.Presentations.map(pr => ({ ...pr })) : p.Presentations
+            }));
+            cacheService.set(catalogCacheKey, snapshotToCache, 30);
+        }
+
+        products.forEach(p => {
             this.sanitizeProductForUser(p, allowCosts);
         });
 
         // Debug Log (only enabled when DEBUG_VERBOSE=true)
         if (process.env.DEBUG_VERBOSE === 'true' && products.length > 0) {
             console.log(`[SYNC DEBUG] Sample Product: ${products[0].name} | Stock: ${products[0].stockQuantity}`);
+        }
+
+        if (isDeltaRequested) {
+            return {
+                delta: false,
+                fullSyncRequired: true,
+                serverTime,
+                products,
+                deletedIds: [],
+                total: count,
+                page: parseInt(page),
+                totalPages: limit > 0 ? Math.ceil(count / limit) : 1
+            };
         }
 
         return { products, total: count, page: parseInt(page), totalPages: limit > 0 ? Math.ceil(count / limit) : 1 };
@@ -297,25 +609,7 @@ class ProductService {
         
         const t = await sequelize.transaction();
         try {
-            // Find or create default branch if none exists for the company to prevent foreign key errors
-            let dbBranch = null;
-            if (reqUser.activeBranchId && reqUser.activeBranchId !== '1' && reqUser.activeBranchId !== 'null' && reqUser.activeBranchId !== 'undefined') {
-                dbBranch = await Branch.findOne({ where: { id: reqUser.activeBranchId, companyId }, transaction: t });
-            }
-            if (!dbBranch) {
-                dbBranch = await Branch.findOne({ where: { companyId }, transaction: t });
-            }
-            if (!dbBranch) {
-                dbBranch = await Branch.create({
-                    id: generateRobustId(),
-                    userId,
-                    companyId,
-                    name: 'Principal',
-                    isMain: true,
-                    isActive: true
-                }, { transaction: t });
-            }
-            const activeBranchId = dbBranch.id;
+            const activeBranchId = await ProductStockService.resolveActiveBranch(reqUser, t);
 
             if (productData) {
                 if (typeof productData.barcode === 'string') productData.barcode = productData.barcode.trim() || null;
@@ -359,41 +653,18 @@ class ProductService {
             }
 
             if (presentationsToSync && presentationsToSync.length > 0) {
-                const usedPresBarcodes = new Set();
-                if (newProduct.barcode) usedPresBarcodes.add(String(newProduct.barcode).trim());
-                for (let idx = 0; idx < presentationsToSync.length; idx++) {
-                    const pres = presentationsToSync[idx];
-                    const factor = parseFloat(pres.factorConversion);
-                    if (!factor || factor <= 0 || !pres.name) continue;
-                    let cleanBarcode = typeof pres.barcode === 'string' && pres.barcode.trim() ? pres.barcode.trim() : null;
-                    if (cleanBarcode) {
-                        if (usedPresBarcodes.has(cleanBarcode)) {
-                            cleanBarcode = null;
-                        } else {
-                            usedPresBarcodes.add(cleanBarcode);
-                            await ProductPresentation.update(
-                                { barcode: null },
-                                { where: { barcode: cleanBarcode }, transaction: t }
-                            );
-                        }
-                    }
-                    await ProductPresentation.create({
-                        id: pres.id || generateRobustId(),
-                        productId,
-                        name: pres.name.trim(),
-                        factorConversion: factor,
-                        price: Number(pres.price) || 0,
-                        cost: Number(pres.cost) || 0,
-                        barcode: cleanBarcode,
-                        isDefaultPurchase: Boolean(pres.isDefaultPurchase),
-                        isDefaultSale: Boolean(pres.isDefaultSale),
-                        orderIndex: pres.orderIndex !== undefined ? pres.orderIndex : idx,
-                        companyId
-                    }, { transaction: t });
-                }
+                await ProductStockService.syncPresentations(
+                    productId,
+                    companyId,
+                    newProduct.barcode,
+                    presentationsToSync,
+                    t,
+                    { replaceExisting: false }
+                );
             }
 
             await t.commit();
+            this.invalidateCatalogCache();
             const plainProduct = newProduct.get({ plain: true });
             await this._logAudit(reqUser, 'CREATE_PRODUCT', `Creado producto: ${plainProduct.name}`, productId, null, plainProduct);
             return plainProduct;
@@ -426,25 +697,7 @@ class ProductService {
         delete updateData.updatedAt;
 
         try {
-            // Find or create default branch if none exists for the company
-            let dbBranch = null;
-            if (reqUser.activeBranchId && reqUser.activeBranchId !== '1' && reqUser.activeBranchId !== 'null' && reqUser.activeBranchId !== 'undefined') {
-                dbBranch = await Branch.findOne({ where: { id: reqUser.activeBranchId, companyId }, transaction: t });
-            }
-            if (!dbBranch) {
-                dbBranch = await Branch.findOne({ where: { companyId }, transaction: t });
-            }
-            if (!dbBranch) {
-                dbBranch = await Branch.create({
-                    id: generateRobustId(),
-                    userId,
-                    companyId,
-                    name: 'Principal',
-                    isMain: true,
-                    isActive: true
-                }, { transaction: t });
-            }
-            const activeBranchId = dbBranch.id;
+            const activeBranchId = await ProductStockService.resolveActiveBranch(reqUser, t);
 
             const oldProduct = await Product.findOne({ 
                 where: { id: productId, companyId },
@@ -459,83 +712,19 @@ class ProductService {
                 transaction: t
             });
 
-            // Handle Stock Adjustments
-            if (updateData.stockQuantity !== undefined) {
-                const totalBranchStock = oldProduct.BranchStocks && oldProduct.BranchStocks.length > 0
-                    ? precision.add(oldProduct.BranchStocks.map(s => Number(s.quantity) || 0))
-                    : 0;
-
-                const currentStock = activeBranchId 
-                    ? (oldProduct.BranchStocks?.find(s => s.branchId === activeBranchId)?.quantity || 0)
-                    : (totalBranchStock > 0 ? totalBranchStock : (oldProduct.stockQuantity || 0));
-                
-                const diff = precision.subtract(updateData.stockQuantity, currentStock);
-
-                if (diff !== 0) {
-                    const stockBefore = Number(currentStock) || 0;
-                    const stockAfter = Number(updateData.stockQuantity);
-
-                    if (activeBranchId) {
-                        const branchStockRecord = oldProduct.BranchStocks?.find(s => s.branchId === activeBranchId);
-                        if (branchStockRecord) {
-                            await BranchStock.update(
-                                { quantity: stockAfter }, 
-                                { where: { id: branchStockRecord.id }, transaction: t }
-                            );
-                        } else {
-                            await BranchStock.create(
-                                { branchId: activeBranchId, productId, quantity: stockAfter, companyId },
-                                { transaction: t }
-                            );
-                        }
-                    } else if (oldProduct.BranchStocks && oldProduct.BranchStocks.length > 0) {
-                        // Global adjustment: keep the branch stocks in sync with the new total stock
-                        const firstRecord = oldProduct.BranchStocks[0];
-                        await BranchStock.update(
-                            { quantity: stockAfter },
-                            { where: { id: firstRecord.id }, transaction: t }
-                        );
-                        if (oldProduct.BranchStocks.length > 1) {
-                            const otherIds = oldProduct.BranchStocks.slice(1).map(s => s.id);
-                            await BranchStock.update(
-                                { quantity: 0 },
-                                { where: { id: { [Op.in]: otherIds } }, transaction: t }
-                            );
-                        }
-                    }
-
-                    await StockMovement.create({
-                        id: generateRobustId(),
-                        productId,
-                        userId,
-                        companyId,
-                        type: 'ADJUSTMENT',
-                        quantity: Math.abs(diff),
-                        stockBefore,
-                        stockAfter,
-                        reason: activeBranchId ? `Ajuste Manual (Sucursal ${activeBranchId})` : 'Ajuste Manual',
-                        referenceId: productId,
-                        date: new Date().toISOString()
-                    }, { transaction: t });
-                }
-
-                // Keep product active in catalog even when stock reaches 0
-                const finalStock = Number(updateData.stockQuantity);
-                if (finalStock <= 0 && !oldProduct.allowNegative) {
-                    if (oldProduct.stockUnits !== null && oldProduct.stockUnits !== undefined && updateData.stockUnits === undefined) {
-                        updateData.stockUnits = 0;
-                    }
-                }
-                if (!updateData.status || updateData.status === 'inactive') {
-                    updateData.status = 'active';
-                }
-            }
+            await ProductStockService.applyBranchStockAdjustment({
+                oldProduct,
+                updateData,
+                activeBranchId,
+                productId,
+                userId,
+                companyId,
+                transaction: t
+            });
 
             // Logic for Audit diff
             const changes = this._getDiff(oldProduct, updateData);
             if (changes.length > 0) {
-                // Not passing transaction to audit log to avoid failing the whole process just for a log, 
-                // but wait, it's better to pass it so it rolls back if the main fails.
                 await AuditLog.create({
                     id: generateRobustId(),
                     userId: reqUser.id,
@@ -566,42 +755,18 @@ class ProductService {
             const updatedProduct = await oldProduct.update(updateData, { transaction: t });
 
             if (presentationsToSync !== null) {
-                await ProductPresentation.destroy({ where: { productId }, transaction: t });
-                const usedPresBarcodes = new Set();
-                if (updatedProduct.barcode) usedPresBarcodes.add(String(updatedProduct.barcode).trim());
-                for (let idx = 0; idx < presentationsToSync.length; idx++) {
-                    const pres = presentationsToSync[idx];
-                    const factor = parseFloat(pres.factorConversion);
-                    if (!factor || factor <= 0 || !pres.name) continue;
-                    let cleanBarcode = typeof pres.barcode === 'string' && pres.barcode.trim() ? pres.barcode.trim() : null;
-                    if (cleanBarcode) {
-                        if (usedPresBarcodes.has(cleanBarcode)) {
-                            cleanBarcode = null;
-                        } else {
-                            usedPresBarcodes.add(cleanBarcode);
-                            await ProductPresentation.update(
-                                { barcode: null },
-                                { where: { barcode: cleanBarcode }, transaction: t }
-                            );
-                        }
-                    }
-                    await ProductPresentation.create({
-                        id: pres.id || generateRobustId(),
-                        productId,
-                        name: pres.name.trim(),
-                        factorConversion: factor,
-                        price: Number(pres.price) || 0,
-                        cost: Number(pres.cost) || 0,
-                        barcode: cleanBarcode,
-                        isDefaultPurchase: Boolean(pres.isDefaultPurchase),
-                        isDefaultSale: Boolean(pres.isDefaultSale),
-                        orderIndex: pres.orderIndex !== undefined ? pres.orderIndex : idx,
-                        companyId
-                    }, { transaction: t });
-                }
+                await ProductStockService.syncPresentations(
+                    productId,
+                    companyId,
+                    updatedProduct.barcode,
+                    presentationsToSync,
+                    t,
+                    { replaceExisting: true }
+                );
             }
             
             await t.commit();
+            this.invalidateCatalogCache();
             return updatedProduct.get({ plain: true });
 
         } catch (error) {
@@ -621,94 +786,14 @@ class ProductService {
      * Bulk price adjustment.
      */
     async bulkPriceAdjustment(reqUser, params) {
-        const { target, category, supplierId, productIds, adjustmentType, direction, value } = params;
-        const whereClause = { companyId: reqUser.companyId };
-        const numericValue = precision.parseNumericInput(value);
-
-        if (target === 'selected' && productIds?.length > 0) {
-            whereClause.id = { [Op.in]: productIds };
-        } else if (target === 'category' && category) {
-            whereClause.category = category;
-        } else if (target === 'supplier' && supplierId) {
-            whereClause.supplierId = supplierId;
-        }
-
-        const allSettings = await readJsonAsync(SETTINGS_FILE);
-        const userSettings = getUserSettings(allSettings, reqUser.companyId);
-        const posRate = precision.parseNumericInput(userSettings?.exchangeRate || userSettings?.bcvRate || 0);
-
-        const products = await Product.findAll({ where: whereClause });
-        let updatedCount = 0;
-        const updates = products.map(p => {
-            const currentPrice = precision.parseNumericInput(p.price || 0);
-            const currentCost = precision.parseNumericInput(p.cost || 0);
-            let newPrice = currentPrice;
-            let nextMargin = precision.parseNumericInput(p.margin || 0);
-
-            if (adjustmentType === 'percentage') {
-                const percentVal = precision.divide(numericValue, 100);
-                if (direction === 'increase') {
-                    const multiplier = precision.add([1, percentVal]);
-                    newPrice = precision.multiply(currentPrice, multiplier);
-                } else {
-                    const multiplier = precision.subtract(1, percentVal);
-                    newPrice = precision.multiply(currentPrice, multiplier);
-                }
-                if (currentCost > 0) {
-                    nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
-                }
-            } else if (adjustmentType === 'margin') {
-                // Estandarizado a Markup sobre Costo: Precio = Costo * (1 + margen% / 100)
-                if (currentCost <= 0) {
-                    return Promise.resolve(null);
-                }
-                const safeMargin = Math.max(0, numericValue);
-                const multiplier = precision.add([1, precision.divide(safeMargin, 100)]);
-                newPrice = precision.multiply(currentCost, multiplier);
-                nextMargin = precision.round(safeMargin, 4);
-            } else {
-                newPrice = direction === 'increase'
-                    ? precision.add([currentPrice, numericValue])
-                    : precision.subtract(currentPrice, numericValue);
-                if (currentCost > 0) {
-                    nextMargin = precision.round(precision.multiply(precision.divide(precision.subtract(newPrice, currentCost), currentCost), 100), 4);
-                }
-            }
-
-            newPrice = Math.max(0, newPrice < 0.10 ? precision.round(newPrice, 4) : precision.round(newPrice, 2));
-            const patch = { price: newPrice, margin: nextMargin };
-            if (posRate > 0) {
-                patch.priceBs = precision.round(precision.multiply(newPrice, posRate), 2);
-            }
-            updatedCount += 1;
-            return p.update(patch);
-        });
-
-        await Promise.all(updates);
-        await this._logAudit(reqUser, 'PRODUCT_BULK_PRICE_ADJUST', `Ajuste masivo (${adjustmentType}): ${direction || 'set'} de ${numericValue}${adjustmentType === 'fixed' ? '$' : '%'} para ${updatedCount} productos.`, 'BULK', null, null);
-
-        return updatedCount;
+        return ProductStockService.bulkPriceAdjustment(this, reqUser, params);
     }
 
     /**
      * Get low stock with caching.
      */
     async getLowStockAlerts(companyId) {
-        const cacheKey = `low_stock_${companyId}`;
-        const cached = cacheService.get(cacheKey);
-        if (cached) return cached;
-
-        const products = await Product.findAll({
-            where: {
-                companyId,
-                stockQuantity: { [Op.lte]: sequelize.col('minStock') },
-                minStock: { [Op.gt]: 0 }
-            },
-            attributes: ['id', 'name', 'stockQuantity', 'minStock']
-        });
-
-        cacheService.set(cacheKey, products, 60);
-        return products;
+        return ProductStockService.getLowStockAlerts(companyId);
     }
 
     // Helper: Log Audit (protegido con SAVEPOINT para no abortar transacciones activas en PostgreSQL si el actor es Employee)
@@ -782,6 +867,8 @@ class ProductService {
             await product.destroy({ transaction: t });
             
             await t.commit();
+            this.recordDeletedProduct(companyId, productId);
+            this.invalidateCatalogCache();
             return true;
         } catch (error) {
             await t.rollback();
@@ -793,46 +880,7 @@ class ProductService {
      * Normaliza nombres de productos y extrae tokens y medidas (kg, g, l, ml, oz) para vinculación de alta precisión.
      */
     _tokenizeForCatalogMatch(rawName) {
-        const normalized = String(rawName || '')
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .toLowerCase()
-            .replace(/(\d+),(\d+)/g, '$1.$2')
-            .replace(/\b1000\s*(?:grs?|gr|g)\b/g, '1kg')
-            .replace(/\b1000\s*(?:ml|cc)\b/g, '1l')
-            .replace(/\b(\d+(?:\.\d+)?)\s*(?:kilos?|kgs?|kg)\b/g, '$1kg')
-            .replace(/\b(\d+(?:\.\d+)?)\s*(?:gramos?|grs?|gr|g)\b/g, '$1g')
-            .replace(/\b(\d+(?:\.\d+)?)\s*(?:litros?|lts?|lt|l)\b/g, '$1l')
-            .replace(/\b(\d+(?:\.\d+)?)\s*(?:mililitros?|ml|cc)\b/g, '$1ml')
-            .replace(/\b(\d+(?:\.\d+)?)\s*(?:onzas?|oz)\b/g, '$1oz')
-            .replace(/\b1?\s*x\s*\d{1,4}\b/g, ' ')
-            .replace(/[^a-z0-9.]+/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        const stopWords = new Set([
-            'de', 'del', 'la', 'el', 'los', 'las', 'con', 'sin', 'para', 'por', 'en', 'un', 'una',
-            'caja', 'bulto', 'bult', 'und', 'unid', 'unidad', 'unidades', 'paq', 'paquete', 'pac',
-            'display', 'disp', 'dis', 'tira', 'fardo', 'fdo', 'pack', 'pcs', 'ctn', 'pet', 'env',
-            'gravable', 'exento'
-        ]);
-
-        const measureRegex = /^\d+(?:\.\d+)?(?:kg|g|l|ml|oz)$/;
-        const rawTokens = normalized.split(' ').filter(Boolean);
-        const measures = [];
-        const tokens = [];
-
-        for (const tk of rawTokens) {
-            if (measureRegex.test(tk)) {
-                measures.push(tk);
-                continue;
-            }
-            if (stopWords.has(tk)) continue;
-            if (/^\d+$/.test(tk) && tk.length <= 2) continue;
-            if (tk.length >= 2) tokens.push(tk);
-        }
-
-        return { normalized, tokens, measures };
+        return ProductImportService.tokenizeForCatalogMatch(rawName);
     }
 
     /**
@@ -840,360 +888,14 @@ class ProductService {
      * Matches external names with existing mappings or suggests high-precision matches in O(N) memory.
      */
     async processCatalogImport(reqUser, extractedItems, supplierId = null) {
-        const { companyId } = reqUser;
-        const results = [];
-
-        // 1. Extraer lista real de ítems y metadatos fiscales/contables
-        const itemsList = Array.isArray(extractedItems) 
-            ? extractedItems 
-            : (Array.isArray(extractedItems?.items) ? extractedItems.items : []);
-        
-        const docCurrency = (Array.isArray(extractedItems) 
-            ? 'USD' 
-            : (extractedItems?.currency || 'USD')).toUpperCase().includes('BS') ? 'BS' : 'USD';
-        
-        const detectedDate = !Array.isArray(extractedItems) 
-            ? (extractedItems?.invoiceDate || extractedItems?.date || null) 
-            : null;
-
-        const documentType = !Array.isArray(extractedItems) && extractedItems?.documentType
-            ? String(extractedItems.documentType).toUpperCase()
-            : 'INVOICE';
-
-        const referenceNumber = !Array.isArray(extractedItems) ? (extractedItems?.referenceNumber || null) : null;
-        const docSubtotal = !Array.isArray(extractedItems) && extractedItems?.docSubtotal != null ? Number(extractedItems.docSubtotal) : null;
-        const docTaxAmount = !Array.isArray(extractedItems) && extractedItems?.docTaxAmount != null ? Number(extractedItems.docTaxAmount) : null;
-        const docTotal = !Array.isArray(extractedItems) && extractedItems?.docTotal != null ? Number(extractedItems.docTotal) : null;
-        
-        let rate = !Array.isArray(extractedItems) && extractedItems?.exchangeRate 
-            ? Number(extractedItems.exchangeRate) 
-            : null;
-        
-        let rateSource = !Array.isArray(extractedItems) && extractedItems?.rateSource 
-            ? extractedItems.rateSource 
-            : 'BCV';
-
-        // Obtener tasa activa de venta del POS desde settings
-        let posExchangeRate = 1;
-        try {
-            const allSettings = await readJsonAsync(SETTINGS_FILE);
-            const userSettings = getUserSettings(allSettings, companyId);
-            posExchangeRate = parseFloat(userSettings.exchangeRate || 1) || 1;
-        } catch (e) {
-            posExchangeRate = 1;
-        }
-
-        // Si la moneda es Bolívares y no vino tasa impresa, obtenerla del BCV histórico/actual o ajustes
-        if (docCurrency === 'BS' && (!rate || rate <= 0)) {
-            try {
-                const BCVRateService = require('./BCVRateService');
-                const bcvRes = await BCVRateService.getOfficialRate(detectedDate);
-                if (bcvRes?.rate && bcvRes.rate > 0) {
-                    rate = Number(bcvRes.rate);
-                    rateSource = bcvRes.source || 'BCV';
-                }
-            } catch (rateErr) {
-                console.warn('[processCatalogImport] No se pudo obtener tasa oficial BCV:', rateErr.message);
-            }
-
-            if (!rate || rate <= 0) {
-                rate = posExchangeRate;
-                rateSource = 'Ajustes';
-            }
-        } else if (docCurrency === 'USD' && (!rate || rate <= 0)) {
-            rate = posExchangeRate > 1 ? posExchangeRate : 1;
-        }
-
-        // 2. Auto-detectar Proveedor por RIF o Razón Social si no fue preseleccionado
-        let effectiveSupplierId = (supplierId && supplierId !== 'null' && supplierId !== '') ? String(supplierId) : null;
-        let detectedSupplierName = !Array.isArray(extractedItems) ? (extractedItems?.supplierName || null) : null;
-
-        if (!effectiveSupplierId && !Array.isArray(extractedItems) && (extractedItems?.supplierRif || extractedItems?.supplierName)) {
-            try {
-                const companySuppliers = await Supplier.findAll({
-                    where: { companyId },
-                    attributes: ['id', 'name', 'rif'],
-                    raw: true
-                });
-                if (extractedItems.supplierRif) {
-                    const cleanTargetRif = String(extractedItems.supplierRif).replace(/[^A-Z0-9]/gi, '').toUpperCase();
-                    const byRif = companySuppliers.find(s => {
-                        const sRif = String(s.rif || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-                        return sRif && cleanTargetRif && (sRif.includes(cleanTargetRif) || cleanTargetRif.includes(sRif));
-                    });
-                    if (byRif) {
-                        effectiveSupplierId = byRif.id;
-                        detectedSupplierName = byRif.name;
-                    }
-                }
-                if (!effectiveSupplierId && extractedItems.supplierName) {
-                    const cleanTargetName = String(extractedItems.supplierName).toLowerCase().trim();
-                    const byName = companySuppliers.find(s => {
-                        const sName = String(s.name || '').toLowerCase().trim();
-                        return sName && sName.length >= 4 && (sName.includes(cleanTargetName) || cleanTargetName.includes(sName));
-                    });
-                    if (byName) {
-                        effectiveSupplierId = byName.id;
-                        detectedSupplierName = byName.name;
-                    }
-                }
-            } catch (supErr) {
-                console.warn('[processCatalogImport] Aviso buscando proveedor automático:', supErr.message);
-            }
-        }
-
-        // 3. Cargar mapeos previos de la empresa y catálogo activo en 2 consultas únicas (cero N+1)
-        const [existingMappings, companyProducts] = await Promise.all([
-            SupplierProductMapping.findAll({
-                include: [{ 
-                    model: Product, 
-                    as: 'Product',
-                    where: { companyId },
-                    required: true,
-                    attributes: ['id', 'name', 'cost', 'price', 'barcode', 'unitsPerBulk', 'margin', 'taxStatus', 'stockQuantity']
-                }]
-            }),
-            Product.findAll({
-                where: { companyId },
-                attributes: ['id', 'name', 'cost', 'price', 'barcode', 'unitsPerBulk', 'margin', 'taxStatus', 'stockQuantity'],
-                raw: true
-            })
-        ]);
-
-        const specificMappingMap = new Map();
-        const globalMappingMap = new Map();
-        existingMappings.forEach(m => {
-            if (!m.Product) return;
-            const key = String(m.externalName || '').trim().toLowerCase();
-            if (!key) return;
-            if (effectiveSupplierId && String(m.supplierId || '') === effectiveSupplierId) {
-                specificMappingMap.set(key, m.Product);
-            }
-            if (!globalMappingMap.has(key)) {
-                globalMappingMap.set(key, m.Product);
-            }
-        });
-
-        // Pre-indexar catálogo de la empresa para matching instantáneo y exacto
-        const barcodeIndex = new Map();
-        const exactNormIndex = new Map();
-        const indexedCatalog = companyProducts.map(prod => {
-            const parsed = this._tokenizeForCatalogMatch(prod.name);
-            if (prod.barcode) {
-                barcodeIndex.set(String(prod.barcode).trim(), prod);
-            }
-            if (parsed.normalized && !exactNormIndex.has(parsed.normalized)) {
-                exactNormIndex.set(parsed.normalized, prod);
-            }
-            return {
-                prod,
-                normalized: parsed.normalized,
-                tokenSet: new Set(parsed.tokens),
-                tokens: parsed.tokens,
-                measures: parsed.measures
-            };
-        });
-
-        const buildMatchedDto = (p) => ({
-            id: p.id,
-            name: p.name,
-            cost: Number(p.cost || 0),
-            currentCost: Number(p.cost || 0),
-            price: Number(p.price || 0),
-            barcode: p.barcode || null,
-            unitsPerBulk: Number(p.unitsPerBulk || 1),
-            margin: Number(p.margin || 0),
-            taxStatus: p.taxStatus || 'gravable',
-            stockQuantity: Number(p.stockQuantity || 0)
-        });
-
-        for (const item of itemsList) {
-            if (!item.externalName || typeof item.externalName !== 'string') continue;
-
-            const nameToMatch = item.externalName.trim();
-            const lowerKey = nameToMatch.toLowerCase();
-
-            const rawPrice = precision.parseNumericInput(item.price ?? item.cost ?? 0);
-            const isExempt = item.isExempt === true || item.taxStatus === 'exento' || Number(item.taxRate) === 0;
-            const taxRate = item.taxRate !== undefined ? Number(item.taxRate) : (isExempt ? 0 : 16);
-            const taxStatus = isExempt ? 'exento' : 'gravable';
-            const suggestedQuantity = Math.max(1, parseInt(item.suggestedQuantity || 1, 10) || 1);
-            const purchasedQuantity = Math.max(0, precision.parseNumericInput(item.purchasedQuantity ?? (documentType === 'CATALOG' ? 0 : 1)));
-
-            // Precisión de 6 decimales en costos base USD y 2 decimales en Bolívares
-            const basePriceBs = docCurrency === 'BS'
-                ? precision.round(rawPrice, 2)
-                : (rate > 0 ? precision.round(precision.multiply(rawPrice, rate), 2) : 0);
-            const basePriceUsd = docCurrency === 'BS' 
-                ? (rate > 0 ? precision.round(precision.divide(rawPrice, rate), 6) : rawPrice) 
-                : precision.round(rawPrice, 6);
-
-            const baseItemData = {
-                externalName: nameToMatch,
-                barcode: item.barcode || null,
-                purchasedQuantity,
-                price: basePriceUsd,
-                basePrice: basePriceUsd,
-                basePriceBs,
-                rawPriceBs: basePriceBs,
-                suggestedQuantity,
-                isExempt,
-                taxRate,
-                taxStatus
-            };
-
-            // Nivel 1: Mapeo histórico aprendido del proveedor o de la empresa
-            const matchedFromSupplierMap = specificMappingMap.get(lowerKey);
-            const matchedFromGlobalMap = !matchedFromSupplierMap ? globalMappingMap.get(lowerKey) : null;
-            if (matchedFromSupplierMap || matchedFromGlobalMap) {
-                const targetProd = matchedFromSupplierMap || matchedFromGlobalMap;
-                results.push({
-                    ...baseItemData,
-                    matchedProduct: buildMatchedDto(targetProd),
-                    confidence: matchedFromSupplierMap ? 100 : 98
-                });
-                continue;
-            }
-
-            // Nivel 2: Código de barras exacto o nombre normalizado idéntico
-            const itemTokens = this._tokenizeForCatalogMatch(nameToMatch);
-            const byBarcode = item.barcode ? barcodeIndex.get(String(item.barcode).trim()) : null;
-            const byExactNorm = !byBarcode && itemTokens.normalized ? exactNormIndex.get(itemTokens.normalized) : null;
-            if (byBarcode || byExactNorm) {
-                results.push({
-                    ...baseItemData,
-                    matchedProduct: buildMatchedDto(byBarcode || byExactNorm),
-                    confidence: byBarcode ? 99 : 95
-                });
-                continue;
-            }
-
-            // Nivel 3: Similitud inteligente por tokens y verificación estricta de medida/gramaje
-            let bestCandidate = null;
-            let bestScore = 0;
-
-            if (itemTokens.tokens.length > 0) {
-                for (const entry of indexedCatalog) {
-                    if (entry.tokens.length === 0) continue;
-
-                    // Si ambos especifican gramaje/volumen (ej. 2L vs 1.5L) y ninguno coincide, descartar para evitar falsos cruces
-                    if (itemTokens.measures.length > 0 && entry.measures.length > 0) {
-                        const sharesMeasure = itemTokens.measures.some(m => entry.measures.includes(m));
-                        if (!sharesMeasure) continue;
-                    }
-
-                    let matchedCount = 0;
-                    for (const tk of itemTokens.tokens) {
-                        if (entry.tokenSet.has(tk)) {
-                            matchedCount += 1;
-                        } else if (tk.length >= 4) {
-                            const partialHit = entry.tokens.some(et => et.length >= 4 && (et.startsWith(tk) || tk.startsWith(et)));
-                            if (partialHit) matchedCount += 0.8;
-                        }
-                    }
-
-                    if (matchedCount === 0) continue;
-
-                    const unionSize = new Set([...itemTokens.tokens, ...entry.tokens]).size || 1;
-                    const jaccard = matchedCount / unionSize;
-                    const coverageExternal = matchedCount / itemTokens.tokens.length;
-                    const coverageLocal = matchedCount / entry.tokens.length;
-                    let score = (jaccard * 0.45) + (Math.max(coverageExternal, coverageLocal) * 0.35) + (Math.min(coverageExternal, coverageLocal) * 0.20);
-
-                    if (itemTokens.measures.length > 0 && entry.measures.some(m => itemTokens.measures.includes(m))) {
-                        score += 0.12;
-                    }
-
-                    // Requerir al menos 2 tokens coincidentes si el nombre tiene varias palabras y el único match es genérico
-                    if (matchedCount < 1.5 && (itemTokens.tokens.length >= 2 && entry.tokens.length >= 2) && score < 0.65) {
-                        continue;
-                    }
-
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestCandidate = entry.prod;
-                    }
-                }
-            }
-
-            if (bestCandidate && bestScore >= 0.56) {
-                results.push({
-                    ...baseItemData,
-                    matchedProduct: buildMatchedDto(bestCandidate),
-                    confidence: bestScore >= 0.88 ? 92 : 70
-                });
-            } else {
-                results.push({
-                    ...baseItemData,
-                    matchedProduct: null,
-                    confidence: 0
-                });
-            }
-        }
-
-        // Estructura híbrida compatible con consumidores legacy y modernos
-        results.items = results;
-        results.currency = docCurrency;
-        results.rate = rate;
-        results.posExchangeRate = posExchangeRate;
-        results.invoiceDate = detectedDate;
-        results.rateSource = rateSource;
-        results.documentType = documentType;
-        results.referenceNumber = referenceNumber;
-        results.detectedSupplierId = effectiveSupplierId;
-        results.detectedSupplierName = detectedSupplierName;
-        results.docSubtotal = docSubtotal;
-        results.docTaxAmount = docTaxAmount;
-        results.docTotal = docTotal;
-
-        return results;
+        return ProductImportService.processCatalogImport(this, reqUser, extractedItems, supplierId);
     }
 
     /**
      * Search products for manual linking (compatible with PostgreSQL and SQLite)
      */
     async searchProductsForLink(reqUser, search) {
-        const { companyId } = reqUser;
-        const searchTerm = (search || '').trim();
-        if (!searchTerm) return [];
-
-        const isPostgres = sequelize.getDialect() === 'postgres';
-        const searchCondition = isPostgres
-            ? {
-                [Op.or]: [
-                    { name: { [Op.iLike]: `%${searchTerm}%` } },
-                    { barcode: { [Op.iLike]: `%${searchTerm}%` } }
-                ]
-            }
-            : {
-                [Op.or]: [
-                    sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), { [Op.like]: `%${searchTerm.toLowerCase()}%` }),
-                    sequelize.where(sequelize.fn('LOWER', sequelize.fn('COALESCE', sequelize.col('barcode'), '')), { [Op.like]: `%${searchTerm.toLowerCase()}%` })
-                ]
-            };
-        
-        const products = await Product.findAll({
-            where: {
-                companyId,
-                ...searchCondition
-            },
-            attributes: ['id', 'name', 'cost', 'price', 'barcode', 'unitsPerBulk', 'margin', 'taxStatus', 'stockQuantity'],
-            limit: 25
-        });
-
-        return products.map(p => {
-            const plain = p.get({ plain: true });
-            const cleanCost = Number(plain.cost || 0);
-            return {
-                ...plain,
-                cost: cleanCost,
-                currentCost: cleanCost,
-                price: Number(plain.price || 0),
-                unitsPerBulk: Number(plain.unitsPerBulk || 1),
-                margin: Number(plain.margin || 0),
-                stockQuantity: Number(plain.stockQuantity || 0)
-            };
-        });
+        return ProductImportService.searchProductsForLink(reqUser, search);
     }
 
     /**
@@ -1201,1293 +903,50 @@ class ProductService {
      * sin disparar choques ON CONFLICT en PostgreSQL ni duplicar filas con supplierId NULL.
      */
     async _saveSupplierMappingSafe(cleanExternalName, finalLocalProductId, finalSupplierId, transaction) {
-        const whereClause = {
-            externalName: cleanExternalName,
-            supplierId: finalSupplierId
-        };
-        const existing = await SupplierProductMapping.findOne({
-            where: whereClause,
-            transaction
-        });
-        if (existing) {
-            await existing.update({
-                localProductId: finalLocalProductId,
-                lastUpdated: new Date()
-            }, { transaction });
-        } else {
-            await SupplierProductMapping.create({
-                externalName: cleanExternalName,
-                localProductId: finalLocalProductId,
-                supplierId: finalSupplierId,
-                lastUpdated: new Date()
-            }, { transaction });
-        }
+        return ProductImportService.saveSupplierMappingSafe(cleanExternalName, finalLocalProductId, finalSupplierId, transaction);
     }
 
     /**
      * Apply the approved mappings, update product costs/IVA/stock, and optionally close PurchaseOrder + Accounts Payable atomically.
      */
     async applySupplierMapping(reqUser, mappings, invoiceOptions = {}) {
-        const { companyId, id: userId } = reqUser;
-        let updateCount = 0;
-        const resolvedOrderItems = [];
-
-        const t = await sequelize.transaction();
-        try {
-            // 1. Resolver sucursal activa para Kardex y BranchStock
-            let dbBranch = null;
-            if (reqUser.activeBranchId && reqUser.activeBranchId !== '1' && reqUser.activeBranchId !== 'null' && reqUser.activeBranchId !== 'undefined') {
-                dbBranch = await Branch.findOne({ where: { id: reqUser.activeBranchId, companyId }, transaction: t });
-            }
-            if (!dbBranch) {
-                dbBranch = await Branch.findOne({ where: { companyId }, transaction: t });
-            }
-            if (!dbBranch) {
-                dbBranch = await Branch.create({
-                    id: generateRobustId(),
-                    userId,
-                    companyId,
-                    name: 'Principal',
-                    isMain: true,
-                    isActive: true
-                }, { transaction: t });
-            }
-            const activeBranchId = dbBranch.id;
-
-            // 2. Obtener tasa de cambio activa del POS para el PVP en Bs
-            const allSettings = await readJsonAsync(SETTINGS_FILE);
-            const userSettings = getUserSettings(allSettings, companyId);
-            const posRate = parseFloat(userSettings.exchangeRate || 1) || 1;
-
-            let headerSupplierId = (invoiceOptions?.supplierId && invoiceOptions.supplierId !== 'null' && invoiceOptions.supplierId !== '')
-                ? String(invoiceOptions.supplierId)
-                : null;
-
-            // Auto-crear proveedor si fue detectado por OCR y aprobado por el usuario
-            if (!headerSupplierId && invoiceOptions?.newSupplier?.name) {
-                const cleanName = String(invoiceOptions.newSupplier.name).trim();
-                const cleanRif = invoiceOptions.newSupplier.rif ? String(invoiceOptions.newSupplier.rif).trim() : null;
-
-                let existing = null;
-                if (cleanRif) {
-                    existing = await Supplier.findOne({ where: { companyId, rif: cleanRif }, transaction: t });
-                }
-                if (!existing && cleanName) {
-                    existing = await Supplier.findOne({ where: { companyId, name: cleanName }, transaction: t });
-                }
-
-                if (existing) {
-                    headerSupplierId = existing.id;
-                } else {
-                    const newSup = await Supplier.create({
-                        id: generateRobustId(),
-                        name: cleanName,
-                        rif: cleanRif,
-                        phone: invoiceOptions.newSupplier.phone ? String(invoiceOptions.newSupplier.phone).trim() : null,
-                        contact: invoiceOptions.newSupplier.contact ? String(invoiceOptions.newSupplier.contact).trim() : null,
-                        companyId,
-                        userId,
-                        creditBalance: 0,
-                        isActive: true
-                    }, { transaction: t });
-                    headerSupplierId = newSup.id;
-                }
-            }
-            const isInvoiceMode = invoiceOptions?.importMode === 'INVOICE' || invoiceOptions?.createPurchaseOrder === true;
-            const refLabel = invoiceOptions?.referenceNumber ? `Factura ${invoiceOptions.referenceNumber}` : 'Importador';
-
-            for (const map of mappings) {
-                try {
-                    const {
-                        externalName,
-                        localProductId,
-                        price,
-                        supplierId,
-                        quantity = 1,
-                        purchasedQuantity,
-                        margin,
-                        allowZeroMargin = false,
-                        newPrice,
-                        isNew,
-                        initialStock,
-                        imageUri,
-                        barcode,
-                        taxStatus,
-                        isExempt,
-                        taxRate
-                    } = map;
-
-                    if (margin !== undefined && margin !== null && margin !== '' && !isNaN(parseFloat(margin)) && parseFloat(margin) < 0) {
-                        throw new Error(`El margen de utilidad no puede ser negativo para "${externalName || 'producto'}".`);
-                    }
-
-                    const isNewProduct = isNew === true || String(isNew) === 'true';
-                    const finalSupplierId = (supplierId && supplierId !== 'null' && supplierId !== '')
-                        ? String(supplierId)
-                        : headerSupplierId;
-                    const cleanExternalName = String(externalName || 'DESCONOCIDO').trim();
-                    let finalLocalProductId = (localProductId && localProductId !== 'null') ? String(localProductId) : null;
-
-                    // Precisión exacta de 6 decimales con VortexMathEngine
-                    const safeBulkCost = Math.max(0, precision.round(precision.parseNumericInput(price), 6));
-                    const unitQuantity = Math.max(1, precision.parseNumericInput(quantity) || 1);
-                    const unitCost = precision.round(precision.divide(safeBulkCost, unitQuantity), 6);
-
-                    const itemIsExempt = isExempt === true || taxStatus === 'exento' || (taxRate !== undefined && Number(taxRate) === 0);
-                    const resolvedTaxStatus = itemIsExempt ? 'exento' : 'gravable';
-                    const stockToAdd = isInvoiceMode ? Math.max(0, precision.round(precision.parseNumericInput(initialStock), 6)) : 0;
-                    const packsPurchased = Math.max(0, precision.parseNumericInput(purchasedQuantity ?? (isInvoiceMode ? 1 : 0)));
-
-                    const allowZero = allowZeroMargin === true || String(allowZeroMargin) === 'true';
-                    const hasExplicitMargin = margin !== undefined && margin !== null && margin !== '' && !isNaN(parseFloat(margin));
-                    const parsedExplicitMargin = hasExplicitMargin ? precision.round(parseFloat(margin), 4) : null;
-
-                    const computeSalesPrice = (effMargin, fallbackPrice = 0) => {
-                        if (newPrice !== undefined && newPrice !== null && precision.parseNumericInput(newPrice) > 0) {
-                            const explicitPvp = precision.parseNumericInput(newPrice);
-                            return explicitPvp < 0.10 ? precision.round(explicitPvp, 4) : precision.round(explicitPvp, 2);
-                        }
-                        if (unitCost > 0) {
-                            const safeMargin = precision.parseNumericInput(effMargin);
-                            if (safeMargin <= 0 && !allowZero) {
-                                if (fallbackPrice > unitCost) {
-                                    return fallbackPrice < 0.10 ? precision.round(fallbackPrice, 4) : precision.round(fallbackPrice, 2);
-                                }
-                                const defaultMarkupPvp = precision.multiply(unitCost, 1.30);
-                                return defaultMarkupPvp < 0.10 ? precision.round(defaultMarkupPvp, 4) : precision.round(defaultMarkupPvp, 2);
-                            }
-                            const effectiveSafeMargin = Math.max(0, safeMargin);
-                            const multiplier = precision.add([1, precision.divide(effectiveSafeMargin, 100)]);
-                            const rawPvp = precision.multiply(unitCost, multiplier);
-                            return rawPvp < 0.10 ? precision.round(rawPvp, 4) : precision.round(rawPvp, 2);
-                        }
-                        return fallbackPrice;
-                    };
-
-                    // RAMA A: Producto Nuevo (creación limpia sin doble suma de stock)
-                    if (isNewProduct) {
-                        const newId = generateRobustId();
-                        const updatedMargin = (hasExplicitMargin && (parsedExplicitMargin > 0 || allowZero))
-                            ? parsedExplicitMargin
-                            : 30;
-                        const updatedPrice = computeSalesPrice(updatedMargin, 0);
-                        const updatedPriceBs = precision.round(precision.multiply(updatedPrice, posRate), 2);
-
-                        const newProduct = await Product.create({
-                            id: newId,
-                            name: cleanExternalName,
-                            barcode: barcode ? String(barcode).trim() : null,
-                            cost: unitCost,
-                            price: updatedPrice,
-                            priceBs: updatedPriceBs,
-                            bulkCost: safeBulkCost,
-                            unitsPerBulk: unitQuantity,
-                            margin: updatedMargin,
-                            companyId,
-                            userId,
-                            category: 'General',
-                            stockUnit: 'unidad',
-                            taxStatus: resolvedTaxStatus,
-                            supplierId: finalSupplierId,
-                            imageUri: imageUri || null,
-                            status: 'active',
-                            stockQuantity: stockToAdd,
-                            stock: stockToAdd
-                        }, { transaction: t });
-                        
-                        finalLocalProductId = newProduct.id;
-
-                        if (stockToAdd > 0 && activeBranchId) {
-                            await BranchStock.create({
-                                productId: newId,
-                                branchId: activeBranchId,
-                                quantity: stockToAdd,
-                                companyId
-                            }, { transaction: t });
-                            
-                            await StockMovement.create({
-                                id: generateRobustId(),
-                                productId: newId,
-                                userId,
-                                companyId,
-                                type: 'IN',
-                                quantity: stockToAdd,
-                                stockBefore: 0,
-                                stockAfter: stockToAdd,
-                                reason: `Carga Inicial (${refLabel})`,
-                                referenceId: invoiceOptions?.referenceNumber || newId,
-                                date: new Date().toISOString()
-                            }, { transaction: t });
-                        }
-
-                        await this._saveSupplierMappingSafe(cleanExternalName, finalLocalProductId, finalSupplierId, t);
-
-                        await this._logAudit(
-                            reqUser,
-                            'PRODUCT_CREATED_IMPORT',
-                            `Nuevo por Importación: ${cleanExternalName}`,
-                            finalLocalProductId,
-                            { cost: 0, price: 0, stock: 0, taxStatus: null },
-                            { cost: unitCost, margin: updatedMargin, price: updatedPrice, priceBs: updatedPriceBs, stock: stockToAdd, taxStatus: resolvedTaxStatus },
-                            t
-                        );
-
-                        resolvedOrderItems.push({
-                            productId: finalLocalProductId,
-                            name: cleanExternalName,
-                            purchasedQuantity: packsPurchased > 0 ? packsPurchased : (stockToAdd > 0 ? precision.round(precision.divide(stockToAdd, unitQuantity), 4) : 1),
-                            unitsPerBulk: unitQuantity,
-                            quantity: stockToAdd > 0 ? stockToAdd : unitQuantity,
-                            bulkCost: safeBulkCost,
-                            cost: unitCost,
-                            taxStatus: resolvedTaxStatus,
-                            subtotal: precision.round(precision.multiply(safeBulkCost, packsPurchased > 0 ? packsPurchased : 1), 2)
-                        });
-
-                        updateCount++;
-                        continue;
-                    }
-
-                    // RAMA B: Producto Existente
-                    if (!finalLocalProductId) continue;
-
-                    await this._saveSupplierMappingSafe(cleanExternalName, finalLocalProductId, finalSupplierId, t);
-
-                    const product = await Product.findOne({ 
-                        where: { id: finalLocalProductId, companyId },
-                        include: [{ model: BranchStock, as: 'BranchStocks' }],
-                        transaction: t
-                    });
-
-                    if (product) {
-                        const oldCost = precision.parseNumericInput(product.cost);
-                        const oldPrice = precision.parseNumericInput(product.price);
-                        const oldPriceBs = product.priceBs;
-                        const oldMargin = product.margin;
-                        const oldTaxStatus = product.taxStatus;
-
-                        let updatedMargin;
-                        if (hasExplicitMargin && (parsedExplicitMargin > 0 || allowZero)) {
-                            updatedMargin = parsedExplicitMargin;
-                        } else if (precision.parseNumericInput(product.margin) > 0) {
-                            updatedMargin = precision.round(precision.parseNumericInput(product.margin), 4);
-                        } else if (oldCost > 0 && oldPrice > oldCost) {
-                            updatedMargin = precision.round(precision.multiply(precision.divide(precision.subtract(oldPrice, oldCost), oldCost), 100), 4);
-                        } else if (unitCost > 0 && oldPrice > unitCost) {
-                            updatedMargin = precision.round(precision.multiply(precision.divide(precision.subtract(oldPrice, unitCost), unitCost), 100), 4);
-                        } else {
-                            updatedMargin = 30;
-                        }
-                        const updatedPrice = computeSalesPrice(updatedMargin, oldPrice);
-                        if (unitCost > 0 && updatedPrice > 0 && (!hasExplicitMargin || (parsedExplicitMargin === 0 && !allowZero))) {
-                            updatedMargin = precision.round(precision.multiply(precision.divide(precision.subtract(updatedPrice, unitCost), unitCost), 100), 4);
-                        }
-                        const updatedPriceBs = precision.round(precision.multiply(updatedPrice, posRate), 2);
-
-                        const updateData = { 
-                            bulkCost: safeBulkCost, 
-                            unitsPerBulk: unitQuantity,
-                            cost: unitCost,
-                            margin: updatedMargin,
-                            price: updatedPrice,
-                            priceBs: updatedPriceBs,
-                            taxStatus: resolvedTaxStatus
-                        };
-
-                        if (finalSupplierId) {
-                            updateData.supplierId = finalSupplierId;
-                        }
-                        if (imageUri) {
-                            updateData.imageUri = imageUri;
-                        }
-
-                        if (stockToAdd > 0) {
-                            const currentGlobalStock = Number(product.stockQuantity ?? product.stock ?? 0);
-                            const newGlobalStock = precision.round(precision.add([currentGlobalStock, stockToAdd]), 6);
-                            updateData.status = 'active';
-                            updateData.stockQuantity = String(newGlobalStock);
-                            updateData.stock = String(newGlobalStock);
-                            
-                            if (activeBranchId) {
-                                const branchStock = product.BranchStocks?.find(s => s.branchId === activeBranchId);
-                                const stockBefore = branchStock ? Number(branchStock.quantity) : 0;
-                                const stockAfter = precision.round(precision.add([stockBefore, stockToAdd]), 6);
-
-                                if (branchStock) {
-                                    await branchStock.update({ quantity: stockAfter }, { transaction: t });
-                                } else {
-                                    await BranchStock.create({
-                                        productId: finalLocalProductId,
-                                        branchId: activeBranchId,
-                                        quantity: stockAfter,
-                                        companyId
-                                    }, { transaction: t });
-                                }
-
-                                await StockMovement.create({
-                                    id: generateRobustId(),
-                                    productId: finalLocalProductId,
-                                    userId,
-                                    companyId,
-                                    type: 'IN',
-                                    quantity: stockToAdd,
-                                    stockBefore: currentGlobalStock,
-                                    stockAfter: newGlobalStock,
-                                    reason: `Recepción Mercancía (${refLabel})`,
-                                    referenceId: invoiceOptions?.referenceNumber || finalLocalProductId,
-                                    date: new Date().toISOString()
-                                }, { transaction: t });
-                            }
-                        }
-
-                        await product.update(updateData, { transaction: t });
-                        updateCount++;
-
-                        resolvedOrderItems.push({
-                            productId: finalLocalProductId,
-                            name: product.name || cleanExternalName,
-                            purchasedQuantity: packsPurchased > 0 ? packsPurchased : (stockToAdd > 0 ? precision.round(precision.divide(stockToAdd, unitQuantity), 4) : 1),
-                            unitsPerBulk: unitQuantity,
-                            quantity: stockToAdd > 0 ? stockToAdd : unitQuantity,
-                            bulkCost: safeBulkCost,
-                            cost: unitCost,
-                            taxStatus: resolvedTaxStatus,
-                            subtotal: precision.round(precision.multiply(safeBulkCost, packsPurchased > 0 ? packsPurchased : 1), 2)
-                        });
-
-                        await this._logAudit(
-                            reqUser,
-                            'COST_UPDATE_IMPORT',
-                            `Importación (${refLabel}): ${product.name}`,
-                            finalLocalProductId,
-                            { cost: oldCost, margin: oldMargin, price: oldPrice, priceBs: oldPriceBs, taxStatus: oldTaxStatus },
-                            { cost: unitCost, margin: updatedMargin, price: updatedPrice, priceBs: updatedPriceBs, taxStatus: resolvedTaxStatus },
-                            t
-                        );
-                    }
-                } catch (error) {
-                    console.error('[IMPORT ERROR] Falla en item:', map.externalName, error);
-                    throw error;
-                }
-            }
-
-            // 3. Cierre Contable Atómico: Orden de Compra Recibida + Cuentas por Pagar (si aplica)
-            let createdPurchaseOrderId = null;
-            let creditCharged = false;
-            let newSupplierBalance = null;
-
-            if (isInvoiceMode && invoiceOptions?.createPurchaseOrder && resolvedOrderItems.length > 0) {
-                const { PurchaseOrder, SupplierCreditHistory } = require('../database/models');
-                const paymentStatus = invoiceOptions.paymentStatus === 'unpaid' ? 'unpaid' : 'paid';
-
-                if (paymentStatus === 'unpaid' && !headerSupplierId) {
-                    throw new Error('Debes seleccionar un Proveedor para registrar la factura a Crédito (Cuentas por Pagar).');
-                }
-
-                const calculatedTotalUsd = resolvedOrderItems.reduce(
-                    (acc, it) => precision.round(precision.add([acc, it.subtotal || 0]), 2),
-                    0
-                );
-                const explicitTotalUsd = precision.parseNumericInput(invoiceOptions.totalUsd);
-                const finalTotalUsd = explicitTotalUsd > 0 ? precision.round(explicitTotalUsd, 2) : calculatedTotalUsd;
-
-                const invRate = precision.parseNumericInput(invoiceOptions.exchangeRate) > 0
-                    ? precision.round(precision.parseNumericInput(invoiceOptions.exchangeRate), 6)
-                    : posRate;
-                const explicitTotalVes = precision.parseNumericInput(invoiceOptions.totalVes);
-                const finalTotalVes = explicitTotalVes > 0
-                    ? precision.round(explicitTotalVes, 2)
-                    : precision.round(precision.multiply(finalTotalUsd, invRate), 2);
-
-                const arrivalDate = invoiceOptions.invoiceDate || new Date().toISOString().split('T')[0];
-                const dueDate = paymentStatus === 'unpaid' ? (invoiceOptions.dueDate || null) : null;
-                const refNo = String(invoiceOptions.referenceNumber || '').trim() || `IMP-${Date.now().toString().slice(-6)}`;
-                const orderId = generateRobustId();
-
-                await PurchaseOrder.create({
-                    id: orderId,
-                    userId,
-                    companyId,
-                    supplierId: headerSupplierId,
-                    date: arrivalDate,
-                    arrivalDate,
-                    expectedDate: dueDate || arrivalDate,
-                    dueDate,
-                    exchangeRate: invRate,
-                    status: 'received',
-                    receivedAt: new Date().toISOString(),
-                    referenceNumber: refNo,
-                    invoiceUrl: invoiceOptions.invoiceUrl || null,
-                    paymentStatus,
-                    items: resolvedOrderItems,
-                    notes: invoiceOptions.notes || `Recepción procesada desde Importador (${resolvedOrderItems.length} renglones)`,
-                    total: finalTotalUsd,
-                    totalVes: finalTotalVes
-                }, { transaction: t });
-
-                createdPurchaseOrderId = orderId;
-
-                // Si la factura es a Crédito ("unpaid"), cargar automáticamente la Cuenta por Pagar al Proveedor
-                if (paymentStatus === 'unpaid' && headerSupplierId && finalTotalUsd > 0) {
-                    const supplier = await Supplier.findOne({
-                        where: { id: headerSupplierId, companyId },
-                        transaction: t
-                    });
-                    if (!supplier) {
-                        throw new Error('El proveedor seleccionado no existe o no pertenece a esta empresa.');
-                    }
-
-                    const oldBalance = Number(supplier.creditBalance) || 0;
-                    newSupplierBalance = precision.round(precision.add([oldBalance, finalTotalUsd]), 2);
-                    await supplier.update({ creditBalance: newSupplierBalance }, { transaction: t });
-
-                    await SupplierCreditHistory.create({
-                        id: generateRobustId(),
-                        supplierId: headerSupplierId,
-                        userId,
-                        companyId,
-                        timestamp: new Date().toISOString(),
-                        type: 'charge',
-                        amount: finalTotalUsd,
-                        balanceAfter: newSupplierBalance,
-                        description: `Factura ${refNo} (Tasa: ${invRate} Bs/$) - Recepción Importador (${resolvedOrderItems.length} ítems)`,
-                        paymentMethod: 'credit',
-                        purchaseOrderId: orderId,
-                        referenceNumber: refNo,
-                        invoiceUrl: invoiceOptions.invoiceUrl || null,
-                        arrivalDate,
-                        dueDate,
-                        exchangeRate: invRate
-                    }, { transaction: t });
-
-                    creditCharged = true;
-                } else if (paymentStatus === 'paid' && headerSupplierId && finalTotalUsd > 0) {
-                    // Si la factura fue pagada de Contado, registrar en el historial de compras solventes del proveedor
-                    const supplier = await Supplier.findOne({
-                        where: { id: headerSupplierId, companyId },
-                        transaction: t
-                    });
-                    const currentBalance = Number(supplier?.creditBalance || 0);
-                    const payMethod = invoiceOptions.paymentMethod || 'cash';
-                    const chargeId = generateRobustId();
-
-                    await SupplierCreditHistory.create({
-                        id: chargeId,
-                        supplierId: headerSupplierId,
-                        userId,
-                        companyId,
-                        timestamp: new Date().toISOString(),
-                        type: 'charge',
-                        amount: finalTotalUsd,
-                        balanceAfter: currentBalance,
-                        description: `Factura ${refNo} (Contado / Tasa: ${invRate} Bs/$) - Recepción (${resolvedOrderItems.length} ítems)`,
-                        paymentMethod: payMethod,
-                        purchaseOrderId: orderId,
-                        referenceNumber: refNo,
-                        invoiceUrl: invoiceOptions.invoiceUrl || null,
-                        arrivalDate,
-                        dueDate: arrivalDate,
-                        exchangeRate: invRate
-                    }, { transaction: t });
-
-                    await SupplierCreditHistory.create({
-                        id: generateRobustId(),
-                        supplierId: headerSupplierId,
-                        userId,
-                        companyId,
-                        timestamp: new Date().toISOString(),
-                        type: 'payment',
-                        amount: finalTotalUsd,
-                        balanceAfter: currentBalance,
-                        description: `Liquidación Contado (${payMethod}) Factura ${refNo}`,
-                        paymentMethod: payMethod,
-                        purchaseOrderId: orderId,
-                        referenceNumber: refNo,
-                        invoiceUrl: invoiceOptions.invoiceUrl || null,
-                        arrivalDate,
-                        dueDate: arrivalDate,
-                        exchangeRate: invRate
-                    }, { transaction: t });
-                }
-            }
-
-            await t.commit();
-
-            // Invalidar cachés de catálogo y categorías tras confirmar transacción
-            cacheService.delPrefix('categories_');
-            cacheService.delPrefix('ai_catalog_');
-
-            if (invoiceOptions && Object.keys(invoiceOptions).length > 0) {
-                return {
-                    updateCount,
-                    updatedCount: updateCount,
-                    purchaseOrderId: createdPurchaseOrderId,
-                    creditCharged,
-                    newSupplierBalance
-                };
-            }
-            return updateCount;
-        } catch (error) {
-            await t.rollback();
-            console.error('[IMPORT TRANSACTION ROLLBACK] La importación fue revertida debido a un error:', error.message);
-            throw error;
-        }
+        return ProductImportService.applySupplierMapping(this, reqUser, mappings, invoiceOptions);
     }
 
-    /**
-     * Genera una imagen para un producto usando el buscador de Bing.
-     */
     async generateImageIA(productId) {
-        try {
-            const product = await Product.findByPk(productId);
-            if (!product) throw new Error('Producto no encontrado');
-
-            console.log(`[IA IMAGE] Buscando imagen real para: ${product.name}`);
-            
-            // 1. Generar query optimizado con Gemini (pasamos también la categoría si existe)
-            const searchQuery = await AIService.generateProductSearchQuery(product.name, product.category);
-            
-            // 2. Buscar URL real usando el servicio de búsqueda robótica (ahora retorna un array de candidatas)
-            const imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
-            
-            if (!imageUrls || imageUrls.length === 0) {
-                throw new Error('No se encontró ninguna imagen válida en la búsqueda');
-            }
-
-            let buffer = null;
-            let successUrl = null;
-
-            for (const imageUrl of imageUrls) {
-                try {
-                    console.log(`[IA IMAGE] Intentando descargar imagen desde: ${imageUrl}`);
-                    const response = await fetch(imageUrl, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-                        }
-                    });
-                    
-                    if (response.ok) {
-                        const contentType = response.headers.get('content-type') || '';
-                        if (!contentType.toLowerCase().startsWith('image/')) {
-                            console.warn(`[IA IMAGE] URL devolvió un tipo no válido (${contentType}), omitiendo: ${imageUrl}`);
-                            continue;
-                        }
-                        
-                        const arrayBuffer = await response.arrayBuffer();
-                        buffer = Buffer.from(arrayBuffer);
-                        successUrl = imageUrl;
-                        break; // Stop trying if successful
-                    } else {
-                        console.warn(`[IA IMAGE] Error ${response.status} al descargar: ${imageUrl}`);
-                    }
-                } catch (err) {
-                    console.warn(`[IA IMAGE] Excepción al descargar ${imageUrl}:`, err.message);
-                }
-            }
-
-            if (!buffer) {
-                throw new Error(`Las restricciones del servidor (ej. Error 403) bloquearon la descarga de todas las imágenes candidatas.`);
-            }
-            
-            // Prepare storage & replicate to all active image directories
-            const filename = `ai_product_${productId}_${Date.now()}.jpg`;
-            const imageUri = saveAndReplicateProductImage(filename, buffer);
-            await product.update({ imageUri, imageUrl: null });
-
-            return { imageUri };
-        } catch (error) {
-            console.error('[IA IMAGE] Error fatal:', error.message);
-            throw new Error('No se pudo generar la imagen con la IA: ' + error.message);
-        }
+        return productMediaService.generateImageIA(productId);
     }
 
-    /**
-     * Busca imágenes candidatas con IA y las devuelve sin descargar.
-     */
     async searchImagesIA(productId, fallbackName = '', fallbackCategory = '') {
-        try {
-            let name = (fallbackName || '').trim();
-            let category = (fallbackCategory || '').trim();
-
-            if (productId && productId !== 'new' && !productId.toString().startsWith('local-')) {
-                const product = await Product.findByPk(productId);
-                if (product) {
-                    name = name || product.name;
-                    category = category || product.category;
-                }
-            }
-
-            if (!name) {
-                throw new Error('Ingresa el nombre del producto primero para buscar su imagen con IA');
-            }
-
-            console.log(`[IA IMAGE] Buscando imágenes candidatas para: "${name}" (${category || 'General'})`);
-            
-            let imageUrls = null;
-
-            // 1. Búsqueda Directa por Nombre del Producto (Infalible y Ultra-rápida)
-            try {
-                imageUrls = await ImageSearchService.findProductImageUrl(name);
-            } catch (e) {
-                console.warn('[IA IMAGE] Fallo búsqueda por nombre directo:', e.message);
-            }
-
-            // 2. Fallback: Query Generado por IA
-            if (!imageUrls || imageUrls.length === 0) {
-                let searchQuery = name;
-                try {
-                    searchQuery = await AIService.generateProductSearchQuery(name, category);
-                    if (searchQuery && searchQuery !== name) {
-                        console.log(`[IA IMAGE] Reintentando con query IA: "${searchQuery}"`);
-                        imageUrls = await ImageSearchService.findProductImageUrl(searchQuery);
-                    }
-                } catch (e) {}
-            }
-            
-            // 3. Fallback: Nombre Simplificado (Removiendo medidas o variantes)
-            if (!imageUrls || imageUrls.length === 0) {
-                const cleanName = name.replace(/lata|roja|azul|verde|paquete|caja|\b\d+(g|gr|kg|ml|l|oz)\b/gi, '').trim();
-                if (cleanName && cleanName.length >= 3 && cleanName !== name) {
-                    console.log(`[IA IMAGE] Reintentando búsqueda simplificada: "${cleanName}"`);
-                    try {
-                        imageUrls = await ImageSearchService.findProductImageUrl(cleanName);
-                    } catch (e) {}
-                }
-            }
-            
-            if (!imageUrls || imageUrls.length === 0) {
-                throw new Error('No se encontraron imágenes candidatas para este producto en la web. Puedes subir una manualmente o colocar su URL.');
-            }
-
-            return { images: imageUrls };
-        } catch (error) {
-            console.error('[IA IMAGE SEARCH] Error:', error.message);
-            throw new Error(error.message);
-        }
+        return productMediaService.searchImagesIA(productId, fallbackName, fallbackCategory);
     }
 
-    /**
-     * Descarga la imagen seleccionada y la asigna al producto.
-     */
-    async downloadAndSetImage(productId, imageUrl, fallbackName = '', fallbackCategory = '') {
-        try {
-            let product = null;
-            if (productId && productId !== 'new' && !productId.toString().startsWith('local-')) {
-                product = await Product.findByPk(productId);
-            }
-
-            console.log(`[IA IMAGE] Intentando descargar imagen seleccionada desde: ${imageUrl}`);
-            
-            const axios = require('axios');
-            const response = await axios.get(imageUrl, {
-                responseType: 'arraybuffer',
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-                },
-                timeout: 15000
-            });
-            
-            const buffer = Buffer.from(response.data);
-
-            const filename = `ai_product_${Date.now()}_${Math.floor(Math.random()*1000)}.jpg`;
-            const imageUri = saveAndReplicateProductImage(filename, buffer);
-            if (product) {
-                await product.update({ imageUri, imageUrl: imageUri });
-            }
-
-            return { imageUri, imageUrl: imageUri };
-        } catch (error) {
-            console.error('[IA IMAGE DOWNLOAD] Error:', error.message);
-            throw new Error('Fallo al descargar la imagen elegida: ' + error.message);
-        }
+    async downloadAndSetImage(productId, imageUrl, fallbackName = '', fallbackCategory = '', reqUser = null) {
+        return productMediaService.downloadAndSetImage(productId, imageUrl, fallbackName, fallbackCategory, reqUser);
     }
 
-    /**
-     * Busca y actualiza el código de barras de un producto usando IA.
-     */
-    async updateBarcodeIA(productId) {
-        try {
-            const product = await Product.findByPk(productId);
-            if (!product) throw new Error('Producto no encontrado');
-
-            console.log(`[IA BARCODE] Buscando código para: ${product.name}`);
-
-            // 1. Generar query optimizado con Gemini
-            const searchQuery = await AIService.generateBarcodeSearchQuery(product.name, product.category);
-
-            // 2. Buscar código real usando el servicio de búsqueda robótica
-            let barcode = await BarcodeSearchService.findProductBarcode(searchQuery);
-
-            // 3. Contingencia: Si falla, usamos Visión Computacional + IA (Gemini 3.1 Pro)
-            if (!barcode) {
-                console.log(`[IA BARCODE] Búsqueda robótica falló. Intentando análisis visual e inferencia experta...`);
-                
-                let imageData = null;
-                if (product.imageUri) {
-                    try {
-                        const fs = require('fs');
-                        const path = require('path');
-                        
-                        let userDataPath = process.env.USER_DATA_PATH;
-                        if (!userDataPath && process.platform === 'win32') {
-                             let appData = path.join(process.env.APPDATA, 'americanpos');
-                             if (!fs.existsSync(appData)) appData = path.join(process.env.APPDATA, 'american-pos-backend');
-                             if (fs.existsSync(appData)) userDataPath = appData;
-                        }
-                        const uploadDir = userDataPath ? path.join(userDataPath, 'product_images') : path.join(__dirname, '..', 'product_images');
-                        const filename = product.imageUri.split('/').pop();
-                        const filePath = path.join(uploadDir, filename);
-                        
-                        if (fs.existsSync(filePath)) {
-                            const buffer = fs.readFileSync(filePath);
-                            const extension = filename.split('.').pop().toLowerCase();
-                            let mimeType = 'image/jpeg';
-                            if (extension === 'png') mimeType = 'image/png';
-                            if (extension === 'webp') mimeType = 'image/webp';
-                            
-                            imageData = {
-                                 data: buffer.toString('base64'),
-                                 mimeType
-                            };
-                            console.log(`[IA BARCODE] Imagen cargada para análisis visual (${mimeType}).`);
-                        }
-                    } catch (err) {
-                        console.error('[IA BARCODE] Ignorando error al cargar imagen:', err.message);
-                    }
-                }
-
-                barcode = await AIService.estimateBarcode(product.name, imageData);
-            }
-
-            if (!barcode) {
-                throw new Error('No se encontró ningún código de barras válido en la búsqueda ni en la estimación');
-            }
-
-            console.log(`[IA BARCODE] Código encontrado/estimado: ${barcode}`);
-
-            // 4. Actualizar producto en DB
-            await product.update({ barcode });
-
-            return { barcode };
-        } catch (error) {
-            console.error('[IA BARCODE] Error:', error.message);
-            throw new Error('No se pudo encontrar el código de barras: ' + error.message);
-        }
+    async updateBarcodeIA(productId, reqUser = null) {
+        return productMediaService.updateBarcodeIA(productId, reqUser);
     }
 
-
-    /**
-     * Registrar baja / merma / avería / ajuste de stock con trazabilidad,
-     * soporte de N-Presentaciones (factorConversion) y asiento contable automático.
-     */
     async recordWaste(reqUser, productId, body) {
-        const { companyId, activeBranchId } = reqUser;
-        const { 
-            quantity, 
-            reason = 'rotura', 
-            notes = '', 
-            responsibleName = '', 
-            presentationId = null,
-            warehouseId = null 
-        } = body;
-
-        const qtyNum = parseFloat(quantity);
-        if (isNaN(qtyNum) || qtyNum <= 0) {
-            throw new Error('La cantidad de merma debe ser un número mayor a 0');
-        }
-
-        return await sequelize.transaction(async (t) => {
-            const product = await Product.findOne({
-                where: { id: productId, companyId },
-                transaction: t,
-                lock: true
-            });
-
-            if (!product) {
-                throw new Error('Producto no encontrado');
-            }
-
-            // Factor de conversión si viene de una presentación
-            let factor = 1;
-            let presentation = null;
-            if (presentationId) {
-                presentation = await ProductPresentation.findOne({
-                    where: { id: presentationId, productId, companyId },
-                    transaction: t
-                });
-                if (presentation && presentation.factorConversion) {
-                    factor = parseFloat(presentation.factorConversion) || 1;
-                }
-            } else if (body.factorConversion) {
-                factor = parseFloat(body.factorConversion) || 1;
-            }
-
-            const baseUnits = precision.round(precision.multiply(qtyNum, factor), 4);
-            const currentStock = precision.parseNumericInput(product.stockQuantity ?? product.stock ?? 0);
-            const isPositive = reason === 'ajuste_positivo';
-            const newStock = isPositive
-                ? precision.round(precision.add([currentStock, baseUnits]), 4)
-                : Math.max(-999999, precision.round(precision.subtract(currentStock, baseUnits), 4));
-
-            // 1. Actualizar Producto maestro
-            await product.update({
-                stock: newStock,
-                stockQuantity: newStock
-            }, { transaction: t });
-
-            // 2. Actualizar BranchStock si aplica
-            const branchToUpdate = body.branchId || activeBranchId;
-            if (branchToUpdate) {
-                const branchExists = await Branch.findByPk(branchToUpdate, { transaction: t });
-                if (branchExists) {
-                    const [bStock] = await BranchStock.findOrCreate({
-                        where: { productId, branchId: branchToUpdate, companyId },
-                        defaults: {
-                            productId,
-                            branchId: branchToUpdate,
-                            companyId,
-                            quantity: currentStock
-                        },
-                        transaction: t
-                    });
-                    const currBranchQty = precision.parseNumericInput(bStock.quantity || 0);
-                    const nextBranchQty = isPositive
-                        ? precision.round(precision.add([currBranchQty, baseUnits]), 4)
-                        : precision.round(precision.subtract(currBranchQty, baseUnits), 4);
-                    await bStock.update({ quantity: nextBranchQty }, { transaction: t });
-                }
-            }
-
-            // 3. Actualizar WarehouseStock si aplica
-            if (warehouseId && WarehouseStock) {
-                const [wStock] = await WarehouseStock.findOrCreate({
-                    where: { productId, warehouseId, companyId },
-                    defaults: {
-                        id: generateRobustId(),
-                        productId,
-                        warehouseId,
-                        companyId,
-                        quantity: currentStock
-                    },
-                    transaction: t
-                });
-                const currWQty = precision.parseNumericInput(wStock.quantity || 0);
-                const nextWQty = isPositive
-                    ? precision.round(precision.add([currWQty, baseUnits]), 4)
-                    : precision.round(precision.subtract(currWQty, baseUnits), 4);
-                await wStock.update({ quantity: nextWQty }, { transaction: t });
-            }
-
-            // 4. Registrar StockMovement
-            const unitCost = precision.parseNumericInput(product.cost || 0);
-            const totalCost = precision.round(precision.multiply(unitCost, baseUnits), 4);
-            const presentationTag = factor > 1 ? ` [Empaque: ${presentation?.name || body.presentationName || 'Presentación'} x${factor}]` : '';
-            const fullNotes = `${notes || ''}${presentationTag}`.trim();
-
-            const movement = await StockMovement.create({
-                id: generateRobustId(),
-                productId,
-                userId: reqUser.id,
-                companyId,
-                branchId: branchToUpdate || null,
-                type: isPositive ? 'ADJUSTMENT_IN' : 'WASTE',
-                category: reason,
-                quantity: baseUnits,
-                stockBefore: currentStock,
-                stockAfter: newStock,
-                costPrice: unitCost,
-                totalCost,
-                responsibleName: responsibleName || reqUser.name || reqUser.username || 'Admin',
-                notes: fullNotes,
-                reason,
-                date: new Date().toISOString()
-            }, { transaction: t });
-
-            // 5. Asiento Contable Automático (PUC) síncrono y obligatorio dentro de la transacción para mermas reales
-            let accountingEntry = null;
-            if (!isPositive && totalCost > 0) {
-                const AccountingEngineService = require('./AccountingEngineService');
-                accountingEntry = await AccountingEngineService.recordWasteMovement({
-                    companyId,
-                    product,
-                    quantityBaseUnits: baseUnits,
-                    reason,
-                    notes: fullNotes,
-                    responsibleName,
-                    userId: reqUser.id,
-                    movementId: movement.id,
-                    transaction: t
-                });
-                if (!accountingEntry) {
-                    throw new Error(`No se pudo generar el asiento contable obligatorio para la merma del producto ${product.name}.`);
-                }
-            }
-
-            return {
-                success: true,
-                movement,
-                product: product.get({ plain: true }),
-                baseUnits,
-                factorConversion: factor,
-                accountingEntryId: accountingEntry?.id || null
-            };
-        });
+        return productWasteAndAudit.recordWaste(reqUser, productId, body);
     }
 
-    /**
-     * Obtener historial y auditoría de mermas y ajustes de inventario
-     */
     async getWasteHistory(reqUser, queryParams = {}) {
-        const { companyId } = reqUser;
-        const { startDate, endDate, reason, search, productId, limit = 100, page = 1 } = queryParams;
-
-        const where = {
-            companyId,
-            type: { [Op.in]: ['WASTE', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT'] }
-        };
-
-        if (startDate && endDate) {
-            where.date = { [Op.between]: [startDate, endDate + 'T23:59:59.999Z'] };
-        } else if (startDate) {
-            where.date = { [Op.gte]: startDate };
-        } else if (endDate) {
-            where.date = { [Op.lte]: endDate + 'T23:59:59.999Z' };
-        }
-
-        if (reason && reason !== 'all') {
-            where.category = reason;
-        }
-
-        if (productId) {
-            where.productId = productId;
-        }
-
-        const cleanSearch = search && typeof search === 'string' ? search.trim() : '';
-        if (cleanSearch) {
-            const likeOp = sequelize.getDialect() === 'postgres' ? Op.iLike : Op.like;
-            const pattern = `%${cleanSearch}%`;
-            where[Op.or] = [
-                { notes: { [likeOp]: pattern } },
-                { responsibleName: { [likeOp]: pattern } },
-                { reason: { [likeOp]: pattern } },
-                { '$Product.name$': { [likeOp]: pattern } },
-                { '$Product.barcode$': { [likeOp]: pattern } }
-            ];
-        }
-
-        const parsedLimit = Math.max(1, parseInt(limit, 10) || 100);
-        const offset = (Math.max(1, parseInt(page, 10) || 1) - 1) * parsedLimit;
-
-        const includeProduct = [
-            {
-                model: Product,
-                as: 'Product',
-                attributes: ['id', 'name', 'barcode', 'cost', 'price', 'imageUri', 'stockUnit'],
-                required: false
-            }
-        ];
-
-        const { count, rows } = await StockMovement.findAndCountAll({
-            where,
-            include: includeProduct,
-            order: [['date', 'DESC'], ['createdAt', 'DESC']],
-            limit: parsedLimit,
-            offset,
-            ...(cleanSearch ? { subQuery: false } : {})
-        });
-
-        let totalUnits = 0;
-        let totalCostUSD = 0;
-        const byCategory = {};
-
-        // Si existen más registros fuera de la página actual, sumar totales globales sobre el filtro completo
-        let summaryRows = rows;
-        if (count > rows.length || offset > 0) {
-            summaryRows = await StockMovement.findAll({
-                where,
-                include: cleanSearch ? [{ model: Product, as: 'Product', attributes: [], required: false }] : [],
-                attributes: ['quantity', 'totalCost', 'category'],
-                raw: true,
-                ...(cleanSearch ? { subQuery: false } : {})
-            });
-        }
-
-        summaryRows.forEach(mov => {
-            const q = precision.parseNumericInput(mov.quantity || 0);
-            const c = precision.parseNumericInput(mov.totalCost || 0);
-            totalUnits = precision.add([totalUnits, q]);
-            totalCostUSD = precision.add([totalCostUSD, c]);
-            const cat = mov.category || 'otros';
-            byCategory[cat] = precision.round(precision.add([byCategory[cat] || 0, c]), 4);
-        });
-
-        return {
-            movements: rows,
-            summary: {
-                totalUnits: precision.round(totalUnits, 4),
-                totalCostUSD: precision.round(totalCostUSD, 4),
-                totalRecords: count,
-                byCategory
-            }
-        };
+        return productWasteAndAudit.getWasteHistory(reqUser, queryParams);
     }
 
-    /**
-     * Exportar reporte de auditoría de mermas a Excel
-     */
     async exportWasteExcel(reqUser, queryParams = {}) {
-        const { movements } = await this.getWasteHistory(reqUser, { ...queryParams, limit: 10000 });
-        const ExcelJS = require('exceljs');
-
-        const rows = movements.map(m => ({
-            fecha: m.date ? new Date(m.date).toLocaleString('es-VE') : '',
-            producto: m.Product?.name || 'N/A',
-            barcode: m.Product?.barcode || '',
-            sku: m.Product?.sku || '',
-            motivo: m.category || m.reason || '',
-            tipo: m.type || '',
-            cantidad: parseFloat(m.quantity || 0),
-            stockAntes: parseFloat(m.stockBefore || 0),
-            stockResultante: parseFloat(m.stockAfter || 0),
-            costoUnitario: parseFloat(m.costPrice || 0),
-            perdidaTotal: parseFloat(m.totalCost || 0),
-            responsable: m.responsibleName || '',
-            notas: m.notes || ''
-        }));
-
-        const wb = new ExcelJS.Workbook();
-        const ws = wb.addWorksheet('Mermas y Ajustes');
-        ws.columns = [
-            { header: 'Fecha y Hora', key: 'fecha', width: 22 },
-            { header: 'Producto', key: 'producto', width: 32 },
-            { header: 'Código de Barras', key: 'barcode', width: 18 },
-            { header: 'SKU', key: 'sku', width: 16 },
-            { header: 'Motivo / Categoría', key: 'motivo', width: 24 },
-            { header: 'Tipo de Movimiento', key: 'tipo', width: 18 },
-            { header: 'Unidades Base Dadas de Baja', key: 'cantidad', width: 24 },
-            { header: 'Stock Antes', key: 'stockAntes', width: 14 },
-            { header: 'Stock Resultante', key: 'stockResultante', width: 16 },
-            { header: 'Costo Unitario ($)', key: 'costoUnitario', width: 18 },
-            { header: 'Pérdida Total ($)', key: 'perdidaTotal', width: 16 },
-            { header: 'Responsable', key: 'responsable', width: 22 },
-            { header: 'Justificación / Notas', key: 'notas', width: 32 }
-        ];
-        ws.addRows(rows);
-        return Buffer.from(await wb.xlsx.writeBuffer());
+        return productWasteAndAudit.exportWasteExcel(reqUser, queryParams);
     }
 
-    /**
-     * Ajuste rápido de inventario físico (conteo/kardex) - Soporta { newStock } o { type: 'add'|'subtract'|'set', quantity }
-     */
     async quickStockAdjust(reqUser, productId, body) {
-        const { companyId, activeBranchId } = reqUser;
-        const { newStock, type, quantity, reason = 'conteo_fisico', notes = '' } = body;
-
-        return await sequelize.transaction(async (t) => {
-            const product = await Product.findOne({
-                where: { id: productId, companyId },
-                transaction: t,
-                lock: t.LOCK.UPDATE
-            });
-            if (!product) throw new Error('Producto no encontrado');
-
-            const currentStock = parseFloat(product.stockQuantity ?? product.stock ?? 0);
-            let targetStock = parseFloat(newStock);
-
-            if (isNaN(targetStock)) {
-                const qtyVal = parseFloat(quantity);
-                if (isNaN(qtyVal)) {
-                    throw new Error('El nuevo stock o cantidad de ajuste debe ser un número válido');
-                }
-                if (type === 'add') {
-                    targetStock = precision.round(precision.add([currentStock, qtyVal]), 6);
-                } else if (type === 'subtract') {
-                    targetStock = Math.max(0, precision.round(precision.subtract(currentStock, qtyVal), 6));
-                } else {
-                    targetStock = precision.round(qtyVal, 6);
-                }
-            }
-
-            const delta = precision.round(precision.subtract(targetStock, currentStock), 6);
-            if (delta === 0) {
-                return {
-                    success: true,
-                    message: 'El stock no requirió cambios',
-                    currentStock,
-                    newStock: targetStock,
-                    stockBefore: currentStock,
-                    stockAfter: targetStock,
-                    delta: 0,
-                    product: product.get({ plain: true })
-                };
-            }
-
-            await product.update({ stock: targetStock, stockQuantity: String(targetStock) }, { transaction: t });
-
-            if (activeBranchId) {
-                const branchExists = await Branch.findByPk(activeBranchId, { transaction: t });
-                if (branchExists) {
-                    const [bStock] = await BranchStock.findOrCreate({
-                        where: { productId, branchId: activeBranchId, companyId },
-                        defaults: { productId, branchId: activeBranchId, companyId, quantity: targetStock },
-                        transaction: t
-                    });
-                    await bStock.update({ quantity: targetStock }, { transaction: t });
-                }
-            }
-
-            const unitCost = parseFloat(product.cost || 0);
-            const movementType = delta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT';
-
-            await StockMovement.create({
-                id: generateRobustId(),
-                productId,
-                userId: reqUser.id,
-                companyId,
-                branchId: activeBranchId || null,
-                type: movementType,
-                category: reason,
-                quantity: Math.abs(delta),
-                stockBefore: currentStock,
-                stockAfter: targetStock,
-                costPrice: unitCost,
-                totalCost: parseFloat((unitCost * Math.abs(delta)).toFixed(4)),
-                responsibleName: reqUser.name || reqUser.username || 'Admin',
-                notes: notes || `Ajuste rápido de inventario de ${currentStock} a ${targetStock}`,
-                reason,
-                date: new Date().toISOString()
-            }, { transaction: t });
-
-            return {
-                success: true,
-                currentStock,
-                newStock: targetStock,
-                stockBefore: currentStock,
-                stockAfter: targetStock,
-                delta,
-                product: product.get({ plain: true })
-            };
-        });
+        return productWasteAndAudit.quickStockAdjust(reqUser, productId, body);
     }
 
-    /**
-     * Ajuste masivo por Toma Física / Auditoría de Inventario
-     * Cuadra en una transacción atómica el stock físico de múltiples productos,
-     * generando sus respectivos asientos de Kardex (ADJUSTMENT_IN / ADJUSTMENT_OUT).
-     */
     async bulkAuditAdjust(reqUser, body = {}) {
-        const { companyId, activeBranchId, id: userId } = reqUser;
-        const { auditSessionId, reason = 'toma_fisica', notes = '', adjustments = [] } = body;
-
-        if (!Array.isArray(adjustments) || adjustments.length === 0) {
-            throw new Error('No se recibieron ajustes para procesar.');
-        }
-
-        const sessionRef = auditSessionId || `AUD-${Date.now().toString().slice(-6)}`;
-
-        return await sequelize.transaction(async (t) => {
-            let updatedCount = 0;
-            let totalFaltantesQty = 0;
-            let totalSobrantesQty = 0;
-            let totalFaltantesUsd = 0;
-            let totalSobrantesUsd = 0;
-            const movementsToInsert = [];
-
-            let branchExists = null;
-            if (activeBranchId) {
-                branchExists = await Branch.findByPk(activeBranchId, { transaction: t });
-            }
-
-            for (const adj of adjustments) {
-                const { productId, countedStock } = adj;
-                if (!productId || countedStock === undefined || countedStock === null || isNaN(Number(countedStock))) {
-                    continue;
-                }
-
-                const product = await Product.findOne({
-                    where: { id: productId, companyId },
-                    transaction: t,
-                    lock: t.LOCK.UPDATE
-                });
-
-                if (!product) continue;
-
-                const currentStock = parseFloat(product.stockQuantity ?? product.stock ?? 0);
-                const targetStock = precision.round(Math.max(0, parseFloat(countedStock)), 4);
-                const delta = precision.round(precision.subtract(targetStock, currentStock), 4);
-
-                if (delta === 0) continue;
-
-                await product.update({
-                    stock: targetStock,
-                    stockQuantity: String(targetStock)
-                }, { transaction: t });
-
-                if (branchExists) {
-                    const [bStock] = await BranchStock.findOrCreate({
-                        where: { productId, branchId: activeBranchId, companyId },
-                        defaults: { productId, branchId: activeBranchId, companyId, quantity: targetStock },
-                        transaction: t
-                    });
-                    await bStock.update({ quantity: targetStock }, { transaction: t });
-                }
-
-                const unitCost = parseFloat(product.cost || 0);
-                const movementType = delta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT';
-                const movementQty = Math.abs(delta);
-                const impactUsd = precision.round(movementQty * unitCost, 2);
-
-                if (delta < 0) {
-                    totalFaltantesQty = precision.round(totalFaltantesQty + movementQty, 4);
-                    totalFaltantesUsd = precision.round(totalFaltantesUsd + impactUsd, 2);
-                } else {
-                    totalSobrantesQty = precision.round(totalSobrantesQty + movementQty, 4);
-                    totalSobrantesUsd = precision.round(totalSobrantesUsd + impactUsd, 2);
-                }
-
-                movementsToInsert.push({
-                    id: generateRobustId(),
-                    productId,
-                    userId,
-                    companyId,
-                    branchId: activeBranchId || null,
-                    type: movementType,
-                    category: reason,
-                    quantity: movementQty,
-                    stockBefore: currentStock,
-                    stockAfter: targetStock,
-                    costPrice: unitCost,
-                    totalCost: impactUsd,
-                    responsibleName: reqUser.name || reqUser.username || 'Admin',
-                    reason: `Toma Física (${sessionRef}): ${delta > 0 ? '+' : ''}${delta} unidades. ${notes}`.trim(),
-                    notes: notes || `Auditoría física de inventario: de ${currentStock} a ${targetStock}`,
-                    referenceId: sessionRef,
-                    date: new Date().toISOString()
-                });
-
-                updatedCount++;
-            }
-
-            if (movementsToInsert.length > 0) {
-                await StockMovement.bulkCreate(movementsToInsert, { transaction: t });
-            }
-
-            const netDiffUsd = precision.round(totalSobrantesUsd - totalFaltantesUsd, 2);
-
-            return {
-                success: true,
-                auditSessionId: sessionRef,
-                updatedCount,
-                totalFaltantesQty,
-                totalSobrantesQty,
-                totalFaltantesUsd,
-                totalSobrantesUsd,
-                netDiffUsd,
-                timestamp: new Date().toISOString()
-            };
-        });
+        return productWasteAndAudit.bulkAuditAdjust(reqUser, body);
     }
 
 }

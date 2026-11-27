@@ -20,7 +20,14 @@ class SemanticSearchService {
      * Inicializa la configuración de API Key de Gemini
      */
     initAI() {
-        this.apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || null;
+        let key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || null;
+        if (!key) {
+            try {
+                const SecretVault = require('../config/secretVault');
+                key = SecretVault.getSecret('GOOGLE_API_KEY') || SecretVault.getSecret('GEMINI_API_KEY') || null;
+            } catch (_) {}
+        }
+        this.apiKey = key;
     }
 
     /**

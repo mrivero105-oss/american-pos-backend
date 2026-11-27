@@ -132,50 +132,76 @@ const loadEnvFile = (filePath) => {
     }
 };
 
-// 1. Cargar .env en la carpeta local de la aplicación
-loadEnvFile(path.join(__dirname, '.env'));
+// 1. Cargar .env de desarrollo en la carpeta local del repositorio si existe (solo lectura)
+const localRepoEnvPath = path.join(__dirname, '.env');
+const hasLocalRepoEnv = fs.existsSync(localRepoEnvPath);
+loadEnvFile(localRepoEnvPath);
 
-// 2. Cargar .env permanente en AppData (donde Electron y las instalaciones guardan la configuración real)
-// En tests aislados (ISAAC_TEST_ISOLATED=1 con USER_DATA_PATH dedicado), omitir AppData del usuario para no contaminar pruebas.
+// 2. Bóveda DPAPI + carga/migración de AppData/UserData (.env heredados pasan a secrets.vault.json cifrado)
+// En tests aislados (ISAAC_TEST_ISOLATED=1 con USER_DATA_PATH dedicado), omitir AppData del usuario real.
 const isTestIsolatedEnv = process.env.ISAAC_TEST_ISOLATED === '1' && Boolean(process.env.USER_DATA_PATH);
-if (!isTestIsolatedEnv && process.platform === 'win32' && process.env.APPDATA) {
-    loadEnvFile(path.join(process.env.APPDATA, 'isaac-pos', '.env'));
-    loadEnvFile(path.join(process.env.APPDATA, 'Isaac POS', '.env'));
-    loadEnvFile(path.join(process.env.APPDATA, 'americanpos', '.env'));
-}
-if (process.env.USER_DATA_PATH) {
-    loadEnvFile(path.join(process.env.USER_DATA_PATH, '.env'));
-}
-
-// 3. Fallbacks seguros con generación criptográfica aleatoria e independiente si faltan en entorno
 const cryptoNode = require('crypto');
-const persistEnvPath = process.env.ISAAC_TEST_ISOLATED === '1'
-    ? null
-    : (process.env.USER_DATA_PATH && fs.existsSync(process.env.USER_DATA_PATH)
-        ? path.join(process.env.USER_DATA_PATH, '.env')
-        : (fs.existsSync(path.join(__dirname, '.env')) ? path.join(__dirname, '.env') : null));
+const SecretVault = require('./config/secretVault');
+const requiredBootSecrets = ['JWT_SECRET', 'SYNC_SECRET_KEY', 'BACKUP_ENCRYPTION_KEY', 'AUDIT_HMAC_SECRET'];
 
-const ensureIndependentSecret = (envKey) => {
-    if (process.env[envKey] && String(process.env[envKey]).trim().length > 0) return;
-    const generated = cryptoNode.randomBytes(32).toString('hex');
-    process.env[envKey] = generated;
-    if (persistEnvPath) {
-        try {
-            const current = fs.existsSync(persistEnvPath) ? fs.readFileSync(persistEnvPath, 'utf8') : '';
-            const keyRegex = new RegExp(`^${envKey}=.*$`, 'm');
-            if (!keyRegex.test(current)) {
-                const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
-                fs.appendFileSync(persistEnvPath, `${prefix}${envKey}=${generated}\n`, 'utf8');
-            }
-        } catch (_) {}
+const resolveVaultBaseDir = () => {
+    if (process.env.USER_DATA_PATH) {
+        return process.env.USER_DATA_PATH.trim().replace(/^["']|["']$/g, '');
     }
-    console.warn(`[SECURITY] ${envKey} no configurado en entorno. Se generó una clave independiente dedicada.`);
+    if (isTestIsolatedEnv || process.env.NODE_ENV === 'test') {
+        return null;
+    }
+    if (process.platform === 'win32' && process.env.APPDATA) {
+        return path.join(process.env.APPDATA, 'isaac-pos');
+    }
+    return null;
 };
 
-ensureIndependentSecret('JWT_SECRET');
-ensureIndependentSecret('SYNC_SECRET_KEY');
-ensureIndependentSecret('BACKUP_ENCRYPTION_KEY');
-ensureIndependentSecret('AUDIT_HMAC_SECRET');
+const vaultBaseDir = resolveVaultBaseDir();
+const appDataEnvCandidates = (!isTestIsolatedEnv && process.platform === 'win32' && process.env.APPDATA)
+    ? [
+        path.join(process.env.APPDATA, 'isaac-pos', '.env'),
+        path.join(process.env.APPDATA, 'Isaac POS', '.env'),
+        path.join(process.env.APPDATA, 'americanpos', '.env')
+    ]
+    : [];
+const userDataEnvPath = process.env.USER_DATA_PATH
+    ? path.join(process.env.USER_DATA_PATH.trim().replace(/^["']|["']$/g, ''), '.env')
+    : null;
+
+const candidateEnvPaths = [
+    ...(!isTestIsolatedEnv && hasLocalRepoEnv ? [localRepoEnvPath] : []),
+    ...(userDataEnvPath ? [userDataEnvPath] : []),
+    ...appDataEnvCandidates
+];
+const migrateEnvPaths = process.env.ISAAC_TEST_ISOLATED === '1'
+    ? (userDataEnvPath ? [userDataEnvPath] : [])
+    : [
+        ...(userDataEnvPath ? [userDataEnvPath] : []),
+        ...appDataEnvCandidates
+    ];
+
+if (vaultBaseDir) {
+    try {
+        SecretVault.provisionAndLoadSecrets({
+            baseDir: vaultBaseDir,
+            requiredKeys: process.env.ISAAC_TEST_ISOLATED === '1' ? [] : requiredBootSecrets,
+            candidateEnvPaths,
+            migrateEnvPaths,
+            stripMigratedEnv: true
+        });
+    } catch (vaultErr) {
+        console.warn('[SECURITY] Aviso cargando bóveda DPAPI:', vaultErr.message);
+        for (const p of candidateEnvPaths) loadEnvFile(p);
+    }
+}
+
+for (const envKey of requiredBootSecrets) {
+    if (!process.env[envKey] || String(process.env[envKey]).trim().length === 0) {
+        process.env[envKey] = cryptoNode.randomBytes(32).toString('hex');
+        console.warn(`[SECURITY] ${envKey} generado en memoria para la sesión actual.`);
+    }
+}
 if (!process.env.PORT) {
     process.env.PORT = '3005,5005,8080';
 }
@@ -183,7 +209,6 @@ if (!process.env.DB_DIALECT) {
     process.env.DB_DIALECT = 'postgres';
 }
 const express = require('express');
-require('express-async-errors');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
@@ -322,6 +347,10 @@ const startServer = (ports, userDataPath = null) => {
 
             const app = express();
 
+            // Enterprise APM Telemetry Middleware (p50/p95/p99 latencia HTTP, ring-buffer acotado)
+            const telemetryCollector = require('./utils/telemetryCollector');
+            app.use(telemetryCollector.middleware());
+
             // Basic Request Logger (redacta parámetros sensibles en query string)
             app.use((req, res, next) => {
                 const sanitizedUrl = String(req.url || '').replace(/([?&](?:token|sync_key|key|secret|password|pin)=)[^&]+/gi, '$1[REDACTED]');
@@ -355,9 +384,25 @@ const startServer = (ports, userDataPath = null) => {
                 next();
             });
 
-            // Middleware - Security Headers
+            // Middleware - Security Headers (CSP compatible con React/Vite/Tailwind/Socket.IO/Electron/LAN)
             app.use(helmet({
-                contentSecurityPolicy: false, // Disabled for Electron app compatibility
+                contentSecurityPolicy: {
+                    directives: {
+                        defaultSrc: ["'self'"],
+                        scriptSrc: ["'self'", "'unsafe-inline'"],
+                        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+                        fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+                        imgSrc: ["'self'", "data:", "blob:", "http:", "https:"],
+                        connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+                        mediaSrc: ["'self'", "data:", "blob:"],
+                        workerSrc: ["'self'", "blob:"],
+                        objectSrc: ["'none'"],
+                        baseUri: ["'self'"],
+                        formAction: ["'self'"],
+                        frameAncestors: ["'none'"],
+                        upgradeInsecureRequests: null
+                    }
+                },
                 crossOriginResourcePolicy: { policy: "cross-origin" },
                 crossOriginOpenerPolicy: false,
                 originAgentCluster: false,
@@ -412,7 +457,7 @@ const startServer = (ports, userDataPath = null) => {
                 if (/^https?:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/i.test(origin)) {
                     return callback(null, true);
                 }
-                if (/^https?:\/\/[a-z0-9_-]+(\.(local|lan|home|internal))?(:\d+)?$/i.test(originLower)) {
+                if (/^https?:\/\/[a-z0-9_-]+\.(local|lan|home|internal)(:\d+)?$/i.test(originLower)) {
                     return callback(null, true);
                 }
                 logger.warn(`[CORS REJECTED] Origin no autorizado bloqueado: ${origin}`);
@@ -437,9 +482,10 @@ const startServer = (ports, userDataPath = null) => {
             };
 
             app.use(cors(corsOptions));
-            app.options('*', cors(corsOptions));
+            app.options('/{*splat}', cors(corsOptions));
             app.use(cookieParser());
-            app.use(compression());
+            const { createCompressionOptions } = require('./utils/httpCompression');
+            app.use(compression(createCompressionOptions()));
 
             const isLocalOrLanIp = (ip) => {
                 if (!ip) return false;
@@ -473,6 +519,8 @@ const startServer = (ports, userDataPath = null) => {
             app.use('/auth/login', authLimiter);
             app.use('/auth/register', authLimiter);
             app.use('/auth/quick-unlock', authLimiter);
+            app.use('/auth/biometrics/challenge', authLimiter);
+            app.use('/auth/biometrics/login', authLimiter);
             app.use('/auth/supervisor-authorize', authLimiter);
             app.use('/auth/supervisor_authorize', authLimiter);
 
@@ -493,6 +541,8 @@ const startServer = (ports, userDataPath = null) => {
                         req.path.startsWith('/sync') ||
                         req.path.startsWith('/messages') ||
                         req.path.startsWith('/dist.zip') ||
+                        req.path.startsWith('/Isaac-POS-Mobile.apk') ||
+                        req.path.startsWith('/Isaac-POS.apk') ||
                         req.path.startsWith('/version.json') ||
                         req.path.startsWith('/api/app-update-info')) {
                         return true;
@@ -533,6 +583,11 @@ const startServer = (ports, userDataPath = null) => {
 
             const safeStaticMimeTypes = (req, res, next) => {
                 if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+                const lowerPath = String(req.path || '').toLowerCase();
+                // Bloquear acceso público directo a herramientas administrativas de licenciamiento en /public
+                if (lowerPath.includes('generador-licencias') || lowerPath.includes('pocket-license')) {
+                    return res.status(403).json({ error: 'Acceso restringido. Utilice la ruta autenticada correspondiente.' });
+                }
                 const ext = path.extname(req.path).toLowerCase();
                 if (ext) {
                     const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.csv', '.xlsx', '.css', '.js', '.html', '.svg', '.woff', '.woff2', '.ttf', '.zip', '.json', '.ico', '.apk'];
@@ -556,13 +611,57 @@ const startServer = (ports, userDataPath = null) => {
                 next();
             };
 
+            // Endpoints directos para OTA móvil (version.json, dist.zip) y descarga del APK en LAN.
+            // Se registran ANTES de express.static(staticPath) para respetar la prioridad:
+            // %APPDATA%/isaac-pos/mobile-ota -> resources/mobile-ota (extraResources) -> staticPath/public.
+            const { resolveMobileDistributionFile } = require('./utils/mobileDistributionPaths');
+
+            app.get('/version.json', (req, res) => {
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
+                const target = resolveMobileDistributionFile('version.json', { staticPath, baseDir: __dirname });
+                if (target) return res.sendFile(target);
+                res.status(404).json({ error: 'version.json no encontrado' });
+            });
+
+            app.get('/dist.zip', (req, res) => {
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                const target = resolveMobileDistributionFile('dist.zip', { staticPath, baseDir: __dirname });
+                if (target) {
+                    res.setHeader('Content-Type', 'application/zip');
+                    return res.sendFile(target);
+                }
+                res.status(404).json({ error: 'dist.zip no encontrado' });
+            });
+
+            app.get(['/Isaac-POS-Mobile.apk', '/Isaac-POS.apk', '/Isaac%20POS%20Mobile.apk'], (req, res) => {
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                const target = resolveMobileDistributionFile(['Isaac-POS-Mobile.apk', 'Isaac-POS.apk'], { staticPath, baseDir: __dirname });
+                if (target) {
+                    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+                    return res.download(target, 'Isaac-POS-Mobile.apk');
+                }
+                res.status(404).json({ error: 'Isaac-POS-Mobile.apk no encontrado' });
+            });
+
             app.use(safeStaticMimeTypes, express.static(staticPath, {
-                etag: false,
-                maxAge: 0,
-                setHeaders: (res, path) => {
-                    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-                    res.setHeader('Pragma', 'no-cache');
-                    res.setHeader('Expires', '0');
+                etag: true,
+                lastModified: true,
+                setHeaders: (res, filePath) => {
+                    const normalized = String(filePath || '').replace(/\\/g, '/').toLowerCase();
+                    const isImmutableAsset = (
+                        normalized.includes('/assets/') &&
+                        /-[a-z0-9_-]{6,16}\.(js|css|png|jpg|jpeg|webp|svg|woff|woff2|ttf)$/i.test(normalized)
+                    ) || normalized.includes('/fonts/');
+
+                    if (isImmutableAsset) {
+                        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                    } else {
+                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                        res.setHeader('Pragma', 'no-cache');
+                        res.setHeader('Expires', '0');
+                    }
                 }
             }));
 
@@ -596,14 +695,28 @@ const startServer = (ports, userDataPath = null) => {
                 }
             });
 
-            app.use('/uploads', safeUserMediaMimeTypes, express.static(path.join(staticPath, 'uploads')));
+            const {
+                createPublicMediaStaticOptions,
+                createPrivateMediaStaticOptions
+            } = require('./utils/staticMediaCache');
+            const publicMediaStaticOptions = createPublicMediaStaticOptions();
+            const privateMediaStaticOptions = createPrivateMediaStaticOptions();
+
+            app.use('/uploads', safeUserMediaMimeTypes, express.static(path.join(staticPath, 'uploads'), publicMediaStaticOptions));
             
-            // Serve all possible media paths (local, electron unpacked, and any existing AppData folders)
+            // Serve all existing media paths without crear directorios legacy vacíos en cada arranque
             const getValidCandidatePaths = (subfolder) => {
+                const primaryUserDataDir = process.env.USER_DATA_PATH
+                    ? path.join(process.env.USER_DATA_PATH, subfolder)
+                    : path.join(__dirname, subfolder);
+                if (!fs.existsSync(primaryUserDataDir)) {
+                    try { fs.mkdirSync(primaryUserDataDir, { recursive: true }); } catch (e) {}
+                }
+
                 const candidates = [
+                    primaryUserDataDir,
                     path.join(__dirname, subfolder),
                     isPackaged ? path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), subfolder) : null,
-                    process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, subfolder) : null,
                     process.env.APPDATA ? path.join(process.env.APPDATA, 'isaac-pos', subfolder) : null,
                     process.env.APPDATA ? path.join(process.env.APPDATA, 'americanpos', subfolder) : null,
                     process.env.APPDATA ? path.join(process.env.APPDATA, 'Isaac POS', subfolder) : null,
@@ -611,23 +724,17 @@ const startServer = (ports, userDataPath = null) => {
                     process.env.APPDATA ? path.join(process.env.APPDATA, 'american-pos-backend', subfolder) : null,
                 ].filter(Boolean);
 
-                candidates.forEach(p => {
-                    if (!fs.existsSync(p)) {
-                        try { fs.mkdirSync(p, { recursive: true }); } catch (e) {}
-                    }
-                });
-
                 return [...new Set(candidates)].filter(p => fs.existsSync(p));
             };
 
             const productImagesDirs = getValidCandidatePaths('product_images');
             productImagesDirs.forEach(dir => {
-                app.use('/product_images', safeUserMediaMimeTypes, express.static(dir));
+                app.use('/product_images', safeUserMediaMimeTypes, express.static(dir, publicMediaStaticOptions));
             });
 
             const supplierLogosDirs = getValidCandidatePaths('supplier_logos');
             supplierLogosDirs.forEach(dir => {
-                app.use('/supplier_logos', safeUserMediaMimeTypes, express.static(dir));
+                app.use('/supplier_logos', safeUserMediaMimeTypes, express.static(dir, publicMediaStaticOptions));
             });
 
             const invoicesDirs = getValidCandidatePaths('invoices');
@@ -644,12 +751,12 @@ const startServer = (ports, userDataPath = null) => {
                 }
             };
             invoicesDirs.forEach(dir => {
-                app.use('/invoices', verifyToken, verifyInvoiceAccess, safeUserMediaMimeTypes, express.static(dir));
+                app.use('/invoices', verifyToken, verifyInvoiceAccess, safeUserMediaMimeTypes, express.static(dir, privateMediaStaticOptions));
             });
 
             const displayAdsDirs = getValidCandidatePaths('display_ads');
             displayAdsDirs.forEach(dir => {
-                app.use('/display_ads', safeUserMediaMimeTypes, express.static(dir));
+                app.use('/display_ads', safeUserMediaMimeTypes, express.static(dir, publicMediaStaticOptions));
             });
 
             // Routes
@@ -669,7 +776,7 @@ const startServer = (ports, userDataPath = null) => {
             });
 
             // SPA Direct Browser Navigation for Mobile & Desktop
-            app.get(['/mobile', '/mobile-pos', '/login', '/pos', '/dashboard', '/inventory', '/customers', '/sales-history', '/sales-manager', '/cash-register', '/recharges', '/display', '/customer-display', '/store*'], (req, res, next) => {
+            app.get(['/mobile', '/mobile-pos', '/login', '/pos', '/dashboard', '/inventory', '/customers', '/sales-history', '/sales-manager', '/cash-register', '/recharges', '/display', '/customer-display', '/store{*splat}'], (req, res, next) => {
                 // If it's an API request (requesting JSON, AJAX, or carrying auth/sync tokens), pass through to API routes
                 const isApiRequest = req.headers.authorization || req.headers['x-sync-key'] || req.xhr || req.headers['x-requested-with'] || (req.headers.accept?.includes('application/json') && !req.headers.accept?.includes('text/html'));
                 if (isApiRequest) {
@@ -681,32 +788,11 @@ const startServer = (ports, userDataPath = null) => {
                 return res.sendFile(path.join(staticPath, 'index.html'));
             });
 
-            // Endpoint directo para version.json y dist.zip (OTA)
-            app.get('/version.json', (req, res) => {
-                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-                res.setHeader('Pragma', 'no-cache');
-                res.setHeader('Expires', '0');
-                const p = path.join(staticPath, 'version.json');
-                const fallback = path.join(__dirname, 'public', 'version.json');
-                const target = fs.existsSync(p) ? p : fallback;
-                if (fs.existsSync(target)) return res.sendFile(target);
-                res.status(404).json({ error: 'version.json no encontrado' });
-            });
-
-            app.get('/dist.zip', (req, res) => {
-                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-                const p = path.join(staticPath, 'dist.zip');
-                const fallback = path.join(__dirname, 'public', 'dist.zip');
-                const target = fs.existsSync(p) ? p : fallback;
-                if (fs.existsSync(target)) return res.sendFile(target);
-                res.status(404).json({ error: 'dist.zip no encontrado' });
-            });
-
             // Endpoint de Información para Actualizaciones OTA (Capacitor Updater)
             app.get('/api/app-update-info', (req, res) => {
                 try {
-                    const versionFile = path.join(staticPath, 'version.json');
-                    if (fs.existsSync(versionFile)) {
+                    const versionFile = resolveMobileDistributionFile('version.json', { staticPath, baseDir: __dirname });
+                    if (versionFile) {
                         const content = fs.readFileSync(versionFile, 'utf8');
                         const data = JSON.parse(content);
                         return res.json({
@@ -1046,13 +1132,72 @@ const startServer = (ports, userDataPath = null) => {
                 return rawAddr === '127.0.0.1' || rawAddr === '::1' || rawAddr === '::ffff:127.0.0.1';
             };
 
-            app.get(['/settings/db-config', '/api/db-config'], (req, res) => {
+            const authorizeDbConfigRequest = async (req, res) => {
                 if (!isLocalLoopbackRequest(req)) {
-                    return res.status(403).json({
+                    res.status(403).json({
                         success: false,
-                        error: 'Acceso restringido: la configuración física de base de datos solo puede consultarse desde el equipo local.'
+                        error: 'Acceso restringido: la configuración física de base de datos solo puede consultarse o modificarse desde el equipo local.'
                     });
+                    return false;
                 }
+
+                const { isCompanyAdminRole } = require('./constants/roles');
+                const { verifyJwtResilient, extractBearerToken, verifySocketJwtUser } = require('./middleware/auth');
+                const authHeader = req.headers?.authorization || req.headers?.Authorization;
+                const token = extractBearerToken(authHeader) || req.cookies?.authToken;
+
+                if (!token && (req.headers?.['x-sync-key'] || req.headers?.['X-Sync-Key'])) {
+                    res.status(403).json({
+                        success: false,
+                        error: 'terminal_no_autorizada',
+                        message: 'Las terminales móviles/LAN no tienen permiso para consultar ni modificar la configuración de base de datos.'
+                    });
+                    return false;
+                }
+
+                if (token) {
+                    try {
+                        const decoded = verifyJwtResilient(token);
+                        const userCheck = await verifySocketJwtUser(decoded);
+                        if (!userCheck.ok) {
+                            res.status(401).json({ success: false, error: userCheck.error || 'Sesión inválida o expirada' });
+                            return false;
+                        }
+                        const perms = decoded.permissions || {};
+                        if (!isCompanyAdminRole(userCheck.role) && perms.canManageSettings !== true) {
+                            res.status(403).json({
+                                success: false,
+                                error: 'Acceso denegado: Se requieren permisos de Administrador o Dueño para modificar la configuración de base de datos.'
+                            });
+                            return false;
+                        }
+                        return true;
+                    } catch (_) {
+                        res.status(401).json({ success: false, error: 'Token de sesión inválido o expirado' });
+                        return false;
+                    }
+                }
+
+                // Sin token: permitido únicamente en onboarding inicial o cuando la BD aún no responde / no tiene usuarios creados
+                try {
+                    const { sequelize, User } = require('./database/models');
+                    await sequelize.authenticate();
+                    const usersCount = await User.count();
+                    if (usersCount > 0) {
+                        res.status(401).json({
+                            success: false,
+                            error: 'Autenticación requerida: Inicia sesión como Administrador o Dueño para consultar o modificar la base de datos.'
+                        });
+                        return false;
+                    }
+                } catch (_) {
+                    // BD no disponible todavía (p.ej. credenciales iniciales erróneas o terminal sin servidor configurado) -> permitir recuperación local
+                }
+                return true;
+            };
+
+            app.get(['/settings/db-config', '/api/db-config'], async (req, res) => {
+                if (!(await authorizeDbConfigRequest(req, res))) return;
                 try {
                     const cfg = DbConfigManager.getConfig();
                     res.json({
@@ -1073,21 +1218,26 @@ const startServer = (ports, userDataPath = null) => {
             });
 
             app.post(['/settings/db-config', '/api/db-config'], async (req, res) => {
-                if (!isLocalLoopbackRequest(req)) {
-                    return res.status(403).json({
-                        success: false,
-                        error: 'Acceso restringido: la configuración física de base de datos solo puede modificarse desde el equipo local.'
-                    });
-                }
+                if (!(await authorizeDbConfigRequest(req, res))) return;
                 try {
-                    const { mode, dialect, host, port, database, user, password } = req.body;
+                    const { mode, dialect, host, port, database, user, password } = req.body || {};
+                    const cleanMode = mode === 'client' ? 'client' : 'server';
+                    const cleanDialect = dialect && String(dialect).trim().toLowerCase() !== 'postgres' ? null : 'postgres';
+                    if (!cleanDialect) {
+                        return res.status(400).json({ success: false, error: 'Dialecto de base de datos no soportado. Solo se permite postgres.' });
+                    }
+                    const parsedPort = parseInt(port || 5432, 10);
+                    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+                        return res.status(400).json({ success: false, error: 'Puerto TCP inválido (debe estar entre 1 y 65535).' });
+                    }
+                    const safeDbName = DbConfigManager.validateDatabaseName(database || 'americanpos');
                     const configToSave = {
-                        mode: mode || 'server',
-                        dialect: dialect || 'postgres',
-                        host: host !== undefined ? host : (mode === 'client' ? '' : '127.0.0.1'),
-                        port: parseInt(port || 5432, 10),
-                        database: database || 'americanpos',
-                        user: user || 'postgres'
+                        mode: cleanMode,
+                        dialect: cleanDialect,
+                        host: host !== undefined ? String(host).replace(/[\r\n\0]/g, '').trim() : (cleanMode === 'client' ? '' : '127.0.0.1'),
+                        port: parsedPort,
+                        database: safeDbName,
+                        user: user ? String(user).replace(/[\r\n\0]/g, '').trim() : 'postgres'
                     };
                     if (password !== undefined && password !== null) {
                         configToSave.password = password;
@@ -1189,7 +1339,7 @@ const startServer = (ports, userDataPath = null) => {
             // 🔒 Endpoints de WhatsApp (Protegidos con verifyToken / RBAC)
             app.use(['/whatsapp', '/api/whatsapp'], whatsappRoutes);
 
-            app.all('*', (req, res) => {
+            app.use((req, res) => {
                 const apiPrefixes = [
                     '/auth', '/products', '/sales', '/customers', '/suppliers',
                     '/cash', '/reports', '/settings', '/purchase-orders', '/refunds',
@@ -1257,300 +1407,36 @@ const startServer = (ports, userDataPath = null) => {
                 } catch (sslErr) {
                     console.warn('⚠️ Failed to load SSL files, falling back to HTTP:', sslErr.message);
                 }
+            } else if (process.env.ENABLE_LAN_TLS !== 'false' && (
+                process.env.ENABLE_LAN_TLS === 'true'
+                || (userDataPath && typeof userDataPath === 'object' && userDataPath.enableLanTls === true)
+                || (() => {
+                    try {
+                        const { SETTINGS_FILE } = require('./config/paths');
+                        const cfgPath = resolvedUserData ? path.join(resolvedUserData, 'settings.json') : SETTINGS_FILE;
+                        if (fs.existsSync(cfgPath)) {
+                            const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                            return parsed?.enableLanTls === true || parsed?.network?.enableLanTls === true;
+                        }
+                    } catch (_e) {}
+                    return false;
+                })()
+            )) {
+                try {
+                    const { BASE_PATH } = require('./config/paths');
+                    const { ensureLanTlsCredentials } = require('./utils/lanTlsCert');
+                    const certBundle = ensureLanTlsCredentials(resolvedUserData || BASE_PATH);
+                    sslOptions = { key: certBundle.key, cert: certBundle.cert };
+                    isHttps = true;
+                    console.log(`🔒 TLS LAN automático activo (SHA-256: ${certBundle.fingerprint256}, SANs: ${certBundle.ips.join(', ')})`);
+                } catch (lanTlsErr) {
+                    console.warn('⚠️ No se pudo inicializar TLS LAN automático, continuando en HTTP:', lanTlsErr.message);
+                }
             }
 
+            const { setupSocketEvents, createVirtualIoHub } = require('./services/SocketGateway');
+            const workerManager = require('./services/WorkerManager');
             const ioInstances = [];
-
-            const setupSocketEvents = (io) => {
-                // 🔒 SEGURIDAD MULTI-TENANT: Middleware estricto de autenticación y aislamiento para WebSockets
-                io.use(async (socket, next) => {
-                    try {
-                        const {
-                            verifyJwtResilient,
-                            safeSecretEqual,
-                            verifyDisplayPairingToken,
-                            verifySocketJwtUser
-                        } = require('./middleware/auth');
-
-                        // Parsear cookie authToken si viene en handshake HTTP Same-Origin / Electron
-                        let cookieToken = null;
-                        const rawCookie = String(socket.handshake.headers?.cookie || '');
-                        if (rawCookie) {
-                            for (const part of rawCookie.split(';')) {
-                                const eqIdx = part.indexOf('=');
-                                if (eqIdx > 0) {
-                                    const k = part.slice(0, eqIdx).trim();
-                                    if (k === 'authToken') {
-                                        cookieToken = decodeURIComponent(part.slice(eqIdx + 1).trim());
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        const token = socket.handshake.auth?.token ||
-                            socket.handshake.headers?.authorization?.replace(/^Bearer\s+/, '') ||
-                            cookieToken;
-                        if (token) {
-                            const decoded = verifyJwtResilient(token);
-                            const sockUserCheck = await verifySocketJwtUser(decoded);
-                            if (!sockUserCheck.ok) {
-                                return next(new Error(sockUserCheck.error || 'Unauthorized socket session'));
-                            }
-                            socket.user = {
-                                ...decoded,
-                                role: sockUserCheck.role,
-                                companyId: sockUserCheck.companyId
-                            };
-                            socket.companyId = sockUserCheck.companyId;
-                            socket.authMode = 'jwt';
-                            return next();
-                        }
-
-                        const syncKey = String(
-                            socket.handshake.auth?.syncKey ||
-                            socket.handshake.headers?.['x-sync-key'] ||
-                            ''
-                        );
-                        const expectedSyncKey = String(process.env.SYNC_SECRET_KEY || '');
-                        if (syncKey && expectedSyncKey && safeSecretEqual(syncKey, expectedSyncKey)) {
-                            socket.isSyncNode = true;
-                            socket.companyId = String(process.env.DEFAULT_COMPANY_ID || '2');
-                            socket.authMode = 'sync_key';
-                            return next();
-                        }
-
-                        // Visor de clientes pasivo: exige token de emparejamiento HMAC firmado
-                        if (socket.handshake.auth?.mode === 'customer_display') {
-                            const targetComp = String(socket.handshake.auth?.companyId || '2');
-                            const targetReg = String(socket.handshake.auth?.registerId || '1');
-                            const displayToken = String(socket.handshake.auth?.displayToken || '');
-                            if (displayToken && verifyDisplayPairingToken(displayToken, targetComp, targetReg)) {
-                                socket.isCustomerDisplayOnly = true;
-                                socket.companyId = targetComp;
-                                socket.registerId = targetReg;
-                                socket.authMode = 'customer_display';
-                                return next();
-                            }
-                        }
-                    } catch (sockErr) {
-                        console.warn('[SOCKET AUTH] Error verificando handshake:', sockErr.message);
-                    }
-
-                    return next(new Error('Unauthorized socket connection'));
-                });
-
-                io.on('connection', (socket) => {
-                    let userCompanyId = String(socket.companyId || 'default');
-                    const isAuthenticatedClient = Boolean(socket.user || socket.isSyncNode);
-
-                    if (isAuthenticatedClient) {
-                        socket.join(userCompanyId);
-                    }
-
-                    socket.on('join_company', (requestedCompanyId) => {
-                        if (!isAuthenticatedClient) return;
-                        const role = String(socket.user?.role || '').toLowerCase();
-                        const canSwitchCompany = role === 'superadmin';
-                        if (socket.user?.companyId && !canSwitchCompany) {
-                            userCompanyId = String(socket.user.companyId);
-                        } else if (requestedCompanyId && canSwitchCompany) {
-                            userCompanyId = String(requestedCompanyId);
-                        }
-                        socket.companyId = userCompanyId;
-                        socket.join(userCompanyId);
-                    });
-
-                    // Typing events for internal chat (Aislados por empresa)
-                    socket.on('internal_chat_typing', (data) => {
-                        if (!isAuthenticatedClient) return;
-                        socket.to(userCompanyId).emit('internal_chat_typing', { ...data, companyId: userCompanyId });
-                    });
-                    socket.on('internal_chat_stop_typing', (data) => {
-                        if (!isAuthenticatedClient) return;
-                        socket.to(userCompanyId).emit('internal_chat_stop_typing', { ...data, companyId: userCompanyId });
-                    });
-
-                    // LAN Cluster P2P Socket Events
-                    socket.on('lan_announce', (peerData) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            const LANClusterService = require('./services/LANClusterService');
-                            if (peerData && peerData.nodeId) {
-                                LANClusterService.peers.set(`${peerData.nodeId}`, {
-                                    ...peerData,
-                                    companyId: userCompanyId,
-                                    lastSeen: Date.now()
-                                });
-                                LANClusterService.notifyTopologyChange();
-                            }
-                        } catch (e) {}
-                    });
-
-                    socket.on('lan_stock_update', async (data) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('lan_stock_update', data);
-                        } catch (e) {}
-                    });
-
-                    socket.on('lan_sale_sync', async (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('lan_sale_sync', payload);
-                        } catch (e) {}
-                    });
-
-                    // Retransmisión en tiempo real aislada por empresa
-                    socket.on('product_updated', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('product_updated', payload);
-                        } catch (e) {}
-                    });
-
-                    socket.on('inventory_changed', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('inventory_changed', payload || { timestamp: Date.now() });
-                        } catch (e) {}
-                    });
-
-                    socket.on('customers_changed', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('customers_changed', payload || { timestamp: Date.now() });
-                        } catch (e) {}
-                    });
-
-                    socket.on('expenses_changed', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('expenses_changed', payload || { timestamp: Date.now() });
-                        } catch (e) {}
-                    });
-
-                    socket.on('cash_updated', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('cash_updated', payload || { timestamp: Date.now() });
-                        } catch (e) {}
-                    });
-
-                    // Visor de Cliente en Tiempo Real (Customer-Facing Display aislado por tenant autenticado)
-                    socket.on('join_customer_display', (info) => {
-                        try {
-                            const targetCompany = isAuthenticatedClient
-                                ? userCompanyId
-                                : String(socket.companyId || '');
-                            if (!targetCompany) return;
-                            const regId = socket.isCustomerDisplayOnly
-                                ? String(socket.registerId || '1')
-                                : String(info?.registerId || socket.registerId || '1');
-                            socket.join(`customer_displays:${targetCompany}`);
-                            if (regId) socket.join(`display_register:${targetCompany}:${regId}`);
-                        } catch (e) {}
-                    });
-
-                    socket.on('request_customer_display_cart', (data) => {
-                        try {
-                            const targetCompany = isAuthenticatedClient
-                                ? userCompanyId
-                                : String(socket.companyId || '');
-                            if (!targetCompany) return;
-                            socket.to(targetCompany).emit('request_customer_display_cart', data);
-                        } catch (e) {}
-                    });
-
-                    socket.on('customer_display_cart_update', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('customer_display_cart_update', payload);
-                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_cart_update', payload);
-                            if (payload?.registerId) {
-                                socket.to(`display_register:${userCompanyId}:${payload.registerId}`).emit('customer_display_cart_update', payload);
-                            }
-                        } catch (e) {}
-                    });
-
-                    socket.on('customer_display_payment_update', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('customer_display_payment_update', payload);
-                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_payment_update', payload);
-                            if (payload?.registerId) {
-                                socket.to(`display_register:${userCompanyId}:${payload.registerId}`).emit('customer_display_payment_update', payload);
-                            }
-                        } catch (e) {}
-                    });
-
-                    socket.on('customer_display_sale_completed', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('customer_display_sale_completed', payload);
-                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_sale_completed', payload);
-                        } catch (e) {}
-                    });
-
-                    socket.on('customer_display_ads_updated', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            socket.to(userCompanyId).emit('customer_display_ads_updated', payload);
-                            io.to(`customer_displays:${userCompanyId}`).emit('customer_display_ads_updated', payload);
-                        } catch (e) {}
-                    });
-
-                    // 📱 Preventa Remota Móvil -> Despacho instantáneo a Caja Principal (aislado por tenant)
-                    socket.on('remote_held_sale', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            if (!payload || !Array.isArray(payload.items) || payload.items.length === 0) return;
-                            const reg = global.__remoteHeldSalesRegistry || (global.__remoteHeldSalesRegistry = { items: new Map(), recentBroadcasts: new Map() });
-                            const now = Date.now();
-                            const saleId = String(payload.id || payload.code || `presale_${now}`);
-                            const enriched = {
-                                ...payload,
-                                id: saleId,
-                                companyId: userCompanyId,
-                                timestamp: payload.timestamp || now
-                            };
-                            reg.items.set(saleId, enriched);
-
-                            // Limpieza de preventas vencidas (>12h) o exceso de memoria (>100)
-                            for (const [k, v] of reg.items.entries()) {
-                                if (now - (v.timestamp || 0) > 12 * 3600 * 1000) reg.items.delete(k);
-                            }
-                            while (reg.items.size > 100) {
-                                const oldestKey = reg.items.keys().next().value;
-                                reg.items.delete(oldestKey);
-                            }
-
-                            const lastSent = reg.recentBroadcasts.get(saleId) || 0;
-                            if (now - lastSent > 6000) {
-                                reg.recentBroadcasts.set(saleId, now);
-                                io.to(userCompanyId).emit('remote_held_sale', enriched);
-                            }
-                        } catch (e) {}
-                    });
-
-                    // 📡 Escáner de Código de Barras Remoto (aislado por empresa)
-                    socket.on('remote_barcode_scan', (payload) => {
-                        if (!isAuthenticatedClient) return;
-                        try {
-                            const code = String(payload?.barcode || payload?.code || '').trim();
-                            if (!code) return;
-                            const scanEvent = {
-                                barcode: code,
-                                companyId: userCompanyId,
-                                source: payload?.source || 'mobile_socket',
-                                senderSocketId: socket.id,
-                                timestamp: payload?.timestamp || Date.now()
-                            };
-                            socket.to(userCompanyId).emit('remote_barcode_scan', scanEvent);
-                        } catch (e) {}
-                    });
-                });
-            };
 
             const bindSinglePort = (port) => {
                 return new Promise((resPort) => {
@@ -1574,7 +1460,7 @@ const startServer = (ports, userDataPath = null) => {
                     });
 
                     ioInstances.push(io);
-                    setupSocketEvents(io);
+                    setupSocketEvents(io, { logger });
 
                     httpServer.on('error', (err) => {
                         console.warn(`⚠️ Port ${p} is busy or could not be bound:`, err.message);
@@ -1596,31 +1482,17 @@ const startServer = (ports, userDataPath = null) => {
             const primaryPort = boundPrimary ? boundPrimary.port : portList[0];
 
             // Create a virtual "io" hub that forwards emissions to all port instances
-            const virtualIo = {
-                to: (room) => ({
-                    emit: (event, ...args) => {
-                        ioInstances.forEach(instance => {
-                            instance.to(room).emit(event, ...args);
-                        });
-                    }
-                }),
-                in: (room) => ({
-                    emit: (event, ...args) => {
-                        ioInstances.forEach(instance => {
-                            instance.in(room).emit(event, ...args);
-                        });
-                    }
-                }),
-                emit: (event, ...args) => {
-                    ioInstances.forEach(instance => {
-                        instance.emit(event, ...args);
-                    });
-                }
-            };
+            const virtualIo = createVirtualIoHub(ioInstances);
             app.set('io', virtualIo);
             global.io = virtualIo;
 
-            const stopServer = async () => {
+            let isShuttingDown = false;
+            const stopServer = async ({ closeDb = true } = {}) => {
+                if (isShuttingDown) return;
+                isShuttingDown = true;
+
+                await workerManager.stopAll({ logger });
+
                 for (const ioInst of ioInstances) {
                     try {
                         await new Promise((resIo) => ioInst.close(() => resIo()));
@@ -1642,85 +1514,42 @@ const startServer = (ports, userDataPath = null) => {
                         }
                     }
                 }
-                try {
-                    const { sequelize } = require('./database/connection');
-                    if (sequelize && typeof sequelize.close === 'function') {
-                        await sequelize.close();
+                if (closeDb) {
+                    try {
+                        const { sequelize } = require('./database/connection');
+                        if (sequelize && typeof sequelize.close === 'function') {
+                            await sequelize.close();
+                        }
+                    } catch (err) {
+                        console.warn('[Server Shutdown] Error cerrando Sequelize:', err.message);
                     }
-                } catch (err) {
-                    console.warn('[Server Shutdown] Error cerrando Sequelize:', err.message);
                 }
             };
 
             // Resolve IMMEDIATELY so Launcher / Edge opens instantly!
-            resolve({ servers, mainPort: primaryPort, app, ioInstances, dbInitPromise, stopServer });
+            resolve({ servers, mainPort: primaryPort, app, ioInstances, dbInitPromise, isDbReady: () => Boolean(dbReady), stopServer, isHttps, protocol: isHttps ? 'https' : 'http' });
 
-            // 2. Levantar puertos secundarios y servicios en segundo plano sin bloquear el arranque
+            // 2. Levantar puertos secundarios, precalentar HWID y servicios en segundo plano sin bloquear el arranque
             setImmediate(async () => {
+                if (isShuttingDown) return;
+                if (process.env.DISABLE_BACKGROUND_WORKERS !== 'true') {
+                    try {
+                        require('./utils/hardware-id').getStableNetId().catch(() => {});
+                    } catch (_) {}
+                }
                 const secondaryPorts = portList.slice(1);
                 for (const secPort of secondaryPorts) {
+                    if (isShuttingDown) return;
                     await bindSinglePort(secPort);
                 }
 
-                if (process.env.DISABLE_BACKGROUND_WORKERS === 'true') {
-                    console.log('🧪 [Startup] Workers en segundo plano desactivados (DISABLE_BACKGROUND_WORKERS=true).');
-                    return;
-                }
-
-                // Initialize LAN Cluster Service (P2P Discovery & Sync)
-                try {
-                    const LANClusterService = require('./services/LANClusterService');
-                    LANClusterService.init(virtualIo, Number(primaryPort));
-                } catch (lanErr) {
-                    console.warn('⚠️ Error al iniciar LAN Cluster Service:', lanErr.message);
-                }
-
-                // Start WhatsApp Bot asynchronously in background
-                try {
-                    await dbInitPromise;
-                    const WhatsappBotService = require('./services/WhatsappBotService');
-                    const { User } = require('./database/models');
-                    const firstUser = await User.findOne({ where: { role: ['superadmin', 'admin'] } }) || await User.findOne();
-                    const companyId = firstUser?.companyId || 'default';
-                    
-                    WhatsappBotService.init(companyId, { autoStart: true });
-                    console.log(`✅ WhatsApp Bot background init completed (Company: ${companyId}).`);
-                } catch (err) {
-                    console.warn('⚠️ WhatsApp Bot background init notice:', err.message);
-                }
-
-                // Initialize Auto-Maintenance Service (Nightly Vacuum, Engine Tuning & Backup Rotation)
-                try {
-                    const AutoMaintenanceService = require('./services/AutoMaintenanceService');
-                    AutoMaintenanceService.init();
-                } catch (maintErr) {
-                    console.warn('⚠️ Error al iniciar AutoMaintenanceService:', maintErr.message);
-                }
-
-                // Initialize PostgreSQL 16 Native Realtime Bus (LISTEN / NOTIFY)
-                try {
-                    const PostgresRealtimeService = require('./services/PostgresRealtimeService');
-                    await PostgresRealtimeService.init(virtualIo);
-                } catch (pgRtErr) {
-                    console.warn('⚠️ Error al iniciar PostgresRealtimeService:', pgRtErr.message);
-                }
-
-                // Initialize BCV Auto-Sync Service (Official Exchange Rate Automation)
-                try {
-                    const BCVAutoSyncService = require('./services/BCVAutoSyncService');
-                    BCVAutoSyncService.init(virtualIo);
-                } catch (bcvErr) {
-                    console.warn('⚠️ Error al iniciar BCVAutoSyncService:', bcvErr.message);
-                }
-
-                // Initialize Supabase Cloud Sync Worker (Outbox Processor 24/7)
-                try {
-                    const SupabaseSyncService = require('./services/SupabaseSyncService');
-                    SupabaseSyncService.start(15000);
-                    console.log('✅ Supabase Cloud Sync Worker iniciado (24/7).');
-                } catch (syncWorkerErr) {
-                    console.warn('⚠️ Error al iniciar SupabaseSyncService:', syncWorkerErr.message);
-                }
+                await workerManager.startAll({
+                    virtualIo,
+                    primaryPort,
+                    dbInitPromise,
+                    shouldAbort: () => isShuttingDown,
+                    logger
+                });
             });
         } catch (error) {
             console.error('CRITICAL STARTUP ERROR:', error);
@@ -1733,7 +1562,25 @@ const rawPort = process.env.PORT || "3005,5005,8080";
 const ports = rawPort.toString().split(',').map(p => p.trim());
 
 if (require.main === module) {
-    startServer(ports);
+    startServer(ports).then((srvHandle) => {
+        const gracefulShutdown = async (signal) => {
+            console.log(`[Shutdown] Señal ${signal} recibida. Cerrando conexiones y workers...`);
+            try {
+                if (srvHandle && typeof srvHandle.stopServer === 'function') {
+                    await srvHandle.stopServer();
+                }
+            } catch (err) {
+                console.warn('[Shutdown] Error en drenaje:', err.message);
+            } finally {
+                process.exit(0);
+            }
+        };
+        process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+        process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    }).catch((err) => {
+        console.error('CRITICAL STARTUP ERROR:', err);
+        process.exit(1);
+    });
 }
 
 module.exports = { startServer };

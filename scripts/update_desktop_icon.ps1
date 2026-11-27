@@ -8,7 +8,9 @@ if (-not (Test-Path $sourcePng)) {
     exit 1
 }
 
-$destIco = "C:\Users\mrive\AppData\Local\Programs\Isaac POS Modern\app_icon_fhd.ico"
+$modernDir = if ($env:ISAAC_MODERN_DIR) { $env:ISAAC_MODERN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\Isaac POS Modern" }
+if (-not (Test-Path $modernDir)) { New-Item -Path $modernDir -ItemType Directory -Force | Out-Null }
+$destIco = Join-Path $modernDir "app_icon_fhd.ico"
 $buildIco = Join-Path $projectRoot "american-pos-backend\build\icon.ico"
 
 # Tamaños estandar de iconos de Windows en alta resolucion con mipmaps perfectos

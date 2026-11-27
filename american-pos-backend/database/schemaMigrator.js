@@ -6,7 +6,8 @@
  * estadísticas extendidas e índices B-Tree/GIN.
  */
 
-const TARGET_SCHEMA_VERSION = 240408;
+const TARGET_SCHEMA_VERSION = 240412;
+const POST_CONNECT_SCHEMA_MARKER = `post_connect:${TARGET_SCHEMA_VERSION}`;
 
 // Conservado por compatibilidad de exportación; el esquema en PostgreSQL se gestiona vía runPostConnectMigrations
 const repairSchema = async () => {
@@ -134,15 +135,22 @@ async function sanitizeCatalogAndOrphans(sequelize) {
         // Tabla Sales puede no existir aún en arranque en frío
     }
 
-    // 2. Eliminar alias antiguos redundantes antes de deduplicación general
+    // 2. Eliminar alias antiguos redundantes antes de deduplicación general (convergencia con migrate.js y AutoMaintenanceService)
     const legacyRedundantIndexes = [
         'idx_audit_logs_created',
         'idx_auditlogs_company_createdat',
+        'idx_cashmovements_shiftid',
         'idx_products_company_stock',
+        'idx_products_name',
+        'idx_products_name_trgm',
+        'idx_products_principio_trgm',
         'idx_sale_items_product_id',
         'idx_sale_items_sale_id',
+        'idx_saleitems_saleid',
         'idx_sales_company_createdat',
-        'idx_stock_movements_prod'
+        'idx_stock_alerts_resolved',
+        'idx_stock_movements_prod',
+        'idx_stockmovements_product'
     ];
     for (const oldIdx of legacyRedundantIndexes) {
         try {
@@ -240,7 +248,72 @@ async function migratePlaintextPasswords(seqInstance = null) {
     }
 }
 
-async function runPostConnectMigrations(sequelize) {
+async function canUsePostConnectFastPath(sequelize, marker) {
+    try {
+        const [rows] = await sequelize.query(`
+            SELECT
+                (to_regclass('public.schema_migrations') IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM schema_migrations WHERE version = :marker LIMIT 1)) AS has_marker,
+                (to_regclass('public."Products"') IS NOT NULL
+                    AND to_regclass('public."Sales"') IS NOT NULL
+                    AND to_regclass('public."SaleItems"') IS NOT NULL
+                    AND to_regclass('public."Customers"') IS NOT NULL
+                    AND to_regclass('public."Users"') IS NOT NULL
+                    AND to_regclass('public."Licenses"') IS NOT NULL
+                    AND to_regclass('public."RegisterDrafts"') IS NOT NULL
+                    AND to_regclass('public."DailyRegisterSequences"') IS NOT NULL
+                    AND to_regclass('public."BusinessSettings"') IS NOT NULL
+                    AND to_regclass('public."product_presentaciones"') IS NOT NULL
+                    AND to_regclass('public.mv_daily_sales_summary') IS NOT NULL) AS has_objects,
+                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'isaac_app') AS has_role,
+                EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_product_stock_integrity' AND NOT tgisinternal) AS has_stock_trg,
+                EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_products_diff' AND NOT tgisinternal) AS has_audit_trg,
+                COALESCE((SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."Products"')), false) AS has_rls
+        `, { replacements: { marker }, type: sequelize.QueryTypes.SELECT });
+
+        const check = rows;
+        if (!check || !check.has_marker || !check.has_objects || !check.has_role || !check.has_stock_trg || !check.has_audit_trg || !check.has_rls) {
+            return { ready: false };
+        }
+
+        const userAndLic = await sequelize.query(`
+            SELECT
+                EXISTS (SELECT 1 FROM "Users" LIMIT 1) AS has_users,
+                EXISTS (
+                    SELECT 1 FROM "Users"
+                    WHERE "username" IS NULL OR "username" = ''
+                       OR ("password" IS NOT NULL AND "password" NOT LIKE '$2%' AND length("password") < 30)
+                    LIMIT 1
+                ) AS needs_user_fix,
+                EXISTS (SELECT 1 FROM "Licenses" WHERE "status" = 'active' LIMIT 1) AS has_active_license
+        `, { type: sequelize.QueryTypes.SELECT });
+
+        const ul = userAndLic && userAndLic[0];
+        if (!ul || !ul.has_users || ul.needs_user_fix) {
+            return { ready: false };
+        }
+
+        return { ready: true, hasActiveLicense: Boolean(ul.has_active_license) };
+    } catch (_fastErr) {
+        return { ready: false };
+    }
+}
+
+async function runPostConnectMigrations(sequelize, options = {}) {
+    const forceFull = Boolean(options && typeof options === 'object' && options.force === true);
+    if (!forceFull) {
+        const fastState = await canUsePostConnectFastPath(sequelize, POST_CONNECT_SCHEMA_MARKER);
+        if (fastState.ready) {
+            if (fastState.hasActiveLicense) {
+                console.log('🔒 [License] Licencia activa detectada en base de datos.');
+            } else {
+                console.log('⚠️ [License] Sin licencia activa. El sistema requerirá activación obligatoria.');
+            }
+            console.log(`⚡ [Schema] Fast-path verificado (${POST_CONNECT_SCHEMA_MARKER}): esquema, índices y seguridad activos.`);
+            return;
+        }
+    }
+
     // 1. Extensiones PostgreSQL, función inmutable y columnas garantizadas
     try {
         await sequelize.query('CREATE EXTENSION IF NOT EXISTS unaccent;');
@@ -356,6 +429,7 @@ async function runPostConnectMigrations(sequelize) {
             // Customers
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "creditLimitDays" INTEGER DEFAULT 30;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "isCreditBlocked" BOOLEAN DEFAULT FALSE;',
+            'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "allowOverdueCredit" BOOLEAN DEFAULT FALSE;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "loyaltyPoints" NUMERIC(20, 6) DEFAULT 0;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "isVIP" BOOLEAN DEFAULT FALSE;',
             'ALTER TABLE "Customers" ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN DEFAULT TRUE;',
@@ -474,6 +548,22 @@ async function runPostConnectMigrations(sequelize) {
         }
         console.log('[Schema] PostgreSQL stock integrity & LISTEN/NOTIFY triggers active.');
 
+        // 3.05 Garantizar tabla transaccional BusinessSettings antes de aplicar políticas RLS
+        try {
+            await sequelize.query(`
+                CREATE TABLE IF NOT EXISTS "BusinessSettings" (
+                    "id" VARCHAR(255) PRIMARY KEY,
+                    "companyId" VARCHAR(255) NOT NULL UNIQUE,
+                    "settings" JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    "version" INTEGER NOT NULL DEFAULT 1,
+                    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+            `);
+        } catch (bsErr) {
+            console.warn('[Schema] Warning ensuring BusinessSettings table:', bsErr.message);
+        }
+
         // 3.1 Seguridad de motor y aislamiento multi-tenant en PostgreSQL 16 (RLS + Triggers JSONB Diff)
         try {
             const { initializeDatabaseSecurity } = require('./tenantContext');
@@ -569,29 +659,44 @@ async function runPostConnectMigrations(sequelize) {
             'CREATE INDEX IF NOT EXISTS idx_products_company ON "Products"("companyId")',
             'CREATE INDEX IF NOT EXISTS idx_products_category ON "Products"("category")',
             'CREATE INDEX IF NOT EXISTS idx_products_barcode ON "Products"("barcode")',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_barcode ON "Products" ("companyId", "barcode")',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_name ON "Products" ("companyId", "name")',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_updated ON "Products" ("companyId", "updatedAt" DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_products_company_status_name ON "Products" ("companyId", "name" ASC) WHERE "status" = \'active\'',
+            'CREATE INDEX IF NOT EXISTS idx_products_active_cat_lower ON "Products" ("companyId", LOWER(TRIM(COALESCE("category", \'\')))) WHERE "status" = \'active\'',
+            'CREATE INDEX IF NOT EXISTS idx_products_active_categories_list ON "Products" ("companyId", "category") WHERE "status" = \'active\' AND ("isCustom" = false OR "isCustom" IS NULL)',
             'CREATE INDEX IF NOT EXISTS idx_products_company_stock_qty ON "Products"("companyId", "stockQuantity")',
             'CREATE INDEX IF NOT EXISTS idx_products_company_price ON "Products"("companyId", "price")',
-            'CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON "Products" USING gin (name gin_trgm_ops)',
             'CREATE INDEX IF NOT EXISTS idx_products_unaccent_trgm ON "Products" USING gin (public.immutable_unaccent(lower("name")) gin_trgm_ops)',
             'CREATE INDEX IF NOT EXISTS idx_products_active_trgm ON "Products" USING gin (public.immutable_unaccent(lower(COALESCE("principio_activo", \'\'))) gin_trgm_ops)',
             'CREATE INDEX IF NOT EXISTS idx_products_barcode_trgm ON "Products" USING gin (COALESCE("barcode", \'\') gin_trgm_ops)',
             'CREATE INDEX IF NOT EXISTS idx_products_bulk_barcode_trgm ON "Products" USING gin (COALESCE("bulkBarcode", \'\') gin_trgm_ops)',
             'CREATE INDEX IF NOT EXISTS idx_presentations_barcode_trgm ON "product_presentaciones" USING gin (COALESCE("barcode", \'\') gin_trgm_ops)',
-            'CREATE INDEX IF NOT EXISTS idx_saleitems_saleid ON "SaleItems"("saleId")',
+            'CREATE INDEX IF NOT EXISTS idx_product_presentaciones_product_id ON "product_presentaciones" ("productId")',
+            'CREATE INDEX IF NOT EXISTS idx_variante_productos_producto_id ON "variante_productos" ("producto_id")',
+            'CREATE INDEX IF NOT EXISTS idx_saleitems_sale_prod ON "SaleItems" ("saleId", "productId")',
             'CREATE INDEX IF NOT EXISTS idx_saleitems_product ON "SaleItems"("productId")',
             'CREATE INDEX IF NOT EXISTS idx_saleitems_company ON "SaleItems"("companyId")',
             'CREATE INDEX IF NOT EXISTS idx_branchstocks_product ON "BranchStocks"("productId")',
             'CREATE INDEX IF NOT EXISTS idx_branchstocks_company ON "BranchStocks"("companyId")',
+            'CREATE INDEX IF NOT EXISTS idx_branchstocks_company_updated ON "BranchStocks" ("companyId", "updatedAt" DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_branchstocks_product_branch ON "BranchStocks" ("productId", "branchId") INCLUDE ("quantity")',
             'CREATE INDEX IF NOT EXISTS idx_customers_company ON "Customers"("companyId")',
+            'CREATE INDEX IF NOT EXISTS idx_customers_company_credit ON "Customers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0',
+            'CREATE INDEX IF NOT EXISTS idx_suppliers_company_credit ON "Suppliers" ("companyId", "creditBalance" DESC) WHERE "creditBalance" > 0',
             'CREATE INDEX IF NOT EXISTS idx_sales_company_status ON "Sales"("companyId", "status")',
             'CREATE INDEX IF NOT EXISTS idx_sales_company_date ON "Sales"("companyId", "date")',
+            'CREATE INDEX IF NOT EXISTS idx_sales_company_status_date ON "Sales" ("companyId", "status", "date")',
+            'CREATE INDEX IF NOT EXISTS idx_sales_company_payment_status ON "Sales" ("companyId", "paymentStatus")',
+            'CREATE INDEX IF NOT EXISTS idx_sales_company_cust_created ON "Sales" ("companyId", "customerId", "createdAt" DESC)',
             'CREATE INDEX IF NOT EXISTS idx_sales_payment_methods_gin ON "Sales" USING gin ("paymentMethods" jsonb_path_ops)',
             'CREATE INDEX IF NOT EXISTS idx_sales_applied_promos_gin ON "Sales" USING gin ("appliedPromotions" jsonb_path_ops)',
             'CREATE INDEX IF NOT EXISTS idx_promotions_target_products_gin ON "Promotions" USING gin ("targetProductIds" jsonb_path_ops)',
             'CREATE INDEX IF NOT EXISTS idx_saleitems_createdat ON "SaleItems"("createdAt")',
             'CREATE INDEX IF NOT EXISTS idx_refunds_company_date ON "Refunds"("companyId", "date")',
-            'CREATE INDEX IF NOT EXISTS idx_cashmovements_shift ON "CashMovements"("shiftId")',
-            'CREATE INDEX IF NOT EXISTS idx_stockmovements_product ON "StockMovements"("productId")',
+            'CREATE INDEX IF NOT EXISTS idx_expenses_company_date ON "Expenses" ("companyId", "date")',
+            'CREATE INDEX IF NOT EXISTS idx_cashmovements_shift ON "CashMovements" ("shiftId", "companyId")',
+            'CREATE INDEX IF NOT EXISTS idx_stock_movements_date ON "StockMovements" ("companyId", "createdAt" DESC)',
             'CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_open_shift_per_register ON "CashShifts" ("companyId", "registerId") WHERE "status" = \'open\'',
             'CREATE INDEX IF NOT EXISTS idx_sales_company_created ON "Sales" ("companyId", "createdAt" DESC)',
             'CREATE INDEX IF NOT EXISTS idx_sales_customer_status ON "Sales" ("customerId", "paymentStatus")',
@@ -601,11 +706,15 @@ async function runPostConnectMigrations(sequelize) {
             'CREATE INDEX IF NOT EXISTS idx_journal_lines_entry_id ON "JournalEntryLines" ("journalEntryId")',
             'CREATE INDEX IF NOT EXISTS idx_journal_lines_account_id ON "JournalEntryLines" ("accountId")',
             'CREATE INDEX IF NOT EXISTS idx_credit_history_customer ON "CreditHistories" ("customerId", "createdAt" DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_credit_history_comp_cust_type ON "CreditHistories" ("companyId", "customerId", "type", "timestamp" ASC)',
+            'CREATE INDEX IF NOT EXISTS idx_supplier_credit_history_sup ON "SupplierCreditHistories" ("companyId", "supplierId", "type", "timestamp" ASC)',
             'CREATE INDEX IF NOT EXISTS idx_credit_history_sale ON "CreditHistories" ("saleId")',
             'CREATE INDEX IF NOT EXISTS idx_payroll_receipts_period ON "PayrollReceipts" ("payrollPeriodId", "employeeId")',
             'CREATE INDEX IF NOT EXISTS idx_stock_movements_prod_date ON "StockMovements" ("productId", "createdAt" DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_stock_movements_company_prod_date ON "StockMovements" ("companyId", "productId", "date" DESC)',
             'CREATE INDEX IF NOT EXISTS idx_warehouse_stock_wh_prod ON "WarehouseStocks" ("warehouseId", "productId")',
             'CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_trf ON "StockTransferItems" ("stockTransferId", "productId")',
+            'CREATE INDEX IF NOT EXISTS idx_stock_alerts_company_resolved ON "StockAlerts" ("companyId", "resolved", "createdAt" DESC)',
             'CREATE INDEX IF NOT EXISTS idx_audit_logs_company_created ON "AuditLogs" ("companyId", "createdAt" DESC)',
             // Índices BRIN (PostgreSQL 16) para series temporales de alto volumen
             'CREATE INDEX IF NOT EXISTS idx_brin_audit_logs_created ON "AuditLogs" USING brin ("createdAt")',
@@ -626,7 +735,7 @@ async function runPostConnectMigrations(sequelize) {
         if (convertedJsonb > 0 || catalogClean.droppedCount > 0) {
             await sequelize.query('ANALYZE "Products"; ANALYZE "Sales"; ANALYZE "Refunds";').catch(() => {});
         }
-        console.log('⚡ [Schema] 42 índices GIN/B-Tree y estadísticas multicolumna de PostgreSQL 16 verificados.');
+        console.log(`⚡ [Schema] ${indexes.length} índices GIN/B-Tree/BRIN y estadísticas multicolumna de PostgreSQL 16 verificados.`);
     } catch (idxErr) {
         console.warn('[Schema] Warning applying performance indexes:', idxErr.message);
     }
@@ -691,6 +800,27 @@ async function runPostConnectMigrations(sequelize) {
 
     console.log('✅ Database fully synchronized.');
     await migratePlaintextPasswords(sequelize);
+
+    try {
+        await sequelize.query(`
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version VARCHAR(64) PRIMARY KEY,
+                applied_at VARCHAR(64) NOT NULL
+            );
+        `);
+        await sequelize.query(`
+            INSERT INTO schema_migrations (version, applied_at)
+            VALUES (:marker, :appliedAt)
+            ON CONFLICT (version) DO NOTHING;
+        `, {
+            replacements: {
+                marker: POST_CONNECT_SCHEMA_MARKER,
+                appliedAt: new Date().toISOString()
+            }
+        });
+    } catch (markerErr) {
+        console.warn('[Schema] Aviso guardando marcador de esquema post-connect:', markerErr.message);
+    }
 }
 
 module.exports = {

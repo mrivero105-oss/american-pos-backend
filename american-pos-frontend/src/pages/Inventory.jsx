@@ -1,27 +1,50 @@
-import { useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, memo, lazy, Suspense } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { db } from '../services/db';
 import { useAuth } from '../hooks/AuthContext';
 import { useSocket } from '../hooks/SocketContext';
-import { 
-    Search, Plus, Edit2, Trash2, Package, Clock, X, 
-    Download, Upload, Printer, Image as ImageIcon, LayoutGrid, 
-    List as ListIcon, Loader2, FileText, Pill, AlertTriangle,
-    TrendingUp, TrendingDown, DollarSign, AlertCircle, RefreshCw,
-    Tag, Layers, ArrowUpRight, RotateCcw
+import {
+    Search, 
+    Plus, 
+    Edit2, 
+    Trash2, 
+    Package, 
+    Clock, 
+    X, 
+    Download, 
+    Upload, 
+    Printer, 
+    Image as ImageIcon, 
+    LayoutGrid, 
+    List as ListIcon, 
+    Loader2, 
+    FileText, 
+    Pill, 
+    AlertTriangle, 
+    TrendingUp, 
+    TrendingDown, 
+    DollarSign, 
+    AlertCircle, 
+    RefreshCw, 
+    Tag, 
+    Layers, 
+    RotateCcw
 } from 'lucide-react';
 const ProductModal = lazy(() => import('../components/ProductModal'));
 import ConfirmModal from '../components/ConfirmModal';
 import KardexModal from '../components/KardexModal';
 import LabelModal from '../components/LabelModal';
 import BulkEditModal from '../components/BulkEditModal';
-import StockTransferModal from '../components/StockTransferModal';
 import QuickStockAdjustModal from '../components/QuickStockAdjustModal';
 import WasteManagementModal from '../components/WasteManagementModal';
+import VirtualProductList, { VirtualProductTableBody } from '../components/common/VirtualProductList';
+import { useFuzzySearch } from '../hooks/useFuzzySearch';
 import { getImageUrl } from '../utils/imageUtils';
 import { formatMoney, fetchGlobalSettings, formatStock, isSingleCurrencyMode, isVesOnlyMode } from '../utils/format';
 import useScanner from '../hooks/useScanner';
+
+const INVENTORY_GRID_COLUMNS = { default: 2, sm: 3, md: 4, xl: 5 };
 
 // Custom debounce hook for search optimization
 function useDebounce(value, delay) {
@@ -38,10 +61,10 @@ function useDebounce(value, delay) {
 }
 
 // Componente de fila memoizado para la vista de tabla
-const ProductRow = memo(({ product, user, isSelected, onToggleSelect, onEdit, onDelete, onKardex, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl, currencyMode }) => {
+const ProductRow = memo(function ProductRow({ product, user, isSelected, onToggleSelect, onEdit, onDelete, onKardex, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl, rowRef, dataIndex }) {
     const canEditProducts = ['superadmin', 'admin', 'supervisor', 'owner', 'dueño', 'master'].includes((user?.role || '').toLowerCase()) || user?.permissions?.canCreateProducts || user?.permissions?.canManageInventory;
     return (
-    <tr key={product.id} className="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors relative">
+    <tr ref={rowRef} data-index={dataIndex} className="group hover:bg-slate-50 dark:hover:bg-white/[0.02] transition-colors relative">
         <td className="px-4 py-4 w-10">
             <input
                 type="checkbox"
@@ -198,7 +221,7 @@ const ProductRow = memo(({ product, user, isSelected, onToggleSelect, onEdit, on
 });
 
 // Componente de tarjeta de inventario optimizado para pantallas táctiles móviles
-const MobileProductCard = memo(({ product, user, isSelected, onToggleSelect, onEdit, onDelete, onKardex, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl, currencyMode }) => {
+const MobileProductCard = memo(function MobileProductCard({ product, user, isSelected, onToggleSelect, onEdit, onDelete, onKardex, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl }) {
     const canEditProducts = ['superadmin', 'admin', 'supervisor', 'owner', 'dueño', 'master'].includes((user?.role || '').toLowerCase()) || user?.permissions?.canCreateProducts || user?.permissions?.canManageInventory;
     const isServiceItem = Boolean(product.isService || String(product.category || '').trim().toLowerCase() === 'servicios');
     const isOutOfStock = !isServiceItem && Number(product.stockQuantity) <= 0;
@@ -354,7 +377,7 @@ const MobileProductCard = memo(({ product, user, isSelected, onToggleSelect, onE
 });
 
 // Componente de tarjeta memoizado para la vista de cuadrícula
-const ProductCard = memo(({ product, user, isSelected, onToggleSelect, onEdit, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl, currencyMode }) => (
+const ProductCard = memo(({ product, user, isSelected, onToggleSelect, onEdit, onQuickAdjust, onGenerateIA, onPrintLabel, isGeneratingIA, renderFormatMoney, formatStock, getImageUrl }) => (
     <div
         onClick={() => onEdit ? onEdit(product) : onToggleSelect(product)}
         className={`group relative flex flex-col bg-white dark:bg-slate-900 border rounded-xl sm:rounded-2xl overflow-hidden shadow-xs transition-all duration-200 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 ${isSelected ? 'border-primary-500 ring-2 ring-primary-500/30' : 'border-slate-200 dark:border-slate-800'}`}
@@ -486,6 +509,7 @@ const ProductCard = memo(({ product, user, isSelected, onToggleSelect, onEdit, o
         </div>
     </div>
 ));
+ProductCard.displayName = 'ProductCard';
 
 export function InventoryList() {
     const { user, hasPermission } = useAuth();
@@ -495,6 +519,7 @@ export function InventoryList() {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const deferredSearchTerm = useDeferredValue(searchTerm);
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
     const [suppliers, setSuppliers] = useState([]);
     const [supplierFilter, setSupplierFilter] = useState('');
@@ -509,6 +534,7 @@ export function InventoryList() {
         return localStorage.getItem('inventory_view_mode') || 'list';
     });
     const tableSectionRef = useRef(null);
+    const desktopTableScrollRef = useRef(null);
 
     // Executive Valuation KPIs
     const [valuationLoaded, setValuationLoaded] = useState(false);
@@ -541,7 +567,6 @@ export function InventoryList() {
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [selectedProducts, setSelectedProducts] = useState([]);
     const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-    const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
     const [isWasteModalOpen, setIsWasteModalOpen] = useState(false);
     const [wasteModalProduct, setWasteModalProduct] = useState(null);
     const [branches, setBranches] = useState([]);
@@ -598,7 +623,7 @@ export function InventoryList() {
                 toast.success(`Producto encontrado: ${list[0].name}`, { id: 'inv-barcode-scan' });
                 return;
             }
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[Inventory] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
 
         // Si el código no existe en ningún producto, abrir modal para registrarlo con el código ya pre-cargado
         setSearchTerm('');
@@ -608,7 +633,7 @@ export function InventoryList() {
     }, []);
 
     useScanner(handleInventoryScan, {
-        enabled: !isModalOpen && !isKardexOpen && !isLabelModalOpen && !isQuickStockOpen && !isBulkModalOpen && !isTransferModalOpen && !isWasteModalOpen
+        enabled: !isModalOpen && !isKardexOpen && !isLabelModalOpen && !isQuickStockOpen && !isBulkModalOpen && !isWasteModalOpen
     });
 
     const fetchValuation = useCallback(async () => {
@@ -658,16 +683,17 @@ export function InventoryList() {
         });
     }, []);
 
-    const fetchSuppliers = useCallback(async () => {
+    const fetchSuppliers = useCallback(async (signal) => {
         try {
-            const { data } = await api.get('/suppliers');
+            const { data } = await api.get('/suppliers', { signal });
             setSuppliers(data || []);
         } catch (error) {
-            console.error('Error fetching suppliers in Inventory:', error);
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.name === 'AbortError') return;
+            console.warn('Error fetching suppliers in Inventory:', error?.message || error);
         }
     }, []);
 
-    const fetchCategories = useCallback(async () => {
+    const fetchCategories = useCallback(async (signal) => {
         const cleanCategoryList = (list) => [...new Set(
             (list || [])
                 .map(c => c?.trim())
@@ -675,14 +701,15 @@ export function InventoryList() {
         )].sort((a, b) => a.localeCompare(b, 'es'));
 
         try {
-            const { data } = await api.get('/products/categories', { timeout: 3000 });
+            const { data } = await api.get('/products/categories', { timeout: 8000, signal });
             const uniqueCats = cleanCategoryList(data);
             if (uniqueCats.length > 0) {
                 setCategories(uniqueCats);
-                try { localStorage.setItem('pos_categories', JSON.stringify(uniqueCats)); } catch {}
+                try { localStorage.setItem('pos_categories', JSON.stringify(uniqueCats)); } catch (caughtErr) { console.warn('[Inventory] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
             }
         } catch (error) {
-            console.error('Error fetching categories in Inventory (trying offline fallback):', error);
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.name === 'AbortError') return;
+            console.warn('Fallback offline de categorías en Inventory:', error?.message || error);
             try {
                 const cached = cleanCategoryList(JSON.parse(localStorage.getItem('pos_categories') || '[]'));
                 if (cached.length > 0) {
@@ -703,12 +730,13 @@ export function InventoryList() {
         setSettings(s);
     }, []);
 
-    const fetchBranches = useCallback(async () => {
+    const fetchBranches = useCallback(async (signal) => {
         try {
-            const { data } = await api.get('/branches');
+            const { data } = await api.get('/branches', { signal });
             setBranches(data || []);
         } catch (error) {
-            console.error('Error fetching branches in Inventory:', error);
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.name === 'AbortError') return;
+            console.warn('Error fetching branches in Inventory:', error?.message || error);
         }
     }, []);
 
@@ -716,9 +744,14 @@ export function InventoryList() {
     const stableFormatStock = useCallback((qty, decimals) => formatStock(qty, decimals), []);
     const stableRenderFormatMoney = useCallback((val, mode) => formatMoney(val, mode, settings), [settings]);
 
+    const productsCountRef = useRef(0);
+    useEffect(() => {
+        productsCountRef.current = products.length;
+    }, [products.length]);
+
     const fetchProducts = useCallback(async (resetPage = false) => {
         try {
-            if (resetPage && products.length === 0) setLoading(true);
+            if (resetPage && productsCountRef.current === 0) setLoading(true);
 
             const currentPage = resetPage ? 1 : page;
             let url = '/products';
@@ -810,13 +843,15 @@ export function InventoryList() {
     }, [page, debouncedSearchTerm, supplierFilter, categoryFilter, stockFilter, missingCostOnly, pharmacyFilter, priceRange, limit, user?.activeBranchId]);
 
     useEffect(() => {
+        const controller = new AbortController();
         fetchSettings();
-        fetchSuppliers();
-        fetchCategories();
+        fetchSuppliers(controller.signal);
+        fetchCategories(controller.signal);
         fetchValuation();
         if (['admin', 'superadmin'].includes(user?.role?.toLowerCase())) {
-            fetchBranches();
+            fetchBranches(controller.signal);
         }
+        return () => controller.abort();
     }, [user?.role, fetchSettings, fetchSuppliers, fetchCategories, fetchBranches, fetchValuation]);
 
     useEffect(() => {
@@ -825,7 +860,7 @@ export function InventoryList() {
 
     useEffect(() => {
         fetchProducts(page === 1);
-    }, [fetchProducts]);
+    }, [fetchProducts, page]);
 
     // Socket.io updates
     const lastUpdateRef = useRef(0);
@@ -969,7 +1004,7 @@ export function InventoryList() {
                     if (prod) {
                         await db.put('products', { ...prod, stockQuantity: afterVal });
                     }
-                } catch {}
+                } catch (caughtErr) { console.warn('[Inventory] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
             } else {
                 // Offline update in IndexedDB
                 const prod = await db.getById('products', adjustData.productId);
@@ -1033,7 +1068,7 @@ export function InventoryList() {
                                                 setProducts(prev => prev.filter(p => p.id !== id));
                                                 toast.success('Producto inactivado localmente [Offline]');
                                             }
-                                        } catch {}
+                                        } catch (caughtErr) { console.warn('[Inventory] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                                     }
                                 }
                             });
@@ -1046,13 +1081,13 @@ export function InventoryList() {
                 if (!deletedOnline) {
                     try {
                         await db.delete('products', id);
-                    } catch {}
+                    } catch (caughtErr) { console.warn('[Inventory] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                     setProducts(prev => prev.filter(p => p.id !== id));
                     toast.success('Producto eliminado localmente [Offline]');
                 } else {
                     try {
                         await db.delete('products', id);
-                    } catch {}
+                    } catch (caughtErr) { console.warn('[Inventory] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                     fetchProducts(true);
                 }
                 fetchValuation();
@@ -1135,7 +1170,7 @@ export function InventoryList() {
             } else if (onlineProduct) {
                 try {
                     await db.put('products', onlineProduct);
-                } catch {}
+                } catch (caughtErr) { console.warn('[Inventory] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                 fetchProducts(true);
             }
 
@@ -1291,6 +1326,33 @@ export function InventoryList() {
             setProcessing(false);
         }
     };
+
+    // Búsqueda instantánea off-main-thread sobre productos en memoria mientras llega la respuesta paginada del servidor
+    const fuzzyLoadedProducts = useFuzzySearch(products, deferredSearchTerm, {
+        category: categoryFilter,
+        maxResults: 1000,
+        enableSemantic: false
+    });
+
+    const displayedProducts = useMemo(() => {
+        const activeTerm = (searchTerm || '').trim();
+        const syncedTerm = (debouncedSearchTerm || '').trim();
+        if (activeTerm && activeTerm !== syncedTerm) {
+            return fuzzyLoadedProducts;
+        }
+        return products;
+    }, [searchTerm, debouncedSearchTerm, fuzzyLoadedProducts, products]);
+
+    const selectedIdsSet = useMemo(
+        () => new Set(selectedProducts.map(p => p.id)),
+        [selectedProducts]
+    );
+
+    const handleLoadMoreProducts = useCallback(() => {
+        if (!loading && hasMore) {
+            setPage(prev => prev + 1);
+        }
+    }, [loading, hasMore]);
 
     // Infinite scroll observer
     const sentinelRef = useRef(null);
@@ -1757,22 +1819,22 @@ export function InventoryList() {
                 </div>
             </div>
 
-            {/* Product List / Grid */}
+            {/* Product List / Grid (Virtualizado con @tanstack/react-virtual) */}
             <div ref={tableSectionRef} className="px-1 sm:px-2">
                 {viewMode === 'list' ? (
                     <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xs">
                         {/* Desktop Table View */}
-                        <div className="hidden md:block overflow-x-auto custom-scrollbar">
+                        <div ref={desktopTableScrollRef} className="hidden md:block max-h-[72vh] overflow-y-auto overflow-x-auto custom-scrollbar">
                             <table className="w-full text-left border-collapse">
-                                <thead>
-                                    <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-slate-50 dark:bg-slate-950/60">
+                                <thead className="sticky top-0 z-10">
+                                    <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-slate-50 dark:bg-slate-950/95">
                                         <th className="px-4 py-3.5 w-10">
                                             <input
                                                 type="checkbox"
-                                                checked={selectedProducts.length > 0 && selectedProducts.length === products.length}
+                                                checked={displayedProducts.length > 0 && selectedProducts.length === displayedProducts.length}
                                                 onChange={(e) => {
                                                     if (e.target.checked) {
-                                                        setSelectedProducts([...products]);
+                                                        setSelectedProducts([...displayedProducts]);
                                                     } else {
                                                         setSelectedProducts([]);
                                                     }
@@ -1788,8 +1850,8 @@ export function InventoryList() {
                                         <th className="px-6 py-3.5 text-center">Acciones</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                    {loading && products.length === 0 ? (
+                                {loading && displayedProducts.length === 0 ? (
+                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                                         <tr>
                                             <td colSpan="7" className="py-24 text-center">
                                                 <div className="inline-flex items-center gap-3 text-primary-500 font-black text-xs uppercase tracking-widest animate-pulse">
@@ -1798,7 +1860,9 @@ export function InventoryList() {
                                                 </div>
                                             </td>
                                         </tr>
-                                    ) : products.length === 0 ? (
+                                    </tbody>
+                                ) : displayedProducts.length === 0 ? (
+                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                                         <tr>
                                             <td colSpan="7" className="py-24 text-center">
                                                 <Package size={48} className="text-slate-300 dark:text-slate-700 mx-auto mb-3" />
@@ -1806,13 +1870,24 @@ export function InventoryList() {
                                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Intente modificando los filtros de búsqueda</p>
                                             </td>
                                         </tr>
-                                    ) : (
-                                        products.map((product) => (
+                                    </tbody>
+                                ) : (
+                                    <VirtualProductTableBody
+                                        items={displayedProducts}
+                                        colSpan={7}
+                                        scrollElementRef={desktopTableScrollRef}
+                                        estimateSize={78}
+                                        overscan={4}
+                                        onEndReached={handleLoadMoreProducts}
+                                        className="divide-y divide-slate-100 dark:divide-slate-800"
+                                        renderRow={(product, idx, measureRef) => (
                                             <ProductRow
                                                 key={product.id}
+                                                rowRef={measureRef}
+                                                dataIndex={idx}
                                                 product={product}
                                                 user={user}
-                                                isSelected={selectedProducts.some(p => p.id === product.id)}
+                                                isSelected={selectedIdsSet.has(product.id)}
                                                 onToggleSelect={handleToggleSelect}
                                                 onEdit={handleEditProduct}
                                                 onDelete={handleDeleteProduct}
@@ -1826,58 +1901,74 @@ export function InventoryList() {
                                                 getImageUrl={stableGetImageUrl}
                                                 currencyMode={settings.currencyMode}
                                             />
-                                        ))
-                                    )}
-                                </tbody>
+                                        )}
+                                    />
+                                )}
                             </table>
                         </div>
 
                         {/* Mobile Card List View */}
-                        <div className="md:hidden divide-y divide-slate-100 dark:divide-white/5 p-2 space-y-2.5">
-                            {loading && products.length === 0 ? (
+                        <div className="md:hidden p-2">
+                            {loading && displayedProducts.length === 0 ? (
                                 <div className="py-20 text-center">
                                     <div className="inline-flex items-center gap-2.5 text-primary-500 font-black text-xs uppercase tracking-widest animate-pulse">
                                         <div className="w-2 h-2 bg-primary-500 rounded-full animate-ping"></div>
                                         Indexando Inventario...
                                     </div>
                                 </div>
-                            ) : products.length === 0 ? (
+                            ) : displayedProducts.length === 0 ? (
                                 <div className="py-16 text-center">
                                     <Package size={40} className="text-slate-400 dark:text-slate-600 mx-auto mb-2" />
                                     <p className="text-xs font-black uppercase text-slate-700 dark:text-white">Sin productos</p>
                                 </div>
                             ) : (
-                                products.map((product) => (
-                                    <MobileProductCard
-                                        key={product.id}
-                                        product={product}
-                                        user={user}
-                                        isSelected={selectedProducts.some(p => p.id === product.id)}
-                                        onToggleSelect={handleToggleSelect}
-                                        onEdit={handleEditProduct}
-                                        onDelete={handleDeleteProduct}
-                                        onKardex={handleKardex}
-                                        onQuickAdjust={handleOpenQuickAdjust}
-                                        onGenerateIA={handleGenerateIAImage}
-                                        onPrintLabel={handlePrintSingleLabel}
-                                        isGeneratingIA={generatingIAId === product.id}
-                                        renderFormatMoney={stableRenderFormatMoney}
-                                        formatStock={stableFormatStock}
-                                        getImageUrl={stableGetImageUrl}
-                                        currencyMode={settings.currencyMode}
-                                    />
-                                ))
+                                <VirtualProductList
+                                    items={displayedProducts}
+                                    columns={1}
+                                    estimateSize={164}
+                                    gap={10}
+                                    overscan={4}
+                                    onEndReached={handleLoadMoreProducts}
+                                    className="max-h-[72vh] overflow-y-auto custom-scrollbar"
+                                    renderItem={(product) => (
+                                        <MobileProductCard
+                                            product={product}
+                                            user={user}
+                                            isSelected={selectedIdsSet.has(product.id)}
+                                            onToggleSelect={handleToggleSelect}
+                                            onEdit={handleEditProduct}
+                                            onDelete={handleDeleteProduct}
+                                            onKardex={handleKardex}
+                                            onQuickAdjust={handleOpenQuickAdjust}
+                                            onGenerateIA={handleGenerateIAImage}
+                                            onPrintLabel={handlePrintSingleLabel}
+                                            isGeneratingIA={generatingIAId === product.id}
+                                            renderFormatMoney={stableRenderFormatMoney}
+                                            formatStock={stableFormatStock}
+                                            getImageUrl={stableGetImageUrl}
+                                            currencyMode={settings.currencyMode}
+                                        />
+                                    )}
+                                />
                             )}
                         </div>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-5">
-                        {products.map((product) => (
+                    <VirtualProductList
+                        items={displayedProducts}
+                        columns={INVENTORY_GRID_COLUMNS}
+                        breakpointSource="window"
+                        estimateSize={340}
+                        gap={18}
+                        overscan={4}
+                        onEndReached={handleLoadMoreProducts}
+                        className="max-h-[74vh] overflow-y-auto pr-1 custom-scrollbar"
+                        itemWrapperClassName="h-full flex flex-col"
+                        renderItem={(product) => (
                             <ProductCard
-                                key={product.id}
                                 product={product}
                                 user={user}
-                                isSelected={selectedProducts.some(p => p.id === product.id)}
+                                isSelected={selectedIdsSet.has(product.id)}
                                 onToggleSelect={handleToggleSelect}
                                 onEdit={handleEditProduct}
                                 onQuickAdjust={handleOpenQuickAdjust}
@@ -1889,8 +1980,8 @@ export function InventoryList() {
                                 getImageUrl={stableGetImageUrl}
                                 currencyMode={settings.currencyMode}
                             />
-                        ))}
-                    </div>
+                        )}
+                    />
                 )}
 
                 {/* Infinite Scroll Sentinel */}

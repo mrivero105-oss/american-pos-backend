@@ -19,7 +19,9 @@ const flushPendingStorageNow = () => {
       } else {
         localStorage.setItem(ACTIVE_CART_STORAGE_KEY, JSON.stringify(pendingCartToFlush));
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error guardando carrito pendiente:', err?.message);
+    }
   }
   if (heldFlushTimer !== null) {
     clearTimeout(heldFlushTimer);
@@ -29,7 +31,9 @@ const flushPendingStorageNow = () => {
         HELD_SALES_STORAGE_KEY,
         JSON.stringify(Array.isArray(pendingHeldToFlush) ? pendingHeldToFlush : [])
       );
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error guardando ventas en espera:', err?.message);
+    }
   }
 };
 
@@ -43,12 +47,105 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/**
+ * Normaliza un ítem de carrito o venta en espera (formato móvil `{ product, quantity }`
+ * o formato plano Desktop/servidor `{ id, productId, name, price, quantity }`)
+ * al contrato canónico `{ product: { id, name, price, ... }, quantity }` que espera Mobile POS.
+ */
+export const normalizeMobileCartItem = (rawItem, catalogLookup = null) => {
+  if (!rawItem || typeof rawItem !== 'object') return null;
+
+  const hasNestedProduct = rawItem.product && typeof rawItem.product === 'object';
+  const baseProd = hasNestedProduct ? rawItem.product : rawItem;
+
+  const rawId =
+    baseProd.id ??
+    baseProd.productId ??
+    baseProd.producto_id ??
+    rawItem.productId ??
+    rawItem.producto_id ??
+    rawItem.id;
+
+  if (rawId === undefined || rawId === null || String(rawId).trim() === '') {
+    return null;
+  }
+
+  const itemId = String(rawId).trim();
+  const cleanLookupId = itemId.replace(/__bulk$|__mid$|__pres_.*$/, '');
+  let catalogProd = null;
+  if (catalogLookup instanceof Map) {
+    catalogProd = catalogLookup.get(itemId) || catalogLookup.get(cleanLookupId) || null;
+  } else if (Array.isArray(catalogLookup)) {
+    catalogProd = catalogLookup.find((p) => p && (String(p.id) === itemId || String(p.id) === cleanLookupId)) || null;
+  }
+
+  const resolvedName =
+    baseProd.name ||
+    baseProd.nombre ||
+    rawItem.name ||
+    rawItem.nombre ||
+    rawItem.productName ||
+    catalogProd?.name ||
+    catalogProd?.nombre ||
+    'Artículo';
+
+  const resolvedPrice = Number(
+    baseProd.price ??
+    baseProd.precio ??
+    rawItem.price ??
+    rawItem.precio ??
+    rawItem.unitPrice ??
+    catalogProd?.price ??
+    catalogProd?.precio ??
+    0
+  );
+
+  const normalizedProduct = {
+    ...(catalogProd || {}),
+    ...baseProd,
+    id: itemId,
+    productId: String(baseProd.productId || rawItem.productId || catalogProd?.id || cleanLookupId),
+    name: resolvedName,
+    nombre: resolvedName,
+    price: Number.isFinite(resolvedPrice) ? resolvedPrice : 0
+  };
+
+  const qtyRaw = Number(rawItem.quantity ?? rawItem.qty ?? 1);
+  const quantity = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+
+  return {
+    ...(hasNestedProduct ? rawItem : {}),
+    product: normalizedProduct,
+    quantity
+  };
+};
+
+export const normalizeMobileCartItems = (items, catalogLookup = null) => {
+  if (!Array.isArray(items)) return [];
+  const normalized = [];
+  for (const item of items) {
+    const clean = normalizeMobileCartItem(item, catalogLookup);
+    if (clean) normalized.push(clean);
+  }
+  return normalized;
+};
+
+const normalizeHeldSalesList = (list) => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((s) => s && typeof s === 'object' && s.id)
+    .map((s) => ({
+      ...s,
+      items: normalizeMobileCartItems(s.items)
+    }));
+};
+
 const loadInitialCart = () => {
   try {
     const raw = localStorage.getItem(ACTIVE_CART_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeMobileCartItems(parsed);
   } catch {
     return [];
   }
@@ -59,7 +156,7 @@ const loadInitialHeldSales = () => {
     const raw = localStorage.getItem(HELD_SALES_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeHeldSalesList(parsed);
   } catch {
     return [];
   }
@@ -79,7 +176,9 @@ const persistCartSafe = (cart) => {
         localStorage.setItem(ACTIVE_CART_STORAGE_KEY, JSON.stringify(pendingCartToFlush));
       }
       db.put('metadata', { key: ACTIVE_CART_STORAGE_KEY, value: pendingCartToFlush || [] }).catch(() => {});
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error persistiendo carrito:', err?.message);
+    }
   }, 120);
 };
 
@@ -94,9 +193,14 @@ const persistHeldSalesSafe = (heldSales) => {
     try {
       localStorage.setItem(HELD_SALES_STORAGE_KEY, JSON.stringify(safeList));
       db.put('metadata', { key: HELD_SALES_STORAGE_KEY, value: safeList }).catch(() => {});
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[MobileStore] Error persistiendo ventas en espera:', err?.message);
+    }
   }, 120);
 };
+
+let hasUserMutatedCart = false;
+let hasUserMutatedHeld = false;
 
 /**
  * Store atómico de Zustand exclusivo para Isaac POS Mobile.
@@ -110,14 +214,36 @@ export const useMobilePosStore = create((set, get) => ({
       activeModule: typeof mod === 'function' ? mod(state.activeModule) : mod
     })),
 
-  cart: loadInitialCart(),
-  setCart: (updater) =>
+  // Preservación de posición de scroll por pestaña/módulo (Venta, Stock, Caja, ERP)
+  moduleScrollPositions: {},
+  setModuleScrollPosition: (moduleId, scrollTop) => {
+    if (!moduleId) return;
+    const safeTop = Math.max(0, Number(scrollTop) || 0);
     set((state) => {
+      if (state.moduleScrollPositions[moduleId] === safeTop) return state;
+      return {
+        moduleScrollPositions: {
+          ...state.moduleScrollPositions,
+          [moduleId]: safeTop
+        }
+      };
+    });
+  },
+  getModuleScrollPosition: (moduleId) => {
+    if (!moduleId) return 0;
+    return Number(get().moduleScrollPositions[moduleId] || 0);
+  },
+
+  cart: loadInitialCart(),
+  setCart: (updater) => {
+    hasUserMutatedCart = true;
+    return set((state) => {
       const nextCart = typeof updater === 'function' ? updater(state.cart) : updater;
-      const validCart = Array.isArray(nextCart) ? nextCart : [];
+      const validCart = normalizeMobileCartItems(nextCart);
       persistCartSafe(validCart);
       return { cart: validCart };
-    }),
+    });
+  },
 
   cartDiscountPercent: 0,
   setCartDiscountPercent: (updater) =>
@@ -134,15 +260,58 @@ export const useMobilePosStore = create((set, get) => ({
     })),
 
   heldSales: loadInitialHeldSales(),
-  setHeldSales: (updater) =>
-    set((state) => {
+  setHeldSales: (updater) => {
+    hasUserMutatedHeld = true;
+    return set((state) => {
       const nextHeld = typeof updater === 'function' ? updater(state.heldSales) : updater;
-      const validHeld = Array.isArray(nextHeld) ? nextHeld : [];
+      const validHeld = normalizeHeldSalesList(nextHeld);
       persistHeldSalesSafe(validHeld);
       return { heldSales: validHeld };
-    }),
+    });
+  },
+
+  hydrateFromDb: async () => {
+    if (typeof db?.getById !== 'function') return;
+    try {
+      const state = get();
+      const updates = {};
+
+      if (!hasUserMutatedCart && (!Array.isArray(state.cart) || state.cart.length === 0)) {
+        const savedCartRec = await db.getById('metadata', ACTIVE_CART_STORAGE_KEY).catch(() => null);
+        const hydratedCart = normalizeMobileCartItems(savedCartRec?.value);
+        if (hydratedCart.length > 0 && !hasUserMutatedCart) {
+          updates.cart = hydratedCart;
+          try {
+            localStorage.setItem(ACTIVE_CART_STORAGE_KEY, JSON.stringify(hydratedCart));
+          } catch {
+            // Ignorar si localStorage no permite escritura
+          }
+        }
+      }
+
+      if (!hasUserMutatedHeld && (!Array.isArray(state.heldSales) || state.heldSales.length === 0)) {
+        const savedHeldRec = await db.getById('metadata', HELD_SALES_STORAGE_KEY).catch(() => null);
+        const hydratedHeld = normalizeHeldSalesList(savedHeldRec?.value);
+        if (hydratedHeld.length > 0 && !hasUserMutatedHeld) {
+          updates.heldSales = hydratedHeld;
+          try {
+            localStorage.setItem(HELD_SALES_STORAGE_KEY, JSON.stringify(hydratedHeld));
+          } catch {
+            // Ignorar si localStorage no permite escritura
+          }
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        set(updates);
+      }
+    } catch (err) {
+      console.warn('[MobileStore] Error hidratando carrito/ventas en espera desde DB:', err?.message);
+    }
+  },
 
   resetMobileCart: () => {
+    hasUserMutatedCart = true;
     persistCartSafe([]);
     set({
       cart: [],
@@ -151,5 +320,12 @@ export const useMobilePosStore = create((set, get) => ({
     });
   }
 }));
+
+// Hidratación de respaldo desde SQLite/IndexedDB por si WebView purgó localStorage tras OTA/reinicio
+if (typeof window !== 'undefined') {
+  queueMicrotask(() => {
+    useMobilePosStore.getState().hydrateFromDb();
+  });
+}
 
 export default useMobilePosStore;

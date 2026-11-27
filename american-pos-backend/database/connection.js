@@ -15,6 +15,7 @@ try {
 }
 
 const DbConfigManager = require('../config/dbConfigManager');
+const telemetryCollector = require('../utils/telemetryCollector');
 const activeDbConfig = DbConfigManager.getConfig();
 
 try {
@@ -45,18 +46,24 @@ function attachTenantRlsConnectionHook(sequelizeInstance) {
         const ctx = getCurrentTenantContext();
         try {
             if (ctx && (ctx.companyId || ctx.isSuperAdmin)) {
-                await connection.query(
-                    "SELECT set_config('role', 'isaac_app', false), set_config('app.current_company_id', $1, false), set_config('app.current_user_id', $2, false), set_config('app.is_superadmin', $3, false)",
-                    [String(ctx.companyId || ''), String(ctx.userId || ''), ctx.isSuperAdmin ? 'true' : 'false']
-                );
-                connection.__isaacRlsDirty = true;
+                const targetKey = `${String(ctx.companyId || '')}|${String(ctx.userId || '')}|${ctx.isSuperAdmin ? '1' : '0'}`;
+                if (connection.__isaacRlsKey !== targetKey) {
+                    await connection.query(
+                        "SELECT set_config('role', 'isaac_app', false), set_config('app.current_company_id', $1, false), set_config('app.current_user_id', $2, false), set_config('app.is_superadmin', $3, false)",
+                        [String(ctx.companyId || ''), String(ctx.userId || ''), ctx.isSuperAdmin ? 'true' : 'false']
+                    );
+                    connection.__isaacRlsKey = targetKey;
+                    connection.__isaacRlsDirty = true;
+                }
             } else if (connection.__isaacRlsDirty) {
                 await connection.query(
                     "SELECT set_config('role', 'none', false), set_config('app.current_company_id', '', false), set_config('app.current_user_id', '', false), set_config('app.is_superadmin', 'false', false)"
                 );
+                connection.__isaacRlsKey = null;
                 connection.__isaacRlsDirty = false;
             }
         } catch (rlsErr) {
+            connection.__isaacRlsKey = null;
             if (cm.releaseConnection) {
                 try { cm.releaseConnection(connection); } catch (_) {}
             }
@@ -83,7 +90,10 @@ function initSequelize(customConfig = null) {
             host: resolvedHost,
             port: parseInt(cfg.port || 5432, 10),
             dialect: 'postgres',
-            logging: false,
+            benchmark: true,
+            logging: (sql, timingMs) => {
+                telemetryCollector.recordDbQuery(sql, timingMs);
+            },
             isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED,
             pool: {
                 max: 30,           // Optimizado para operaciones concurrentes multi-caja y comanderas móviles
@@ -213,6 +223,13 @@ const connectDB = async () => {
         require('./models');
 
         await runPostConnectMigrations(sequelize, 'postgres');
+
+        try {
+            const SettingsStoreService = require('../services/SettingsStoreService');
+            await SettingsStoreService.hydrateAllFromDb();
+        } catch (_hydrateErr) {
+            // Non-blocking hydration fallback to atomic JSON
+        }
     } catch (error) {
         console.error('❌ DATABASE CONNECTION ERROR:', error.message);
         throw error;

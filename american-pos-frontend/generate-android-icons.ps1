@@ -1,6 +1,13 @@
 Add-Type -AssemblyName System.Drawing
 
-$sourcePath = 'C:\AndroidStudioProjects\Isaac Page\public\icon-512x512.png'
+$defaultSource = Join-Path $PSScriptRoot "src\assets\isaac-emblem.png"
+$sourcePath = if ($env:ISAAC_ANDROID_ICON_SOURCE -and (Test-Path $env:ISAAC_ANDROID_ICON_SOURCE)) {
+    $env:ISAAC_ANDROID_ICON_SOURCE
+} elseif (Test-Path "C:\AndroidStudioProjects\Isaac Page\public\icon-512x512.png") {
+    "C:\AndroidStudioProjects\Isaac Page\public\icon-512x512.png"
+} else {
+    $defaultSource
+}
 if (-not (Test-Path $sourcePath)) {
     Write-Error "Source icon not found at: $sourcePath"
     exit 1
@@ -8,7 +15,7 @@ if (-not (Test-Path $sourcePath)) {
 
 $sourceImg = [System.Drawing.Bitmap]::FromFile($sourcePath)
 
-$resRoot = "C:\AndroidStudioProjects\American POS PC\american-pos-frontend\android\app\src\main\res"
+$resRoot = Join-Path $PSScriptRoot "android\app\src\main\res"
 
 $densities = @(
     @{ Name = 'mdpi'; Launcher = 48; Foreground = 108 },

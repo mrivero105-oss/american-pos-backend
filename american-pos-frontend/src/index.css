@@ -34,48 +34,48 @@ input, textarea, [contenteditable="true"], .selectable-text {
   -webkit-user-select: text !important;
 }
 
-/* LOCAL OFFLINE FONTS FOR ELECTRON & WEB */
+/* LOCAL OFFLINE FONTS FOR ELECTRON & WEB (WOFF2) */
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/Inter-400.ttf') format('truetype');
+  src: url('/fonts/Inter-400.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('/fonts/Inter-500.ttf') format('truetype');
+  src: url('/fonts/Inter-500.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('/fonts/Inter-600.ttf') format('truetype');
+  src: url('/fonts/Inter-600.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts/Inter-700.ttf') format('truetype');
+  src: url('/fonts/Inter-700.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 800;
   font-display: swap;
-  src: url('/fonts/Inter-800.ttf') format('truetype');
+  src: url('/fonts/Inter-800.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 900;
   font-display: swap;
-  src: url('/fonts/Inter-900.ttf') format('truetype');
+  src: url('/fonts/Inter-900.woff2') format('woff2');
 }
 
 @font-face {
@@ -83,42 +83,42 @@ input, textarea, [contenteditable="true"], .selectable-text {
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/Outfit-400.ttf') format('truetype');
+  src: url('/fonts/Outfit-400.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Outfit';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('/fonts/Outfit-500.ttf') format('truetype');
+  src: url('/fonts/Outfit-500.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Outfit';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('/fonts/Outfit-600.ttf') format('truetype');
+  src: url('/fonts/Outfit-600.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Outfit';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts/Outfit-700.ttf') format('truetype');
+  src: url('/fonts/Outfit-700.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Outfit';
   font-style: normal;
   font-weight: 800;
   font-display: swap;
-  src: url('/fonts/Outfit-800.ttf') format('truetype');
+  src: url('/fonts/Outfit-800.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Outfit';
   font-style: normal;
   font-weight: 900;
   font-display: swap;
-  src: url('/fonts/Outfit-900.ttf') format('truetype');
+  src: url('/fonts/Outfit-900.woff2') format('woff2');
 }
 
 /* DESACTIVAR ICONO NATIVO DE REVELAR CONTRASEÑA EN EDGE / CHROMIUM / WINDOWS (EVITA DUPLICAR EL OJITO) */
@@ -1004,262 +1004,9 @@ html:not(.dark) {
   .table-premium td { @apply py-4 px-3; }
 }
 
-/* -------------------------------------
-   WINDOWS 95 / RETRO THEME OVERRIDES 
--------------------------------------- */
-.retro body {
-  background: #008080 !important;
-  font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif !important;
-  color: #000 !important;
-}
-
-.retro * {
-  border-radius: 0 !important;
-  backdrop-filter: none !important;
-  transition: none !important;
-  animation: none !important;
-  box-shadow: none !important;
-}
-
-/* Standard UI elements become gray with 3D borders */
-.retro .card-tactical, 
-.retro .glass-premium, 
-.retro .glass, 
-.retro .bg-white,
-.retro .bg-slate-50,
-.retro .dark\:bg-slate-900,
-.retro .dark\:bg-slate-950,
-.retro button, 
-.retro [role="button"],
-.retro select {
-  background: #c0c0c0 !important;
-  color: #000 !important;
-  border: 2px solid !important;
-  border-top-color: #ffffff !important;
-  border-left-color: #ffffff !important;
-  border-right-color: #808080 !important;
-  border-bottom-color: #808080 !important;
-}
-
-/* Depress effect on click */
-.retro button:active, .retro [role="button"]:active {
-  border-top-color: #808080 !important;
-  border-left-color: #808080 !important;
-  border-right-color: #ffffff !important;
-  border-bottom-color: #ffffff !important;
-  padding-top: 2px !important;
-  padding-left: 2px !important;
-}
-
-/* Accent Buttons (Primary) */
-.retro .bg-primary-500, 
-.retro .bg-primary-600,
-.retro .bg-amber-500,
-.retro .bg-emerald-500,
-.retro .bg-rose-500 {
-  background: #000080 !important; /* Classic Navy */
-  color: #ffffff !important;
-}
-
-/* Inputs and Textareas */
-.retro input, .retro textarea {
-  background: #ffffff !important;
-  color: #000 !important;
-  border: 2px solid !important;
-  border-top-color: #808080 !important;
-  border-left-color: #808080 !important;
-  border-right-color: #ffffff !important;
-  border-bottom-color: #ffffff !important;
-}
-
-/* Tables */
-.retro .table-premium, .retro table {
-  border: 2px solid #808080 !important;
-  border-spacing: 0 !important;
-  background: #ffffff !important;
-}
-.retro .table-premium tr {
-  background: #ffffff !important;
-  border: none !important;
-}
-.retro .table-premium td, .retro .table-premium th {
-  border: 1px solid #c0c0c0 !important;
-  background: #ffffff !important;
-  color: #000 !important;
-}
-.retro .table-premium th {
-  background: #c0c0c0 !important;
-  border-top-color: #ffffff !important;
-  border-left-color: #ffffff !important;
-  border-right-color: #808080 !important;
-  border-bottom-color: #808080 !important;
-}
-
-/* Modals and Overlays */
-.retro .fixed.inset-0 > div:first-child {
-  background: transparent !important; /* No backdrop blur overlay */
-}
-
-/* Typography fix */
-.retro h1, .retro h2, .retro h3, .retro h4, .retro h5, .retro h6 {
-  font-weight: bold !important;
-  font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif !important;
-  text-transform: none !important;
-  letter-spacing: normal !important;
-}
-
-.retro .text-slate-400, .retro .text-slate-500, .retro .text-slate-600, .retro .text-slate-800,
-.retro .dark\:text-white, .retro .dark\:text-slate-300 {
-  color: #000 !important;
-}
-
-/* Lucide icons in buttons */
-.retro svg {
-  color: inherit !important;
-}
-
-/* Title bars for modals (simulated) */
-.retro .border-b.border-slate-100 {
-  background: #000080 !important;
-  color: #ffffff !important;
-}
-.retro .border-b.border-slate-100 h2 {
-  color: #ffffff !important;
-}
-.retro .border-b.border-slate-100 button {
-  background: #c0c0c0 !important;
-  color: #000 !important;
-}
-/* -------------------------------------
-   2005 THEME (Frutiger Aero / Web 2.0)
--------------------------------------- */
-.theme-2005 body {
-  background: radial-gradient(circle at top, #e0f2fe, #bae6fd);
-  font-family: 'Trebuchet MS', 'Lucida Grande', sans-serif !important;
-}
-
-.theme-2005 * {
-  backdrop-filter: none !important;
-}
-
-.theme-2005 button, .theme-2005 .card-tactical, .theme-2005 .glass-premium, .theme-2005 .glass {
-  background: linear-gradient(180deg, #ffffff 0%, #f0f0f0 49%, #e0e0e0 50%, #f9f9f9 100%) !important;
-  border: 1px solid #a0a0a0 !important;
-  border-radius: 8px !important;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 2px 4px rgba(0,0,0,0.1) !important;
-  color: #333 !important;
-  text-shadow: 0 1px 0 rgba(255,255,255,0.8);
-}
-
-.theme-2005 button:hover {
-  background: linear-gradient(180deg, #ffffff 0%, #e8f4ff 49%, #d0e8ff 50%, #eef6ff 100%) !important;
-  border-color: #7ab8f5 !important;
-}
-
-.theme-2005 .bg-primary-500, .theme-2005 .bg-primary-600 {
-  background: linear-gradient(180deg, #60a5fa 0%, #3b82f6 49%, #2563eb 50%, #60a5fa 100%) !important;
-  color: white !important;
-  border-color: #1d4ed8 !important;
-  text-shadow: 0 -1px 0 rgba(0,0,0,0.3);
-}
-
-/* -------------------------------------
-   2015 THEME (Flat / Material Design)
--------------------------------------- */
-.theme-2015 body {
-  background: #f5f5f5 !important;
-  font-family: 'Roboto', sans-serif !important;
-}
-
-.theme-2015 * {
-  backdrop-filter: none !important;
-  border-radius: 2px !important;
-}
-
-.theme-2015 .card-tactical, .theme-2015 .glass-premium, .theme-2015 .glass {
-  background: #ffffff !important;
-  border: none !important;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24) !important;
-}
-
-.theme-2015 button {
-  text-transform: uppercase !important;
-  font-weight: 500 !important;
-  letter-spacing: 0.5px !important;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
-  background: #ffffff !important;
-  border: none !important;
-}
-
-.theme-2015 button:active {
-  box-shadow: 0 4px 8px rgba(0,0,0,0.3) !important;
-}
-
-.theme-2015 .bg-primary-500, .theme-2015 .bg-primary-600 {
-  background: #2196f3 !important; /* Material Blue */
-  color: white !important;
-}
-
-/* -------------------------------------
-   2025 THEME (Ultra Hyper-Glass / Neon)
--------------------------------------- */
-.theme-2025 body {
-  background: radial-gradient(circle at 50% 0%, #0f172a, #020617);
-  color: #fff !important;
-}
-
-.theme-2025 .card-tactical, .theme-2025 .glass-premium, .theme-2025 .glass,
-.theme-2025 .bg-white, .theme-2025 .bg-slate-50 {
-  background: rgba(15, 23, 42, 0.92) !important;
-  backdrop-filter: blur(40px) saturate(200%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 30px !important;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.2) !important;
-  color: #fff !important;
-}
-
-.theme-2025 button, .theme-2025 input, .theme-2025 select {
-  border-radius: 30px !important;
-  background: rgba(255, 255, 255, 0.05) !important;
-  backdrop-filter: blur(20px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  color: #fff !important;
-}
-
-.theme-2025 .bg-primary-500, .theme-2025 .bg-primary-600 {
-  background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%) !important;
-  color: #000 !important;
-  font-weight: 900 !important;
-  box-shadow: 0 0 20px rgba(0, 242, 254, 0.4) !important;
-  border: none !important;
-}
-
-.theme-2025 .text-slate-400, .theme-2025 .text-slate-500, .theme-2025 .text-slate-600, .theme-2025 .text-slate-800 {
-  color: rgba(255, 255, 255, 0.7) !important;
-}
-
-/* -------------------------------------
-   CRISTAL PREMIUM THEME (Global Glass)
-   Refined for readability + premium feel
--------------------------------------- */
-.glass body {
-  background: radial-gradient(circle at 50% 0%, #0f172a, #020617);
-  background-image: 
-    radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.15) 0%, transparent 40%),
-    radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.15) 0%, transparent 40%);
-  background-attachment: fixed;
-  color: #f8fafc !important;
-}
-
-.glass * {
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
 /* Modales y Diálogos: 100% Sólidos y Opacos (Garantiza cero sangrado de fondo en cualquier tema) */
 .modal-solid,
-.glass .modal-solid,
-[role="dialog"],
-.glass [role="dialog"] {
+[role="dialog"] {
   background: #ffffff !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -1267,384 +1014,16 @@ html:not(.dark) {
 }
 
 .dark .modal-solid,
-.dark .glass .modal-solid,
-.dark [role="dialog"],
-.dark .glass [role="dialog"] {
+.dark [role="dialog"] {
   background: #0f172a !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   opacity: 1 !important;
 }
 
-/* Cards, Panels, Containers — translucent but readable */
-.glass .card-tactical, .glass .bg-white:not(.modal-solid), .glass .bg-slate-50,
-.glass .dark\:bg-slate-900:not(.modal-solid), .glass .dark\:bg-slate-950:not(.modal-solid),
-.glass .bg-\[\#f5f5f5\]\/80 {
-  background: rgba(15, 23, 42, 0.75) !important;
-  backdrop-filter: blur(24px) saturate(150%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  color: #fff !important;
-}
-
-/* Glass-premium panels inside glass theme */
-.glass .glass-premium {
-  background: rgba(15, 23, 42, 0.80) !important;
-  backdrop-filter: blur(30px) saturate(160%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-}
-
-/* Inputs, Selects, Textareas — clearly visible with glass feel */
-.glass input, .glass select, .glass textarea {
-  background: rgba(255, 255, 255, 0.10) !important;
-  backdrop-filter: blur(12px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
-  color: #fff !important;
-}
-
-.glass input:focus, .glass select:focus, .glass textarea:focus {
-  background: rgba(255, 255, 255, 0.14) !important;
-  border-color: rgba(59, 130, 246, 0.5) !important;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
-}
-
-.glass input::placeholder, .glass textarea::placeholder {
-  color: rgba(255, 255, 255, 0.40) !important;
-}
-
-/* Buttons — subtle glass with visible boundaries */
-.glass button {
-  background: rgba(255, 255, 255, 0.07) !important;
-  backdrop-filter: blur(12px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
-  color: #fff !important;
-}
-
-.glass button:hover {
-  background: rgba(255, 255, 255, 0.12) !important;
-  border-color: rgba(255, 255, 255, 0.18) !important;
-}
-
-/* Primary/Accent Buttons — vibrant gradient */
-.glass .bg-primary-500, .glass .bg-primary-600 {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.85) 0%, rgba(139, 92, 246, 0.85) 100%) !important;
-  backdrop-filter: blur(8px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.25) !important;
-  color: #fff !important;
-  box-shadow: 0 0 20px rgba(59, 130, 246, 0.3) !important;
-}
-
-/* Active nav links inside glass */
-.glass .nav-link-premium.active {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.8) 0%, rgba(99, 102, 241, 0.8) 100%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3) !important;
-}
-
-/* Table rows — glass panels for each row */
-.glass .table-premium tbody tr {
-  background: rgba(15, 23, 42, 0.65) !important;
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  backdrop-filter: blur(12px) !important;
-}
-
-.glass .table-premium tbody tr:hover {
-  background: rgba(30, 41, 59, 0.80) !important;
-  border-color: rgba(59, 130, 246, 0.25) !important;
-}
-
-.glass .table-premium th {
-  color: rgba(255, 255, 255, 0.5) !important;
-}
-
-.glass .table-premium td {
-  color: #e2e8f0 !important;
-}
-
-/* Text Overrides — readable hierarchy */
-.glass .text-slate-400, .glass .text-slate-500 {
-  color: rgba(255, 255, 255, 0.55) !important;
-}
-
-.glass .text-slate-600, .glass .text-slate-700, .glass .text-slate-800 {
-  color: rgba(255, 255, 255, 0.75) !important;
-}
-
-.glass .text-slate-900, .glass .dark\:text-white {
-  color: #f1f5f9 !important;
-}
-
-/* White cards inside glass theme */
-.glass [class*="fcfcfc"] *,
-.glass .bg-white .text-slate-900,
-.glass .bg-white .text-slate-800,
-.glass .bg-white .text-slate-700 {
-  color: #0f172a !important;
-}
-
-.glass [class*="fcfcfc"] .text-slate-500,
-.glass [class*="fcfcfc"] .text-slate-400,
-.glass .bg-white .text-slate-500,
-.glass .bg-white .text-slate-400 {
-  color: #475569 !important;
-}
-
-/* Dropdown menus */
-.glass [role="listbox"], .glass [role="menu"],
-.glass .absolute.z-50, .glass .absolute[class*="z-[100]"] {
-  background: rgba(15, 23, 42, 0.92) !important;
-  backdrop-filter: blur(20px) saturate(150%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-}
-
-/* -------------------------------------------------------------
-   MODO GRAFITO MATE (Tercer Modo: Descanso Visual en Jornadas Largas)
-   Evita el negro #000000 puro (que causa halación y fatiga ocular en
-   monitores LCD/LED) usando una escala de grises carbón/grafito neutros
-   (#181a1f -> #1e2127 -> #252932) con contraste equilibrado y cero brillo.
--------------------------------------------------------------- */
-html.oled,
-html.oled body {
-  background-color: #181a1f !important;
-  background-image: none !important;
-  color: #e2e6ec !important;
-  color-scheme: dark;
-}
-
-/* Paneles estructurales, encabezados y barras laterales */
-html.oled aside,
-.oled aside.bg-\[\#e8edf3\] {
-  background-color: #15171c !important;
-  background-image: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  box-shadow: none !important;
-  border-color: transparent !important;
-  color: #e2e6ec !important;
-}
-
-.oled header,
-.oled nav.dashboard-nav {
-  background-color: #1e2127 !important;
-  background-image: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  box-shadow: none !important;
-  border-color: transparent !important;
-  color: #e2e6ec !important;
-}
-
-/* Fondos contenedores principales */
-.oled .bg-\[\#e4e9f0\],
-.oled .bg-slate-950,
-.oled .dark\:bg-slate-950,
-.oled .dark\:bg-slate-950\/70 {
-  background-color: #181a1f !important;
-  border-color: #2e333d !important;
-}
-
-.oled .bg-\[\#eef2f6\],
-.oled .dark\:bg-slate-900,
-.oled .dark\:bg-slate-900\/60,
-.oled .dark\:bg-\[\#070d1e\],
-.oled .dark\:bg-\[\#091126\] {
-  background-color: #1e2127 !important;
-  border-color: #2e333d !important;
-}
-
-.oled .dark\:bg-slate-800,
-.oled .dark\:bg-slate-800\/50,
-.oled .dark\:bg-slate-800\/80 {
-  background-color: #242830 !important;
-  border-color: #343a46 !important;
-}
-
-/* Modales y diálogos en Grafito Mate */
-.oled .modal-solid,
-.oled [role="dialog"],
-.oled .modal-container-responsive {
-  background-color: #21252c !important;
-  background-image: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  border: 1px solid #343a46 !important;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4) !important;
-}
-
-/* Tarjetas de Producto y Elementos del Catálogo */
-.oled [id^="product-"],
-.oled .card-tactical,
-.oled .glass,
-.oled .glass-premium {
-  background-color: #242830 !important;
-  background-image: none !important;
-  border: 1px solid #343a46 !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
-  color: #e2e6ec !important;
-}
-
-.oled [id^="product-"]:hover,
-.oled .card-tactical:hover {
-  border-color: #4b5364 !important;
-  background-color: #292e37 !important;
-}
-
-/* Contenedor de imagen dentro de las tarjetas en Grafito Mate */
-.oled [id^="product-"] > div:first-child {
-  background-color: #2b303a !important;
-  border-color: #343a46 !important;
-}
-
 /* Atenuación óptica suave para imágenes con fondo blanco puro en modos oscuros */
-.dark [id^="product-"] img,
-.oled [id^="product-"] img {
+.dark [id^="product-"] img {
   filter: brightness(0.92) contrast(0.98);
-}
-
-/* Líneas de producto en el Carrito y tarjeta de resumen */
-.oled .dark\:bg-\[\#0e1730\],
-.oled .cart-summary-card {
-  background-color: #242830 !important;
-  border-color: #343a46 !important;
-}
-
-/* Barra inferior de navegación móvil (Dock) */
-.oled .mobile-bottom-dock {
-  background-color: #1e2127 !important;
-  background: #1e2127 !important;
-  border-top: 1px solid #2e333d !important;
-  box-shadow: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-/* Inputs, Selects y Buscadores */
-.oled input:not(.bg-transparent):not([class*="bg-transparent"]):not(.border-none):not([class*="border-none"]):not([class*="border-0"]),
-.oled select,
-.oled textarea {
-  background-color: #242830 !important;
-  border-color: #363c48 !important;
-  color: #e2e6ec !important;
-  box-shadow: none !important;
-}
-
-.oled input:not(.bg-transparent):not([class*="bg-transparent"]):not(.border-none):not([class*="border-none"]):not([class*="border-0"]):focus,
-.oled select:focus,
-.oled textarea:focus {
-  background-color: #282d36 !important;
-  border-color: #525b6d !important;
-  box-shadow: none !important;
-}
-
-/* Inputs transparentes y buscadores integrados */
-.oled input.bg-transparent,
-.oled input[class*="bg-transparent"],
-.oled input.border-none,
-.oled input[class*="border-none"],
-.oled input[class*="border-0"],
-.oled .search-bar-container input,
-.oled .search-box input {
-  background-color: transparent !important;
-  background: transparent !important;
-  border: none !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-  outline: none !important;
-}
-
-.oled .search-bar-container {
-  background-color: #242830 !important;
-  border: 1px solid #363c48 !important;
-}
-
-.oled .search-bar-container:focus-within {
-  background-color: #282d36 !important;
-  border-color: #525b6d !important;
-  box-shadow: none !important;
-}
-
-.oled input::placeholder,
-.oled textarea::placeholder {
-  color: #8b93a2 !important;
-}
-
-/* Tablas y Listados */
-.oled .table-premium tbody tr {
-  background-color: #242830 !important;
-  border-bottom: 1px solid #2e333d !important;
-}
-
-.oled .table-premium tbody tr:hover {
-  background-color: #2a2f38 !important;
-}
-
-.oled .table-premium th {
-  background-color: #1e2127 !important;
-  color: #9ba3b0 !important;
-  border-bottom: 1px solid #2e333d !important;
-}
-
-/* Supresión de sombras de texto y desenfoques pesados */
-.oled *,
-.oled *::before,
-.oled *::after {
-  text-shadow: none !important;
-}
-
-.oled .backdrop-blur-xl,
-.oled .backdrop-blur-2xl,
-.oled .backdrop-blur-3xl,
-.oled .backdrop-blur-md,
-.oled .backdrop-blur {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-/* Botones secundarios con cuerpo real y contraste suave */
-.oled button:not(.bg-primary-500):not(.bg-primary-600):not(.bg-slate-800):not(.bg-emerald-600):not(.bg-rose-600):not(.bg-red-600):not(.bg-amber-600):not(.btn-gradient-primary):not(.btn-gradient-tab-active):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="hover:bg-transparent"]):not(.btn-icon):not(.btn-ghost) {
-  background-color: #2b303a !important;
-  border-color: #3b4250 !important;
-  color: #dcdfe4 !important;
-}
-
-.oled button:not(.bg-primary-500):not(.bg-primary-600):not(.bg-slate-800):not(.bg-emerald-600):not(.bg-rose-600):not(.bg-red-600):not(.bg-amber-600):not(.btn-gradient-primary):not(.btn-gradient-tab-active):not(.bg-transparent):not([class*="bg-transparent"]):not([class*="hover:bg-transparent"]):not(.btn-icon):not(.btn-ghost):hover {
-  background-color: #343a46 !important;
-  border-color: #4b5364 !important;
-}
-
-/* Botones activos y principales en Grafito Mate (Categoría activa, Cobrar F2, Menú activo) */
-.oled button.bg-slate-800,
-.oled .nav-link-premium.active {
-  background-color: #3b4252 !important;
-  border-color: #4c566a !important;
-  color: #ffffff !important;
-}
-
-.oled button.bg-transparent,
-.oled button[class*="bg-transparent"],
-.oled button.btn-icon,
-.oled button.btn-ghost {
-  background-color: transparent !important;
-  border-color: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-}
-
-/* Jerarquía tipográfica descansada sin halación */
-.oled .text-slate-400,
-.oled .text-slate-500 {
-  color: #9ba3b0 !important;
-}
-
-.oled .text-slate-600,
-.oled .text-slate-700 {
-  color: #c4c9d4 !important;
-}
-
-.oled .text-slate-800,
-.oled .text-slate-900,
-.oled .dark\:text-white,
-.oled .dark\:text-slate-100 {
-  color: #e2e6ec !important;
 }
 
 /* ==========================================
@@ -2016,58 +1395,6 @@ button, input, select, textarea, a, [role="button"], .touch-fast {
   overscroll-behavior-y: auto !important;
 }
 
-/* Gestor de Ventas - Navegación de Pestañas Multi-Tema (Claro, Oscuro, OLED) */
-.oled .sales-nav-card {
-  background-color: #000000 !important;
-  border-color: #27272a !important;
-  box-shadow: none !important;
-}
-
-.oled .sales-tab-track {
-  background-color: #09090b !important;
-  border-color: #27272a !important;
-}
-
-.oled .sales-tab-active {
-  background-color: #18181b !important;
-  border-color: #3f3f46 !important;
-  color: #ffffff !important;
-  box-shadow: none !important;
-}
-
-.oled .sales-tab-inactive {
-  background-color: transparent !important;
-  border-color: transparent !important;
-  color: #71717a !important;
-}
-
-.oled .sales-tab-inactive:hover {
-  background-color: #121214 !important;
-  color: #e4e4e7 !important;
-}
-
-/* Inventario & Stock - Navegación y Controles Multi-Tema (Claro, Oscuro, OLED) */
-.oled .inv-tab-active,
-.oled .inv-toggle-active {
-  background-color: #18181b !important;
-  border-color: #3f3f46 !important;
-  color: #ffffff !important;
-  box-shadow: none !important;
-}
-
-.oled .inv-tab-inactive,
-.oled .inv-toggle-inactive {
-  background-color: transparent !important;
-  border-color: transparent !important;
-  color: #71717a !important;
-}
-
-.oled .inv-tab-inactive:hover,
-.oled .inv-toggle-inactive:hover {
-  background-color: #121214 !important;
-  color: #e4e4e7 !important;
-}
-
 /* ========================================================================= */
 /* 📱 AUTO-ADAPTIVE RULES FOR EMBEDDED DESKTOP MODULES ON MOBILE & TABLETS   */
 /* ========================================================================= */
@@ -2078,6 +1405,16 @@ button, input, select, textarea, a, [role="button"], .touch-fast {
 }
 
 @media (max-width: 768px) {
+  .mobile-embedded-module {
+    max-width: 100% !important;
+    overflow-x: clip !important;
+  }
+
+  .mobile-embedded-module > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   /* Scale down oversized desktop typography */
   .mobile-embedded-module h1,
   .mobile-embedded-module .text-3xl,
@@ -2147,8 +1484,17 @@ button, input, select, textarea, a, [role="button"], .touch-fast {
 
   /* Tables inside embedded modules auto-scroll horizontally and never blow up width */
   .mobile-embedded-module table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-embedded-module .overflow-x-auto > table {
     display: table;
     min-width: 100%;
+    overflow-x: visible;
   }
 
   .mobile-embedded-module table th,
@@ -2159,6 +1505,7 @@ button, input, select, textarea, a, [role="button"], .touch-fast {
 
   .mobile-embedded-module .overflow-x-auto {
     width: 100%;
+    max-width: 100%;
     -webkit-overflow-scrolling: touch;
   }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Store, Pill, Shirt, CheckCircle2, Globe2, Building2, ArrowRight, ArrowLeft, ShieldCheck, Check, Phone, FileText, MapPin } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -62,7 +62,9 @@ export default function FirstTimeSetupWizard({ onCompleted }) {
                 } else if ((formData.country || '').toLowerCase() === 'venezuela') {
                     await api.post('/settings/rate', { rate: 50.0, currencyMode: 'BOTH' });
                 }
-            } catch (_) {}
+            } catch (err) {
+                console.warn('[FirstTimeSetupWizard] No se pudo configurar tasa inicial automática:', err?.message);
+            }
 
             // Update local storage and PosContext (Always succeed locally)
             localStorage.setItem('pos_business_mode', formData.businessMode);

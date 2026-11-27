@@ -1,12 +1,32 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { 
-    Search, Plus, Edit2, Trash2, Truck, X, Phone, History, Download, Upload, 
-    Package, MessageCircle, ShoppingBag, CheckCircle2, Clock, XCircle, 
-    DollarSign, Eye, FileText, PackageCheck, Filter, ChevronDown, ChevronUp,
-    ArrowUpRight, Check, AlertCircle, FileUp, Globe, Building2, CreditCard
+import {
+    Search, 
+    Plus, 
+    Edit2, 
+    Trash2, 
+    Truck, 
+    X, 
+    Phone, 
+    History, 
+    Download, 
+    Upload, 
+    Package, 
+    MessageCircle, 
+    ShoppingBag, 
+    CheckCircle2, 
+    Clock, 
+    XCircle, 
+    DollarSign, 
+    Eye, 
+    FileText, 
+    PackageCheck, 
+    ChevronDown, 
+    ChevronUp, 
+    Globe, 
+    Building2
 } from 'lucide-react';
 import SupplierModal from '../components/SupplierModal';
 import ConfirmModal from '../components/ConfirmModal';
@@ -17,21 +37,18 @@ import InvoiceViewerModal from '../components/InvoiceViewerModal';
 import OrderReceptionModal from '../components/OrderReceptionModal';
 import SupplierLogoSearchModal from '../components/SupplierLogoSearchModal';
 import SupplierLogoBox from '../components/SupplierLogoBox';
-import { formatMoney, isDollarOnlyCountry, isSingleCurrencyMode } from '../utils/format';
-import { getImageUrl } from '../utils/imageUtils';
-import { useAuth } from '../hooks/AuthContext';
+import { isDollarOnlyCountry, isSingleCurrencyMode } from '../utils/format';
 
-export default function Suppliers() {
+export default function Suppliers({ defaultTab = null } = {}) {
     const location = useLocation();
     const [searchParams, setSearchParams] = useSearchParams();
-    const { user } = useAuth();
 
     const effectiveCountry = localStorage.getItem('pos_country') || '';
     const isDollarCountry = isDollarOnlyCountry(effectiveCountry);
     const isUsdOnly = isDollarCountry || isSingleCurrencyMode();
 
-    // Default tab based on URL path or search query (?tab=orders)
-    const initialTab = (location.pathname === '/purchase-orders' || searchParams.get('tab') === 'orders') ? 'orders' : 'suppliers';
+    // Default tab based on prop, URL path or search query (?tab=orders)
+    const initialTab = (defaultTab === 'orders' || location.pathname === '/purchase-orders' || searchParams.get('tab') === 'orders') ? 'orders' : 'suppliers';
     const [activeTab, setActiveTab] = useState(initialTab);
 
     // --- State: Suppliers ---
@@ -79,17 +96,7 @@ export default function Suppliers() {
         }
     }, [location.pathname, searchParams]);
 
-    useEffect(() => {
-        fetchAll();
-    }, []);
-
-    const fetchAll = () => {
-        fetchSuppliers();
-        fetchOrders();
-        fetchBcvRate();
-    };
-
-    const fetchBcvRate = async () => {
+    const fetchBcvRate = useCallback(async () => {
         try {
             const res = await api.get('/suppliers/bcv-rate');
             if (res.data && Number(res.data.rate) > 0) {
@@ -98,9 +105,9 @@ export default function Suppliers() {
         } catch (e) {
             console.warn('Error al obtener tasa BCV en Proveedores:', e);
         }
-    };
+    }, []);
 
-    const fetchSuppliers = async () => {
+    const fetchSuppliers = useCallback(async () => {
         try {
             setSuppliersLoading(true);
             const res = await api.get('/suppliers');
@@ -110,9 +117,9 @@ export default function Suppliers() {
         } finally {
             setSuppliersLoading(false);
         }
-    };
+    }, []);
 
-    const fetchOrders = async () => {
+    const fetchOrders = useCallback(async () => {
         try {
             setOrdersLoading(true);
             const res = await api.get('/purchase-orders');
@@ -122,7 +129,17 @@ export default function Suppliers() {
         } finally {
             setOrdersLoading(false);
         }
-    };
+    }, []);
+
+    const fetchAll = useCallback(() => {
+        fetchSuppliers();
+        fetchOrders();
+        fetchBcvRate();
+    }, [fetchSuppliers, fetchOrders, fetchBcvRate]);
+
+    useEffect(() => {
+        fetchAll();
+    }, [fetchAll]);
 
     // --- Supplier Handlers ---
     const handleCreateSupplier = () => {
@@ -268,48 +285,7 @@ export default function Suppliers() {
         setReceptionModalOrder(order);
     };
 
-    const handleCancelOrder = (id) => {
-        setConfirmConfig({
-            isOpen: true,
-            title: 'Cancelar Orden',
-            message: '¿Deseas cancelar esta orden de compra? Esta acción no se puede deshacer.',
-            variant: 'danger',
-            confirmText: 'Cancelar Orden',
-            action: async () => {
-                try {
-                    await api.post(`/purchase-orders/${id}/cancel`);
-                    toast.success('Orden cancelada');
-                    fetchOrders();
-                } catch (error) {
-                    console.error('Error cancelling order:', error);
-                    toast.error('Error al cancelar');
-                }
-            }
-        });
-    };
 
-    const handlePayOrder = (id) => {
-        setConfirmConfig({
-            isOpen: true,
-            title: 'Registrar Pago al Proveedor',
-            message: '¿Deseas registrar el pago total de esta orden y saldar el balance pendiente?',
-            variant: 'primary',
-            confirmText: 'Registrar Pago',
-            action: async () => {
-                try {
-                    setProcessing(true);
-                    await api.post(`/purchase-orders/${id}/pay`);
-                    toast.success('Pago registrado exitosamente');
-                    fetchAll();
-                } catch (error) {
-                    console.error('Error paying order:', error);
-                    toast.error('Error al registrar pago');
-                } finally {
-                    setProcessing(false);
-                }
-            }
-        });
-    };
 
     const handleTogglePaymentStatus = (order) => {
         const isPaid = order.paymentStatus === 'paid';

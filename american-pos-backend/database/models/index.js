@@ -60,6 +60,7 @@ const TelecomRecharge = require('./TelecomRecharge');
 const DailyRegisterSequence = require('./DailyRegisterSequence');
 const RegisterDraft = require('./RegisterDraft');
 const SyncOutbox = require('./SyncOutbox');
+const BusinessSetting = require('./BusinessSetting');
 
 // --- Relationships ---
 
@@ -258,5 +259,6 @@ module.exports = {
     TelecomRecharge,
     DailyRegisterSequence,
     RegisterDraft,
-    SyncOutbox
+    SyncOutbox,
+    BusinessSetting
 };

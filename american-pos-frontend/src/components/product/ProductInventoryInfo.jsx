@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { BarChart3, Weight, Scan, Package, Calendar } from 'lucide-react';
+import { useState } from 'react';
+import { BarChart3, Weight, Scan, Calendar } from 'lucide-react';
 
 export default function ProductInventoryInfo({
     formData,
@@ -20,27 +20,8 @@ export default function ProductInventoryInfo({
     const currentFactor = Number(primaryPres?.factorConversion) || 0;
     const stockKg = parseFloat(formData?.stockQuantity) || 0;
 
-    const [piecesInput, setPiecesInput] = useState(
-        formData?.stockUnits !== undefined && formData?.stockUnits !== null && formData?.stockUnits !== ''
-            ? String(formData.stockUnits)
-            : ''
-    );
-    const [isEditingPieces, setIsEditingPieces] = useState(false);
     const [singleWeighInput, setSingleWeighInput] = useState('');
     const [weighedList, setWeighedList] = useState([]);
-
-    useEffect(() => {
-        if (!isEditingPieces) {
-            if (formData?.stockUnits !== undefined && formData?.stockUnits !== null && formData?.stockUnits !== '') {
-                setPiecesInput(String(formData.stockUnits));
-            } else if (stockKg > 0 && currentFactor > 0) {
-                const calcPieces = Math.round((stockKg / currentFactor) * 100) / 100;
-                setPiecesInput(String(calcPieces));
-            } else if (stockKg === 0) {
-                setPiecesInput('');
-            }
-        }
-    }, [formData?.stockUnits, stockKg, currentFactor, isEditingPieces]);
 
     const updatePrimaryPresentationFactor = (newFactorVal, nextStockKg = undefined) => {
         if (!setFormData) return;
@@ -125,7 +106,6 @@ export default function ProductInventoryInfo({
             stockQuantity: String(sumKg),
             stockUnits: nextList.length
         }));
-        setPiecesInput(String(nextList.length));
         updatePrimaryPresentationFactor(avgFactor, sumKg);
     };
 
@@ -140,7 +120,6 @@ export default function ProductInventoryInfo({
             stockQuantity: count > 0 ? String(sumKg) : '0',
             stockUnits: count
         }));
-        setPiecesInput(String(count));
         if (count > 0) updatePrimaryPresentationFactor(avgFactor, sumKg);
     };
 

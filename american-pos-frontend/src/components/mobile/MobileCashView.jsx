@@ -1,16 +1,31 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  ArrowLeft, Wallet, DollarSign, CreditCard, Smartphone, 
-  Clock, ShieldCheck, CheckCircle, RefreshCw, AlertCircle, Share2,
-  Lock, Unlock, ArrowDownRight, ArrowUpRight, FileText, Printer,
-  Coins, Plus, Minus, Check, X, AlertTriangle, Shield
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  ArrowLeft, 
+  Wallet, 
+  DollarSign, 
+  CreditCard, 
+  Smartphone, 
+  RefreshCw, 
+  Share2, 
+  Lock, 
+  Unlock, 
+  ArrowDownRight, 
+  ArrowUpRight, 
+  FileText, 
+  Printer, 
+  Coins, 
+  Check, 
+  X,
+  Clock
 } from 'lucide-react';
 import api from '../../services/api';
 import localDb from '../../db/localDb';
 import { db as primaryDb } from '../../services/db';
 import mobilePrinterService from '../../services/mobilePrinterService';
-import biometricService from '../../services/biometricService';
+import { encodeEscPosCp858, ESC_INIT_CP858 } from '../../utils/escposFormatter';
 import SupervisorAuthModal from './SupervisorAuthModal';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
 
 // Helper para normalizar el nombre del método de pago proveniente de la base de datos
 const normalizePaymentMethod = (rawMethod) => {
@@ -72,19 +87,30 @@ export default function MobileCashView({
   sales = [],
   user,
   exchangeRate = 950,
+  businessInfo = null,
   T,
   isLight,
   onBackToPOS,
+  onOpenSyncCenter = null,
   showToast
 }) {
   const [currentShift, setCurrentShift] = useState(null);
   const [isLoadingShift, setIsLoadingShift] = useState(true);
+  const { counts: offlineCounts } = useOfflineQueueCounts();
 
   // Modales
   const [isOpenShiftModalOpen, setIsOpenShiftModalOpen] = useState(false);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const [isCloseShiftModalOpen, setIsCloseShiftModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({
+    enabled: isOpenShiftModalOpen || isMovementModalOpen || isCloseShiftModalOpen
+  });
   const [reportType, setReportType] = useState('X'); // 'X' o 'Z'
   const [lastZReportData, setLastZReportData] = useState(null);
 
@@ -115,10 +141,10 @@ export default function MobileCashView({
       const res = await api.get('/cash/current', { timeout: 3500 });
       if (res.data && res.data.id) {
         setCurrentShift(res.data);
-        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(res.data)); } catch (_) {}
+        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(res.data)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       } else {
         setCurrentShift(null);
-        try { localStorage.removeItem('pos_mobile_current_shift'); } catch (_) {}
+        try { localStorage.removeItem('pos_mobile_current_shift'); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       }
     } catch (_err) {
       // Fallback a almacenamiento local / offline
@@ -195,7 +221,7 @@ export default function MobileCashView({
       if (Array.isArray(s.paymentMethods)) {
         splitMethods = s.paymentMethods;
       } else if (typeof s.paymentMethods === 'string' && s.paymentMethods.trim().startsWith('[')) {
-        try { splitMethods = JSON.parse(s.paymentMethods); } catch (_) {}
+        try { splitMethods = JSON.parse(s.paymentMethods); } catch (caughtErr) { console.warn('[MobileCashView] Error parseando JSON local:', caughtErr?.message || caughtErr); }
       }
 
       if (splitMethods && splitMethods.length > 0) {
@@ -290,10 +316,18 @@ export default function MobileCashView({
   const handleOpenShift = async (e) => {
     e.preventDefault();
     setIsSubmittingOpen(true);
+    const parsedUsd = parseFloat(openFloatUSD) || 0;
+    const parsedBs = parseFloat(openFloatBS) || 0;
     const payload = {
-      initialAmountUsd: parseFloat(openFloatUSD) || 0,
-      initialAmountBs: parseFloat(openFloatBS) || 0,
-      initialAmount: parseFloat(openFloatUSD) || 0,
+      amount: parsedUsd,
+      initialBreakdown: {
+        cash: parsedUsd,
+        cash_usd: parsedUsd,
+        cash_bs: parsedBs
+      },
+      initialAmountUsd: parsedUsd,
+      initialAmountBs: parsedBs,
+      initialAmount: parsedUsd,
       registerId: 'Caja Móvil',
       registerName: 'Terminal Móvil',
       notes: openNotes.trim() || 'Apertura desde POS Móvil'
@@ -303,29 +337,37 @@ export default function MobileCashView({
       const res = await api.post('/cash/open', payload, { timeout: 4000 });
       const created = res.data?.shift || res.data || { ...payload, id: Date.now(), openedAt: new Date().toISOString(), movements: [] };
       setCurrentShift(created);
-      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(created)); } catch (_) {}
+      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(created)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       setIsOpenShiftModalOpen(false);
       showToast('✅ ¡Turno de caja abierto exitosamente!');
-    } catch (_err) {
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.error || err?.response?.data?.message || 'No tienes permiso o no es posible abrir turno';
+        showToast(`⚠️ ${msg}`);
+        return;
+      }
       // Fallback offline con encolado automático hacia el servidor PC
+      const tempShiftId = `shift_off_${Date.now()}`;
       const offlineShift = {
-        id: `shift_off_${Date.now()}`,
+        id: tempShiftId,
         ...payload,
         openedAt: new Date().toISOString(),
         movements: [],
         isOffline: true
       };
       setCurrentShift(offlineShift);
-      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(offlineShift)); } catch (_) {}
+      try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(offlineShift)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       try {
         await primaryDb.put('syncQueue', {
           id: `cash_open_${Date.now()}`,
+          tempLocalId: tempShiftId,
           endpoint: '/cash/open',
           method: 'POST',
           payload,
           createdAt: new Date().toISOString()
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       setIsOpenShiftModalOpen(false);
       showToast('⚡ Turno abierto offline (se sincronizará al conectar con PC).');
     } finally {
@@ -370,7 +412,7 @@ export default function MobileCashView({
           ...prev,
           movements: [localMovObj, ...(Array.isArray(prev.movements) ? prev.movements : [])]
         };
-        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (_) {}
+        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         return updated;
       });
       showToast(`✅ Movimiento registrado: ${movementType === 'in' ? 'Entrada' : 'Salida'} de ${movementCurrency} ${amountNum}`);
@@ -378,8 +420,14 @@ export default function MobileCashView({
       setMovementAmount('');
       setMovementReason('');
       fetchCurrentShift();
-    } catch (_err) {
-      // Offline fallback: actualizar turno en curso e insertar en cola de sincronización
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.message || err?.response?.data?.error || `Operación rechazada por el servidor (${httpStatus})`;
+        showToast(`⛔ ${msg}`);
+        return;
+      }
+      // Offline fallback: solo ante fallo de red / 5xx actualizar turno en curso e insertar en cola de sincronización
       setCurrentShift(prev => {
         const baseShift = prev || {
           id: `shift_off_${Date.now()}`,
@@ -393,7 +441,7 @@ export default function MobileCashView({
           ...baseShift,
           movements: [localMovObj, ...(Array.isArray(baseShift.movements) ? baseShift.movements : [])]
         };
-        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (_) {}
+        try { localStorage.setItem('pos_mobile_current_shift', JSON.stringify(updated)); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
         return updated;
       });
       try {
@@ -413,7 +461,7 @@ export default function MobileCashView({
             status: 'pending_sync'
           });
         }
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       showToast('⚡ Movimiento aplicado en caja local (pendiente de sincronizar).');
       setIsMovementModalOpen(false);
       setMovementAmount('');
@@ -436,12 +484,18 @@ export default function MobileCashView({
         user: user?.name || user?.username || 'Cajero Móvil'
       });
       setCurrentShift(null);
-      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (_) {}
+      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       setIsCloseShiftModalOpen(false);
       setReportType('Z');
       setIsReportModalOpen(true);
       showToast('✅ ¡Caja cerrada exitosamente! Generando Corte Z.');
-    } catch (_err) {
+    } catch (err) {
+      const httpStatus = err?.response?.status;
+      if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+        const msg = err?.response?.data?.error || err?.response?.data?.message || 'Cierre de caja rechazado por el servidor';
+        showToast(`⚠️ ${msg}`);
+        return;
+      }
       // Fallback offline con sincronización diferida
       try {
         await primaryDb.put('syncQueue', {
@@ -451,7 +505,7 @@ export default function MobileCashView({
           payload,
           createdAt: new Date().toISOString()
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       setLastZReportData({
         ...payload,
         countedUSD: cUSD,
@@ -462,7 +516,7 @@ export default function MobileCashView({
         user: user?.name || user?.username || 'Cajero Móvil'
       });
       setCurrentShift(null);
-      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (_) {}
+      try { localStorage.removeItem('pos_mobile_current_shift'); } catch (caughtErr) { console.warn('[MobileCashView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
       setIsCloseShiftModalOpen(false);
       setReportType('Z');
       setIsReportModalOpen(true);
@@ -483,22 +537,22 @@ export default function MobileCashView({
 
     const finalBreakdown = {
       cash: cUSD,
-      cash_bs: cBS,
-      ...Object.fromEntries(
-        Object.entries(metrics.methods)
-          .filter(([mName]) => mName !== 'Efectivo USD' && mName !== 'Efectivo Bs')
-          .map(([mName, data]) => {
-            let canon = 'otros';
-            if (mName === 'Pago Móvil') canon = 'pago_movil';
-            else if (mName === 'Tarjeta') canon = 'debit';
-            else if (mName === 'Zelle') canon = 'zelle';
-            else if (mName === 'Transferencia') canon = 'transfer';
-            else if (mName === 'Crédito') canon = 'fiado';
-            const isVes = mName === 'Pago Móvil' || mName === 'Tarjeta';
-            return [canon, isVes ? data.bs : data.usd];
-          })
-      )
+      cash_bs: cBS
     };
+    Object.entries(metrics.methods)
+      .filter(([mName]) => mName !== 'Efectivo USD' && mName !== 'Efectivo Bs')
+      .forEach(([mName, data]) => {
+        let canon = 'otros';
+        if (mName === 'Pago Móvil') canon = 'pago_movil';
+        else if (mName === 'Tarjeta') canon = 'debit';
+        else if (mName === 'Zelle') canon = 'zelle';
+        else if (mName === 'Transferencia') canon = 'transfer';
+        else if (mName === 'Crédito') canon = 'fiado';
+        else if (mName === 'Mixto') canon = 'mixto';
+        const isVes = mName === 'Pago Móvil' || mName === 'Tarjeta';
+        const val = isVes ? data.bs : data.usd;
+        finalBreakdown[canon] = Number(((finalBreakdown[canon] || 0) + val).toFixed(2));
+      });
 
     const payload = {
       shiftId: currentShift?.id || null,
@@ -513,11 +567,13 @@ export default function MobileCashView({
       differenceBs: diffBS
     };
 
-    // Si hay discrepancia mayor a $5, solicitar autenticación biométrica o PIN de supervisor
-    if (Math.abs(diffUSD) > 5) {
+    // Tolerancia alineada con CashReconciliationService (por defecto $1.0 USD)
+    const configuredTolerance = Number(businessInfo?.cashDifferenceToleranceUsd ?? 1);
+    const toleranceUsd = Number.isFinite(configuredTolerance) && configuredTolerance >= 0 ? configuredTolerance : 1;
+    if (Math.abs(diffUSD) > toleranceUsd) {
       setSupervisorAuthRequest({
         title: 'Autorizar Cierre con Diferencia',
-        reason: `Discrepancia detectada: $${diffUSD.toFixed(2)} USD`,
+        reason: `Discrepancia detectada: $${diffUSD.toFixed(2)} USD (tolerancia $${toleranceUsd.toFixed(2)})`,
         actionType: 'cash_discrepancy',
         referenceId: String(currentShift?.id || 'caja_movil'),
         onAuthorized: (approvalData) => executeCloseShift({
@@ -531,9 +587,18 @@ export default function MobileCashView({
     await executeCloseShift(payload, cUSD, cBS);
   };
 
+  // Fuente de métricas activa para Reporte X vs Corte Z (preserva snapshot del turno recién cerrado)
+  const getReportMetrics = (type = 'X') => {
+    if (type === 'Z' && lastZReportData?.metrics) {
+      return lastZReportData.metrics;
+    }
+    return metrics;
+  };
+
   // Generar texto para WhatsApp (Corte X o Z)
   const generateReportText = (type = 'X') => {
     const isZ = type === 'Z';
+    const rMetrics = getReportMetrics(type);
     const lines = [
       `📊 *${isZ ? 'CORTE Z (CIERRE DEFINITIVO)' : 'CORTE X (ARQUEO PARCIAL)'}*`,
       `Terminal: *Caja Móvil*`,
@@ -542,22 +607,22 @@ export default function MobileCashView({
       `Tasa Oficial: Bs. ${exchangeRate.toFixed(2)}`,
       `--------------------------------`,
       `*FONDO INICIAL DE APERTURA:*`,
-      `• USD: $${metrics.initialUsd.toFixed(2)}`,
-      `• Bs: Bs. ${metrics.initialBs.toFixed(2)}`,
+      `• USD: $${rMetrics.initialUsd.toFixed(2)}`,
+      `• Bs: Bs. ${rMetrics.initialBs.toFixed(2)}`,
       `--------------------------------`,
       `*VENTAS TOTALES DEL TURNO:*`,
-      `• Total USD: *$${metrics.totalUSD.toFixed(2)}*`,
-      `• Total BS: *Bs. ${metrics.totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
-      `• Tickets emitidos: *${metrics.count}*`,
+      `• Total USD: *$${rMetrics.totalUSD.toFixed(2)}*`,
+      `• Total BS: *Bs. ${rMetrics.totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}*`,
+      `• Tickets emitidos: *${rMetrics.count}*`,
       `--------------------------------`,
       `*DESGLOSE POR FORMA DE PAGO:*`,
-      ...Object.entries(metrics.methods)
+      ...Object.entries(rMetrics.methods)
         .filter(([_, data]) => data.count > 0)
         .map(([name, data]) => `• ${name} (${data.count}): $${data.usd.toFixed(2)} / Bs. ${data.bs.toFixed(2)}`),
       `--------------------------------`,
       `*EFECTIVO TEÓRICO EN CAJA:*`,
-      `• Efectivo USD Esperado: *$${metrics.theoreticalCashUsd.toFixed(2)}*`,
-      `• Efectivo Bs Esperado: *Bs. ${metrics.theoreticalCashBs.toFixed(2)}*`,
+      `• Efectivo USD Esperado: *$${rMetrics.theoreticalCashUsd.toFixed(2)}*`,
+      `• Efectivo Bs Esperado: *Bs. ${rMetrics.theoreticalCashBs.toFixed(2)}*`,
       ...(isZ && lastZReportData ? [
         `--------------------------------`,
         `*CONTEO FÍSICO ARQUEADO:*`,
@@ -567,7 +632,7 @@ export default function MobileCashView({
         `• Diferencia Bs: Bs. ${Number(lastZReportData.differenceBs || 0).toFixed(2)}`
       ] : []),
       `--------------------------------`,
-      metrics.offlineCount > 0 ? `⚠️ Ventas offline por sincronizar: ${metrics.offlineCount}` : `✅ Todo sincronizado en red LAN`,
+      rMetrics.offlineCount > 0 ? `⚠️ Ventas offline por sincronizar: ${rMetrics.offlineCount}` : `✅ Todo sincronizado en red LAN`,
       `--------------------------------`,
       `Isaac POS Ultra Móvil • Sistema Seguro`
     ];
@@ -583,62 +648,57 @@ export default function MobileCashView({
   const handlePrintBluetooth = async (type = 'X') => {
     try {
       const isZ = type === 'Z';
-      const cleanStr = (s = '') => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]/g, '');
+      const rMetrics = getReportMetrics(type);
       const ESC = '\x1B';
       const GS = '\x1D';
       const divider = '--------------------------------\n';
       let receipt = '';
-      receipt += `${ESC}@`; // Init
+      receipt += ESC_INIT_CP858; // Init + CP858 Español real (ñ, Ñ, tildes)
       receipt += `${ESC}a\x01`; // Center
       receipt += `${ESC}!\x30${isZ ? 'CORTE Z (CIERRE)' : 'CORTE X (ARQUEO)'}${ESC}!\x00\n`;
-      receipt += `Terminal: Caja Movil\n`;
-      receipt += `Cajero: ${cleanStr(user?.name || user?.username || 'Cajero Movil')}\n`;
+      receipt += `Terminal: Caja Móvil\n`;
+      receipt += `Cajero: ${String(user?.name || user?.username || 'Cajero Móvil')}\n`;
       receipt += `${new Date().toLocaleDateString('es-VE')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n`;
       receipt += `Tasa BCV: Bs. ${exchangeRate.toFixed(2)}\n`;
       receipt += `${ESC}a\x00`; // Left
       receipt += divider;
       receipt += `${ESC}E\x01FONDO INICIAL DE APERTURA:${ESC}E\x00\n`;
-      receipt += `USD: $${metrics.initialUsd.toFixed(2)}\n`;
-      receipt += `Bs:  Bs. ${metrics.initialBs.toFixed(2)}\n`;
+      receipt += `USD: $${rMetrics.initialUsd.toFixed(2)}\n`;
+      receipt += `Bs:  Bs. ${rMetrics.initialBs.toFixed(2)}\n`;
       receipt += divider;
       receipt += `${ESC}E\x01VENTAS TOTALES DEL TURNO:${ESC}E\x00\n`;
-      receipt += `Total USD: $${metrics.totalUSD.toFixed(2)}\n`;
-      receipt += `Total BS:  Bs. ${metrics.totalBS.toFixed(2)}\n`;
-      receipt += `Tickets:   ${metrics.count}\n`;
+      receipt += `Total USD: $${rMetrics.totalUSD.toFixed(2)}\n`;
+      receipt += `Total BS:  Bs. ${rMetrics.totalBS.toFixed(2)}\n`;
+      receipt += `Tickets:   ${rMetrics.count}\n`;
       receipt += divider;
       receipt += `${ESC}E\x01DESGLOSE POR PAGO:${ESC}E\x00\n`;
-      Object.entries(metrics.methods)
+      Object.entries(rMetrics.methods)
         .filter(([_, data]) => data.count > 0)
         .forEach(([name, data]) => {
-          receipt += `${cleanStr(name)} (${data.count}): $${data.usd.toFixed(2)}\n`;
+          receipt += `${String(name)} (${data.count}): $${data.usd.toFixed(2)}\n`;
         });
       receipt += divider;
       receipt += `${ESC}E\x01EFECTIVO ESPERADO EN CAJA:${ESC}E\x00\n`;
-      receipt += `USD Esperado: $${metrics.theoreticalCashUsd.toFixed(2)}\n`;
-      receipt += `Bs Esperado:  Bs. ${metrics.theoreticalCashBs.toFixed(2)}\n`;
+      receipt += `USD Esperado: $${rMetrics.theoreticalCashUsd.toFixed(2)}\n`;
+      receipt += `Bs Esperado:  Bs. ${rMetrics.theoreticalCashBs.toFixed(2)}\n`;
       if (isZ && lastZReportData) {
         receipt += divider;
-        receipt += `${ESC}E\x01CONTEO FISICO ARQUEADO:${ESC}E\x00\n`;
+        receipt += `${ESC}E\x01CONTEO FÍSICO ARQUEADO:${ESC}E\x00\n`;
         receipt += `Conteo USD: $${Number(lastZReportData.countedUSD || 0).toFixed(2)}\n`;
         receipt += `Conteo Bs:  Bs. ${Number(lastZReportData.countedBS || 0).toFixed(2)}\n`;
         receipt += `Dif. USD:   $${Number(lastZReportData.differenceUsd || 0).toFixed(2)}\n`;
         receipt += `Dif. Bs:    Bs. ${Number(lastZReportData.differenceBs || 0).toFixed(2)}\n`;
       }
       receipt += divider;
-      receipt += `${ESC}a\x01Isaac POS Ultra Movil\n\n\n\n${GS}V\x41\x00`;
+      receipt += `${ESC}a\x01Isaac POS Ultra Móvil\n\n\n\n${GS}V\x41\x00`;
 
-      const encoder = new TextEncoder();
-      const escposData = encoder.encode(receipt);
-      let binary = '';
-      for (let i = 0; i < escposData.length; i++) {
-        binary += String.fromCharCode(escposData[i]);
-      }
-      const base64 = btoa(binary);
+      const escposData = encodeEscPosCp858(receipt);
+      const base64 = mobilePrinterService.toBase64(escposData);
 
       let printerCfg = {};
       try {
         printerCfg = JSON.parse(localStorage.getItem('pos_printer_config') || '{}');
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileCashView] Error parseando JSON local:', caughtErr?.message || caughtErr); }
 
       if (printerCfg.type === 'network' && printerCfg.ip) {
         await mobilePrinterService.printNetwork(printerCfg.ip, printerCfg.port || 9100, escposData);
@@ -647,8 +707,12 @@ export default function MobileCashView({
       }
 
       if (window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware) {
+        const btAddress = printerCfg.btAddress ||
+          printerCfg.address ||
+          localStorage.getItem('pos_mobile_bt_printer') ||
+          localStorage.getItem('pos_mobile_bt_printer_last') || '';
         await window.Capacitor.Plugins.PosNativeHardware.printBluetooth({
-          address: printerCfg.btAddress || printerCfg.address || '',
+          address: btAddress,
           data: base64
         });
         showToast('🖨️ Reporte impreso en impresora térmica Bluetooth');
@@ -704,6 +768,17 @@ export default function MobileCashView({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {offlineCounts.cash > 0 && (
+            <button
+              type="button"
+              onClick={() => onOpenSyncCenter?.()}
+              className="px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-500 text-[10px] font-black flex items-center gap-1 cursor-pointer active:scale-95"
+              title="Registros de caja/ventas pendientes por sincronizar"
+            >
+              <Clock size={11} />
+              <span>{offlineCounts.cash} pend.</span>
+            </button>
+          )}
           <button
             onClick={() => fetchCurrentShift()}
             className={`p-2 rounded-xl ${T.btnGhost} text-slate-400 hover:text-white cursor-pointer active:scale-95`}
@@ -919,19 +994,30 @@ export default function MobileCashView({
 
       {/* MODAL: APERTURA DE TURNO */}
       {isOpenShiftModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
                 <Unlock size={18} className="text-emerald-500" />
                 <h3 className={`font-black text-sm ${T.textPrimary}`}>Apertura de Turno de Caja</h3>
               </div>
-              <button onClick={() => setIsOpenShiftModalOpen(false)} className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}>
+              <button onClick={() => setIsOpenShiftModalOpen(false)} className={`${T.textMuted} hover:opacity-100 p-2 cursor-pointer`}>
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleOpenShift} className="space-y-3">
+            <form
+              onSubmit={handleOpenShift}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               <p className={`text-xs ${T.textSecondary}`}>
                 Indica el fondo inicial de cambio recibido en caja al comenzar el turno.
               </p>
@@ -943,11 +1029,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.01"
                     value={openFloatUSD}
                     onChange={(e) => setOpenFloatUSD(e.target.value)}
                     placeholder="0.00"
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
                   />
                 </div>
                 <div>
@@ -956,11 +1044,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.1"
                     value={openFloatBS}
                     onChange={(e) => setOpenFloatBS(e.target.value)}
                     placeholder="0.00"
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-amber-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-amber-500`}
                   />
                 </div>
               </div>
@@ -971,10 +1061,11 @@ export default function MobileCashView({
                 </label>
                 <input
                   type="text"
+                  enterKeyHint="done"
                   value={openNotes}
                   onChange={(e) => setOpenNotes(e.target.value)}
                   placeholder="Ej: Turno mañana, billetes de $1 y $5 para cambio"
-                  className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                  className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                 />
               </div>
 
@@ -993,19 +1084,30 @@ export default function MobileCashView({
 
       {/* MODAL: MOVIMIENTO DE CAJA CHICA (ENTRADA / SALIDA) */}
       {isMovementModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border ${T.border} space-y-4 max-h-[92dvh] overflow-y-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
                 <Coins size={18} className="text-amber-500" />
                 <h3 className={`font-black text-sm ${T.textPrimary}`}>Movimiento de Caja Chica</h3>
               </div>
-              <button onClick={() => setIsMovementModalOpen(false)} className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}>
+              <button onClick={() => setIsMovementModalOpen(false)} className={`${T.textMuted} hover:opacity-100 p-2 cursor-pointer`}>
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleRecordMovement} className="space-y-3">
+            <form
+              onSubmit={handleRecordMovement}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -1039,7 +1141,7 @@ export default function MobileCashView({
                   <select
                     value={movementCurrency}
                     onChange={(e) => setMovementCurrency(e.target.value)}
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                   >
                     <option value="USD">Dólares ($ USD)</option>
                     <option value="VES">Bolívares (Bs)</option>
@@ -1050,12 +1152,14 @@ export default function MobileCashView({
                   <label className={`text-[10px] font-bold ${T.textSecondary} block mb-1`}>Monto *</label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.01"
                     required
                     value={movementAmount}
                     onChange={(e) => setMovementAmount(e.target.value)}
                     placeholder="0.00"
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-amber-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-amber-500`}
                   />
                 </div>
               </div>
@@ -1064,11 +1168,12 @@ export default function MobileCashView({
                 <label className={`text-[10px] font-bold ${T.textSecondary} block mb-1`}>Motivo / Concepto *</label>
                 <input
                   type="text"
+                  enterKeyHint="done"
                   required
                   value={movementReason}
                   onChange={(e) => setMovementReason(e.target.value)}
                   placeholder="Ej: Pago de hielo, compras menores, cambio"
-                  className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                  className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                 />
               </div>
 
@@ -1087,19 +1192,30 @@ export default function MobileCashView({
 
       {/* MODAL: CIERRE DE TURNO (CORTE Z) */}
       {isCloseShiftModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80">
-          <div className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border border-rose-500/30 space-y-4 max-h-[92vh] overflow-y-auto`}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-xl border-t sm:border border-rose-500/30 space-y-4 max-h-[92dvh] overflow-y-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
                 <Lock size={18} className="text-rose-500" />
                 <h3 className={`font-black text-sm ${T.textPrimary}`}>Cierre de Turno (Corte Z)</h3>
               </div>
-              <button onClick={() => setIsCloseShiftModalOpen(false)} className={`${T.textMuted} hover:${T.textPrimary} p-1 cursor-pointer`}>
+              <button onClick={() => setIsCloseShiftModalOpen(false)} className={`${T.textMuted} hover:opacity-100 p-2 cursor-pointer`}>
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleCloseShift} className="space-y-3">
+            <form
+              onSubmit={handleCloseShift}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 space-y-1">
                 <p className="text-[11px] font-black uppercase text-rose-600 dark:text-rose-400">
                   Arqueo y Cierre Definitivo
@@ -1117,11 +1233,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.01"
                     required
                     value={countedUSD}
                     onChange={(e) => setCountedUSD(e.target.value)}
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-emerald-500`}
                   />
                   {(user?.role === 'admin' || user?.role === 'superadmin') ? (
                     <p className={`text-[9px] ${T.textMuted} mt-1`}>
@@ -1140,11 +1258,13 @@ export default function MobileCashView({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     step="0.1"
                     required
                     value={countedBS}
                     onChange={(e) => setCountedBS(e.target.value)}
-                    className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-black ${T.textPrimary} outline-none focus:border-amber-500`}
+                    className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-black ${T.textPrimary} outline-none focus:border-amber-500`}
                   />
                   {(user?.role === 'admin' || user?.role === 'superadmin') ? (
                     <p className={`text-[9px] ${T.textMuted} mt-1`}>
@@ -1179,10 +1299,11 @@ export default function MobileCashView({
                 </label>
                 <input
                   type="text"
+                  enterKeyHint="done"
                   value={closeNotes}
                   onChange={(e) => setCloseNotes(e.target.value)}
                   placeholder="Ej: Todo cuadrado sin faltantes"
-                  className={`w-full ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-xs font-bold ${T.textPrimary} outline-none`}
+                  className={`w-full min-h-[44px] ${T.inputBg} border ${T.border} rounded-lg p-2.5 text-base sm:text-sm font-bold ${T.textPrimary} outline-none`}
                 />
               </div>
 
@@ -1202,7 +1323,7 @@ export default function MobileCashView({
       {/* MODAL: VISOR DE REPORTE TÉRMICO (CORTE X o CORTE Z) */}
       {isReportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/85">
-          <div className="w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-xl shadow-xl space-y-3 border border-slate-200 max-h-[92vh] overflow-y-auto">
+          <div className="w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-xl shadow-xl space-y-3 border border-slate-200 max-h-[92dvh] overflow-y-auto">
             <div className="text-center border-b border-dashed pb-2.5">
               <h2 className="font-black text-base tracking-tight">ISAAC POS ULTRA</h2>
               <p className="text-[10px] font-sans font-bold text-slate-700">
@@ -1217,53 +1338,60 @@ export default function MobileCashView({
               <div className="flex justify-between"><span>Cajero:</span><span>{user?.name || user?.username || 'Cajero Móvil'}</span></div>
             </div>
 
-            <div className="border-t border-b border-dashed py-2 space-y-1">
-              <div className="flex justify-between font-bold">
-                <span>Fondo Inicial ($):</span>
-                <span>${metrics.initialUsd.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold">
-                <span>Fondo Inicial (Bs):</span>
-                <span>Bs. {metrics.initialBs.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold text-emerald-800">
-                <span>Total Ventas USD:</span>
-                <span>${metrics.totalUSD.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold">
-                <span>Total Ventas Bs:</span>
-                <span>Bs. {metrics.totalBS.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Tickets Emitidos:</span>
-                <span>{metrics.count}</span>
-              </div>
-            </div>
-
-            {/* Desglose métodos */}
-            <div className="space-y-0.5 text-[9px]">
-              <p className="font-bold font-sans uppercase">Desglose por Método:</p>
-              {Object.entries(metrics.methods).map(([mName, data]) => {
-                if (data.count === 0) return null;
-                return (
-                  <div key={mName} className="flex justify-between">
-                    <span>{mName} ({data.count}):</span>
-                    <span>${data.usd.toFixed(2)} / Bs. {data.bs.toFixed(2)}</span>
+            {(() => {
+              const modalMetrics = getReportMetrics(reportType);
+              return (
+                <>
+                  <div className="border-t border-b border-dashed py-2 space-y-1">
+                    <div className="flex justify-between font-bold">
+                      <span>Fondo Inicial ($):</span>
+                      <span>${modalMetrics.initialUsd.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Fondo Inicial (Bs):</span>
+                      <span>Bs. {modalMetrics.initialBs.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-emerald-800">
+                      <span>Total Ventas USD:</span>
+                      <span>${modalMetrics.totalUSD.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Total Ventas Bs:</span>
+                      <span>Bs. {modalMetrics.totalBS.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tickets Emitidos:</span>
+                      <span>{modalMetrics.count}</span>
+                    </div>
                   </div>
-                );
-              })}
-            </div>
 
-            <div className="border-t border-dashed pt-2 space-y-1 font-bold text-[10px]">
-              <div className="flex justify-between text-blue-900">
-                <span>Efectivo Teórico USD:</span>
-                <span>${metrics.theoreticalCashUsd.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Efectivo Teórico Bs:</span>
-                <span>Bs. {metrics.theoreticalCashBs.toFixed(2)}</span>
-              </div>
-            </div>
+                  {/* Desglose métodos */}
+                  <div className="space-y-0.5 text-[9px]">
+                    <p className="font-bold font-sans uppercase">Desglose por Método:</p>
+                    {Object.entries(modalMetrics.methods).map(([mName, data]) => {
+                      if (data.count === 0) return null;
+                      return (
+                        <div key={mName} className="flex justify-between">
+                          <span>{mName} ({data.count}):</span>
+                          <span>${data.usd.toFixed(2)} / Bs. {data.bs.toFixed(2)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="border-t border-dashed pt-2 space-y-1 font-bold text-[10px]">
+                    <div className="flex justify-between text-blue-900">
+                      <span>Efectivo Teórico USD:</span>
+                      <span>${modalMetrics.theoreticalCashUsd.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Efectivo Teórico Bs:</span>
+                      <span>Bs. {modalMetrics.theoreticalCashBs.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="space-y-2 pt-2 border-t border-dashed font-sans">
               <button

@@ -2,8 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { Op } = require('sequelize');
 const { TelecomRecharge, CashShift, CashMovement } = require('../database/models');
+const { requirePermission } = require('../middleware/auth');
 const { generateRobustId, readJson, writeJson, getUserSettings } = require('../utils/helpers');
 const { SETTINGS_FILE } = require('../config/paths');
+
+router.use(requirePermission('canAccessPOS'));
 
 let tableSynced = false;
 async function ensureTableReady() {
@@ -29,7 +32,7 @@ function normalizePaymentMethodKey(rawMethod) {
 }
 
 function isUsdMethod(methodKey) {
-    return ['cash', 'cash_usd', 'efectivo_usd', 'divisas', 'zelle'].includes(methodKey);
+    return ['cash', 'cash_usd', 'efectivo_usd', 'divisas', 'zelle', 'binance_usdt'].includes(methodKey);
 }
 
 async function registerCashMovementForRecharge(recharge, user, req) {
@@ -205,6 +208,7 @@ router.get('/', async (req, res) => {
         if (lastWalletBalanceBs === null) {
             const latestWithBalance = await TelecomRecharge.findOne({
                 where: {
+                    companyId: compId,
                     remainingWalletBalanceBs: { [Op.not]: null, [Op.gt]: 0 }
                 },
                 order: [['updatedAt', 'DESC']]
@@ -417,7 +421,7 @@ router.put('/:id/complete', async (req, res) => {
 /**
  * PUT /:id/cancel - Anular recarga y revertir ingreso de caja si existía
  */
-router.put('/:id/cancel', async (req, res) => {
+router.put('/:id/cancel', requirePermission('canVoidSales', 'canManageCashShift'), async (req, res) => {
     try {
         await ensureTableReady();
         const { id } = req.params;
@@ -455,7 +459,7 @@ router.put('/:id/cancel', async (req, res) => {
 /**
  * POST /wallet-balance - Actualizar saldo disponible en bolsa Movilway
  */
-router.post('/wallet-balance', async (req, res) => {
+router.post('/wallet-balance', requirePermission('canManageSettings', 'canManageCashShift'), async (req, res) => {
     try {
         const compId = String(req.user?.companyId || '2');
         const balance = Number(req.body?.balanceBs ?? req.body?.saldo ?? 0);

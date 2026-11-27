@@ -52,7 +52,9 @@ const resolveEffectiveSettings = (settings = null, businessSettings = null) => {
         try {
             const raw = localStorage.getItem('pos_business_settings');
             if (raw) storedBiz = JSON.parse(raw) || {};
-        } catch (_) {}
+        } catch (err) {
+            console.warn('[Print] Error leyendo pos_business_settings:', err?.message);
+        }
     }
     const globalCfg = getGlobalSettings() || {};
     const merged = {
@@ -628,7 +630,6 @@ export const printZReportReceipt = async ({
     shift,
     closureResult,
     declaration,
-    difference,
     supervisorName,
     user,
     settings,

@@ -165,18 +165,29 @@ class CollectionIntelligenceService {
             } catch (_e) {}
 
             // Clasificación de riesgo técnico
+            const creditLimitDays = Number(cust.creditLimitDays) > 0 ? Number(cust.creditLimitDays) : 30;
+            const allowOverdueCredit = Boolean(cust.allowOverdueCredit);
+            const hasOverdueDebt = balance > 0.01 && (c31to60 > 0 || cOver60 > 0 || oldestDays > creditLimitDays);
+            const isEffectivelyBlocked = Boolean(
+                cust.isCreditBlocked ||
+                (!allowOverdueCredit && hasOverdueDebt)
+            );
+
             let status = 'GREEN';
             let statusLabel = balance > 0.01 ? 'Corriente (0-15d)' : 'Solvente ($0.00)';
 
             if (cust.isCreditBlocked) {
                 status = 'RED';
                 statusLabel = 'Crédito Bloqueado';
+            } else if (allowOverdueCredit && hasOverdueDebt) {
+                status = 'YELLOW';
+                statusLabel = 'Desbloqueado (Mora permitida)';
             } else if (cOver60 > 0 || oldestDays > 60) {
                 status = 'RED';
                 statusLabel = 'Mora Crítica (+60d)';
-            } else if (c31to60 > 0 || oldestDays > 30) {
+            } else if (c31to60 > 0 || oldestDays > creditLimitDays) {
                 status = 'ORANGE';
-                statusLabel = 'Mora Preventiva (31-60d)';
+                statusLabel = `Mora Preventiva (+${creditLimitDays}d)`;
             } else if (c16to30 > 0 || oldestDays > 15 || (creditLimit > 0 && balance > creditLimit * 0.85)) {
                 status = 'YELLOW';
                 statusLabel = 'Vencido 16-30d / En Alerta';
@@ -194,6 +205,7 @@ class CollectionIntelligenceService {
                 phone: cust.phone || '',
                 email: cust.email || '',
                 creditLimit,
+                creditLimitDays,
                 totalBalance: balance,
                 current0to15: cCurrent,
                 days16to30: c16to30,
@@ -203,6 +215,9 @@ class CollectionIntelligenceService {
                 status,
                 statusLabel,
                 isCreditBlocked: Boolean(cust.isCreditBlocked),
+                allowOverdueCredit,
+                hasOverdueDebt,
+                isEffectivelyBlocked,
                 lastAction
             });
         }
@@ -226,29 +241,42 @@ class CollectionIntelligenceService {
     }
 
     /**
-     * Bloquea o desbloquea administrativamente el crédito de un cliente en el POS
+     * Bloquea o desbloquea administrativamente el crédito de un cliente en el POS.
+     * Al desbloquear (isBlocked === false), habilita allowOverdueCredit para permitir
+     * registrar nuevas facturas aunque el cliente conserve deudas vencidas antiguas.
      */
-    static async toggleCreditBlock(customerId, isBlocked, companyId = 'default', userId = null) {
+    static async toggleCreditBlock(customerId, isBlocked, companyId = 'default', userId = null, options = {}) {
         const customer = await Customer.findByPk(customerId);
         if (!customer) throw new Error('Cliente no encontrado');
 
         const nextState = typeof isBlocked === 'boolean' ? isBlocked : !customer.isCreditBlocked;
-        await customer.update({ isCreditBlocked: nextState });
+        const nextAllowOverdue = nextState
+            ? false
+            : (typeof options.allowOverdueCredit === 'boolean' ? options.allowOverdueCredit : true);
 
+        await customer.update({
+            isCreditBlocked: nextState,
+            allowOverdueCredit: nextAllowOverdue
+        });
+
+        const customNotes = typeof options.notes === 'string' && options.notes.trim() ? options.notes.trim() : null;
         await CollectionActionLog.create({
             id: generateRobustId(),
             customerId: customer.id,
             actionType: nextState ? 'CREDIT_BLOCKED' : 'CREDIT_UNBLOCKED',
-            notes: nextState
+            notes: customNotes || (nextState
                 ? 'Suspensión preventiva de línea de crédito en POS desde Radar de Cobranza'
-                : 'Rehabilitación de línea de crédito en POS',
+                : (nextAllowOverdue
+                    ? 'Crédito desbloqueado: autorizado para seguir facturando con deudas vencidas'
+                    : 'Rehabilitación de línea de crédito en POS')),
             userId,
             companyId: String(companyId || 'default')
         });
 
         return {
             customerId: customer.id,
-            isCreditBlocked: nextState
+            isCreditBlocked: nextState,
+            allowOverdueCredit: nextAllowOverdue
         };
     }
 
@@ -261,6 +289,8 @@ class CollectionIntelligenceService {
 
         const balance = parseFloat(customer.creditBalance) || 0;
         const limit = parseFloat(customer.creditLimit) || 0;
+        const creditLimitDays = Number(customer.creditLimitDays) > 0 ? Number(customer.creditLimitDays) : 30;
+        const allowOverdueCredit = Boolean(customer.allowOverdueCredit);
         const availableCredit = Math.max(0, limit - balance);
 
         let maxDaysOverdue = 0;
@@ -294,7 +324,7 @@ class CollectionIntelligenceService {
 
                 const saleDate = new Date(sale.createdAt || sale.date);
                 const diffDays = Math.floor(Math.max(0, today - saleDate) / (1000 * 60 * 60 * 24));
-                if (diffDays > 30) {
+                if (diffDays > creditLimitDays) {
                     overdueAmount += remaining;
                 }
                 if (diffDays > maxDaysOverdue) {
@@ -305,20 +335,33 @@ class CollectionIntelligenceService {
 
         let trafficLight = 'GREEN';
         let blockReason = null;
+        let blockType = null;
         let canSellCredit = true;
+        let overdueBypassActive = false;
 
         if (customer.isCreditBlocked) {
             trafficLight = 'RED';
             blockReason = 'El crédito está administrativamente bloqueado para este cliente.';
+            blockType = 'MANUAL_BLOCK';
             canSellCredit = false;
         } else if (limit > 0 && balance >= limit) {
             trafficLight = 'RED';
             blockReason = `Límite de crédito excedido ($${balance.toFixed(2)} de $${limit.toFixed(2)} permitidos).`;
+            blockType = 'CREDIT_LIMIT_EXCEEDED';
             canSellCredit = false;
-        } else if (balance > 0.01 && (maxDaysOverdue > 30 || overdueAmount > 0.01)) {
-            trafficLight = 'RED';
-            blockReason = `Tiene facturas vencidas con más de 30 días de mora ($${overdueAmount.toFixed(2)}).`;
-            canSellCredit = false;
+        } else if (balance > 0.01 && (maxDaysOverdue > creditLimitDays || overdueAmount > 0.01)) {
+            if (allowOverdueCredit) {
+                trafficLight = 'YELLOW';
+                blockReason = `Deuda vencida (${maxDaysOverdue}d, $${overdueAmount.toFixed(2)}), pero el cliente está desbloqueado para seguir facturando.`;
+                blockType = null;
+                canSellCredit = true;
+                overdueBypassActive = true;
+            } else {
+                trafficLight = 'RED';
+                blockReason = `Tiene facturas vencidas con más de ${creditLimitDays} días de mora ($${overdueAmount.toFixed(2)}).`;
+                blockType = 'OVERDUE_DEBT';
+                canSellCredit = false;
+            }
         } else if (balance > (limit * 0.8) && limit > 0) {
             trafficLight = 'YELLOW';
             blockReason = 'Cliente cercano al límite máximo de crédito (80%+ utilizado).';
@@ -330,6 +373,7 @@ class CollectionIntelligenceService {
             idDocument: customer.idDocument,
             phone: customer.phone,
             creditLimit: limit,
+            creditLimitDays,
             creditBalance: balance,
             availableCredit,
             maxDaysOverdue,
@@ -337,6 +381,10 @@ class CollectionIntelligenceService {
             trafficLight,
             canSellCredit,
             blockReason,
+            blockType,
+            isCreditBlocked: Boolean(customer.isCreditBlocked),
+            allowOverdueCredit,
+            overdueBypassActive,
             isVIP: Boolean(customer.isVIP)
         };
     }

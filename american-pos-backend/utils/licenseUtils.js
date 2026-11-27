@@ -10,6 +10,24 @@ const cryptoService = require('./crypto-service');
 const hardwareIdentity = require('./hardware-id');
 const os = require('os');
 
+function parseGraceDays(rawValue, fallback = 7) {
+    if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+        return fallback;
+    }
+    const num = Number(rawValue);
+    if (!Number.isFinite(num)) return fallback;
+    return Math.max(0, Math.min(365, Math.trunc(num)));
+}
+
+function parseExpirationMs(expValue) {
+    if (!expValue || expValue === 'never') return null;
+    if (typeof expValue === 'number') return Number.isFinite(expValue) ? expValue : null;
+    const numeric = Number(expValue);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsedIso = Date.parse(String(expValue));
+    return Number.isFinite(parsedIso) ? parsedIso : null;
+}
+
 function extractAndCleanLicenseKey(rawInput) {
     if (!rawInput || typeof rawInput !== 'string') return '';
     let text = rawInput.trim();
@@ -120,7 +138,8 @@ class LicenseManager {
             let cryptoCheck = cryptoService.verifyLicenseSignature(
                 payloadStr, 
                 signature, 
-                version
+                version,
+                data.kid || null
             );
 
             // Si falló y tenemos payload crudo alternativo (p. ej. en JWT)
@@ -128,7 +147,8 @@ class LicenseManager {
                 cryptoCheck = cryptoService.verifyLicenseSignature(
                     rawPayloadForSig,
                     signature,
-                    version
+                    version,
+                    data.kid || null
                 );
             }
 
@@ -161,12 +181,18 @@ class LicenseManager {
                 return { valid: false, message: `Llave asignada a terminal ${requiredHwid}, no coincide con ${expectedHwid}` };
             }
 
-            // 5. Retorno Exitoso
+            // 5. Retorno Exitoso (incluyendo claims de plan/emisión firmados en RSA v2 si existen)
             return { 
                 valid: true, 
                 version,
                 requiresUpgrade: cryptoCheck.requiresUpgrade,
-                expiresAt: data.exp === 'never' ? null : new Date(Number(data.exp)).toISOString()
+                expiresAt: data.exp === 'never' ? null : new Date(Number(data.exp)).toISOString(),
+                claims: {
+                    plan: data.plan || null,
+                    allowMobile: data.allowMobile !== undefined ? Boolean(data.allowMobile) : null,
+                    maxRegisters: Number.isFinite(Number(data.maxRegisters)) ? Number(data.maxRegisters) : null,
+                    iat: Number.isFinite(Number(data.iat)) ? Number(data.iat) : null
+                }
             };
 
         } catch (error) {
@@ -184,9 +210,11 @@ class LicenseManager {
             : '';
         if (envPem) return envPem;
 
-        const keyPath = path.join(__dirname, 'keys', 'private.pem');
-        if (fs.existsSync(keyPath)) {
-            return fs.readFileSync(keyPath, 'utf8');
+        if (process.env.NODE_ENV !== 'production' || process.env.ALLOW_LOCAL_LICENSE_SIGNING === 'true') {
+            const keyPath = path.join(__dirname, 'keys', 'private.pem');
+            if (fs.existsSync(keyPath)) {
+                return fs.readFileSync(keyPath, 'utf8');
+            }
         }
         return null;
     }
@@ -201,6 +229,7 @@ class LicenseManager {
             : Date.now() + (unit === 'minutes' ? duration * 60000 : duration * 86400000);
         const payloadObj = {
             ...extraClaims,
+            kid: String(extraClaims?.kid || process.env.LICENSE_KEY_ID || 'v2-primary'),
             mid: machineId,
             exp,
             v: 2,
@@ -229,6 +258,92 @@ class LicenseManager {
             return Buffer.from(`${data}.${sig}`, 'utf8').toString('base64');
         }
         throw new Error('No se permite emitir licencias HMAC v1 sin clave privada RSA (LICENSE_PRIVATE_KEY_PEM).');
+    }
+
+    signRemoteLease(payloadObj = {}, privateKeyPem = null) {
+        const privKey = this.getPrivateKey(privateKeyPem);
+        if (!privKey) {
+            throw new Error('Se requiere clave privada RSA para firmar leases remotos.');
+        }
+        const now = Date.now();
+        const graceDays = parseGraceDays(payloadObj.graceDays, 7);
+        const normalized = {
+            typ: 'license_lease',
+            v: 2,
+            kid: String(payloadObj.kid || process.env.LICENSE_KEY_ID || 'v2-primary'),
+            mid: String(payloadObj.mid || payloadObj.machineId || '').trim(),
+            status: String(payloadObj.status || 'active').toLowerCase(),
+            reason: payloadObj.reason ? String(payloadObj.reason).slice(0, 300) : null,
+            graceDays,
+            iat: Number(payloadObj.iat || now),
+            serverTime: Number(payloadObj.serverTime || now),
+            graceUntil: Number(payloadObj.graceUntil ?? (now + graceDays * 86400000)),
+            exp: payloadObj.exp !== undefined ? payloadObj.exp : 'never'
+        };
+        if (!normalized.mid) {
+            throw new Error('machineId requerido para firmar lease remoto.');
+        }
+        const payloadStr = JSON.stringify(normalized);
+        const signatureB64 = crypto.sign('RSA-SHA256', Buffer.from(payloadStr, 'utf8'), privKey).toString('base64');
+        return Buffer.from(`${payloadStr}.${signatureB64}`, 'utf8').toString('base64');
+    }
+
+    verifyRemoteLeaseToken(leaseToken, expectedMachineId = null) {
+        if (!leaseToken || typeof leaseToken !== 'string') {
+            return { valid: false, message: 'Lease remoto vacío o inválido' };
+        }
+        try {
+            const decoded = safeBase64Decode(leaseToken.trim());
+            if (!decoded || !decoded.includes('.')) {
+                return { valid: false, message: 'Formato de lease remoto inválido' };
+            }
+            const lastDot = decoded.lastIndexOf('.');
+            const payloadStr = decoded.substring(0, lastDot);
+            const sigB64 = decoded.substring(lastDot + 1);
+            if (!payloadStr.startsWith('{') || !sigB64) {
+                return { valid: false, message: 'Payload de lease corrupto' };
+            }
+
+            const data = JSON.parse(payloadStr);
+            const sigCheck = cryptoService.verifyLicenseSignature(payloadStr, sigB64, 2, data.kid || null);
+            if (!sigCheck.isValid) {
+                return { valid: false, message: 'Firma RSA del lease remoto inválida o falsificada' };
+            }
+
+            if (data.typ !== 'license_lease' || Number(data.v) !== 2) {
+                return { valid: false, message: 'Tipo o versión de lease remoto no soportado' };
+            }
+
+            if (expectedMachineId) {
+                const normExpected = String(expectedMachineId).trim().toUpperCase().replace(/O/g, '0');
+                const normLeaseMid = String(data.mid || '').trim().toUpperCase().replace(/O/g, '0');
+                if (!normLeaseMid || normLeaseMid !== normExpected) {
+                    return { valid: false, message: `Lease asignado a otra terminal (${data.mid || 'N/A'})` };
+                }
+            }
+
+            const allowedStatuses = new Set(['active', 'suspended', 'revoked']);
+            const status = String(data.status || '').toLowerCase();
+            if (!allowedStatuses.has(status)) {
+                return { valid: false, message: `Estado de lease desconocido: ${status}` };
+            }
+
+            const expMs = parseExpirationMs(data.exp);
+            return {
+                valid: true,
+                lease: {
+                    ...data,
+                    status,
+                    graceDays: parseGraceDays(data.graceDays, 7),
+                    iat: Number(data.iat || 0),
+                    serverTime: Number(data.serverTime || data.iat || 0),
+                    graceUntil: Number(data.graceUntil || 0),
+                    expMs
+                }
+            };
+        } catch (err) {
+            return { valid: false, message: 'Error verificando lease remoto: ' + err.message };
+        }
     }
 }
 

@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import process from 'node:process';
-import react from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
@@ -23,21 +24,166 @@ function mobileEntrypointHtmlPlugin() {
       }
     },
     closeBundle() {
-      const nestedApk = path.resolve(process.cwd(), 'dist-mobile', 'Isaac-POS-Mobile.apk');
-      if (fs.existsSync(nestedApk)) {
-        try {
-          fs.unlinkSync(nestedApk);
-        } catch (_) {}
+      const distDir = path.resolve(process.cwd(), 'dist-mobile');
+      // Limpiar APK anidado y duplicados de public/ innecesarios en el APK/OTA (logos importados como WebP vía src/assets)
+      const redundantMobileFiles = [
+        'Isaac-POS-Mobile.apk',
+        'isaac-logo-horizontal.png',
+        'isaac-logo-horizontal-dark.png',
+        'isaac-emblem.png',
+        'isaac-emblem-dark.png',
+        'favicon.ico',
+        'splash.html',
+        path.join('assets', 'icon.png')
+      ];
+      for (const rel of redundantMobileFiles) {
+        const target = path.join(distDir, rel);
+        if (fs.existsSync(target)) {
+          try {
+            fs.unlinkSync(target);
+          } catch (err) {
+            console.warn(`[vite.mobile] No se pudo limpiar ${rel}:`, err?.message);
+          }
+        }
       }
     }
   };
 }
 
-export default defineConfig({
+// Patch Tailwind v4 color-mix on custom CSS variables for older Android WebViews (Chromium 108+)
+function patchTailwindPrimaryOpacity(css) {
+  const regex = /@supports\s*\(color:color-mix\(in lab,red,red\)\)\{([^{}]+)\{([^{}]+)\}\}/g;
+  const items = [];
+  let m;
+  while ((m = regex.exec(css)) !== null) {
+    const fullBlock = m[0];
+    const sel = m[1].trim();
+    const decls = m[2].trim();
+    const primaryMatch = decls.match(/var\(--color-primary-(\d+)\)\s*(\d+)%/);
+    if (primaryMatch) {
+      const shade = primaryMatch[1];
+      const pct = parseInt(primaryMatch[2], 10);
+      const alpha = (pct / 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+      const propMatch = decls.match(/([a-z-]+)\s*:/);
+      if (propMatch) {
+        items.push({ fullBlock, sel, prop: propMatch[1], shade, alpha });
+      }
+    }
+  }
+
+  items.forEach((item) => {
+    const escapedSel = item.sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const ruleRegex = new RegExp('([^{}]*?' + escapedSel + '[^{}]*?)\\{([^{}]*?' + item.prop + '\\s*:\\s*var\\(--color-primary-' + item.shade + '\\)[^{}]*?)\\}');
+    const match = ruleRegex.exec(css);
+    if (match) {
+      const fullRule = match[0];
+      const selList = match[1];
+      const body = match[2];
+      const selectors = selList.split(',').map((s) => s.trim());
+      if (selectors.includes(item.sel)) {
+        const remaining = selectors.filter((s) => s !== item.sel);
+        const newRules = [];
+        if (remaining.length > 0) {
+          newRules.push(remaining.join(',') + '{' + body + '}');
+        }
+        const newBody = body.replace(
+          new RegExp(item.prop + '\\s*:\\s*var\\(--color-primary-' + item.shade + '\\)'),
+          item.prop + ':rgba(var(--app-primary-' + item.shade + '-rgb),' + item.alpha + ')'
+        );
+        newRules.push(item.sel + '{' + newBody + '}');
+        css = css.replace(fullRule, newRules.join(''));
+      }
+    }
+    css = css.replace(item.fullBlock, '');
+  });
+
+  return css;
+}
+
+function webViewColorFixPlugin() {
+  return {
+    name: 'mobile-webview-chromium-108-color-fix',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      for (const fileName in bundle) {
+        if (fileName.endsWith('.css')) {
+          const chunk = bundle[fileName];
+          if (chunk && chunk.source) {
+            chunk.source = patchTailwindPrimaryOpacity(chunk.source.toString());
+          }
+        }
+      }
+    }
+  };
+}
+
+function readAndroidApkVersionCode() {
+  try {
+    const gradlePath = path.resolve(process.cwd(), 'android', 'app', 'build.gradle');
+    if (fs.existsSync(gradlePath)) {
+      const content = fs.readFileSync(gradlePath, 'utf8');
+      const match = content.match(/\bversionCode\s+(\d+)/);
+      if (match) return match[1];
+    }
+  } catch {
+    // Fallback silencioso
+  }
+  return '0';
+}
+
+function readMobileBaseVersion() {
+  try {
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.version) {
+        return pkg.version.replace(/^(\d+)\.0*(\d+)/, '$1.$2');
+      }
+    }
+  } catch {
+    // Fallback silencioso
+  }
+  return '24.4.0';
+}
+
+function writeBuildVersionMarkerPlugin(buildVersion) {
+  return {
+    name: 'isaac-pos-mobile-build-version-marker',
+    closeBundle() {
+      try {
+        const markerPath = path.resolve(process.cwd(), 'dist-mobile', '.build-version');
+        fs.writeFileSync(markerPath, JSON.stringify({ version: buildVersion, createdAt: Date.now() }), 'utf8');
+      } catch (err) {
+        console.warn('[vite.mobile] No se pudo escribir .build-version:', err?.message);
+      }
+    }
+  };
+}
+
+export default defineConfig(({ command }) => {
+  const apkVersionCode = readAndroidApkVersionCode();
+  const mobileBuildVersion =
+    process.env.MOBILE_BUILD_VERSION ||
+    `${readMobileBaseVersion()}.${Math.floor(Date.now() / 1000)}`;
+  const baseDefine = {
+    'import.meta.env.VITE_APK_VERSION_CODE': JSON.stringify(apkVersionCode),
+    'import.meta.env.VITE_MOBILE_BUILD_VERSION': JSON.stringify(mobileBuildVersion),
+    ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
+      ? {
+          'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),
+          'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('')
+        }
+      : {})
+  };
+  return {
+  define: baseDefine,
   plugins: [
     mobileEntrypointHtmlPlugin(),
     react(),
-    tailwindcss()
+    babel({ presets: [reactCompilerPreset()] }),
+    tailwindcss(),
+    webViewColorFixPlugin(),
+    ...(command === 'build' ? [writeBuildVersionMarkerPlugin(mobileBuildVersion)] : [])
   ],
   resolve: {
     dedupe: ['react', 'react-dom'],
@@ -97,18 +243,30 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom', 'zustand'],
-          'vendor-icons': ['lucide-react'],
-          'vendor-motion': ['framer-motion'],
-          'vendor-zxing': ['@zxing/library'],
-          'vendor-utils': ['axios', 'date-fns', 'uuid', 'fuse.js']
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/');
+          if (normalized.includes('commonjsHelpers')) return 'vendor-react';
+          if (!normalized.includes('/node_modules/')) return undefined;
+          const rules = [
+            ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/', '/node_modules/zustand/']],
+            ['vendor-icons', ['/node_modules/lucide-react/']],
+            ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
+            ['vendor-realtime', ['/node_modules/socket.io-client/', '/node_modules/engine.io-client/', '/node_modules/socket.io-parser/']],
+            ['vendor-capacitor', ['/node_modules/@capacitor/core/', '/node_modules/@capacitor/clipboard/', '/node_modules/@capgo/capacitor-updater/']],
+            ['vendor-qr', ['/node_modules/qrcode/', '/node_modules/jsbarcode/']],
+            ['vendor-utils', ['/node_modules/axios/', '/node_modules/date-fns/', '/node_modules/uuid/']]
+          ];
+          for (const [chunkName, patterns] of rules) {
+            if (patterns.some((p) => normalized.includes(p))) return chunkName;
+          }
+          return undefined;
         }
       }
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom', 'zustand', 'fuse.js']
+    include: ['react', 'react-dom', 'react-router-dom', 'zustand']
   },
   base: './'
+  };
 });

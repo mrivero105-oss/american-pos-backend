@@ -1,9 +1,19 @@
-import React, { useState, useRef } from 'react';
-import { 
-  X, Camera, RefreshCw, Search, ScanBarcode, 
-  Package, Sliders, ShieldAlert, Layers, Calendar, Scale, Info
+import { useState, useRef } from 'react';
+import {
+  X, 
+  Camera, 
+  RefreshCw, 
+  Search, 
+  ScanBarcode, 
+  Package, 
+  Sliders, 
+  ShieldAlert, 
+  Layers, 
+  Calendar, 
+  Scale
 } from 'lucide-react';
 import CachedImage from '../CachedImage';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 /**
  * Modal táctil completo de Creación / Edición de Producto para POS Móvil.
@@ -31,10 +41,17 @@ export default function MobileQuickProductModal({
   setIsCustomCategoryMode = () => {},
   selectableCategories = ['General'],
   exchangeRate = 1,
-  triggerHaptic = () => {}
+  triggerHaptic = () => {},
+  canViewCosts = true
 }) {
   const [activeTab, setActiveTab] = useState('general'); // 'general' | 'bulk' | 'advanced'
   const imageFileInputRef = useRef(null);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isOpen });
 
   if (!isOpen) return null;
 
@@ -48,8 +65,14 @@ export default function MobileQuickProductModal({
   );
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 sm:p-4 animate-fadeIn">
-      <div className={`w-full max-w-md sm:max-w-lg ${T.modalCard} rounded-2xl p-4 sm:p-5 shadow-2xl flex flex-col max-h-[94dvh] overflow-hidden`}>
+    <div
+      className="fixed inset-0 bg-black/80 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 animate-fadeIn overflow-y-auto"
+      style={modalOverlayStyle}
+    >
+      <div
+        className={`w-full max-w-md sm:max-w-lg ${T.modalCard} rounded-2xl p-4 sm:p-5 shadow-2xl flex flex-col max-h-[94dvh] overflow-hidden my-auto`}
+        style={modalCardMaxHeightStyle}
+      >
         
         {/* Cabecera del Modal */}
         <div className={`flex items-center justify-between border-b ${T.border} pb-2.5 shrink-0`}>
@@ -62,7 +85,7 @@ export default function MobileQuickProductModal({
           <button 
             type="button"
             onClick={() => onClose()}
-            className={`${T.textMuted} hover:${T.textPrimary} p-1.5 rounded-lg cursor-pointer active:scale-90 transition-transform`}
+            className={`${T.textMuted} hover:opacity-100 p-2 rounded-lg cursor-pointer active:scale-90 transition-transform`}
           >
             <X size={18} />
           </button>
@@ -126,7 +149,12 @@ export default function MobileQuickProductModal({
         </div>
 
         {/* Cuerpo del Formulario con scroll independiente */}
-        <form onSubmit={handleSaveProduct} className="flex-1 overflow-y-auto custom-scrollbar pr-0.5 space-y-3.5">
+        <form
+          onSubmit={handleSaveProduct}
+          onKeyDown={handleFormKeyDown}
+          onFocusCapture={handleFieldFocusCapture}
+          className="flex-1 overflow-y-auto custom-scrollbar pr-0.5 space-y-3.5"
+        >
           
           {/* ======================================================== */}
           {/* TAB 1: INFORMACIÓN GENERAL Y ESENCIAL                     */}
@@ -226,11 +254,12 @@ export default function MobileQuickProductModal({
                 <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Nombre del producto *</label>
                 <input 
                   type="text" 
+                  enterKeyHint="next"
                   required
                   value={productFormData.name}
                   onChange={(e) => setProductFormData(p => ({ ...p, name: e.target.value }))}
                   placeholder="Ej: Harina PAN 1kg"
-                  className={`w-full h-9.5 ${T.inputBg} border rounded-lg px-3 text-xs font-semibold outline-none`}
+                  className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-3 text-base sm:text-sm font-semibold outline-none`}
                 />
               </div>
 
@@ -250,10 +279,11 @@ export default function MobileQuickProductModal({
                   <div className="relative flex items-center">
                     <input 
                       type="text" 
+                      enterKeyHint="next"
                       value={productFormData.barcode}
                       onChange={(e) => setProductFormData(p => ({ ...p, barcode: e.target.value }))}
                       placeholder="Código de barras"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-2.5 pr-8 text-xs font-mono font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-2.5 pr-8 text-base sm:text-sm font-mono font-semibold outline-none`}
                     />
                     <button
                       type="button"
@@ -263,7 +293,7 @@ export default function MobileQuickProductModal({
                         setIsScannerOpen(true);
                       }}
                       title="Escanear código"
-                      className={`absolute right-1.5 p-1 rounded-md ${T.textMuted} hover:${T.textPrimary} cursor-pointer flex items-center justify-center`}
+                      className={`absolute right-1.5 p-1.5 rounded-md ${T.textMuted} hover:opacity-100 cursor-pointer flex items-center justify-center`}
                     >
                       <ScanBarcode size={15} />
                     </button>
@@ -291,11 +321,12 @@ export default function MobileQuickProductModal({
                   {isCustomCategoryMode ? (
                     <input 
                       type="text" 
+                      enterKeyHint="next"
                       value={productFormData.category}
                       onChange={(e) => setProductFormData(p => ({ ...p, category: e.target.value }))}
                       placeholder="Escribir categoría..."
                       autoFocus
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg px-2.5 text-xs font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-semibold outline-none`}
                     />
                   ) : (
                     <select
@@ -308,7 +339,7 @@ export default function MobileQuickProductModal({
                           setProductFormData(p => ({ ...p, category: e.target.value }));
                         }
                       }}
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg px-2.5 text-xs font-semibold outline-none cursor-pointer`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-semibold outline-none cursor-pointer`}
                     >
                       {selectableCategories.map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
@@ -319,7 +350,8 @@ export default function MobileQuickProductModal({
                 </div>
               </div>
 
-              {/* Costo USD y Margen de Ganancia (%) */}
+              {/* Costo USD y Margen de Ganancia (%) - Solo usuarios con permiso canViewCosts */}
+              {canViewCosts && (
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Costo ($)</label>
@@ -327,6 +359,8 @@ export default function MobileQuickProductModal({
                     <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold ${T.textMuted}`}>$</span>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.01" 
                       value={productFormData.costUSD}
                       onChange={(e) => {
@@ -348,7 +382,7 @@ export default function MobileQuickProductModal({
                         });
                       }}
                       placeholder="0.00"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-xs font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-base sm:text-sm font-semibold outline-none`}
                     />
                   </div>
                 </div>
@@ -357,6 +391,8 @@ export default function MobileQuickProductModal({
                   <div className="relative">
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.1" 
                       value={productFormData.margin ?? ''}
                       onChange={(e) => {
@@ -373,12 +409,13 @@ export default function MobileQuickProductModal({
                         });
                       }}
                       placeholder="30"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-3 pr-6 text-xs font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-3 pr-6 text-base sm:text-sm font-semibold outline-none`}
                     />
                     <span className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold ${T.textMuted}`}>%</span>
                   </div>
                 </div>
               </div>
+              )}
 
               {/* Precios: USD y Bs */}
               <div className="grid grid-cols-2 gap-2.5">
@@ -390,6 +427,8 @@ export default function MobileQuickProductModal({
                     <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold ${T.textMuted}`}>$</span>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.01" 
                       required
                       value={productFormData.priceUSD}
@@ -410,7 +449,7 @@ export default function MobileQuickProductModal({
                         });
                       }}
                       placeholder="0.00"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-xs font-bold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-base sm:text-sm font-bold outline-none`}
                     />
                   </div>
                 </div>
@@ -422,6 +461,8 @@ export default function MobileQuickProductModal({
                     <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold ${T.textMuted}`}>Bs</span>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.1" 
                       value={productFormData.priceBS}
                       onChange={(e) => {
@@ -442,7 +483,7 @@ export default function MobileQuickProductModal({
                         });
                       }}
                       placeholder="0.00"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-7 pr-2.5 text-xs font-bold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-7 pr-2.5 text-base sm:text-sm font-bold outline-none`}
                     />
                   </div>
                 </div>
@@ -454,11 +495,13 @@ export default function MobileQuickProductModal({
                   <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Stock disponible</label>
                   <input 
                     type="number" 
+                    inputMode="decimal"
+                    enterKeyHint="done"
                     step="any" 
                     value={productFormData.stock}
                     onChange={(e) => setProductFormData(p => ({ ...p, stock: e.target.value }))}
                     placeholder="0"
-                    className={`w-full h-9.5 ${T.inputBg} border rounded-lg px-3 text-xs font-bold outline-none`}
+                    className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-3 text-base sm:text-sm font-bold outline-none`}
                   />
                 </div>
                 <div>
@@ -496,7 +539,15 @@ export default function MobileQuickProductModal({
                         : T.textMuted
                     }`}
                   >
-                    Gravable 16%
+                    Gravable ({(() => {
+                      try {
+                        const saved = JSON.parse(localStorage.getItem('pos_business_info') || '{}');
+                        const rate = Number(saved?.taxConfig?.ivaRate ?? saved?.ivaRate);
+                        return Number.isFinite(rate) && rate >= 0 ? `${rate}%` : 'Impuesto';
+                      } catch {
+                        return 'Impuesto';
+                      }
+                    })()})
                   </button>
                   <button
                     type="button"
@@ -537,16 +588,19 @@ export default function MobileQuickProductModal({
                     <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Nombre empaque</label>
                     <input 
                       type="text" 
+                      enterKeyHint="next"
                       value={productFormData.bulkUnitName || 'Caja'}
                       onChange={(e) => setProductFormData(p => ({ ...p, bulkUnitName: e.target.value }))}
                       placeholder="Ej: Caja, Bulto, Display"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg px-2.5 text-xs font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-semibold outline-none`}
                     />
                   </div>
                   <div>
                     <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Unidades por empaque</label>
                     <input 
                       type="number" 
+                      inputMode="numeric"
+                      enterKeyHint="next"
                       step="1"
                       min="1"
                       value={productFormData.unitsPerBulk || ''}
@@ -568,7 +622,7 @@ export default function MobileQuickProductModal({
                         });
                       }}
                       placeholder="Ej: 12 ó 24"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg px-2.5 text-xs font-bold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-bold outline-none`}
                     />
                   </div>
                 </div>
@@ -580,6 +634,8 @@ export default function MobileQuickProductModal({
                       <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold ${T.textMuted}`}>$</span>
                       <input 
                         type="number" 
+                        inputMode="decimal"
+                        enterKeyHint="next"
                         step="0.01"
                         value={productFormData.bulkPrice || ''}
                         onChange={(e) => {
@@ -592,7 +648,7 @@ export default function MobileQuickProductModal({
                           }));
                         }}
                         placeholder="0.00"
-                        className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-xs font-bold outline-none`}
+                        className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-base sm:text-sm font-bold outline-none`}
                       />
                     </div>
                   </div>
@@ -602,6 +658,8 @@ export default function MobileQuickProductModal({
                       <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold ${T.textMuted}`}>Bs</span>
                       <input 
                         type="number" 
+                        inputMode="decimal"
+                        enterKeyHint="next"
                         step="0.1"
                         value={productFormData.bulkPriceBs || ''}
                         onChange={(e) => {
@@ -614,7 +672,7 @@ export default function MobileQuickProductModal({
                           }));
                         }}
                         placeholder="0.00"
-                        className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-7 pr-2.5 text-xs font-bold outline-none`}
+                        className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-7 pr-2.5 text-base sm:text-sm font-bold outline-none`}
                       />
                     </div>
                   </div>
@@ -628,10 +686,11 @@ export default function MobileQuickProductModal({
                   <div className="relative flex items-center">
                     <input 
                       type="text" 
+                      enterKeyHint="next"
                       value={productFormData.bulkBarcode || ''}
                       onChange={(e) => setProductFormData(p => ({ ...p, bulkBarcode: e.target.value }))}
                       placeholder="Código del fardo o caja"
-                      className={`w-full h-9.5 ${T.inputBg} border rounded-lg pl-2.5 pr-8 text-xs font-mono font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-2.5 pr-8 text-base sm:text-sm font-mono font-semibold outline-none`}
                     />
                     <button
                       type="button"
@@ -641,7 +700,7 @@ export default function MobileQuickProductModal({
                         setIsScannerOpen(true);
                       }}
                       title="Escanear código de caja"
-                      className={`absolute right-1.5 p-1 rounded-md ${T.textMuted} hover:${T.textPrimary} cursor-pointer flex items-center justify-center`}
+                      className={`absolute right-1.5 p-1.5 rounded-md ${T.textMuted} hover:opacity-100 cursor-pointer flex items-center justify-center`}
                     >
                       <ScanBarcode size={15} />
                     </button>
@@ -673,21 +732,24 @@ export default function MobileQuickProductModal({
                         <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Nombre</label>
                         <input 
                           type="text" 
+                          enterKeyHint="next"
                           value={productFormData.midBulkUnitName || 'Media Caja'}
                           onChange={(e) => setProductFormData(p => ({ ...p, midBulkUnitName: e.target.value }))}
                           placeholder="Media Caja"
-                          className={`w-full h-9 ${T.inputBg} border rounded-lg px-2.5 text-xs font-semibold outline-none`}
+                          className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-semibold outline-none`}
                         />
                       </div>
                       <div>
                         <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Unidades</label>
                         <input 
                           type="number" 
+                          inputMode="numeric"
+                          enterKeyHint="next"
                           step="1"
                           value={productFormData.unitsPerMidBulk || ''}
                           onChange={(e) => setProductFormData(p => ({ ...p, unitsPerMidBulk: e.target.value }))}
                           placeholder="Ej: 6"
-                          className={`w-full h-9 ${T.inputBg} border rounded-lg px-2.5 text-xs font-bold outline-none`}
+                          className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-bold outline-none`}
                         />
                       </div>
                     </div>
@@ -699,6 +761,8 @@ export default function MobileQuickProductModal({
                           <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold ${T.textMuted}`}>$</span>
                           <input 
                             type="number" 
+                            inputMode="decimal"
+                            enterKeyHint="next"
                             step="0.01"
                             value={productFormData.midBulkPrice || ''}
                             onChange={(e) => {
@@ -711,7 +775,7 @@ export default function MobileQuickProductModal({
                               }));
                             }}
                             placeholder="0.00"
-                            className={`w-full h-9 ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-xs font-bold outline-none`}
+                            className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg pl-6 pr-2.5 text-base sm:text-sm font-bold outline-none`}
                           />
                         </div>
                       </div>
@@ -719,10 +783,11 @@ export default function MobileQuickProductModal({
                         <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Código de barras</label>
                         <input 
                           type="text" 
+                          enterKeyHint="done"
                           value={productFormData.midBulkBarcode || ''}
                           onChange={(e) => setProductFormData(p => ({ ...p, midBulkBarcode: e.target.value }))}
                           placeholder="Código opcional"
-                          className={`w-full h-9 ${T.inputBg} border rounded-lg px-2.5 text-xs font-mono font-semibold outline-none`}
+                          className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-mono font-semibold outline-none`}
                         />
                       </div>
                     </div>
@@ -757,7 +822,7 @@ export default function MobileQuickProductModal({
                           isSoldByWeight: val === 'kg' || val === 'gr' ? true : p.isSoldByWeight
                         }));
                       }}
-                      className={`w-full h-9 ${T.inputBg} border rounded-lg px-2.5 text-xs font-semibold outline-none cursor-pointer`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-semibold outline-none cursor-pointer`}
                     >
                       <option value="und">Unidades (und)</option>
                       <option value="kg">Kilogramos (kg)</option>
@@ -772,11 +837,13 @@ export default function MobileQuickProductModal({
                     <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Stock mínimo alerta</label>
                     <input 
                       type="number" 
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="any"
                       value={productFormData.minStock ?? '2'}
                       onChange={(e) => setProductFormData(p => ({ ...p, minStock: e.target.value }))}
                       placeholder="2"
-                      className={`w-full h-9 ${T.inputBg} border rounded-lg px-2.5 text-xs font-bold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-bold outline-none`}
                     />
                   </div>
                 </div>
@@ -804,19 +871,21 @@ export default function MobileQuickProductModal({
                     <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>N° de Lote</label>
                     <input 
                       type="text" 
+                      enterKeyHint="next"
                       value={productFormData.batchNumber || ''}
                       onChange={(e) => setProductFormData(p => ({ ...p, batchNumber: e.target.value }))}
                       placeholder="Ej: LOTE-2026A"
-                      className={`w-full h-9 ${T.inputBg} border rounded-lg px-2.5 text-xs font-mono font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-mono font-semibold outline-none`}
                     />
                   </div>
                   <div>
                     <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Fecha de Vencimiento</label>
                     <input 
                       type="date" 
+                      enterKeyHint="next"
                       value={productFormData.expirationDate || ''}
                       onChange={(e) => setProductFormData(p => ({ ...p, expirationDate: e.target.value }))}
-                      className={`w-full h-9 ${T.inputBg} border rounded-lg px-2 text-xs font-semibold outline-none`}
+                      className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2 text-base sm:text-sm font-semibold outline-none`}
                     />
                   </div>
                 </div>
@@ -835,10 +904,11 @@ export default function MobileQuickProductModal({
                   <label className={`text-[11px] font-semibold ${T.textSecondary} block mb-1`}>Principio Activo (Genérico)</label>
                   <input 
                     type="text" 
+                    enterKeyHint="done"
                     value={productFormData.principio_activo || ''}
                     onChange={(e) => setProductFormData(p => ({ ...p, principio_activo: e.target.value }))}
                     placeholder="Ej: Ibuprofeno 400mg, Amoxicilina..."
-                    className={`w-full h-9 ${T.inputBg} border rounded-lg px-2.5 text-xs font-semibold outline-none`}
+                    className={`w-full min-h-[42px] ${T.inputBg} border rounded-lg px-2.5 text-base sm:text-sm font-semibold outline-none`}
                   />
                 </div>
 

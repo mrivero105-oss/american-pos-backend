@@ -1,6 +1,5 @@
-import React, { memo, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Minus, Package, Plus } from 'lucide-react';
-import { getImageUrl } from '../../utils/imageUtils';
 import { CachedImage } from '../CachedImage';
 import { triggerHaptic } from '../../utils/haptics';
 
@@ -18,7 +17,6 @@ function MobileProductCardComponent({
   businessMode,
   posMode,
   isLight,
-  T = {},
   onAddToCart,
   onDecrementFromCart,
   onOpenBulkPicker,
@@ -31,6 +29,16 @@ function MobileProductCardComponent({
   const touchStartRef = useRef({ x: 0, y: 0 });
   const lastImageTapRef = useRef(0);
 
+  // Limpiar temporizador de long-press si la tarjeta se desmonta durante scroll virtualizado
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const priceUSD = Number(product.price || product.precio || 0);
   const priceBS = Number(product.priceBs) > 0 ? Number(product.priceBs) : (priceUSD * (exchangeRate || 1));
   const committedInCart = Number(cartQuantity || 0);
@@ -40,7 +48,6 @@ function MobileProductCardComponent({
   const isExhausted = availableStock <= 0;
   const rawImage = product.imageUrl || product.imageUri || product.image || '';
   const hasImage = Boolean(rawImage && String(rawImage).trim());
-  const imgSrc = hasImage ? getImageUrl(rawImage) : null;
 
   const unitsPerBulk = Number(product.unitsPerBulk) || 1;
   const bulkPriceUSD = Number(product.bulkPrice) || 0;
@@ -136,7 +143,7 @@ function MobileProductCardComponent({
       onPreviewImage({
         product,
         name: product.name || product.nombre,
-        url: imgSrc,
+        url: rawImage,
         priceUSD,
         priceBS,
         barcode: product.barcode || '',
@@ -293,10 +300,10 @@ function MobileProductCardComponent({
               <button
                 type="button"
                 onClick={handleDecrement}
-                className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-black/10 active:scale-90 transition-transform cursor-pointer"
+                className="w-11 h-11 rounded-lg flex items-center justify-center hover:bg-black/10 active:scale-90 transition-transform cursor-pointer"
                 title="Restar 1"
               >
-                <Minus size={14} className="stroke-[2.8]" />
+                <Minus size={16} className="stroke-[2.8]" />
               </button>
               <span className="px-1.5 font-mono font-black text-xs tabular-nums min-w-[22px] text-center">
                 {committedInCart}
@@ -305,10 +312,10 @@ function MobileProductCardComponent({
                 type="button"
                 onClick={handleIncrement}
                 disabled={isExhausted}
-                className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-black/10 active:scale-90 transition-transform cursor-pointer disabled:opacity-40"
+                className="w-11 h-11 rounded-lg flex items-center justify-center hover:bg-black/10 active:scale-90 transition-transform cursor-pointer disabled:opacity-40"
                 title="Sumar 1"
               >
-                <Plus size={14} className="stroke-[2.8]" />
+                <Plus size={16} className="stroke-[2.8]" />
               </button>
             </div>
           ) : (
@@ -483,10 +490,10 @@ function MobileProductCardComponent({
             <button
               type="button"
               onClick={handleDecrement}
-              className="w-7 h-7 rounded-lg bg-black/15 hover:bg-black/25 flex items-center justify-center active:scale-90 transition-transform cursor-pointer shrink-0"
+              className="w-10 h-11 rounded-lg bg-black/15 hover:bg-black/25 flex items-center justify-center active:scale-90 transition-transform cursor-pointer shrink-0"
               title="Restar 1"
             >
-              <Minus size={14} className="stroke-[2.8]" />
+              <Minus size={15} className="stroke-[2.8]" />
             </button>
             <div className="flex flex-col items-center leading-none min-w-0">
               <span className="font-mono font-black text-xs tabular-nums">
@@ -500,10 +507,10 @@ function MobileProductCardComponent({
               type="button"
               onClick={handleIncrement}
               disabled={isExhausted}
-              className="w-7 h-7 rounded-lg bg-black/15 hover:bg-black/25 flex items-center justify-center active:scale-90 transition-transform cursor-pointer shrink-0 disabled:opacity-40"
+              className="w-10 h-11 rounded-lg bg-black/15 hover:bg-black/25 flex items-center justify-center active:scale-90 transition-transform cursor-pointer shrink-0 disabled:opacity-40"
               title="Sumar 1"
             >
-              <Plus size={14} className="stroke-[2.8]" />
+              <Plus size={15} className="stroke-[2.8]" />
             </button>
           </div>
         ) : (
@@ -554,6 +561,9 @@ export const MobileProductCard = memo(MobileProductCardComponent, (prev, next) =
     prev.product.midBulkPrice === next.product.midBulkPrice &&
     prev.product.name === next.product.name &&
     prev.product.nombre === next.product.nombre &&
+    prev.product.imageUrl === next.product.imageUrl &&
+    prev.product.imageUri === next.product.imageUri &&
+    prev.product.image === next.product.image &&
     prev.exchangeRate === next.exchangeRate &&
     prev.isLight === next.isLight &&
     prev.posMode === next.posMode &&

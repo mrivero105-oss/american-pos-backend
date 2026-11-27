@@ -1,22 +1,30 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter } from 'react-router-dom';
 import MobileApp from './MobileApp.jsx';
 import './index.css';
-import { ThemeProvider } from './hooks/ThemeContext';
-import { AuthProvider } from './hooks/AuthContext';
-import { SocketProvider } from './hooks/SocketContext';
-import { PosProvider } from './hooks/PosContext';
+import { ThemeProvider } from './providers/ThemeProvider';
+import { AuthProvider } from './providers/AuthProvider';
+import { SocketProvider } from './providers/SocketProvider';
 import { ensureStoragePersistence } from './services/storagePersistence';
+import { installGlobalErrorHooks } from './services/mobileDiagnosticsService';
+import { otaUpdateService } from './services/otaUpdateService';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// 🖤 Instalar Caja Negra de diagnóstico sanitizada desde el milisegundo 0
+installGlobalErrorHooks();
+
+// 🚀 Confirmar notifyAppReady() ante CapacitorUpdater desde el milisegundo 0,
+// desacoplado de AuthProvider (/auth/me) para evitar Semaphore timeout y rollbacks en arranque offline.
+otaUpdateService.init().catch(() => {});
 
 // 🛡️ Blindaje de Almacenamiento Persistente en Android / iOS / PWA
 ensureStoragePersistence().catch(() => {});
 
-// Redirección directa al entorno móvil
+// Redirección directa al entorno móvil (in-place sin recargar el documento ni romper Capgo notifyAppReady)
 if (typeof window !== 'undefined' && window.location) {
   if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
-    window.location.replace(window.location.origin + '/#/mobile');
+    window.location.hash = '#/mobile';
   }
 }
 
@@ -65,11 +73,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <ThemeProvider>
         <AuthProvider>
           <SocketProvider>
-            <PosProvider>
-              <HashRouter>
-                <MobileApp />
-              </HashRouter>
-            </PosProvider>
+            <HashRouter>
+              <MobileApp />
+            </HashRouter>
           </SocketProvider>
         </AuthProvider>
       </ThemeProvider>

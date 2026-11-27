@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
     X, ZoomIn, ZoomOut, RotateCw, Download, Printer, 
     ExternalLink, FileText, Loader2, AlertCircle, Maximize2, Minimize2,

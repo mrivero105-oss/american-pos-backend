@@ -1,10 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
-import { 
-    Server, Wifi, Zap, Globe, Shield, RefreshCw, CheckCircle2, 
-    AlertTriangle, X, Radio, HardDrive, Cpu, Terminal, ArrowRight,
-    Activity, Check, ExternalLink, Network, Laptop, Sliders
+import {
+    Server, 
+    Zap, 
+    Shield, 
+    RefreshCw, 
+    CheckCircle2, 
+    AlertTriangle, 
+    X, 
+    Radio, 
+    HardDrive, 
+    Cpu, 
+    Terminal, 
+    ArrowRight, 
+    Activity, 
+    Check, 
+    Network, 
+    Laptop, 
+    Sliders
 } from 'lucide-react';
 import api, { 
     formatServerUrl, 
@@ -55,6 +69,9 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
     const [apiPort, setApiPort] = useState('3005');
     const [dbPort, setDbPort] = useState('5432');
     const [dbName, setDbName] = useState('americanpos');
+    const [dbUser, setDbUser] = useState('postgres');
+    const [dbPassword, setDbPassword] = useState('');
+    const [showDbPassword, setShowDbPassword] = useState(false);
     const [timeoutMs, setTimeoutMs] = useState('3500');
 
     // Server Real Network Info
@@ -78,6 +95,8 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
 
         setSaveSuccess(false);
         setTelemetry(null);
+        setDbPassword('');
+        setShowDbPassword(false);
 
         // 1. Read stored IP and Role
         const saved = localStorage.getItem('isaac_pos_server_ip') || localStorage.getItem('american_pos_server_ip') || initialIp || '';
@@ -129,6 +148,7 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
                     }
                     if (cfg.port) setDbPort(String(cfg.port));
                     if (cfg.database) setDbName(cfg.database);
+                    if (cfg.user) setDbUser(cfg.user);
                 }
             }).catch(() => {});
         } else {
@@ -317,14 +337,19 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
                 host: '',
                 port: parseInt(dbPort, 10) || 5432,
                 database: dbName,
-                user: 'postgres'
+                user: dbUser.trim() || 'postgres',
+                ...(dbPassword.trim() ? { password: dbPassword.trim() } : {})
             };
 
             // Guardar físicamente únicamente en el disco del equipo local (nunca en el servidor remoto ni desde móviles)
             if (!isMobile) {
                 try {
-                    await axios.post('http://127.0.0.1:3005/settings/db-config', clearPayload, { timeout: 2500 });
-                } catch (e) {}
+                    const authToken = localStorage.getItem('token');
+                    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+                    await axios.post('http://127.0.0.1:3005/settings/db-config', clearPayload, { timeout: 2500, headers });
+                } catch (e) {
+                    console.warn('[ServerConfigModal] No se pudo limpiar db-config local:', e?.message);
+                }
             }
 
             if (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.saveDbConfigAndRestart) {
@@ -344,13 +369,16 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
                 host: nodeRole === 'server' ? '127.0.0.1' : hostOnly,
                 port: parseInt(dbPort, 10) || 5432,
                 database: dbName,
-                user: 'postgres'
+                user: dbUser.trim() || 'postgres',
+                ...(dbPassword.trim() ? { password: dbPassword.trim() } : {})
             };
 
             // Guardar físicamente únicamente en el disco del equipo local (nunca sobreescribir el db-config del servidor remoto)
             if (!isMobile) {
                 try {
-                    const apiRes = await axios.post('http://127.0.0.1:3005/settings/db-config', payload, { timeout: 2500 });
+                    const authToken = localStorage.getItem('token');
+                    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+                    const apiRes = await axios.post('http://127.0.0.1:3005/settings/db-config', payload, { timeout: 2500, headers });
                     if (apiRes.data?.success) {
                         console.log('[ServerConfigModal] Configuración guardada en disco local exitosamente.');
                     }
@@ -740,7 +768,7 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
                                     </div>
                                 ) : (
                                     <p className="text-xs text-slate-500 italic text-center py-2">
-                                        Presiona "Diagnosticar" para medir latencia, enlace de red y estado del servidor.
+                                        Presiona &ldquo;Diagnosticar&rdquo; para medir latencia, enlace de red y estado del servidor.
                                     </p>
                                 )}
                             </div>
@@ -835,7 +863,7 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
                                     <div className="p-8 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center space-y-2">
                                         <Network size={28} className="mx-auto text-slate-600" />
                                         <p className="text-xs text-slate-400">
-                                            No se han detectado servidores aún. Haz clic en <strong>"Iniciar Radar"</strong> para explorar automáticamente.
+                                            No se han detectado servidores aún. Haz clic en <strong>&ldquo;Iniciar Radar&rdquo;</strong> para explorar automáticamente.
                                         </p>
                                     </div>
                                 ) : null}
@@ -890,6 +918,45 @@ export default function ServerConfigModal({ isOpen, onClose, onConfigSaved, init
                                         onChange={(e) => setDbName(e.target.value)}
                                         className="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-base sm:text-sm min-h-[44px]"
                                     />
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-xs font-black uppercase tracking-wider text-slate-400">
+                                        Usuario PostgreSQL
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={dbUser}
+                                        onChange={(e) => setDbUser(e.target.value)}
+                                        placeholder="postgres"
+                                        className="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-base sm:text-sm min-h-[44px]"
+                                    />
+                                </div>
+
+                                <div className="space-y-1.5 sm:col-span-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <label className="text-xs font-black uppercase tracking-wider text-slate-400">
+                                            Contraseña PostgreSQL (Opcional)
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowDbPassword(prev => !prev)}
+                                            className="text-[11px] font-bold text-blue-400 hover:text-blue-300 cursor-pointer"
+                                        >
+                                            {showDbPassword ? 'Ocultar' : 'Mostrar'}
+                                        </button>
+                                    </div>
+                                    <input
+                                        type={showDbPassword ? 'text' : 'password'}
+                                        value={dbPassword}
+                                        onChange={(e) => setDbPassword(e.target.value)}
+                                        autoComplete="new-password"
+                                        placeholder="Dejar vacío para conservar la contraseña cifrada actual"
+                                        className="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-base sm:text-sm min-h-[44px]"
+                                    />
+                                    <span className="text-[11px] text-slate-500">
+                                        En Cajas Terminales nuevas, ingresa aquí la clave aleatoria generada en el Servidor Principal. Se almacena cifrada con DPAPI.
+                                    </span>
                                 </div>
 
                                 <div className="space-y-1.5">

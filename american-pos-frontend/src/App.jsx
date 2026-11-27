@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import toast, { Toaster, ToastBar } from 'react-hot-toast';
@@ -32,11 +32,11 @@ const ExecutiveBI = lazy(() => import('./pages/ExecutiveBI'));
 const AccountingGeneral = lazy(() => import('./pages/AccountingGeneral'));
 const PayrollManager = lazy(() => import('./pages/PayrollManager'));
 const PromotionsManager = lazy(() => import('./pages/PromotionsManager'));
+const WarehousesManager = lazy(() => import('./pages/WarehousesManager'));
 const LotsTraceability = lazy(() => import('./pages/LotsTraceability'));
 const AssetsAndCollections = lazy(() => import('./pages/AssetsAndCollections'));
 const MobilePOSSimulator = lazy(() => import('./pages/MobilePOSSimulator'));
 const CustomerDisplay = lazy(() => import('./pages/CustomerDisplay'));
-const TelecomRecharges = lazy(() => import('./pages/TelecomRecharges'));
 import { syncManager } from './services/syncManager';
 const LockScreen = lazy(() => import('./components/LockScreen'));
 const ActivationPortal = lazy(() => import('./components/ActivationPortal'));
@@ -126,11 +126,18 @@ function App() {
   useWin7Zoom();
   const { theme } = useTheme();
   const isDark = theme === 'dark' || theme === '2025' || theme === 'glass' || theme === 'oled' || theme === 'titanium';
-  const { isLocked, user, appUnlock, logout, appLock, isActivated, machineId, licenseLoading, setIsActivated, checkLicense } = useAuth();
+  const { isLocked, user, appUnlock, logout, appLock, isActivated, machineId, licenseInfo, licenseLoading, setIsActivated, checkLicense } = useAuth();
   const [isSetup, setIsSetup] = useState(true);
   const [setupLoading, setSetupLoading] = useState(false);
-  const [hasCheckedSetup, setHasCheckedSetup] = useState(true);
-  const [showSplash, setShowSplash] = useState(true);
+  const [hasCheckedSetup, setHasCheckedSetup] = useState(() => {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem('isaac_pos_is_setup') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  // Electron ya muestra splash.html nativo al iniciar; evitar segundo splash bloqueante de 1s en desktop
+  const [showSplash, setShowSplash] = useState(() => !(typeof window !== 'undefined' && window.electronAPI));
   
   // Mandatory Initial Mobile Sync State
   const [isInitialSyncDone, setIsInitialSyncDone] = useState(() => {
@@ -178,15 +185,20 @@ function App() {
     );
   })();
 
-  const checkSetup = async () => {
+  const checkSetup = useCallback(async () => {
     if (!user) {
       setSetupLoading(false);
-      setHasCheckedSetup(false);
       return;
     }
     try {
       const { data } = await api.get('/settings/is-setup');
-      setIsSetup(data.isSetup !== false);
+      const setupDone = data.isSetup !== false;
+      setIsSetup(setupDone);
+      try {
+        localStorage.setItem('isaac_pos_is_setup', setupDone ? 'true' : 'false');
+      } catch (storageErr) {
+        console.warn('[App] No se pudo persistir is_setup en localStorage:', storageErr?.message);
+      }
     } catch (e) {
       console.warn('Notice checking setup:', e.message);
       setIsSetup(true);
@@ -194,12 +206,11 @@ function App() {
       setHasCheckedSetup(true);
       setSetupLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     if (user) {
       checkSetup();
-      // Inicializar servicio LAN P2P y broadcast de impresoras
       try {
         lanSyncService.init();
       } catch (err) {
@@ -207,9 +218,13 @@ function App() {
       }
     } else {
       setSetupLoading(false);
-      setHasCheckedSetup(false);
+      try {
+        lanSyncService.stop();
+      } catch (err) {
+        console.warn('[App] Error al detener lanSyncService:', err);
+      }
     }
-  }, [user]);
+  }, [user, checkSetup]);
 
   useEffect(() => {
     // Global Shortcuts
@@ -340,6 +355,7 @@ function App() {
         <Suspense fallback={<RouteLoader />}>
           <ActivationPortal 
             machineId={machineId} 
+            licenseInfo={licenseInfo}
             onActivated={async () => {
               setIsActivated(true);
               if (checkLicense) await checkLicense();
@@ -381,7 +397,6 @@ function App() {
                 {/* 1. Base POS & Cashier Operations */}
                 <Route element={<ProtectedRoute requiredPermission="canAccessPOS" />}>
                   <Route path="/pos" element={<POS />} />
-                  <Route path="/recharges" element={<TelecomRecharges />} />
                 </Route>
                 <Route element={<ProtectedRoute requiredPermission="canManageCashShift" />}>
                   <Route path="/cash-register" element={<CashRegister />} />
@@ -401,7 +416,9 @@ function App() {
                   <Route path="/inventory" element={<InventoryDashboard />} />
                   <Route path="/lots" element={<LotsTraceability />} />
                 </Route>
-                <Route path="/warehouses" element={<Navigate to="/inventory" replace />} />
+                <Route element={<ProtectedRoute requiredPermission="canManageWarehouses" />}>
+                  <Route path="/warehouses" element={<WarehousesManager />} />
+                </Route>
                 <Route element={<ProtectedRoute requiredPermission="canImportCatalog" />}>
                   <Route path="/catalog-importer" element={<CatalogImporter />} />
                 </Route>

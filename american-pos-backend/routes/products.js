@@ -5,12 +5,15 @@ const fs = require('fs');
 const { isAdmin, requirePermission } = require('../middleware/auth');
 const ProductService = require('../services/ProductService');
 const SupabaseSyncService = require('../services/SupabaseSyncService');
-const ExcelJS = require('exceljs');
 const validate = require('../middleware/validate');
 const { productSchema } = require('../schemas/productSchema');
-const PDFService = require('../services/PDFService');
 const InvoiceService = require('../services/InvoiceService');
+let ExcelJSRef = null;
+const getExcelJS = () => (ExcelJSRef || (ExcelJSRef = require('exceljs')));
+let PDFServiceRef = null;
+const getPDFService = () => (PDFServiceRef || (PDFServiceRef = require('../services/PDFService')));
 const precision = require('../utils/precision');
+const { generateRobustId } = require('../utils/helpers');
 const multer = require('multer');
 const os = require('os');
 
@@ -84,7 +87,8 @@ router.get('/categories', async (req, res) => {
                 ...companyCondition,
                 status: 'active',
                 isCustom: { [Op.or]: [false, null] }
-            }
+            },
+            raw: true
         });
         const rawCategories = categories.map(c => c.category).filter(Boolean);
 
@@ -166,7 +170,7 @@ router.post('/scan-from-printer', canImportCatalog, async (req, res) => {
         // 2. Extraer datos del catálogo / factura con IA / OCR (timeout de seguridad 180s para permitir análisis multimodal a 600 DPI)
         let extractedData = null;
         try {
-            const aiPromise = PDFService.parseCatalog(scannedFilePath);
+            const aiPromise = getPDFService().parseCatalog(scannedFilePath);
             const timeoutPromise = new Promise((_, reject) => 
                 setTimeout(() => reject(new Error('Tiempo de espera de IA agotado')), 180000)
             );
@@ -245,9 +249,9 @@ router.get('/public-catalog', require('../middleware/auth').verifyToken, async (
 });
 
 /**
- * POST /public-sync - Sync local mobile products to server (Protected)
+ * POST /public-sync - Sync local mobile products to server (Protected + RBAC)
  */
-router.post('/public-sync', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/public-sync', require('../middleware/auth').verifyToken, requirePermission(['canCreateProducts', 'canManageInventory']), async (req, res) => {
     try {
         const { products } = req.body;
         if (!Array.isArray(products)) return res.status(400).json({ error: 'Formato inválido' });
@@ -337,7 +341,7 @@ router.get('/', async (req, res) => {
         }
 
         const result = await ProductService.getAllProducts(req.user, req.query);
-        if (req.query.limit > 0 || req.query.page) {
+        if (req.query.since || req.query.delta === 'true' || req.query.limit > 0 || req.query.page) {
             res.json(result);
         } else {
             res.json(result.products);
@@ -533,6 +537,7 @@ router.post('/bulk-stock-increase', requirePermission('canManageInventory'), asy
                 }, { transaction: t });
             }
         });
+        ProductService.invalidateCatalogCache();
         
         const io = req.app.get('io');
         if (io) io.to(req.user.companyId).emit('inventory_changed');
@@ -684,6 +689,7 @@ router.get('/export/excel', requirePermission(['canManageInventory', 'canCreateP
             Min_Stock: p.minStock || 0
         }));
 
+        const ExcelJS = getExcelJS();
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('Productos');
         worksheet.columns = [
@@ -781,6 +787,7 @@ router.get('/:id', async (req, res) => {
             totalPhysicalStock = p.BranchStocks.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
         }
         p.stockQuantity = Number(totalPhysicalStock > 0 ? totalPhysicalStock : (p.stockQuantity || p.stock || 0));
+        ProductService.sanitizeProductForUser(p, ProductService.canUserViewCosts(req.user));
         
         res.json(p);
     } catch (error) {
@@ -975,7 +982,7 @@ const importCatalogHandler = async (req, res) => {
         const invoiceUrl = await InvoiceService.saveInvoiceFromPath(req.file.path, req.file.originalname);
 
         // 2. Extraer datos con OCR / IA
-        const extractedItems = await PDFService.parseCatalog(req.file.path);
+        const extractedItems = await getPDFService().parseCatalog(req.file.path);
         const rawList = Array.isArray(extractedItems) ? extractedItems : (extractedItems?.items || []);
         
         console.log(`[IMPORT] Extraídos ${rawList.length} registros del documento (Factura guardada en ${invoiceUrl})`);
@@ -1099,7 +1106,7 @@ router.post('/reparse-invoice', canImportCatalog, async (req, res) => {
         }
 
         console.log(`[REPARSE INVOICE] Re-procesando factura digitalizada: ${fullPath}`);
-        const extractedData = await PDFService.parseCatalog(fullPath);
+        const extractedData = await getPDFService().parseCatalog(fullPath);
         const processed = await ProductService.processCatalogImport(req.user, extractedData, supplierId);
         const payload = buildCatalogImportResponse(invoiceUrl, extractedData, processed);
 
@@ -1199,6 +1206,7 @@ router.post('/import/excel', requirePermission('canCreateProducts'), async (req,
         if (!base64) return res.status(400).json({ error: 'No se proporcionaron datos del archivo Excel' });
 
         const buffer = Buffer.from(base64, 'base64');
+        const ExcelJS = getExcelJS();
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.load(buffer);
         const sheet = workbook.worksheets[0];
@@ -1482,7 +1490,7 @@ router.get('/:id/lots', require('../middleware/auth').verifyToken, async (req, r
 /**
  * POST /:id/lots - Create a new lot for a product
  */
-router.post('/:id/lots', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/:id/lots', requirePermission(['canManageInventory', 'canAdjustStock', 'canCreateProducts']), async (req, res) => {
     const { sequelize } = require('../database/connection');
     const t = await sequelize.transaction();
     try {
@@ -1495,8 +1503,12 @@ router.post('/:id/lots', require('../middleware/auth').verifyToken, async (req, 
         const { lotNumber, quantity, expirationDate, cost, branchId } = req.body;
         const lotQty = precision.round(Number(quantity) || 0, 3);
         const lotCost = precision.round(Number(cost) || 0);
+        if (!Number.isFinite(lotQty) || lotQty <= 0) {
+            await t.rollback();
+            return res.status(400).json({ error: 'La cantidad del lote debe ser mayor a 0.' });
+        }
 
-        const product = await Product.findOne({ where: { id: productId, companyId }, transaction: t });
+        const product = await Product.findOne({ where: { id: productId, companyId }, lock: t.LOCK.UPDATE, transaction: t });
         if (!product) {
             await t.rollback();
             return res.status(404).json({ error: 'Producto no encontrado' });
@@ -1514,17 +1526,18 @@ router.post('/:id/lots', require('../middleware/auth').verifyToken, async (req, 
         }, { transaction: t });
 
         const currentStock = precision.round(Number(product.stockQuantity || product.stock || 0), 3);
-        const newTotalStock = precision.round(currentStock + lotQty, 3);
+        const newTotalStock = precision.round(precision.add([currentStock, lotQty]), 3);
 
         // Add stock to product branch stock if branchId is provided
         const targetBranchId = branchId || req.user.activeBranchId || null;
         if (targetBranchId) {
             let bs = await BranchStock.findOne({ 
                 where: { productId, branchId: targetBranchId, companyId },
+                lock: t.LOCK.UPDATE,
                 transaction: t 
             });
             if (bs) {
-                const newBranchQty = precision.round((Number(bs.quantity) || 0) + lotQty, 3);
+                const newBranchQty = precision.round(precision.add([Number(bs.quantity) || 0, lotQty]), 3);
                 await bs.update({ quantity: newBranchQty }, { transaction: t });
             } else {
                 await BranchStock.create({
@@ -1556,7 +1569,7 @@ router.post('/:id/lots', require('../middleware/auth').verifyToken, async (req, 
         await t.commit();
         res.status(201).json(lot);
     } catch (error) {
-        if (t) await t.rollback();
+        if (t && !t.finished) await t.rollback();
         console.error('Create lot error:', error);
         res.status(500).json({ error: 'Error al crear lote: ' + error.message });
     }
@@ -1595,33 +1608,31 @@ router.post('/transfer', requirePermission('canManageInventory'), async (req, re
             transaction: t,
             lock: t.LOCK.UPDATE
         });
-        const currentOriginQty = Number(originStock ? originStock.stockQuantity : 0);
-        if (currentOriginQty < qty) {
+        const currentOriginQty = Number(originStock ? originStock.quantity : 0);
+        if (!originStock || currentOriginQty < qty) {
             await t.rollback();
             return res.status(400).json({ error: `Stock insuficiente en la sucursal origen (${currentOriginQty} disponibles).` });
         }
 
         const newOriginQty = Number((currentOriginQty - qty).toFixed(4));
-        await originStock.update({ stockQuantity: newOriginQty }, { transaction: t });
+        await originStock.update({ quantity: newOriginQty }, { transaction: t });
 
         let destStock = await BranchStock.findOne({
             where: { productId, branchId: toBranchId, companyId },
             transaction: t,
             lock: t.LOCK.UPDATE
         });
-        const currentDestQty = Number(destStock ? destStock.stockQuantity : 0);
+        const currentDestQty = Number(destStock ? destStock.quantity : 0);
         const newDestQty = Number((currentDestQty + qty).toFixed(4));
 
         if (destStock) {
-            await destStock.update({ stockQuantity: newDestQty }, { transaction: t });
+            await destStock.update({ quantity: newDestQty }, { transaction: t });
         } else {
             destStock = await BranchStock.create({
-                id: generateRobustId(),
                 productId,
                 branchId: toBranchId,
                 companyId,
-                stockQuantity: newDestQty,
-                minStock: Number(product.minStock || 5)
+                quantity: newDestQty
             }, { transaction: t });
         }
 
@@ -1669,6 +1680,242 @@ router.post('/transfer', requirePermission('canManageInventory'), async (req, re
         if (t) await t.rollback();
         console.error('Transfer stock error:', error);
         res.status(500).json({ error: 'Error al transferir stock: ' + error.message });
+    }
+});
+
+/**
+ * CRUD de Variantes (Talla / Color / SKU) para vertical Boutique y Calzado
+ */
+router.get('/:id/variants', async (req, res) => {
+    try {
+        const { Product, VarianteProducto } = require('../database/models');
+        const product = await Product.findOne({
+            where: { id: req.params.id, companyId: req.user.companyId }
+        });
+        if (!product) {
+            return res.status(404).json({ error: 'Producto no encontrado' });
+        }
+        const variants = await VarianteProducto.findAll({
+            where: { producto_id: product.id },
+            order: [['talla', 'ASC'], ['color', 'ASC']]
+        });
+        res.json(variants);
+    } catch (error) {
+        console.error('Get product variants error:', error);
+        res.status(500).json({ error: 'Error al obtener variantes del producto' });
+    }
+});
+
+router.post('/:id/variants', requirePermission('canManageInventory', 'canCreateProducts'), async (req, res) => {
+    const { Product, VarianteProducto } = require('../database/models');
+    const { sequelize } = require('../database/connection');
+    const { generateRobustId } = require('../utils/helpers');
+    const t = await sequelize.transaction();
+    try {
+        const product = await Product.findOne({
+            where: { id: req.params.id, companyId: req.user.companyId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!product) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Producto no encontrado' });
+        }
+
+        const talla = String(req.body?.talla || '').trim().slice(0, 60);
+        const color = String(req.body?.color || '').trim().slice(0, 60);
+        if (!talla || !color) {
+            await t.rollback();
+            return res.status(400).json({ error: 'Talla y color son obligatorios' });
+        }
+
+        const stockNum = Number(req.body?.stock ?? 0);
+        const extraPriceNum = Number(req.body?.precio_adicional ?? 0);
+        if (!Number.isFinite(stockNum) || stockNum < 0) {
+            await t.rollback();
+            return res.status(400).json({ error: 'El stock de la variante debe ser un número mayor o igual a cero' });
+        }
+        if (!Number.isFinite(extraPriceNum) || extraPriceNum < 0) {
+            await t.rollback();
+            return res.status(400).json({ error: 'El precio adicional debe ser un número mayor o igual a cero' });
+        }
+
+        const skuVariante = req.body?.sku_variante
+            ? String(req.body.sku_variante).trim().slice(0, 120)
+            : `${product.barcode || product.id}-${talla}-${color}`.replace(/\s+/g, '-').toUpperCase();
+
+        const created = await VarianteProducto.create({
+            id: `var_${generateRobustId()}`,
+            producto_id: product.id,
+            talla,
+            color,
+            sku_variante: skuVariante,
+            stock: precision.round(stockNum, 6),
+            precio_adicional: precision.round(extraPriceNum, 6)
+        }, { transaction: t });
+
+        const allVariants = await VarianteProducto.findAll({
+            where: { producto_id: product.id },
+            transaction: t
+        });
+        const totalVariantStock = precision.round(
+            precision.add(allVariants.map(v => Number(v.stock || 0))),
+            6
+        );
+        await product.update({
+            stockQuantity: String(totalVariantStock),
+            stock: String(totalVariantStock)
+        }, { transaction: t });
+
+        await t.commit();
+        const io = req.app.get('io');
+        if (io) io.to(String(req.user.companyId)).emit('inventory_changed');
+        res.status(201).json({ variant: created, totalStock: totalVariantStock });
+    } catch (error) {
+        await t.rollback();
+        console.error('Create product variant error:', error);
+        res.status(500).json({ error: 'Error al crear variante del producto' });
+    }
+});
+
+router.put('/:id/variants/:variantId', requirePermission('canManageInventory', 'canCreateProducts'), async (req, res) => {
+    const { Product, VarianteProducto } = require('../database/models');
+    const { sequelize } = require('../database/connection');
+    const t = await sequelize.transaction();
+    try {
+        const product = await Product.findOne({
+            where: { id: req.params.id, companyId: req.user.companyId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!product) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Producto no encontrado' });
+        }
+
+        const variant = await VarianteProducto.findOne({
+            where: { id: req.params.variantId, producto_id: product.id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!variant) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Variante no encontrada' });
+        }
+
+        const updates = {};
+        if (req.body?.talla !== undefined) {
+            const cleanTalla = String(req.body.talla).trim().slice(0, 60);
+            if (!cleanTalla) {
+                await t.rollback();
+                return res.status(400).json({ error: 'La talla no puede quedar vacía' });
+            }
+            updates.talla = cleanTalla;
+        }
+        if (req.body?.color !== undefined) {
+            const cleanColor = String(req.body.color).trim().slice(0, 60);
+            if (!cleanColor) {
+                await t.rollback();
+                return res.status(400).json({ error: 'El color no puede quedar vacío' });
+            }
+            updates.color = cleanColor;
+        }
+        if (req.body?.sku_variante !== undefined) {
+            updates.sku_variante = String(req.body.sku_variante).trim().slice(0, 120) || null;
+        }
+        if (req.body?.stock !== undefined) {
+            const stockNum = Number(req.body.stock);
+            if (!Number.isFinite(stockNum) || stockNum < 0) {
+                await t.rollback();
+                return res.status(400).json({ error: 'El stock de la variante debe ser mayor o igual a cero' });
+            }
+            updates.stock = precision.round(stockNum, 6);
+        }
+        if (req.body?.precio_adicional !== undefined) {
+            const extraNum = Number(req.body.precio_adicional);
+            if (!Number.isFinite(extraNum) || extraNum < 0) {
+                await t.rollback();
+                return res.status(400).json({ error: 'El precio adicional debe ser mayor o igual a cero' });
+            }
+            updates.precio_adicional = precision.round(extraNum, 6);
+        }
+
+        await variant.update(updates, { transaction: t });
+
+        const allVariants = await VarianteProducto.findAll({
+            where: { producto_id: product.id },
+            transaction: t
+        });
+        const totalVariantStock = precision.round(
+            precision.add(allVariants.map(v => Number(v.stock || 0))),
+            6
+        );
+        await product.update({
+            stockQuantity: String(totalVariantStock),
+            stock: String(totalVariantStock)
+        }, { transaction: t });
+
+        await t.commit();
+        const io = req.app.get('io');
+        if (io) io.to(String(req.user.companyId)).emit('inventory_changed');
+        res.json({ variant, totalStock: totalVariantStock });
+    } catch (error) {
+        await t.rollback();
+        console.error('Update product variant error:', error);
+        res.status(500).json({ error: 'Error al actualizar variante del producto' });
+    }
+});
+
+router.delete('/:id/variants/:variantId', requirePermission('canManageInventory', 'canCreateProducts'), async (req, res) => {
+    const { Product, VarianteProducto } = require('../database/models');
+    const { sequelize } = require('../database/connection');
+    const t = await sequelize.transaction();
+    try {
+        const product = await Product.findOne({
+            where: { id: req.params.id, companyId: req.user.companyId },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!product) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Producto no encontrado' });
+        }
+
+        const variant = await VarianteProducto.findOne({
+            where: { id: req.params.variantId, producto_id: product.id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+        });
+        if (!variant) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Variante no encontrada' });
+        }
+
+        await variant.destroy({ transaction: t });
+
+        const remaining = await VarianteProducto.findAll({
+            where: { producto_id: product.id },
+            transaction: t
+        });
+        if (remaining.length > 0) {
+            const totalVariantStock = precision.round(
+                precision.add(remaining.map(v => Number(v.stock || 0))),
+                6
+            );
+            await product.update({
+                stockQuantity: String(totalVariantStock),
+                stock: String(totalVariantStock)
+            }, { transaction: t });
+        }
+
+        await t.commit();
+        const io = req.app.get('io');
+        if (io) io.to(String(req.user.companyId)).emit('inventory_changed');
+        res.json({ success: true, remainingCount: remaining.length });
+    } catch (error) {
+        await t.rollback();
+        console.error('Delete product variant error:', error);
+        res.status(500).json({ error: 'Error al eliminar variante del producto' });
     }
 });
 

@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Edit3, X } from 'lucide-react';
 import CachedImage from '../CachedImage';

@@ -1,17 +1,40 @@
 /**
  * Validador Criptográfico Local de Licencias (Isaac POS Mobile & Desktop)
  * 
- * Permite que los terminales y cajeros móviles activen su licencia de forma 
- * 100% autónoma y OFFLINE mediante WebCrypto (HMAC-SHA256), sin depender de
- * que la PC Servidor esté encendida o alcanzable en la red en ese instante.
+ * Permite que los terminales y cajeros móviles activen y validen su licencia
+ * de forma 100% autónoma y OFFLINE mediante RSA-SHA256 (WebCrypto con fallback
+ * determinista en JS puro BigInt para entornos HTTP LAN / Android WebView),
+ * sin depender de que la PC Servidor esté encendida o alcanzable en la red.
  */
 
-import PUBLIC_RSA_KEY_PEM from '../config/licensePublicKey.pem?raw';
+import PUBLIC_RSA_KEY_PEM from '../config/licensePublicKey';
 
 let cachedRsaPublicKey = null;
+let cachedParsedRsaKey = null;
+
+// Prefijo ASN.1 DER DigestInfo para SHA-256 (RFC 8017 §9.2)
+const SHA256_DIGEST_INFO_PREFIX = new Uint8Array([
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00, 0x04, 0x20
+]);
+
+const SHA256_K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]);
 
 function base64ToUint8Array(base64Str) {
-    const clean = String(base64Str || '').replace(/\s+/g, '');
+    let clean = String(base64Str || '').replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    while (clean.length % 4 !== 0) {
+        clean += '=';
+    }
     const binary = atob(clean);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
@@ -20,44 +43,327 @@ function base64ToUint8Array(base64Str) {
     return bytes;
 }
 
-async function getRsaPublicKey() {
-    if (cachedRsaPublicKey) return cachedRsaPublicKey;
-    if (typeof window === 'undefined' || !window.crypto?.subtle) {
-        throw new Error('WebCrypto API no disponible en este entorno.');
-    }
-    const pemBody = String(PUBLIC_RSA_KEY_PEM || '')
+function getSpkiBytes(publicKeyPem = PUBLIC_RSA_KEY_PEM) {
+    const pemBody = String(publicKeyPem || '')
         .replace(/-----BEGIN PUBLIC KEY-----/g, '')
         .replace(/-----END PUBLIC KEY-----/g, '')
         .replace(/\s+/g, '');
-    const spkiBytes = base64ToUint8Array(pemBody);
-    cachedRsaPublicKey = await window.crypto.subtle.importKey(
+    if (!pemBody) {
+        throw new Error('Clave pública RSA SPKI no configurada.');
+    }
+    return base64ToUint8Array(pemBody);
+}
+
+function readDerTlv(bytes, offset) {
+    if (offset + 2 > bytes.length) {
+        throw new Error('ASN.1 DER truncado.');
+    }
+    const tag = bytes[offset];
+    const lenByte = bytes[offset + 1];
+    let length = 0;
+    let valueStart = offset + 2;
+    if ((lenByte & 0x80) === 0) {
+        length = lenByte;
+    } else {
+        const numLenBytes = lenByte & 0x7f;
+        if (numLenBytes === 0 || numLenBytes > 4 || valueStart + numLenBytes > bytes.length) {
+            throw new Error('Longitud ASN.1 DER inválida.');
+        }
+        for (let i = 0; i < numLenBytes; i++) {
+            length = (length << 8) | bytes[valueStart + i];
+        }
+        valueStart += numLenBytes;
+    }
+    const valueEnd = valueStart + length;
+    if (valueEnd > bytes.length) {
+        throw new Error('Valor ASN.1 DER fuera de rango.');
+    }
+    return { tag, valueStart, valueEnd, nextOffset: valueEnd };
+}
+
+function bytesToBigInt(bytes, start = 0, end = bytes.length) {
+    let result = 0n;
+    for (let i = start; i < end; i++) {
+        result = (result << 8n) | BigInt(bytes[i]);
+    }
+    return result;
+}
+
+function bigIntToFixedBytes(value, byteLength) {
+    const out = new Uint8Array(byteLength);
+    let v = value;
+    for (let i = byteLength - 1; i >= 0; i--) {
+        out[i] = Number(v & 0xffn);
+        v >>= 8n;
+    }
+    if (v !== 0n) return null;
+    return out;
+}
+
+function modPow(base, exp, mod) {
+    if (mod === 1n) return 0n;
+    let result = 1n;
+    let b = base % mod;
+    let e = exp;
+    while (e > 0n) {
+        if ((e & 1n) === 1n) {
+            result = (result * b) % mod;
+        }
+        e >>= 1n;
+        if (e > 0n) {
+            b = (b * b) % mod;
+        }
+    }
+    return result;
+}
+
+function sha256Bytes(bytes) {
+    const rotr = (v, n) => (v >>> n) | (v << (32 - n));
+    const paddedLen = Math.ceil((bytes.length + 9) / 64) * 64;
+    const padded = new Uint8Array(paddedLen);
+    padded.set(bytes);
+    padded[bytes.length] = 0x80;
+
+    const view = new DataView(padded.buffer);
+    const bitLenBig = BigInt(bytes.length) * 8n;
+    view.setUint32(paddedLen - 8, Number((bitLenBig >> 32n) & 0xffffffffn), false);
+    view.setUint32(paddedLen - 4, Number(bitLenBig & 0xffffffffn), false);
+
+    let h0 = 0x6a09e667;
+    let h1 = 0xbb67ae85;
+    let h2 = 0x3c6ef372;
+    let h3 = 0xa54ff53a;
+    let h4 = 0x510e527f;
+    let h5 = 0x9b05688c;
+    let h6 = 0x1f83d9ab;
+    let h7 = 0x5be0cd19;
+    const w = new Uint32Array(64);
+
+    for (let i = 0; i < paddedLen; i += 64) {
+        for (let t = 0; t < 16; t++) {
+            w[t] = view.getUint32(i + t * 4, false);
+        }
+        for (let t = 16; t < 64; t++) {
+            const s0 = rotr(w[t - 15], 7) ^ rotr(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+            const s1 = rotr(w[t - 2], 17) ^ rotr(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+            w[t] = (w[t - 16] + s0 + w[t - 7] + s1) >>> 0;
+        }
+
+        let a = h0;
+        let b = h1;
+        let c = h2;
+        let d = h3;
+        let e = h4;
+        let f = h5;
+        let g = h6;
+        let hh = h7;
+
+        for (let t = 0; t < 64; t++) {
+            const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+            const ch = (e & f) ^ ((~e) & g);
+            const temp1 = (hh + S1 + ch + SHA256_K[t] + w[t]) >>> 0;
+            const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+            const maj = (a & b) ^ (a & c) ^ (b & c);
+            const temp2 = (S0 + maj) >>> 0;
+
+            hh = g;
+            g = f;
+            f = e;
+            e = (d + temp1) >>> 0;
+            d = c;
+            c = b;
+            b = a;
+            a = (temp1 + temp2) >>> 0;
+        }
+
+        h0 = (h0 + a) >>> 0;
+        h1 = (h1 + b) >>> 0;
+        h2 = (h2 + c) >>> 0;
+        h3 = (h3 + d) >>> 0;
+        h4 = (h4 + e) >>> 0;
+        h5 = (h5 + f) >>> 0;
+        h6 = (h6 + g) >>> 0;
+        h7 = (h7 + hh) >>> 0;
+    }
+
+    const digest = new Uint8Array(32);
+    const outView = new DataView(digest.buffer);
+    outView.setUint32(0, h0, false);
+    outView.setUint32(4, h1, false);
+    outView.setUint32(8, h2, false);
+    outView.setUint32(12, h3, false);
+    outView.setUint32(16, h4, false);
+    outView.setUint32(20, h5, false);
+    outView.setUint32(24, h6, false);
+    outView.setUint32(28, h7, false);
+    return digest;
+}
+
+function parseRsaPublicKey(publicKeyPem = PUBLIC_RSA_KEY_PEM) {
+    const isDefaultKey = publicKeyPem === PUBLIC_RSA_KEY_PEM;
+    if (isDefaultKey && cachedParsedRsaKey) return cachedParsedRsaKey;
+    const spki = getSpkiBytes(publicKeyPem);
+    const outerSeq = readDerTlv(spki, 0);
+    if (outerSeq.tag !== 0x30) throw new Error('SPKI raíz no es SEQUENCE.');
+
+    const algSeq = readDerTlv(spki, outerSeq.valueStart);
+    if (algSeq.tag !== 0x30) throw new Error('AlgorithmIdentifier inválido.');
+
+    const bitStr = readDerTlv(spki, algSeq.nextOffset);
+    if (bitStr.tag !== 0x03 || spki[bitStr.valueStart] !== 0x00) {
+        throw new Error('BIT STRING SPKI inválido.');
+    }
+
+    const rsaSeq = readDerTlv(spki, bitStr.valueStart + 1);
+    if (rsaSeq.tag !== 0x30) throw new Error('RSAPublicKey no es SEQUENCE.');
+
+    const modTlv = readDerTlv(spki, rsaSeq.valueStart);
+    if (modTlv.tag !== 0x02) throw new Error('Módulo RSA inválido.');
+
+    const expTlv = readDerTlv(spki, modTlv.nextOffset);
+    if (expTlv.tag !== 0x02) throw new Error('Exponente RSA inválido.');
+
+    let modStart = modTlv.valueStart;
+    while (modStart < modTlv.valueEnd && spki[modStart] === 0x00) {
+        modStart++;
+    }
+    const modulusByteLength = modTlv.valueEnd - modStart;
+    const n = bytesToBigInt(spki, modStart, modTlv.valueEnd);
+    const e = bytesToBigInt(spki, expTlv.valueStart, expTlv.valueEnd);
+
+    if (modulusByteLength < 128 || n <= 0n || e <= 1n) {
+        throw new Error('Parámetros de clave pública RSA inválidos.');
+    }
+
+    const parsed = { n, e, k: modulusByteLength };
+    if (isDefaultKey) {
+        cachedParsedRsaKey = parsed;
+    }
+    return parsed;
+}
+
+function toUint8Array(input) {
+    if (input instanceof Uint8Array) return input;
+    if (input instanceof ArrayBuffer) return new Uint8Array(input);
+    if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    if (typeof input === 'string') return new TextEncoder().encode(input);
+    throw new Error('Entrada binaria inválida.');
+}
+
+function bytesToHex(bytes) {
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+        hex += bytes[i].toString(16).padStart(2, '0');
+    }
+    return hex;
+}
+
+/**
+ * Calcula SHA-256 en hexadecimal minúscula usando WebCrypto cuando está disponible
+ * o el motor JS puro determinista como fallback (HTTP LAN / WebView).
+ */
+export async function computeSha256Hex(input) {
+    const bytes = toUint8Array(input);
+    if (typeof window !== 'undefined' && window.crypto?.subtle) {
+        try {
+            const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+            return bytesToHex(new Uint8Array(digest));
+        } catch (_) {
+            // Fallback JS puro
+        }
+    }
+    return bytesToHex(sha256Bytes(bytes));
+}
+
+function verifyRsaSha256BytesPureJs(bytes, base64Signature, publicKeyPem = PUBLIC_RSA_KEY_PEM) {
+    try {
+        const { n, e, k } = parseRsaPublicKey(publicKeyPem);
+        const sigBytes = base64ToUint8Array(base64Signature);
+        if (sigBytes.length !== k) return false;
+
+        const s = bytesToBigInt(sigBytes);
+        if (s < 0n || s >= n) return false;
+
+        const m = modPow(s, e, n);
+        const em = bigIntToFixedBytes(m, k);
+        if (!em) return false;
+
+        const hash = sha256Bytes(bytes);
+        const tLen = SHA256_DIGEST_INFO_PREFIX.length + hash.length;
+        const psLen = k - tLen - 3;
+        if (psLen < 8) return false;
+
+        let diff = (em[0] ^ 0x00) | (em[1] ^ 0x01) | (em[2 + psLen] ^ 0x00);
+        for (let i = 0; i < psLen; i++) {
+            diff |= em[2 + i] ^ 0xff;
+        }
+        const digestStart = 3 + psLen;
+        for (let i = 0; i < SHA256_DIGEST_INFO_PREFIX.length; i++) {
+            diff |= em[digestStart + i] ^ SHA256_DIGEST_INFO_PREFIX[i];
+        }
+        const hashStart = digestStart + SHA256_DIGEST_INFO_PREFIX.length;
+        for (let i = 0; i < hash.length; i++) {
+            diff |= em[hashStart + i] ^ hash[i];
+        }
+        return diff === 0;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function getRsaPublicKey(publicKeyPem = PUBLIC_RSA_KEY_PEM) {
+    const isDefaultKey = publicKeyPem === PUBLIC_RSA_KEY_PEM;
+    if (isDefaultKey && cachedRsaPublicKey) return cachedRsaPublicKey;
+    if (typeof window === 'undefined' || !window.crypto?.subtle) {
+        throw new Error('WebCrypto API no disponible en este entorno.');
+    }
+    const spkiBytes = getSpkiBytes(publicKeyPem);
+    const imported = await window.crypto.subtle.importKey(
         'spki',
         spkiBytes.buffer,
         { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
         false,
         ['verify']
     );
-    return cachedRsaPublicKey;
+    if (isDefaultKey) {
+        cachedRsaPublicKey = imported;
+    }
+    return imported;
 }
 
 /**
- * Verifica firma digital RSA-SHA256 (licencias v2) usando únicamente clave pública SPKI.
+ * Verifica firma digital RSA-SHA256 sobre bytes arbitrarios (licencias v2 o paquetes OTA dist.zip).
+ * Usa WebCrypto nativo cuando está disponible y cae automáticamente a BigInt JS puro
+ * en contextos HTTP no seguros (LAN) o WebViews Android sin crypto.subtle.
  */
-async function verifyRsaSha256Signature(payload, base64Signature) {
+export async function verifyRsaSha256Bytes(inputBytes, base64Signature, publicKeyPem = PUBLIC_RSA_KEY_PEM) {
     if (!base64Signature || typeof base64Signature !== 'string') return false;
+    let payloadBytes;
     try {
-        const publicKey = await getRsaPublicKey();
-        const sigBytes = base64ToUint8Array(base64Signature);
-        const payloadBytes = new TextEncoder().encode(payload);
-        return await window.crypto.subtle.verify(
-            { name: 'RSASSA-PKCS1-v1_5' },
-            publicKey,
-            sigBytes.buffer,
-            payloadBytes
-        );
+        payloadBytes = toUint8Array(inputBytes);
     } catch (_) {
         return false;
     }
+
+    if (typeof window !== 'undefined' && window.crypto?.subtle) {
+        try {
+            const publicKey = await getRsaPublicKey(publicKeyPem);
+            const sigBytes = base64ToUint8Array(base64Signature);
+            return await window.crypto.subtle.verify(
+                { name: 'RSASSA-PKCS1-v1_5' },
+                publicKey,
+                sigBytes.buffer,
+                payloadBytes
+            );
+        } catch (_) {
+            // Fallback determinista en JS puro si WebCrypto falla o está restringido
+        }
+    }
+    return verifyRsaSha256BytesPureJs(payloadBytes, base64Signature, publicKeyPem);
+}
+
+async function verifyRsaSha256Signature(payload, base64Signature) {
+    return verifyRsaSha256Bytes(new TextEncoder().encode(payload), base64Signature, PUBLIC_RSA_KEY_PEM);
 }
 
 /**
@@ -210,7 +516,7 @@ export async function validateLicenseKeyLocally(licenseKeyString, targetTerminal
 
         // 3. Validar Expiración
         if (data.exp && data.exp !== 'never' && Date.now() > Number(data.exp)) {
-            return { valid: false, message: 'Esta licencia ya ha expirado' };
+            return { valid: false, expired: true, message: 'Esta licencia ya ha expirado' };
         }
 
         // 4. Validar Identidad de Terminal (con tolerancia a 0 vs O y mayúsculas/minúsculas)

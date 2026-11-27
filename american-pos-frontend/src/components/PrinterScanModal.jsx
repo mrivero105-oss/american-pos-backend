@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Printer, RefreshCw, X, Play, Loader2, CheckCircle2, ShieldCheck, FileScan, Sliders, Wifi } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
@@ -14,7 +14,7 @@ export default function PrinterScanModal({ isOpen, onClose, onScan, isScanning }
     const fetchScanners = async () => {
         setIsLoadingDevices(true);
         try {
-            const { data } = await api.get('/products/scanners');
+            const { data } = await api.get('/products/scanners', { timeout: 5000 });
             const list = data?.scanners || [];
             setScanners(list);
 
@@ -24,7 +24,12 @@ export default function PrinterScanModal({ isOpen, onClose, onScan, isScanning }
                 setSelectedDeviceId(realDevice.id);
             }
         } catch (err) {
-            console.error('Error fetching scanners:', err);
+            const isTimeoutOrOffline = !err?.response || err?.code === 'ECONNABORTED';
+            if (isTimeoutOrOffline) {
+                console.warn('Escáneres WIA no respondieron a tiempo:', err?.message || err);
+            } else {
+                console.error('Error fetching scanners:', err);
+            }
             toast.error('No se pudo obtener la lista de escáneres. Se usará la detección automática.');
             setScanners([
                 {

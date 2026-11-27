@@ -91,7 +91,8 @@ class RefundService {
             if (sale.status === 'refunded') throw new Error('Esta venta ya fue devuelta en su totalidad.');
 
             // --- REGLA DE NEGOCIO: AUTORIZACIÓN DE DEVOLUCIONES ---
-            const canVoidDirectly = reqUser.role === 'superadmin' || reqUser.role === 'admin' || reqUser.permissions?.canVoidSales === true;
+            const { isCompanyAdminRole } = require('../constants/roles');
+            const canVoidDirectly = isCompanyAdminRole(reqUser.role) || reqUser.permissions?.canVoidSales === true;
             let approval = null;
 
             if (!canVoidDirectly && !supervisorApprovalId) {
@@ -705,10 +706,13 @@ class RefundService {
                 }
             }
 
-            // 6D. Emitir Nota de Crédito fiscal y Libro de Ventas en la misma transacción
+            // 6D. Emitir Nota de Crédito fiscal y Libro de Ventas en la misma transacción (tasa IVA dinámica por país/config)
+            const refundSettings = getUserSettings(readJson(SETTINGS_FILE) || {}, companyId) || {};
+            const configuredIvaPct = Number(refundSettings.taxConfig?.ivaRate ?? refundSettings.ivaRate ?? 16);
+            const ivaFraction = configuredIvaPct > 0 ? precision.divide(configuredIvaPct, 100) : 0.16;
             const netAfterTaxAndIgtf = Math.max(0, precision.round(precision.subtract(totalToRefund, precision.add([taxRefundUsd, igtfRefundUsd])), 2));
             const taxableBaseUsd = taxRefundUsd > 0
-                ? Math.min(netAfterTaxAndIgtf, precision.round(precision.divide(taxRefundUsd, 0.16), 2))
+                ? Math.min(netAfterTaxAndIgtf, precision.round(precision.divide(taxRefundUsd, ivaFraction), 2))
                 : 0;
             const exemptUsd = Math.max(0, precision.round(precision.subtract(netAfterTaxAndIgtf, taxableBaseUsd), 2));
 
@@ -775,6 +779,12 @@ class RefundService {
             }, { transaction: t });
 
             await t.commit();
+
+            try {
+                const DailyRollupService = require('./DailyRollupService');
+                DailyRollupService.scheduleDayRefresh(companyId, refund.date || new Date());
+                if (sale?.date) DailyRollupService.scheduleDayRefresh(companyId, sale.date);
+            } catch (_) {}
 
             // 📱 Alerta Ejecutiva WhatsApp al Dueño (Devolución / Reembolso)
             try {

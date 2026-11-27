@@ -1,9 +1,13 @@
 const { exec, spawn, execFile } = require('child_process');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const { BASE_PATH } = require('../config/paths');
 
 class LocalPrinterService {
-    static _helperExePath = path.join(process.env.TEMP || 'C:\\Windows\\Temp', 'IsaacPOS_RawPrinter_v1.exe');
+    static _helperDir = path.join(BASE_PATH, 'bin_cache');
+    static _helperExePath = path.join(BASE_PATH, 'bin_cache', 'IsaacPOS_RawPrinter_v1.exe');
+    static _helperHashPath = path.join(BASE_PATH, 'bin_cache', 'IsaacPOS_RawPrinter_v1.sha256');
     static _printerQueues = new Map();
     static _printersCache = null;
     static _printersCacheAt = 0;
@@ -36,9 +40,26 @@ class LocalPrinterService {
         return currentPromise;
     }
 
-    // Compila el micro-binario C# nativo UNA SOLA VEZ en la vida del servidor (0% CPU, 12ms por ticket)
+    static _computeFileSha256(filePath) {
+        const hash = crypto.createHash('sha256');
+        hash.update(fs.readFileSync(filePath));
+        return hash.digest('hex');
+    }
+
+    // Compila el micro-binario C# nativo en un directorio privado del usuario con verificación SHA-256 (anti binary hijacking en %TEMP%)
     static async _ensureNativeHelper() {
-        if (fs.existsSync(this._helperExePath)) return this._helperExePath;
+        try {
+            if (fs.existsSync(this._helperExePath) && fs.existsSync(this._helperHashPath)) {
+                const expectedHash = fs.readFileSync(this._helperHashPath, 'utf8').trim();
+                const actualHash = this._computeFileSha256(this._helperExePath);
+                if (expectedHash && expectedHash.length === 64 && expectedHash === actualHash) {
+                    return this._helperExePath;
+                }
+            }
+        } catch (_) {}
+
+        await fs.promises.mkdir(this._helperDir, { recursive: true });
+        try { if (fs.existsSync(this._helperExePath)) await fs.promises.unlink(this._helperExePath); } catch (_) {}
 
         const csSource = `
 using System;
@@ -102,6 +123,10 @@ public class RawPrinterHelper {
             execFile(cscPath, ['/nologo', '/optimize+', `/out:${this._helperExePath}`, csPath], { windowsHide: true }, (err) => {
                 fs.unlink(csPath, () => {});
                 if (err) return reject(err);
+                try {
+                    const compiledHash = this._computeFileSha256(this._helperExePath);
+                    fs.writeFileSync(this._helperHashPath, compiledHash, { encoding: 'utf8', mode: 0o600 });
+                } catch (_) {}
                 resolve(this._helperExePath);
             });
         });

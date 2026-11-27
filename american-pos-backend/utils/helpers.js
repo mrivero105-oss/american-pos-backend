@@ -1,5 +1,6 @@
 const fs = require('fs');
 const fsPromises = require('fs').promises;
+const path = require('path');
 const { sequelize } = require('../database/connection');
 const { SETTINGS_FILE, PAYMENT_METHODS_FILE, DB_FILE } = require('../config/paths');
 
@@ -10,7 +11,64 @@ const crypto = require('crypto');
  */
 const generateRobustId = () => crypto.randomUUID();
 
+/**
+ * Comparación en tiempo constante independiente de la longitud usando SHA-256 + timingSafeEqual.
+ * @param {string|number} a
+ * @param {string|number} b
+ * @returns {boolean}
+ */
+const safeSecretEqual = (a, b) => {
+    if (a === undefined || a === null || b === undefined || b === null) return false;
+    const digestA = crypto.createHash('sha256').update(String(a), 'utf8').digest();
+    const digestB = crypto.createHash('sha256').update(String(b), 'utf8').digest();
+    return crypto.timingSafeEqual(digestA, digestB);
+};
+
+/**
+ * Unifica el identificador canónico de empresa preservando compatibilidad con BD legada ('2' / 'default' / 'admin').
+ * @param {string|null|undefined} rawCompanyId
+ * @returns {string}
+ */
+const normalizeCompanyId = (rawCompanyId) => {
+    if (!rawCompanyId || rawCompanyId === 'default' || rawCompanyId === 'admin') {
+        return '2';
+    }
+    return String(rawCompanyId);
+};
+
+/**
+ * Construye condición Sequelize compatible con tenants legados ('2' / 'default' / null).
+ * @param {string|null|undefined} companyId
+ * @param {object} Op
+ */
+const buildLegacyCompanyCondition = (companyId, Op) => {
+    const compId = normalizeCompanyId(companyId);
+    if (compId === '2' || compId === 'default') {
+        return { [Op.or]: ['2', 'default', null] };
+    }
+    return compId;
+};
+
 let settingsCache = null;
+
+/**
+ * Escritura atómica en disco (archivo temporal + rename) para evitar corrupción parcial ante cortes eléctricos.
+ */
+const writeFileAtomicSync = (file, content) => {
+    const dir = path.dirname(file);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const tmpFile = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmpFile, content, 'utf8');
+    fs.renameSync(tmpFile, file);
+};
+
+const writeFileAtomicAsync = async (file, content) => {
+    const dir = path.dirname(file);
+    await fsPromises.mkdir(dir, { recursive: true });
+    const tmpFile = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    await fsPromises.writeFile(tmpFile, content, 'utf8');
+    await fsPromises.rename(tmpFile, file);
+};
 
 /**
  * Helper functions for JSON persistence (Settings/Backup)
@@ -46,7 +104,7 @@ const readJsonAsync = async (file) => {
 const writeJson = (file, data) => {
     try {
         if (file === SETTINGS_FILE) settingsCache = data;
-        fs.writeFileSync(file, JSON.stringify(data, null, 2));
+        writeFileAtomicSync(file, JSON.stringify(data, null, 2));
     } catch (e) {
         console.error('Error writing JSON:', file, e);
     }
@@ -55,7 +113,7 @@ const writeJson = (file, data) => {
 const writeJsonAsync = async (file, data) => {
     try {
         if (file === SETTINGS_FILE) settingsCache = data;
-        await fsPromises.writeFile(file, JSON.stringify(data, null, 2));
+        await writeFileAtomicAsync(file, JSON.stringify(data, null, 2));
     } catch (e) {
         console.error('Error writing JSON Async:', file, e);
     }
@@ -166,6 +224,9 @@ const getUserSettings = (allSettings, userId) => {
 
 module.exports = {
     generateRobustId,
+    safeSecretEqual,
+    normalizeCompanyId,
+    buildLegacyCompanyCondition,
     readJson,
     readJsonAsync,
     writeJson,

@@ -1,22 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
+import { useState, useEffect, useMemo } from 'react';
+import {
     X, 
     Search, 
     Calendar, 
     FileText, 
     Eye, 
     RefreshCw, 
-    CheckCircle2, 
-    Clock, 
     ChevronDown, 
     ChevronUp, 
     Package, 
-    DollarSign, 
     Building2, 
-    ArrowRight,
-    Loader2,
-    RotateCcw,
-    Layers,
+    Loader2, 
+    RotateCcw, 
+    Layers, 
     Receipt
 } from 'lucide-react';
 import api from '../services/api';

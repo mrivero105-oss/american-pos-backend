@@ -6,13 +6,19 @@
 /**
  * Normaliza y compara identificadores de métodos de pago con flexibilidad
  */
+const stripDiacritics = (str) => String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
 export function matchesPaymentMethod(targetMethods = [], methodIdOrName = '') {
     if (!Array.isArray(targetMethods) || targetMethods.length === 0) return true;
     if (!methodIdOrName) return false;
 
-    const query = String(methodIdOrName).toLowerCase().trim();
+    const query = stripDiacritics(methodIdOrName);
     return targetMethods.some(target => {
-        const t = String(target).toLowerCase().trim();
+        const t = stripDiacritics(target);
         if (t === query) return true;
         // Mapeos comunes
         if (t === 'cash_usd' && (query === 'cash' || query === 'efectivo_usd' || query.includes('usd') || query.includes('divisa'))) return true;

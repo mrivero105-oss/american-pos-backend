@@ -117,17 +117,19 @@ class FiscalSpoolerService {
         //   '!' = Tasa Reducida (8%)
         //   '"' = Tasa Adicional / Lujo (31%)
         //   'd0' o '1' = Exento (0%)
-        const items = sale.items || sale.SaleItems || [];
+        const items = sale.SaleItems || sale.items || sale.saleItems || [];
+        const saleCurrency = String(sale.currency || 'USD').toUpperCase();
+        const fiscalRate = (saleCurrency === 'USD' && Number(sale.exchangeRate) > 1) ? Number(sale.exchangeRate) : 1;
         for (const item of items) {
             const rawQty = Math.max(0.001, Number(item.quantity || 1));
-            const rawPrice = Number(item.price || item.unitPrice || 0);
+            const rawPrice = Number(item.price || item.unitPrice || 0) * fiscalRate;
             const isExempt = item.taxRate === 0 || item.isExempt || (sale.tax === 0 && !item.tax);
 
             // Formatear cantidad a 5 enteros y 3 decimales sin punto: 00001000 = 1.000
             const qtyInt = Math.round(rawQty * 1000);
             const qtyStr = qtyInt.toString().padStart(8, '0').slice(-8);
 
-            // Formatear precio a 8 enteros y 2 decimales sin punto: 0000050000 = 500.00
+            // Formatear precio en moneda fiscal local (8 enteros y 2 decimales sin punto: 0000050000 = 500.00)
             const priceInt = Math.round(rawPrice * 100);
             const priceStr = priceInt.toString().padStart(10, '0').slice(-10);
 
@@ -146,8 +148,8 @@ class FiscalSpoolerService {
             }
         }
 
-        // 3. Descuento general si existe (ej. Promociones o Descuentos)
-        const promoDiscount = Number(sale.promoDiscount || sale.discount || 0);
+        // 3. Descuento general si existe (ej. Promociones o Descuentos) en moneda fiscal local
+        const promoDiscount = Number(sale.promoDiscount || sale.discount || 0) * fiscalRate;
         if (promoDiscount > 0) {
             const discInt = Math.round(promoDiscount * 100);
             const discStr = discInt.toString().padStart(10, '0').slice(-10);
@@ -198,25 +200,37 @@ class FiscalSpoolerService {
             const base64Data = Buffer.from(rawCommands, 'utf8').toString('base64');
 
             const psScript = `
-                $port = New-Object System.IO.Ports.SerialPort("${cleanPort}", ${numericBaud}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One);
-                $port.ReadTimeout = 3000;
-                $port.WriteTimeout = 3000;
-                $port.Open();
-                $bytes = [System.Convert]::FromBase64String("${base64Data}");
-                $port.Write($bytes, 0, $bytes.Length);
-                Start-Sleep -Milliseconds 600;
-                $response = "";
-                while ($port.BytesToRead -gt 0) {
-                    $response += [char]$port.ReadByte();
+                $port = $null
+                try {
+                    $port = New-Object System.IO.Ports.SerialPort($env:ISAAC_FISCAL_PORT, [int]$env:ISAAC_FISCAL_BAUD, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One)
+                    $port.ReadTimeout = 3000
+                    $port.WriteTimeout = 3000
+                    $port.Open()
+                    $bytes = [System.Convert]::FromBase64String($env:ISAAC_FISCAL_B64)
+                    $port.Write($bytes, 0, $bytes.Length)
+                    Start-Sleep -Milliseconds 600
+                    $response = ""
+                    while ($port.BytesToRead -gt 0) {
+                        $response += [char]$port.ReadByte()
+                    }
+                    Write-Output $response
+                } finally {
+                    if ($port -ne $null -and $port.IsOpen) { $port.Close() }
                 }
-                $port.Close();
-                Write-Output $response;
             `;
 
             const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
             const child = spawn('powershell.exe', [
                 '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedCommand
-            ], { windowsHide: true });
+            ], {
+                windowsHide: true,
+                env: {
+                    ...process.env,
+                    ISAAC_FISCAL_PORT: cleanPort,
+                    ISAAC_FISCAL_BAUD: String(numericBaud),
+                    ISAAC_FISCAL_B64: base64Data
+                }
+            });
 
             let stdout = '';
             let stderr = '';
@@ -334,7 +348,7 @@ class FiscalSpoolerService {
             if (!saleId) throw new Error('Se requiere saleId para emitir factura fiscal');
             const sale = await Sale.findOne({
                 where: { id: saleId, companyId },
-                include: [{ model: SaleItem, as: 'items' }]
+                include: [{ model: SaleItem, as: 'SaleItems' }]
             });
             if (!sale) throw new Error(`Venta #${saleId} no encontrada`);
 
@@ -368,8 +382,8 @@ class FiscalSpoolerService {
                 companyId,
                 userId: userId || 'system',
                 action: `FISCAL_${action}`,
-                details: `Comando fiscal ${documentLabel} emitido exitosamente hacia [${targetType.toUpperCase()}: ${targetPort || targetPrinter || spoolerPath}]`,
-                createdAt: new Date()
+                description: `Comando fiscal ${documentLabel} emitido exitosamente hacia [${targetType.toUpperCase()}: ${targetPort || targetPrinter || spoolerPath}]`,
+                timestamp: new Date().toISOString()
             });
         } catch (auditErr) {
             console.warn('[FiscalSpooler] Warning: No se pudo registrar log de auditoría:', auditErr.message);

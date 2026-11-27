@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { 
     Search, 
     X, 
@@ -45,7 +45,7 @@ const ICON_MAP = {
     Volume2
 };
 
-export const SETTINGS_INDEX = [
+const SETTINGS_INDEX = [
     // --- TAB: Identidad & Negocio (business) ---
     {
         id: 'biz_name_rif',
@@ -585,10 +585,10 @@ export default function QuickSettingsFinder({ isOpen, onClose, onSelectSetting, 
                         <div className="py-12 px-4 text-center">
                             <SlidersHorizontal size={36} className="mx-auto text-slate-400 mb-3 opacity-50" />
                             <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                                No se encontraron ajustes para "{searchQuery}"
+                                No se encontraron ajustes para &ldquo;{searchQuery}&rdquo;
                             </p>
                             <p className="text-xs text-slate-400 mt-1">
-                                Intente buscar por palabras clave como "tasa", "impresora", "cajon", "iva", "pin" o "backup".
+                                Intente buscar por palabras clave como &ldquo;tasa&rdquo;, &ldquo;impresora&rdquo;, &ldquo;cajon&rdquo;, &ldquo;iva&rdquo;, &ldquo;pin&rdquo; o &ldquo;backup&rdquo;.
                             </p>
                         </div>
                     )}

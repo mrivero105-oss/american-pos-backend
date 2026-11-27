@@ -55,7 +55,6 @@ BrandingText "Isaac POS • Servidor Principal de Base de Datos"
 Section "Isaac POS Servidor Principal" SecMain
     DetailPrint "Cerrando instancias previas de Isaac POS..."
     nsExec::Exec 'cmd.exe /c taskkill /F /IM "Isaac POS.exe" /T'
-    nsExec::Exec 'cmd.exe /c taskkill /F /IM "node.exe" /T'
     nsExec::Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -LocalPort 3005,5005,8080 -ErrorAction SilentlyContinue | ForEach-Object { try { Stop-Process -Id $$_.OwningProcess -Force } catch {} }"'
     Sleep 1500
 
@@ -74,20 +73,19 @@ Section "Isaac POS Servidor Principal" SecMain
 
     SetOverwrite on
     SetOutPath "$INSTDIR"
-    File /r /x ".env" /x ".env.*" /x "settings.json" /x "db-config.json" /x "*.pfx" /x "*private*.pem" "${PROJECT_ROOT}\build_ultra\app_files\*.*"
+    File /r /x ".env" /x ".env.*" /x "settings.json" /x "db-config.json" /x "cloud_mirror_config.json" /x ".dbcfg.key.dpapi" /x ".secrets.key.dpapi" /x "secrets.vault.json" /x "*.vault.json" /x "*.pfx" /x "*.key" /x "*private*.pem" "${PROJECT_ROOT}\build_ultra\app_files\*.*"
 
     ; Crear desinstalador
     WriteUninstaller "$INSTDIR\Uninstall_Server.exe"
 
-    ; Configurar modo Servidor en db-config.json de forma nativa (main.js migrará a DPAPI en el 1er arranque)
-    DetailPrint "Estableciendo configuracion de modo Servidor Principal..."
+    ; Asegurar carpeta de configuración en AppData; instalar_postgresql.ps1 inicializa db-config.json si aún no existe
     CreateDirectory "$APPDATA\isaac-pos"
-    FileOpen $0 "$APPDATA\isaac-pos\db-config.json" w
-    FileWrite $0 '{"mode":"server","dialect":"postgres","host":"127.0.0.1","port":5432,"database":"americanpos","user":"postgres","password":"postgres"}'
-    FileClose $0
 
-    ; Instalar y Configurar PostgreSQL 16
+    ; Instalar y Configurar PostgreSQL 16 (crea db-config.json con contraseña aleatoria fuerte si es instalación nueva)
     DetailPrint "Configurando motor de base de datos PostgreSQL 16..."
+    IfFileExists "$INSTDIR\resources\scripts\instalar_postgresql.ps1" 0 +3
+    nsExec::Exec 'powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\scripts\instalar_postgresql.ps1"'
+    Goto +2
     nsExec::Exec 'powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\instalar_postgresql.ps1"'
 
     ; Accesos directos en Menú Inicio y Escritorio
@@ -99,12 +97,12 @@ Section "Isaac POS Servidor Principal" SecMain
     ; Configurar Inicio Automático con Windows vía Registro Run
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Isaac POS Server" '"$INSTDIR\Isaac POS.exe"'
 
-    ; Configurar reglas de Firewall de Windows para admitir conexiones entrantes
-    DetailPrint "Configurando Firewall de Windows para red local (puertos 3005 y 5432)..."
+    ; Configurar reglas de Firewall de Windows restringidas a redes privadas y subred local
+    DetailPrint "Configurando Firewall de Windows para red privada local (puertos 3005 y 5432)..."
     nsExec::Exec 'netsh advfirewall firewall delete rule name="Isaac POS Backend"'
-    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 profile=private,public'
+    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 remoteip=localsubnet profile=private'
     nsExec::Exec 'netsh advfirewall firewall delete rule name="Isaac POS PostgreSQL"'
-    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS PostgreSQL" dir=in action=allow protocol=TCP localport=5432 remoteip=localsubnet profile=private,public'
+    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS PostgreSQL" dir=in action=allow protocol=TCP localport=5432 remoteip=localsubnet profile=private'
 
     ; Registro de Windows
     WriteRegStr HKCU "Software\IsaacPOSServer" "InstallDir" "$INSTDIR"

@@ -3,21 +3,34 @@ const precision = require('../../utils/precision');
 // Helper to canonicalize payment method IDs across the system
 function canonicalizePaymentMethodId(methodId) {
     if (!methodId) return 'cash';
-    const key = String(methodId).toLowerCase().trim();
-    if (['efectivo_bs', 'cash_bs', 'cash_ves', 'ves', 'bs'].includes(key)) return 'cash_bs';
-    if (['efectivo_usd', 'cash_usd', 'cash'].includes(key)) return 'cash';
-    if (['card', 'tarjeta', 'punto', 'punto_de_venta', 'debito', 'debit'].includes(key)) return 'debit';
+    const key = String(methodId)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s_]+/g, '')
+        .trim()
+        .replace(/\s+/g, '_');
+    if (['efectivo_bs', 'cash_bs', 'cash_ves', 'ves', 'bs', 'bolivares'].includes(key)) return 'cash_bs';
+    if (['efectivo_usd', 'cash_usd', 'cash', 'efectivo'].includes(key)) return 'cash';
+    if (['card', 'tarjeta', 'punto', 'punto_de_venta', 'punto_venta', 'debito', 'debit'].includes(key)) return 'debit';
     if (['pagomovil', 'mobile', 'pago_movil'].includes(key)) return 'pago_movil';
     if (['binance', 'binance_pay', 'binance_usdt', 'usdt'].includes(key)) return 'binance_usdt';
     if (['transferencia', 'transfer_bs', 'transfer'].includes(key)) return 'transfer';
     if (['credito', 'credit', 'fiado'].includes(key)) return 'fiado';
+    if (['biopago'].includes(key)) return 'biopago';
     return key;
 }
 
 // Helper to robustly detect if a payment method operates in VES (Bolívares)
 function isVesPaymentMethod(methodId, pMethods = []) {
     if (!methodId) return false;
-    const key = String(methodId).toLowerCase().trim();
+    const key = String(methodId)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s_]+/g, '')
+        .trim()
+        .replace(/\s+/g, '_');
     
     if (Array.isArray(pMethods) && pMethods.length > 0) {
         // Direct match

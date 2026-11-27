@@ -20,10 +20,13 @@ const buildTimeIso = new Date().toISOString();
 
 const srcDir = path.resolve(__dirname, 'dist');
 const mobileDistDir = path.resolve(__dirname, 'dist-mobile');
+const os = require('os');
+const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+const extraUltraPublicDir = process.env.ISAAC_ULTRA_PUBLIC_DIR || path.join(localAppData, 'Programs', 'Isaac POS Ultra', 'public');
 const targetDirs = [
   path.resolve(__dirname, '../american-pos-backend/public'),
-  'C:\\Users\\mrive\\AppData\\Local\\Programs\\Isaac POS Ultra\\public'
-];
+  extraUltraPublicDir
+].filter(Boolean);
 
 const crypto = require('crypto');
 
@@ -33,7 +36,8 @@ console.log(`[BUILD SYNC] Empaquetando dist.zip para actualizaciones OTA desde $
 const zip = new AdmZip();
 zip.addLocalFolder(otaSourceDir, '', (filename) => {
   const lower = filename.toLowerCase();
-  return !lower.endsWith('.apk') && !lower.endsWith('dist.zip');
+  const base = path.basename(lower);
+  return !lower.endsWith('.apk') && !lower.endsWith('dist.zip') && base !== 'version.json';
 });
 const zipBuffer = zip.toBuffer();
 const checksum = crypto.createHash('sha256').update(zipBuffer).digest('hex');
@@ -50,14 +54,32 @@ if (otaSourceDir === mobileDistDir && fs.existsSync(path.join(mobileDistDir, 've
   } catch (_) {}
 }
 
+// 2.1 Firma digital RSA-SHA256 del paquete OTA (misma clave dedicada que sync-mobile-ota.cjs)
+const defaultLocalKeyPath = path.join(os.homedir(), '.isaac-pos-secrets', 'ota_signing_private.pem');
+const otaPrivKeyInline = process.env.OTA_SIGNING_PRIVATE_KEY_PEM;
+const otaPrivKeyPath = process.env.OTA_SIGNING_PRIVATE_KEY_PATH || (fs.existsSync(defaultLocalKeyPath) ? defaultLocalKeyPath : null);
+let otaPrivKeyPem = otaPrivKeyInline ? otaPrivKeyInline.replace(/\\n/g, '\n') : null;
+if (!otaPrivKeyPem && otaPrivKeyPath && fs.existsSync(path.resolve(otaPrivKeyPath))) {
+  otaPrivKeyPem = fs.readFileSync(path.resolve(otaPrivKeyPath), 'utf8');
+}
+
+let otaSignature = null;
+let otaManifestSignature = null;
+if (otaPrivKeyPem) {
+  otaSignature = crypto.sign('sha256', zipBuffer, otaPrivKeyPem).toString('base64');
+  const manifestCanonical = `${otaVersion}|${checksum}|${otaBuildTime}`;
+  otaManifestSignature = crypto.sign('sha256', Buffer.from(manifestCanonical, 'utf8'), otaPrivKeyPem).toString('base64');
+}
+
 const versionPayload = {
   version: otaVersion,
   buildTime: otaBuildTime,
   bundleUrl: '/dist.zip',
   checksum: checksum,
+  ...(otaSignature ? { otaSignature, otaManifestSignature, otaSignatureAlg: 'RSA-SHA256' } : {}),
   apkUrl: '/Isaac-POS-Mobile.apk'
 };
-console.log(`[BUILD SYNC] Versión Desktop: ${fullVersion} | Versión OTA Móvil preservada: ${otaVersion}`);
+console.log(`[BUILD SYNC] Versión Desktop: ${fullVersion} | Versión OTA Móvil preservada: ${otaVersion} | Firmado RSA-SHA256: ${otaSignature ? 'SÍ' : 'NO'}`);
 
 // 2.5 Actualizar versión de caché en dist/sw.js para invalidar index.html antiguos
 try {
@@ -112,6 +134,20 @@ for (const targetDir of targetDirs) {
         console.warn(`[BUILD SYNC] Limpieza de assets antiguos omitida:`, rmErr.message);
       }
     }
+    const srcFontsDir = path.join(srcDir, 'fonts');
+    const currentFontFiles = new Set(fs.existsSync(srcFontsDir) ? fs.readdirSync(srcFontsDir) : []);
+    const targetFontsDir = path.join(targetDir, 'fonts');
+    if (fs.existsSync(targetFontsDir) && currentFontFiles.size > 0) {
+      try {
+        for (const f of fs.readdirSync(targetFontsDir)) {
+          if (!currentFontFiles.has(f)) {
+            fs.rmSync(path.join(targetFontsDir, f), { recursive: true, force: true });
+          }
+        }
+      } catch (rmFontErr) {
+        console.warn(`[BUILD SYNC] Limpieza de fuentes antiguas omitida:`, rmFontErr.message);
+      }
+    }
     const legacyPocketLicense = path.join(targetDir, 'pocket-license.html');
     if (fs.existsSync(legacyPocketLicense)) {
       try {
@@ -128,7 +164,7 @@ for (const targetDir of targetDirs) {
 }
 
 // 4. Sincronizar binarios y servicios de impresión del backend hacia la instalación local de Isaac POS Ultra
-const ultraRoot = 'C:\\Users\\mrive\\AppData\\Local\\Programs\\Isaac POS Ultra';
+const ultraRoot = path.join(localAppData, 'Programs', 'Isaac POS Ultra');
 const backendRoot = path.resolve(__dirname, '../american-pos-backend');
 if (fs.existsSync(ultraRoot) && fs.existsSync(backendRoot)) {
   const backendFilesToSync = [
@@ -153,9 +189,16 @@ if (fs.existsSync(ultraRoot) && fs.existsSync(backendRoot)) {
     'routes/whatsapp.js',
     'routes/branches.js',
     'routes/cash.js',
+    'routes/reports.js',
     'routes/users.js',
     'routes/recharges.js',
+    'routes/publicAi.js',
+    'services/StockIntelligenceService.js',
+    'services/product/productMediaService.js',
     'config/dbConfigManager.js',
+    'config/secretVault.js',
+    'utils/dpapiCrypto.js',
+    'utils/hardware-id.js',
     'database/connection.js',
     'database/models/User.js',
     'database/models/TelecomRecharge.js',

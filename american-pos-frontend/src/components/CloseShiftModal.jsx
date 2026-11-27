@@ -1,14 +1,27 @@
-import { useState, useEffect, useMemo } from 'react';
-import { 
-    CheckCircle, X, AlertTriangle, ArrowRight, Save, Printer, 
-    DollarSign, CreditCard, Smartphone, Banknote, RefreshCw, 
-    ShieldCheck, ChevronDown, ChevronUp, Lock, CheckCircle2,
-    Store, Copy, Clock, Landmark, User, Wallet, Send
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+    CheckCircle, 
+    X, 
+    AlertTriangle, 
+    Save, 
+    Printer, 
+    DollarSign, 
+    CreditCard, 
+    Smartphone, 
+    Banknote, 
+    ChevronDown, 
+    ChevronUp, 
+    CheckCircle2, 
+    Store, 
+    Copy, 
+    Clock, 
+    Landmark, 
+    User
 } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { formatUSD, formatBs, isSingleCurrencyMode, getGlobalSettings } from '../utils/format';
+import { formatBs, isSingleCurrencyMode, getGlobalSettings } from '../utils/format';
 import { printZReportReceipt, printShiftInventoryReceipt } from '../utils/printCashReceipts';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import { useAuth } from '../hooks/AuthContext';
@@ -92,7 +105,7 @@ export default function CloseShiftModal(props) {
             posExchangeRate = pos.exchangeRate;
             posCurrencyMode = pos.currencyMode;
         }
-    } catch (_e) {}
+    } catch { /* PosContext opcional no disponible en este árbol de componentes */ }
 
     const [rate, setRate] = useState(() => {
         const globalRate = getGlobalSettings()?.rate;
@@ -132,8 +145,8 @@ export default function CloseShiftModal(props) {
             localStorage.getItem('pos_exchange_rate') ||
             0
         );
-        if (candidate > 0 && candidate !== rate) {
-            setRate(candidate);
+        if (candidate > 0) {
+            setRate(prev => (candidate !== prev ? candidate : prev));
         }
     }, [propExchangeRate, businessSettings?.rate, businessSettings?.exchangeRate, currentShift?.exchangeRate, posExchangeRate]);
 
@@ -327,7 +340,7 @@ export default function CloseShiftModal(props) {
     }, [loadedMethods, currentShift, singleCurrency]);
 
     // Expected amount per method (Robust & Deduplicated)
-    const getExpectedForMethod = (methodId) => {
+    const getExpectedForMethod = useCallback((methodId) => {
         if (!currentShift) return 0;
         const eb = currentShift.expectedBreakdown || {};
         const pbn = currentShift.paymentBreakdownNative || currentShift.paymentBreakdown || {};
@@ -397,14 +410,16 @@ export default function CloseShiftModal(props) {
             }
         });
         return matchedIb ? totalIb : 0;
-    };
+    }, [currentShift]);
+
+    const currentShiftId = currentShift?.id;
 
     // Load & Restore Draft
     useEffect(() => {
-        if (isOpen && currentShift) {
+        if (isOpen && currentShiftId) {
             setClosureResult(null);
             setApproval(null);
-            const draftStr = localStorage.getItem(`closure_draft_${currentShift.id}`);
+            const draftStr = localStorage.getItem(`closure_draft_${currentShiftId}`);
             if (draftStr) {
                 try {
                     const draft = JSON.parse(draftStr);
@@ -412,18 +427,18 @@ export default function CloseShiftModal(props) {
                     if (draft.usdDenoms) setUsdDenoms(draft.usdDenoms);
                     if (draft.looseCoins) setLooseCoins(draft.looseCoins);
                     if (draft.notes) setNotes(draft.notes);
-                } catch (_e) {}
+                } catch (caughtErr) { console.warn('[CloseShiftModal] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             }
         }
-    }, [isOpen, currentShift?.id]);
+    }, [isOpen, currentShiftId]);
 
     // Save draft periodically
     useEffect(() => {
-        if (isOpen && currentShift && !closureResult) {
+        if (isOpen && currentShiftId && !closureResult) {
             const draft = { declaredAmounts, usdDenoms, looseCoins, notes };
-            localStorage.setItem(`closure_draft_${currentShift.id}`, JSON.stringify(draft));
+            localStorage.setItem(`closure_draft_${currentShiftId}`, JSON.stringify(draft));
         }
-    }, [declaredAmounts, usdDenoms, looseCoins, notes, isOpen, currentShift?.id, closureResult]);
+    }, [declaredAmounts, usdDenoms, looseCoins, notes, isOpen, currentShiftId, closureResult]);
 
     // Shortcut: Auto-populate declared with expected values for ALL methods
     const handlePopulateExpected = () => {
@@ -485,7 +500,7 @@ export default function CloseShiftModal(props) {
             netDifferenceVES,
             exceedsTolerance
         };
-    }, [declaredAmounts, activeMethods, currentShift, singleCurrency, rate, tolerance]);
+    }, [declaredAmounts, activeMethods, singleCurrency, rate, tolerance, getExpectedForMethod]);
 
     if (effectiveClosureMode === 'BLIND') {
         return <BlindClosureModal {...props} />;

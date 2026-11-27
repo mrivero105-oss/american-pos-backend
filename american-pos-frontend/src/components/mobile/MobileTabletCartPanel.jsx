@@ -1,16 +1,25 @@
-import React from 'react';
 import { ShoppingCart, Trash2, User, UserCheck, Percent, PauseCircle, ArrowRight } from 'lucide-react';
+import { getRegionConfig } from '../../utils/regionConfig';
+
+const cleanProdId = (rawId) => String(rawId || '').replace(/__bulk$|__mid$|__pres_.*$|__wpres_.*$|__srv_.*$/, '');
+const getPackFactor = (prod) => {
+  if (!prod) return 1;
+  const f = Number(prod.factorConversion || prod.unitsMultiplier || 0);
+  if (f > 1) return f;
+  if (prod.isBulk) return Math.max(1, Number(prod.unitsPerBulk) || 1);
+  if (prod.isMidBulk) return Math.max(1, Number(prod.unitsPerMidBulk) || 1);
+  return 1;
+};
 
 export default function MobileTabletCartPanel({
+  productsMap = null,
   T,
   totalItemsCount,
   cart,
   enrichedCart,
   products,
   isUnlimitedStockProduct,
-  requestSupervisorAuth,
   clearCart,
-  showToast,
   customerName,
   customerDoc,
   onOpenCustomerSelect,
@@ -21,11 +30,18 @@ export default function MobileTabletCartPanel({
   handleApplyDiscount,
   cartDiscountAmountUSD,
   taxUSD,
+  taxLabel = null,
+  effectiveIvaRate = null,
+  isIvaEnabled = true,
+  isDollarCountry = false,
   totalUSD,
   totalBS,
   handleHoldSale,
   onProceedToCheckout
 }) {
+  const regionCfg = getRegionConfig();
+  const resolvedTaxLabel = taxLabel || regionCfg.taxLabel || 'IVA';
+  const resolvedTaxRate = effectiveIvaRate !== null && effectiveIvaRate !== undefined ? effectiveIvaRate : regionCfg.defaultTaxRate;
   return (
           <aside className={`pos-ticket-panel hidden lg:flex lg:w-[340px] xl:w-[380px] shrink-0 flex-col h-full overflow-hidden ${T.ticketSidebar}`}>
             {/* Cabecera del Ticket en Tablet */}
@@ -87,17 +103,22 @@ export default function MobileTabletCartPanel({
                   </p>
                 </div>
               ) : (
-                enrichedCart.map(item => {
-                  const unlimited = isUnlimitedStockProduct(item.product);
-                  const latestProd = (!unlimited && Array.isArray(products))
-                    ? (products.find(p => String(p.id) === String(item.product.id)) || item.product)
-                    : item.product;
-                  const itemMaxStock = unlimited ? Infinity : Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
+                enrichedCart.map((item) => {
+                  const prod = item?.product;
+                  if (!prod || !prod.id) return null;
+                  const unlimited = isUnlimitedStockProduct(prod);
+                  const baseId = cleanProdId(prod.productId || prod.id);
+                  const latestProd = (!unlimited)
+                    ? (productsMap ? (productsMap.get(baseId) || prod) : (Array.isArray(products) ? (products.find(p => String(p.id) === baseId) || prod) : prod))
+                    : prod;
+                  const packFactor = getPackFactor(prod);
+                  const rawBaseStock = Math.max(0, Number(latestProd.stockQuantity ?? latestProd.stock ?? 0));
+                  const itemMaxStock = unlimited ? Infinity : (packFactor > 1 ? Math.floor(rawBaseStock / packFactor) : rawBaseStock);
                   const atMaxStock = !unlimited && item.quantity >= itemMaxStock;
 
                   return (
                     <div
-                      key={item.product.id}
+                      key={String(prod.id)}
                       className={`pos-ticket-item ${T.ticketItemBg} rounded-[6px] p-2.5 flex items-center justify-between gap-2 select-none`}
                     >
                       <div className="flex-1 min-w-0">
@@ -205,17 +226,19 @@ export default function MobileTabletCartPanel({
                   </div>
                 )}
                 <div className="flex justify-between text-[11px] text-[#94a3b8]">
-                  <span>IVA (16% Incluido):</span>
+                  <span>{isIvaEnabled && resolvedTaxRate > 0 ? `${resolvedTaxLabel} (${resolvedTaxRate}% Incluido):` : `${resolvedTaxLabel} (Exento):`}</span>
                   <span className="font-bold text-white font-mono">${taxUSD.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between items-baseline pt-0.5">
                   <span className="font-extrabold text-xs text-[#cbd5e1] tracking-wide">TOTAL USD:</span>
                   <span className="font-black text-lg text-[#34d399] font-mono tabular-nums">${totalUSD.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between items-baseline text-xs text-[#fbbf24] font-bold">
-                  <span>TOTAL BS:</span>
-                  <span className="font-mono tabular-nums">Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
+                {!isDollarCountry && (
+                  <div className="flex justify-between items-baseline text-xs text-[#fbbf24] font-bold">
+                    <span>TOTAL BS:</span>
+                    <span className="font-mono tabular-nums">Bs. {totalBS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2">

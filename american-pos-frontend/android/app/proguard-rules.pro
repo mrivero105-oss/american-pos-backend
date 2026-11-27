@@ -1,21 +1,25 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ProGuard / R8 rules for Isaac POS Android (Capacitor + PosNativeHardwarePlugin + Capgo OTA + ML Kit + Biometric)
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,SourceFile,LineNumberTable
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Capacitor bridge & custom native plugins invoked via reflection
+-keep class com.getcapacitor.** { *; }
+-keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }
+-keepclassmembers class * {
+    @com.getcapacitor.PluginMethod <methods>;
+    @com.getcapacitor.annotation.ActivityCallback <methods>;
+    @com.getcapacitor.annotation.PermissionCallback <methods>;
+    @android.webkit.JavascriptInterface <methods>;
+}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Capgo Capacitor Updater (OTA) - preservar clases cargadas por reflexión
+-keep class ee.forgr.capacitor_updater.** { *; }
+-dontwarn ee.forgr.capacitor_updater.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ML Kit Barcode & Text Recognition
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
+
+# AndroidX Biometric & CameraX
+-keep class androidx.biometric.** { *; }
+-keep class com.isaacpos.app.NativeVisionScannerActivity { *; }
+-dontwarn androidx.camera.**

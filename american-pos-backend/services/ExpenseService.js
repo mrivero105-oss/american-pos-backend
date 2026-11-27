@@ -50,10 +50,20 @@ class ExpenseService {
         const { amount, nativeAmount, exchangeRate, description, category, date, paymentMethod, deductFromCash, invoiceUrl } = expenseData;
 
         return await sequelize.transaction(async (t) => {
-            const methodKey = String(paymentMethod || 'cash').toLowerCase().trim();
-            const isVesMethod = ['cash_bs', 'cash_ves', 'efectivo_bs', 'pago_movil', 'transfer_bs', 'ves', 'bs'].includes(methodKey) ||
+            const methodKey = String(paymentMethod || 'cash')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .trim()
+                .replace(/\s+/g, '_');
+            const isVesMethod = ['cash_bs', 'cash_ves', 'efectivo_bs', 'pago_movil', 'pagomovil', 'transfer_bs', 'biopago', 'ves', 'bs'].includes(methodKey) ||
                                 methodKey.includes('_bs') || methodKey.includes('_ves') || methodKey.endsWith('bs');
-            const expCurrency = (expenseData.currency || (isVesMethod ? 'VES' : 'USD')).toUpperCase();
+            const rawCur = String(expenseData.currency || (isVesMethod ? 'VES' : 'USD'))
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toUpperCase()
+                .trim();
+            const expCurrency = ['VES', 'BS', 'BS.', 'BSF', 'BOLIVARES'].includes(rawCur) ? 'VES' : rawCur;
             const resolvedMethodId = paymentMethod || (expCurrency === 'VES' ? 'cash_bs' : 'cash');
 
             const rawAmt = parseFloat(amount) || 0;
@@ -142,7 +152,22 @@ class ExpenseService {
             if (!expense) throw new Error('Gasto no encontrado');
 
             const oldValues = expense.toJSON();
-            const [updated] = await Expense.update(updateData, { where: { id, companyId }, transaction: t });
+            const normalizedUpdate = { ...updateData };
+            if (normalizedUpdate.currency) {
+                const rawUpdCur = String(normalizedUpdate.currency)
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .toUpperCase()
+                    .trim();
+                normalizedUpdate.currency = ['VES', 'BS', 'BS.', 'BSF', 'BOLIVARES'].includes(rawUpdCur) ? 'VES' : rawUpdCur;
+                const updRate = parseFloat(normalizedUpdate.exchangeRate) > 0 ? parseFloat(normalizedUpdate.exchangeRate) : 1;
+                if (normalizedUpdate.currency === 'VES' && normalizedUpdate.amount !== undefined && !(parseFloat(normalizedUpdate.nativeAmount) > 0) && updRate > 1) {
+                    const rawUpdAmt = parseFloat(normalizedUpdate.amount) || 0;
+                    normalizedUpdate.nativeAmount = precision.round(rawUpdAmt, 2);
+                    normalizedUpdate.amount = precision.round(precision.divide(rawUpdAmt, updRate), 2);
+                }
+            }
+            const [updated] = await Expense.update(normalizedUpdate, { where: { id, companyId }, transaction: t });
 
             if (updated) {
                 const updatedExpense = await Expense.findOne({ where: { id, companyId }, transaction: t });
@@ -161,20 +186,20 @@ class ExpenseService {
                 }
 
                 // Sincronizar con CashMovement si cambió el monto, moneda o descripción
-                if (updateData.amount !== undefined || updateData.nativeAmount !== undefined || updateData.description !== undefined) {
+                if (normalizedUpdate.amount !== undefined || normalizedUpdate.nativeAmount !== undefined || normalizedUpdate.description !== undefined) {
                     try {
                         const { CashMovement } = require('../database/models');
                         const updates = {};
-                        const finalCur = (updateData.currency || updatedExpense.currency || 'USD').toUpperCase();
-                        if (updateData.amount !== undefined || updateData.nativeAmount !== undefined) {
-                            if (finalCur === 'VES' && parseFloat(updateData.nativeAmount) > 0) {
-                                updates.amount = parseFloat(updateData.nativeAmount);
+                        const finalCur = (normalizedUpdate.currency || updatedExpense.currency || 'USD').toUpperCase();
+                        if (normalizedUpdate.amount !== undefined || normalizedUpdate.nativeAmount !== undefined) {
+                            if (finalCur === 'VES' && parseFloat(normalizedUpdate.nativeAmount) > 0) {
+                                updates.amount = parseFloat(normalizedUpdate.nativeAmount);
                             } else {
-                                updates.amount = parseFloat(updateData.amount ?? updatedExpense.amount);
+                                updates.amount = parseFloat(normalizedUpdate.amount ?? updatedExpense.amount);
                             }
                             updates.currency = finalCur;
                         }
-                        if (updateData.description !== undefined) updates.reason = `Gasto: ${updateData.description} [${id}]`;
+                        if (normalizedUpdate.description !== undefined) updates.reason = `Gasto: ${normalizedUpdate.description} [${id}]`;
                         await CashMovement.update(updates, {
                             where: {
                                 companyId,
@@ -225,6 +250,42 @@ class ExpenseService {
             }
             return false;
         });
+    }
+
+    /**
+     * Sync batch of offline mobile expenses idempotently.
+     */
+    async syncExpenses(reqUser, expenses = []) {
+        const synced = [];
+        const failed = [];
+        const list = Array.isArray(expenses) ? expenses : [];
+
+        for (const item of list) {
+            try {
+                if (!item || !item.description) {
+                    failed.push({ id: item?.id || null, error: 'Descripción obligatoria' });
+                    continue;
+                }
+                const existing = item.id && !String(item.id).startsWith('exp_off_') && !String(item.id).startsWith('local-')
+                    ? await Expense.findOne({ where: { id: String(item.id), companyId: reqUser.companyId } })
+                    : null;
+
+                if (existing) {
+                    synced.push({ localId: item.id, id: existing.id, action: 'skipped_existing' });
+                    continue;
+                }
+
+                const created = await this.createExpense(reqUser, {
+                    ...item,
+                    amount: item.amount ?? item.monto
+                });
+                synced.push({ localId: item.id || null, id: created.id, action: 'created' });
+            } catch (err) {
+                failed.push({ id: item?.id || null, error: err.message });
+            }
+        }
+
+        return { syncedCount: synced.length, synced, failed };
     }
 
     /**

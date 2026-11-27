@@ -1,12 +1,18 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-    X, TrendingDown, Package, Search, AlertTriangle, CheckCircle2, 
-    Calendar, User, DollarSign, FileSpreadsheet, Printer, RefreshCw, 
-    Flame, Clock, Filter, ArrowDownRight, Layers, FileText, Check, ShieldAlert,
+import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+    X, 
+    TrendingDown, 
+    Package, 
+    Search, 
+    User, 
+    FileSpreadsheet, 
+    RefreshCw, 
+    Check, 
+    ShieldAlert, 
     Loader2
 } from 'lucide-react';
 import BaseModal from './BaseModal';
-import { formatMoney, formatStock } from '../utils/format';
+import { formatStock } from '../utils/format';
 import { getImageUrl } from '../utils/imageUtils';
 import api from '../services/api';
 import { db } from '../services/db';
@@ -19,8 +25,7 @@ export default function WasteManagementModal({
     products = [], 
     initialProduct = null,
     onProductUpdated,
-    user,
-    settings 
+    user
 }) {
     const [activeTab, setActiveTab] = useState('register'); // 'register' | 'history'
     
@@ -46,17 +51,62 @@ export default function WasteManagementModal({
     const [historySearch, setHistorySearch] = useState('');
 
     const searchInputRef = useRef(null);
+    const historySearchRef = useRef(historySearch);
+    useEffect(() => {
+        historySearchRef.current = historySearch;
+    }, [historySearch]);
+
+    const selectedProdId = selectedProduct?.id;
+    const hasSelectedPres = Array.isArray(selectedProduct?.Presentations) && selectedProduct.Presentations.length > 0;
     // Cargar presentaciones del producto si no están presentes
     useEffect(() => {
-        if (selectedProduct && selectedProduct.id && (!selectedProduct.Presentations || selectedProduct.Presentations.length === 0)) {
-            api.get(`/products/${selectedProduct.id}`).then(res => {
+        if (selectedProdId && !hasSelectedPres) {
+            api.get(`/products/${selectedProdId}`).then(res => {
                 if (res.data?.Presentations && res.data.Presentations.length > 0) {
                     setSelectedProduct(prev => prev && prev.id === res.data.id ? { ...prev, Presentations: res.data.Presentations } : prev);
                 }
             }).catch(() => {});
         }
-    }, [selectedProduct?.id]);
+    }, [selectedProdId, hasSelectedPres]);
 
+    // Consultar historial
+    const fetchHistory = useCallback(async () => {
+        try {
+            setLoadingHistory(true);
+            const params = {};
+            
+            const now = new Date();
+            if (dateFilter === 'today') {
+                const todayStr = now.toISOString().split('T')[0];
+                params.startDate = todayStr;
+                params.endDate = todayStr;
+            } else if (dateFilter === '7d') {
+                const past = new Date(now.setDate(now.getDate() - 7));
+                params.startDate = past.toISOString().split('T')[0];
+            } else if (dateFilter === 'month') {
+                const past = new Date(now.setMonth(now.getMonth() - 1));
+                params.startDate = past.toISOString().split('T')[0];
+            }
+
+            if (reasonFilter !== 'all') {
+                params.reason = reasonFilter;
+            }
+
+            const q = historySearchRef.current?.trim();
+            if (q) {
+                params.search = q;
+            }
+
+            const res = await api.get('/products/waste/history', { params });
+            setHistory(res.data.movements || []);
+            setSummary(res.data.summary || { totalUnits: 0, totalCostUSD: 0, totalRecords: 0, byCategory: {} });
+        } catch (error) {
+            console.error('Error fetching waste history:', error);
+            toast.error('Error al cargar historial de mermas');
+        } finally {
+            setLoadingHistory(false);
+        }
+    }, [dateFilter, reasonFilter]);
 
     // Sync initial product and default responsible
     useEffect(() => {
@@ -68,9 +118,6 @@ export default function WasteManagementModal({
             setNotes('');
             setReason('rotura');
             setSearchQuery('');
-            if (activeTab === 'history') {
-                fetchHistory();
-            }
         }
     }, [isOpen, initialProduct, user]);
 
@@ -78,7 +125,7 @@ export default function WasteManagementModal({
         if (isOpen && activeTab === 'history') {
             fetchHistory();
         }
-    }, [activeTab, dateFilter, reasonFilter]);
+    }, [isOpen, activeTab, fetchHistory]);
 
     // Motivos predefinidos para auditoría
     const reasonsConfig = [
@@ -234,47 +281,6 @@ export default function WasteManagementModal({
     const totalRetailLoss = unitPrice * numQty;
 
     // Helper format money
-    const renderMoney = (amount, currency = 'USD') => {
-        return formatMoney(amount, currency, settings);
-    };
-
-    // Consultar historial
-    const fetchHistory = async () => {
-        try {
-            setLoadingHistory(true);
-            const params = {};
-            
-            const now = new Date();
-            if (dateFilter === 'today') {
-                const todayStr = now.toISOString().split('T')[0];
-                params.startDate = todayStr;
-                params.endDate = todayStr;
-            } else if (dateFilter === '7d') {
-                const past = new Date(now.setDate(now.getDate() - 7));
-                params.startDate = past.toISOString().split('T')[0];
-            } else if (dateFilter === 'month') {
-                const past = new Date(now.setMonth(now.getMonth() - 1));
-                params.startDate = past.toISOString().split('T')[0];
-            }
-
-            if (reasonFilter !== 'all') {
-                params.reason = reasonFilter;
-            }
-
-            if (historySearch.trim()) {
-                params.search = historySearch.trim();
-            }
-
-            const res = await api.get('/products/waste/history', { params });
-            setHistory(res.data.movements || []);
-            setSummary(res.data.summary || { totalUnits: 0, totalCostUSD: 0, totalRecords: 0, byCategory: {} });
-        } catch (error) {
-            console.error('Error fetching waste history:', error);
-            toast.error('Error al cargar historial de mermas');
-        } finally {
-            setLoadingHistory(false);
-        }
-    };
 
     // Guardar merma / baja
     const handleSubmitWaste = async (e) => {
@@ -347,9 +353,6 @@ export default function WasteManagementModal({
     };
 
     // Imprimir acta de baja física
-    const handlePrintAuditSheet = () => {
-        window.print();
-    };
 
     if (!isOpen) return null;
 
@@ -490,13 +493,13 @@ export default function WasteManagementModal({
                                     {searching ? (
                                         <div className="flex items-center justify-center gap-2 text-slate-500 dark:text-slate-400">
                                             <Loader2 className="animate-spin text-rose-500" size={18} />
-                                            <span className="text-xs font-bold">Buscando "{searchQuery}" en todo el catálogo...</span>
+                                            <span className="text-xs font-bold">Buscando &ldquo;{searchQuery}&rdquo; en todo el catálogo...</span>
                                         </div>
                                     ) : (
                                         <div className="space-y-1">
                                             <Package size={26} className="mx-auto text-slate-300 dark:text-slate-600 mb-1" />
                                             <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                                                No se encontraron productos para "{searchQuery}"
+                                                No se encontraron productos para &ldquo;{searchQuery}&rdquo;
                                             </p>
                                             <p className="text-[11px] text-slate-400">
                                                 Verifica la ortografía o intenta buscar por código de barra o SKU
@@ -901,7 +904,7 @@ export default function WasteManagementModal({
                                                         ${(Number(mov.totalCost) || (Number(mov.quantity) * Number(mov.costPrice || mov.Product?.cost || 0))).toFixed(2)}
                                                     </td>
                                                     <td className="px-3.5 py-3 max-w-xs text-[11px] text-slate-600 dark:text-slate-300 italic">
-                                                        "{mov.notes || mov.reason || 'Sin justificación'}"
+                                                        &ldquo;{mov.notes || mov.reason || 'Sin justificación'}&rdquo;
                                                     </td>
                                                     <td className="px-3.5 py-3 whitespace-nowrap text-[11px] font-bold text-slate-700 dark:text-slate-400">
                                                         {mov.responsibleName || mov.User?.name || mov.User?.username || 'Auditor'}

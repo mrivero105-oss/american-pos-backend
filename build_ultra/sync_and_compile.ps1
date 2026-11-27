@@ -37,9 +37,17 @@ function Find-MakeNsis {
 function Remove-SensitivePackagingFiles {
     param([string]$TargetDir)
     if (!(Test-Path $TargetDir)) { return }
-    $patterns = @('.env', '.env.*', 'settings.json', 'db-config.json', 'cloud_mirror_config.json', 'cert.pfx', '*.pfx', '*.p12', '*.key', '*private*.pem', '*.apk')
+    $patterns = @(
+        '.env', '.env.*', 'settings.json', 'db-config.json', '.dbcfg.key.dpapi',
+        'secrets.vault.json', '*.vault.json', '.secrets.key.dpapi', '.*.key.dpapi',
+        'cloud_mirror_config.json', 'cert.pfx', '*.pfx', '*.p12', '*.key',
+        '*private*.pem', '*.apk', '*.sqlite*'
+    )
     foreach ($pat in $patterns) {
         Get-ChildItem -Path $TargetDir -Filter $pat -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($dirName in @('.wwebjs_auth', '.wwebjs_cache', '.test_wwebjs_auth', 'auto-backups', 'invoices', 'product_images', 'scratch')) {
+        Get-ChildItem -Path $TargetDir -Filter $dirName -Directory -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

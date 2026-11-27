@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execSync } = require('child_process');
 
@@ -8,7 +9,7 @@ async function main() {
     const stubPath = path.join(distDir, 'stub.exe');
     const zipPath = path.join(distDir, 'app_payload.zip');
     const outExe = path.join(distDir, 'Instalador_Isaac_POS_Ultra.exe');
-    const desktopExe = path.join(process.env.USERPROFILE || 'C:\\Users\\mrive', 'Desktop', 'Instalador_Isaac_POS_Ultra.exe');
+    const desktopExe = path.join(process.env.USERPROFILE || os.homedir(), 'Desktop', 'Instalador_Isaac_POS_Ultra.exe');
 
     if (!fs.existsSync(zipPath)) {
         console.error('[Installer Builder] ERROR: app_payload.zip no existe aún.');

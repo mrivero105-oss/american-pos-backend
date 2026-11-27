@@ -3,6 +3,7 @@ import {
     Coins,
     CreditCard,
     DollarSign,
+    Euro,
     Fingerprint,
     QrCode,
     Send,
@@ -11,11 +12,11 @@ import {
     X,
     Zap
 } from 'lucide-react';
-import { formatBs, precisionRound } from '../../utils/format';
+import { formatBs, formatUSD, precisionRound } from '../../utils/format';
 import { cleanMethodName } from './checkoutUtils';
 
 function DynamicPaymentIcon({ name, size = 20, className = '' }) {
-    const icons = { Banknote, CreditCard, User, Send, DollarSign, X, Wallet, Fingerprint, QrCode, Coins };
+    const icons = { Banknote, CreditCard, User, Send, DollarSign, Euro, X, Wallet, Fingerprint, QrCode, Coins };
     const IconComp = icons[name] || (name === 'Fingerprint' ? Fingerprint : CreditCard);
     return <IconComp size={size} className={className} />;
 }
@@ -26,6 +27,9 @@ export default function CheckoutSplitView({
     methods,
     isUsdOnly,
     isSingle,
+    primaryCurrency = 'USD',
+    activeExchangeRate = 1,
+    activeEuroRate = 0,
     payments,
     getMethodPromo,
     getEffectiveBinanceRate,
@@ -44,28 +48,36 @@ export default function CheckoutSplitView({
     return (
         <form id="checkout-form" onSubmit={handleSubmit} className={`grid grid-cols-1 md:grid-cols-2 ${isMaximized ? 'xl:grid-cols-3' : ''} gap-2.5 sm:gap-3`}>
             {Array.isArray(methods) && methods.filter(method => {
-                if (isUsdOnly) {
+                if (isSingle || isUsdOnly) {
                     const idLower = (method.id || '').toLowerCase();
                     const nameLower = (method.name || '').toLowerCase();
                     const curr = (method.currency || method.defaultCurrency || '').toUpperCase();
                     if (curr === 'VES' || curr === 'BS') return false;
                     if (['cash_bs', 'efectivo_bs', 'pago_movil', 'biopago'].includes(idLower)) return false;
                     if (nameLower.includes(' bs') || nameLower.includes('ves') || nameLower.includes('pago móvil') || nameLower.includes('pago movil') || nameLower.includes('biopago')) return false;
+                    if (primaryCurrency !== 'EUR' && (idLower === 'cash_eur' || curr === 'EUR')) return false;
                 }
                 return true;
             }).map((method, index) => {
                 const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(method.id.toLowerCase()) || method.id.toLowerCase().includes('bs') || method.id.toLowerCase().includes('ves') || method.id.toLowerCase().includes('movil'));
-                const defaultCurrency = isSingle ? 'USD' : (method.currency || method.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
+                const defaultCurrency = isSingle ? primaryCurrency : (method.currency || method.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
                 const payment = payments[method.id] || { amount: '', currency: defaultCurrency };
                 const hasAmount = parseFloat(payment.amount) > 0;
                 const cleanName = cleanMethodName(method.name);
                 const methodPromo = getMethodPromo(method.id, cleanName);
-                const isBinanceCard = payment.currency === 'USDT' || (method.id || '').toLowerCase().includes('binance') || (method.name || '').toLowerCase().includes('binance');
+                const isBinanceCard = !isSingle && (payment.currency === 'USDT' || (method.id || '').toLowerCase().includes('binance') || (method.name || '').toLowerCase().includes('binance'));
+                const isForeignEurCard = !isSingle && (payment.currency === 'EUR' || (method.id || '').toLowerCase() === 'cash_eur');
                 const cardBinRate = isBinanceCard ? getEffectiveBinanceRate(method.id, payment.cryptoRate) : 0;
                 const cardEquivBs = isBinanceCard && hasAmount
                     ? (payment.coveredBs && Math.abs(parseFloat(payment.amount) - precisionRound(Number(payment.coveredBs) / cardBinRate, 2)) < 0.001
                         ? Number(payment.coveredBs)
                         : precisionRound(parseFloat(payment.amount) * cardBinRate, 2))
+                    : 0;
+                const eurEquivBs = isForeignEurCard && hasAmount && activeEuroRate > 0
+                    ? precisionRound(parseFloat(payment.amount) * activeEuroRate, 2)
+                    : 0;
+                const eurEquivUsd = isForeignEurCard && eurEquivBs > 0 && activeExchangeRate > 0
+                    ? precisionRound(eurEquivBs / activeExchangeRate, 2)
                     : 0;
 
                 return (
@@ -88,12 +100,29 @@ export default function CheckoutSplitView({
                                         {cleanName}
                                     </h3>
                                     <div className="flex items-center flex-wrap gap-1.5 mt-0.5">
-                                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded uppercase tracking-wider ${payment.currency === 'VES' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200/70 dark:border-emerald-800/60' : isBinanceCard ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200/70 dark:border-amber-800/60' : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 border border-sky-200/70 dark:border-sky-800/60'}`}>
+                                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded uppercase tracking-wider ${
+                                            payment.currency === 'VES'
+                                                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200/70 dark:border-emerald-800/60'
+                                                : isBinanceCard
+                                                    ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200/70 dark:border-amber-800/60'
+                                                    : payment.currency === 'EUR'
+                                                        ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/60'
+                                                        : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 border border-sky-200/70 dark:border-sky-800/60'
+                                        }`}>
                                             {payment.currency}
                                         </span>
                                         {isBinanceCard && (
                                             <span className="text-[9.5px] font-mono font-semibold text-slate-500 dark:text-slate-400">
                                                 {hasAmount ? `≈ ${formatBs(cardEquivBs)} (1:1 USD)` : 'Paridad 1:1 USD'}
+                                            </span>
+                                        )}
+                                        {isForeignEurCard && (
+                                            <span className="text-[9.5px] font-mono font-semibold text-indigo-600 dark:text-indigo-300">
+                                                {activeEuroRate > 0
+                                                    ? (hasAmount
+                                                        ? `≈ ${formatBs(eurEquivBs)} (${formatUSD(eurEquivUsd)})`
+                                                        : `BCV €: ${activeEuroRate.toFixed(2)} Bs`)
+                                                    : 'Configura tasa € BCV'}
                                             </span>
                                         )}
                                         {methodPromo && (

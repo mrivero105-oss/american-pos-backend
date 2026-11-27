@@ -22,8 +22,11 @@ if (isLegacyWin || process.env.DISABLE_GPU === 'true') {
     app.commandLine.appendSwitch('enable-smooth-scrolling');
     app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
     app.commandLine.appendSwitch('force_high_performance_gpu');
-    if (isWin11) {
+    const chromeMajor = parseInt(String(process.versions.chrome || '0').split('.')[0], 10) || 0;
+    if (isWin11 && chromeMajor > 0 && chromeMajor < 130) {
         app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization,UseSkiaRenderer');
+    } else if (isWin11) {
+        app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization');
     }
 }
 
@@ -40,17 +43,15 @@ app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication,Au
 app.commandLine.appendSwitch('disable-save-password-bubble');
 app.commandLine.appendSwitch('disable-single-click-autofill');
 
-// Handle Squirrel events for Windows immediately on startup
-try {
-    if (require('electron-squirrel-startup')) {
-        app.quit();
-        process.exit(0);
-    }
-} catch (e) { }
+// Los instaladores Windows de Isaac POS usan NSIS (no Squirrel), por lo que no requiere electron-squirrel-startup.
 
 let mainWindow = null;
 let isQuittingAfterBackup = false;
 let electronUpdaterInstance = null;
+let activeServerHandle = null;
+let startupSessionCleaned = false;
+let gracefulShutdownPromise = null;
+let isCleanShutdownCompleted = false;
 
 // 🔒 SINGLE INSTANCE LOCK: Evitar doble inicio al encender la PC o al abrir el acceso directo varias veces
 const gotTheLock = app.requestSingleInstanceLock();
@@ -154,8 +155,8 @@ const patchConsole = (method) => {
     console[method] = (...args) => {
         try {
             if (LOGS_ENABLED) {
-                // Log to our file first
-                const msg = formatLogMessage(args, { pretty: true });
+                // Log to our file first (compact formatting avoids expensive pretty JSON indentation in startup/runtime)
+                const msg = formatLogMessage(args, { pretty: false });
                 log(`[CONSOLE.${method.toUpperCase()}] ${msg}`);
             }
 
@@ -173,6 +174,7 @@ const patchConsole = (method) => {
     };
 };
 ['log', 'error', 'warn', 'info', 'debug'].forEach(patchConsole);
+console.__isaacMainPatched = true;
 
 // Asegurar fetch global en Electron 22 (Node 16) antes de operaciones de red o auto-update
 try {
@@ -268,19 +270,57 @@ async function performAutoBackup() {
     }
 }
 
+async function performGracefulShutdown() {
+    if (gracefulShutdownPromise) return gracefulShutdownPromise;
+    gracefulShutdownPromise = (async () => {
+        try {
+            const backupTimeout = new Promise(resolve => setTimeout(() => resolve(false), 8000));
+            const success = await Promise.race([performFastDbBackupOnly(), backupTimeout]);
+            log(`Fast auto-backup result: ${success ? 'SUCCESS' : 'FAILED/TIMEOUT'}.`);
+        } catch (bkErr) {
+            log(`Warning during exit backup: ${bkErr.message}`);
+        }
+
+        if (activeServerHandle && typeof activeServerHandle.stopServer === 'function') {
+            try {
+                log('Stopping backend server and background workers cleanly...');
+                const stopTimeout = new Promise(resolve => setTimeout(resolve, 4000));
+                await Promise.race([activeServerHandle.stopServer(), stopTimeout]);
+                log('Backend server stopped cleanly.');
+            } catch (stopErr) {
+                log(`Warning during stopServer: ${stopErr.message}`);
+            }
+        }
+        isCleanShutdownCompleted = true;
+    })();
+    return gracefulShutdownPromise;
+}
+
 function createWindow(serverPort) {
     log(`Entering createWindow function. serverPort: ${serverPort}`);
-    session.defaultSession.clearCache().then(() => {
-        log('Web cache cleared successfully.');
-    });
-    session.defaultSession.clearStorageData({ storages: ['cookies', 'serviceworkers', 'cachestorage'] }).then(() => {
-        log('Session cookies cleared successfully on app startup.');
-    }).catch(() => {});
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        if (serverPort) {
+    const loadTargetUrl = () => {
+        if (mainWindow && !mainWindow.isDestroyed() && serverPort) {
             log(`Redirecting existing window to http://localhost:${serverPort}`);
             mainWindow.loadURL(`http://localhost:${serverPort}`);
         }
+    };
+
+    if (serverPort && !startupSessionCleaned) {
+        startupSessionCleaned = true;
+        // Limpiar únicamente cookies de sesión sin destruir el caché de Service Workers ni bloquear la carga
+        session.defaultSession.clearStorageData({ storages: ['cookies'] }).then(() => {
+            log('Session cookies cleared cleanly once on startup.');
+        }).catch(() => {}).finally(() => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                loadTargetUrl();
+            }
+        });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            return;
+        }
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        loadTargetUrl();
         return;
     }
 
@@ -392,6 +432,7 @@ function createWindow(serverPort) {
     });
 
     mainWindow.once('ready-to-show', () => {
+        log('Window ready-to-show event fired.');
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.setResizable(true);
             mainWindow.setMaximizable(true);
@@ -451,9 +492,10 @@ function createWindow(serverPort) {
                     label: 'Verificar Actualizaciones de Isaac POS...',
                     click: async () => {
                         if (mainWindow) {
-                            if (electronUpdaterInstance) {
+                            const updater = typeof global.__getIsaacAutoUpdater === 'function' ? global.__getIsaacAutoUpdater() : electronUpdaterInstance;
+                            if (updater) {
                                 mainWindow.webContents.send('updater-event', { status: 'checking' });
-                                electronUpdaterInstance.checkForUpdates().catch(e => {
+                                updater.checkForUpdates().catch(e => {
                                     log(`Check for updates error: ${e.message}`);
                                     mainWindow.webContents.send('updater-event', { status: 'error', error: e.message });
                                 });
@@ -504,8 +546,12 @@ function createWindow(serverPort) {
         log(`FAILED TO LOAD: ${errorCode} - ${errorDescription}`);
     });
 
-    mainWindow.webContents.on('crashed', () => {
-        log('Renderer process CRASHED. Attempting recovery...');
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+        const reason = details && details.reason ? details.reason : 'unknown';
+        const exitCode = details && typeof details.exitCode === 'number' ? details.exitCode : -1;
+        log(`Renderer process gone (reason=${reason}, exitCode=${exitCode}).`);
+        if (reason === 'clean-exit') return;
+        log('Attempting automatic renderer recovery...');
         setTimeout(() => {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.reload();
@@ -513,28 +559,19 @@ function createWindow(serverPort) {
         }, 1000);
     });
 
-    mainWindow.on('ready-to-show', () => {
-        log('Window ready-to-show event fired.');
-        mainWindow.show();
-    });
-
     mainWindow.on('closed', function () {
         log('Window closed.');
         mainWindow = null;
     });
 
-    // --- AUTO-BACKUP ON CLOSE ---
+    // --- AUTO-BACKUP & GRACEFUL SHUTDOWN ON CLOSE ---
     mainWindow.on('close', (event) => {
-        // Only intercept if we haven't already done the backup
         if (!isQuittingAfterBackup) {
-            event.preventDefault(); // Prevent immediate close
+            event.preventDefault();
             isQuittingAfterBackup = true;
-            log('Window close intercepted. Running fast DB backup before quit...');
+            log('Window close intercepted. Running fast DB backup and graceful server shutdown...');
 
-            // Race the fast backup against an 8-second timeout (sqliteBackupHelper writes atomically via .tmp)
-            const backupTimeout = new Promise(resolve => setTimeout(() => resolve(false), 8000));
-            Promise.race([performFastDbBackupOnly(), backupTimeout]).then((success) => {
-                log(`Fast auto-backup result: ${success ? 'SUCCESS' : 'FAILED/TIMEOUT'}. Closing process.`);
+            performGracefulShutdown().finally(() => {
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.destroy();
                 }
@@ -544,119 +581,20 @@ function createWindow(serverPort) {
     });
 }
 
-function setupStartupShortcut(exePath, enable = true) {
-    if (process.platform !== 'win32') return;
-    try {
-        const { execSync } = require('child_process');
-        const startupDir = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
-        const shortcutPath = path.join(startupDir, 'Isaac POS.lnk');
-        const legacyShortcutPath = path.join(startupDir, 'American POS.lnk');
+const autoLaunchManager = require('./utils/autoLaunchManager');
 
-        // Limpiar acceso directo legacy si existe
-        if (fs.existsSync(legacyShortcutPath)) {
-            try { fs.unlinkSync(legacyShortcutPath); } catch (e) { }
-        }
-
-        if (enable && exePath && fs.existsSync(exePath)) {
-            const workDir = path.dirname(exePath);
-            const psScript = `$wshell = New-Object -ComObject WScript.Shell; $shortcut = $wshell.CreateShortcut('${shortcutPath.replace(/'/g, "''")}'); $shortcut.TargetPath = '${exePath.replace(/'/g, "''")}'; $shortcut.WorkingDirectory = '${workDir.replace(/'/g, "''")}'; $shortcut.IconLocation = '${exePath.replace(/'/g, "''")}, 0'; $shortcut.Save()`;
-            execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/"/g, '\\"')}"`, { stdio: 'ignore' });
-            log(`Startup shortcut created at: ${shortcutPath}`);
-        } else {
-            if (fs.existsSync(shortcutPath)) {
-                fs.unlinkSync(shortcutPath);
-                log(`Startup shortcut removed at: ${shortcutPath}`);
-            }
-        }
-    } catch (err) {
-        log(`Error configuring startup shortcut: ${err.message}`);
-    }
+function getAutoLaunchPreference() {
+    return autoLaunchManager.getAutoLaunchPreference(app.getPath('userData'));
 }
 
-function configureAutoLaunch(enabled = true) {
-    if (process.platform !== 'win32') return { success: true, enabled };
-    const { execSync } = require('child_process');
-
-    // Limpieza de entradas de registro erróneas de desarrollo o legacy (evita ventana de consola de node.exe o Electron genérico)
-    try {
-        execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS" /f', { stdio: 'ignore' });
-    } catch (e) { }
-
-    try {
-        const regOutput = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS"', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
-        if (regOutput && (
-            regOutput.toLowerCase().includes('node_modules') ||
-            regOutput.toLowerCase().includes('node.exe') ||
-            (regOutput.toLowerCase().includes('electron.exe') && !regOutput.toLowerCase().includes('isaac pos.exe'))
-        )) {
-            log('Limpiando entrada de registro errónea de node.exe/desarrollo para el autoinicio...');
-            execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS" /f', { stdio: 'ignore' });
-        }
-    } catch (e) { }
-
-    let exePath = process.execPath;
-    if (exePath.toLowerCase().includes('node.exe') || exePath.toLowerCase().includes('electron.exe')) {
-        const v24Path = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Isaac POS V24.04', 'Isaac POS V24.04.exe');
-        const defaultInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Isaac POS', 'Isaac POS.exe');
-        const altInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'IsaacPOS', 'Isaac POS.exe');
-        const legacyInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'American POS', 'American POS.exe');
-        if (fs.existsSync(v24Path)) {
-            exePath = v24Path;
-        } else if (fs.existsSync(defaultInstallPath)) {
-            exePath = defaultInstallPath;
-        } else if (fs.existsSync(altInstallPath)) {
-            exePath = altInstallPath;
-        } else if (fs.existsSync(legacyInstallPath)) {
-            exePath = legacyInstallPath;
-        }
-    }
-
-    const isDevExecutable = exePath.toLowerCase().includes('node.exe') || exePath.toLowerCase().includes('electron.exe');
-
-    if (isDevExecutable && !app.isPackaged) {
-        log('Modo desarrollo detectado. Omitiendo registro automático en Windows.');
-        return { success: true, enabled: false };
-    }
-
-    log(`Configurando autoinicio (enabled: ${enabled}) para ejecutable: ${exePath}`);
-
-    try {
-        if (app.setLoginItemSettings && !isDevExecutable) {
-            app.setLoginItemSettings({
-                openAtLogin: enabled,
-                path: exePath
-            });
-        }
-    } catch (e) {
-        log(`app.setLoginItemSettings error: ${e.message}`);
-    }
-
-    if (enabled && !isDevExecutable) {
-        try {
-            const targetCmd = `"${exePath}"`;
-            execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS" /t REG_SZ /d "${targetCmd.replace(/"/g, '\\"')}" /f`, { stdio: 'ignore' });
-        } catch (e) {
-            log(`Reg add error: ${e.message}`);
-        }
-        setupStartupShortcut(exePath, true);
-    } else {
-        try {
-            execSync(`reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS" /f`, { stdio: 'ignore' });
-        } catch (e) { }
-        setupStartupShortcut(exePath, false);
-    }
-
-    try {
-        const settingsPath = path.join(app.getPath('userData'), 'auto_launch.json');
-        let settings = {};
-        if (fs.existsSync(settingsPath)) {
-            settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        }
-        settings.autoLaunch = enabled;
-        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
-    } catch (e) { }
-
-    return { success: true, enabled };
+async function configureAutoLaunch(enabled = true) {
+    return autoLaunchManager.configureWindowsAutoLaunch(enabled, {
+        userDataPath: app.getPath('userData'),
+        isPackaged: app.isPackaged,
+        processExecPath: process.execPath,
+        app,
+        logFn: log
+    });
 }
 
 
@@ -675,11 +613,46 @@ function setupIpcHandlers() {
             return false;
         }
         const url = event.senderFrame?.url;
-        if (!url || (!url.startsWith('http://localhost:') && !url.startsWith('http://127.0.0.1:') && !url.startsWith('http://[::1]:') && !url.startsWith('file://'))) {
+        if (!url || (
+            !url.startsWith('http://localhost:') &&
+            !url.startsWith('https://localhost:') &&
+            !url.startsWith('http://127.0.0.1:') &&
+            !url.startsWith('https://127.0.0.1:') &&
+            !url.startsWith('http://[::1]:') &&
+            !url.startsWith('https://[::1]:') &&
+            !url.startsWith('file://')
+        )) {
             log('Acceso IPC denegado por origen de URL no autorizado: ' + url);
             return false;
         }
         return true;
+    };
+
+    // Verifica sesión JWT activa desde la cookie httpOnly de Electron (evita uso de IPC sensibles por XSS/sesión anónima)
+    const getAuthenticatedIpcUser = async () => {
+        try {
+            const secret = process.env.JWT_SECRET;
+            if (!secret) return null;
+            const cookies = await session.defaultSession.cookies.get({ name: 'authToken' });
+            if (!Array.isArray(cookies) || cookies.length === 0) return null;
+            const jwt = require('jsonwebtoken');
+            for (const c of cookies) {
+                if (!c || !c.value) continue;
+                try {
+                    const decoded = jwt.verify(c.value, secret, { algorithms: ['HS256'] });
+                    if (decoded && (decoded.id || decoded.userId)) {
+                        return decoded;
+                    }
+                } catch (_) {}
+            }
+        } catch (_) {}
+        return null;
+    };
+
+    const isPrivilegedIpcRole = (user) => {
+        if (!user) return false;
+        const role = String(user.role || '').toLowerCase().trim();
+        return ['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'supervisor', 'gerente'].includes(role);
     };
 
     ipcMain.on('get-machine-id-sync', (event) => {
@@ -731,25 +704,10 @@ function setupIpcHandlers() {
     ipcMain.handle('get-auto-launch', async (event) => {
         if (!verifyIpcSender(event)) return false;
         try {
-            const { execSync } = require('child_process');
-            let isOpenAtLogin = false;
-            try {
-                if (app.getLoginItemSettings) {
-                    isOpenAtLogin = app.getLoginItemSettings().openAtLogin;
-                }
-            } catch (e) { }
-            try {
-                const regOutput = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS"', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
-                if (regOutput && regOutput.includes('Isaac POS')) {
-                    isOpenAtLogin = true;
-                }
-            } catch (e) { }
-            const startupDir = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
-            const shortcutPath = path.join(startupDir, 'Isaac POS.lnk');
-            if (fs.existsSync(shortcutPath)) {
-                isOpenAtLogin = true;
-            }
-            return isOpenAtLogin;
+            return await autoLaunchManager.getWindowsAutoLaunchStatus({
+                userDataPath: app.getPath('userData'),
+                app
+            });
         } catch (err) {
             log(`Error getting auto-launch: ${err.message}`);
             return false;
@@ -759,7 +717,7 @@ function setupIpcHandlers() {
     ipcMain.handle('set-auto-launch', async (event, enabled) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Origen no autorizado' };
         try {
-            return configureAutoLaunch(enabled);
+            return await configureAutoLaunch(enabled);
         } catch (err) {
             log(`Error setting auto-launch: ${err.message}`);
             return { success: false, error: err.message };
@@ -928,9 +886,14 @@ function setupIpcHandlers() {
         if (!verifyIpcSender(event)) {
             return { success: false, error: 'Origen de IPC no autorizado ni autenticado' };
         }
+        const ipcUser = await getAuthenticatedIpcUser();
+        if (!ipcUser) {
+            log('[SECURITY] Bloqueado IPC open-drawer sin sesión autenticada.');
+            return { success: false, error: 'Sesión autenticada requerida para abrir la gaveta.' };
+        }
 
         const safePrinterName = await resolveTargetPrinter(printerName);
-        log(`Attempting to open drawer on printer: "${safePrinterName || 'NONE'}" (requested: "${printerName || ''}") with sequence: ${sequence || 'default'}`);
+        log(`Attempting to open drawer on printer: "${safePrinterName || 'NONE'}" by user=${ipcUser.id || ipcUser.userId} (requested: "${printerName || ''}") with sequence: ${sequence || 'default'}`);
         if (!safePrinterName) {
             log('No physical printer available for open-drawer');
             return { success: false, error: 'No se detectó una impresora térmica conectada' };
@@ -942,7 +905,7 @@ function setupIpcHandlers() {
 
         if (sequence) {
             try {
-                bytes = String(sequence).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+                bytes = String(sequence).split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n >= 0 && n <= 255);
                 if (bytes.length === 0) bytes = defaultCodes;
             } catch (e) {
                 log(`Error parsing custom sequence: ${e.message}`);
@@ -961,12 +924,12 @@ function setupIpcHandlers() {
             log(`Fast RawPrinter drawer kick notice (${fastErr.message}), trying fallback...`);
         }
 
-        const byteString = bytes.join(',');
+        const bytesBase64 = Buffer.from(bytes).toString('base64');
 
         return new Promise((resolve) => {
             try {
                 const { spawn } = require('child_process');
-                const escapedPrinterName = safePrinterName.replace(/'/g, "''");
+                // Script PowerShell 100% estático: impresora y bytes viajan por variables de entorno (inmune a inyección ASCII/Unicode)
                 const psScript = `
 $code = @'
 using System;
@@ -1015,9 +978,11 @@ public class RawPrinterHelper {
         return bSuccess;
     }
 }
-'@; 
-Add-Type -TypeDefinition $code; 
-$success = [RawPrinterHelper]::SendBytesToPrinter('${escapedPrinterName}', [byte[]]('${byteString}' -split ','));
+'@;
+Add-Type -TypeDefinition $code;
+$printerTarget = $env:ISAAC_PRINTER_NAME;
+$rawBytes = [Convert]::FromBase64String($env:ISAAC_RAW_B64);
+$success = [RawPrinterHelper]::SendBytesToPrinter($printerTarget, $rawBytes);
 if ($success) { exit 0 } else { exit 1 }`;
 
                 const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
@@ -1025,9 +990,17 @@ if ($success) { exit 0 } else { exit 1 }`;
                 log(`Spawning C# interop drawer process for: "${safePrinterName}"`);
                 const child = spawn('powershell.exe', [
                     '-NoProfile',
+                    '-NonInteractive',
                     '-ExecutionPolicy', 'Bypass',
                     '-EncodedCommand', encodedScript
-                ], { windowsHide: true });
+                ], {
+                    windowsHide: true,
+                    env: {
+                        ...process.env,
+                        ISAAC_PRINTER_NAME: safePrinterName,
+                        ISAAC_RAW_B64: bytesBase64
+                    }
+                });
 
                 child.on('error', (err) => {
                     log(`[CRITICAL] Error al lanzar proceso hijo (PowerShell) en open-drawer: ${err.message}`);
@@ -1105,7 +1078,7 @@ if ($success) { exit 0 } else { exit 1 }`;
                 return resolve({ success: false, error: 'Lectura de balanza serial disponible en Windows.' });
             }
 
-            const safePort = String(portName || 'COM1').trim().toUpperCase();
+            const safePort = String(portName || 'COM1').trim().toUpperCase().replace(/^\\\\\.\\/, '');
             if (!/^COM\d{1,3}$/.test(safePort)) {
                 return resolve({ success: false, error: `Puerto serial inválido: ${portName}` });
             }
@@ -1115,7 +1088,7 @@ if ($success) { exit 0 } else { exit 1 }`;
             const psScaleScript = `
 $port = $null
 try {
-    $port = New-Object System.IO.Ports.SerialPort '${safePort}', ${safeBaud}, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One
+    $port = New-Object System.IO.Ports.SerialPort $env:ISAAC_SCALE_PORT, ([int]$env:ISAAC_SCALE_BAUD), [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One
     $port.ReadTimeout = 1500
     $port.Open()
     $line = $port.ReadLine()
@@ -1128,7 +1101,10 @@ try {
 }
 `;
             const encodedScript = Buffer.from(psScaleScript, 'utf16le').toString('base64');
-            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript], { windowsHide: true });
+            const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript], {
+                windowsHide: true,
+                env: { ...process.env, ISAAC_SCALE_PORT: safePort, ISAAC_SCALE_BAUD: String(safeBaud) }
+            });
             
             let output = '';
             let errorOut = '';
@@ -1195,11 +1171,10 @@ try {
             try {
                 const { spawn } = require('child_process');
 
-                // Content to Bytes (UTF8 or ASCII)
-                const bytes = Buffer.from(content, 'utf8');
-                const byteString = Array.from(bytes).join(',');
+                // Payload vía stdin Base64 e impresora vía env (elimina RCE Unicode y límite de 32KB de CreateProcess)
+                const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content || '', 'utf8');
+                const payloadB64 = bytes.toString('base64');
 
-                const escapedPrinterName = safePrinterName.replace(/'/g, "''");
                 const psScript = `
 $code = @'
 using System;
@@ -1248,19 +1223,27 @@ public class RawPrinterHelper {
         return bSuccess;
     }
 }
-'@; 
-Add-Type -TypeDefinition $code; 
-$success = [RawPrinterHelper]::SendBytesToPrinter('${escapedPrinterName}', [byte[]]('${byteString}' -split ','));
+'@;
+Add-Type -TypeDefinition $code;
+$rawB64 = [Console]::In.ReadToEnd().Trim();
+$rawBytes = [Convert]::FromBase64String($rawB64);
+$success = [RawPrinterHelper]::SendBytesToPrinter($env:ISAAC_PRINTER_NAME, $rawBytes);
 if ($success) { exit 0 } else { exit 1 }`;
 
-                // Encode to avoid newline/quote parsing errors
                 const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
 
                 const child = spawn('powershell.exe', [
                     '-NoProfile',
+                    '-NonInteractive',
                     '-ExecutionPolicy', 'Bypass',
                     '-EncodedCommand', encodedScript
-                ], { windowsHide: true });
+                ], {
+                    windowsHide: true,
+                    env: { ...process.env, ISAAC_PRINTER_NAME: safePrinterName }
+                });
+                if (child.stdin) {
+                    child.stdin.end(payloadB64, 'utf8');
+                }
 
                 child.on('error', (err) => {
                     log(`[CRITICAL] Error al lanzar proceso hijo (PowerShell) en print-raw: ${err.message}`);
@@ -1347,45 +1330,86 @@ if ($success) { exit 0 } else { exit 1 }`;
         }
     });
 
-    try {
-        const { autoUpdater } = require('electron-updater');
-        autoUpdater.autoDownload = true;
-        autoUpdater.autoInstallOnAppQuit = true;
-        electronUpdaterInstance = autoUpdater;
+    let isSilentUpdateCheck = false;
+    global.__setIsaacSilentUpdateCheck = (flag) => {
+        isSilentUpdateCheck = Boolean(flag);
+    };
 
-        autoUpdater.on('checking-for-update', () => {
-            log('Electron AutoUpdater: Buscando actualizaciones...');
-            if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'checking' });
-        });
-        autoUpdater.on('update-available', (info) => {
-            log(`Electron AutoUpdater: Nueva versión disponible v${info.version}. Descargando silenciosamente en segundo plano...`);
-            if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'available', info });
-        });
-        autoUpdater.on('update-not-available', (info) => {
-            log('Electron AutoUpdater: El sistema está actualizado.');
-            if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'not-available', info });
-        });
-        autoUpdater.on('error', (err) => {
-            log(`Electron AutoUpdater error: ${err.message}`);
-            if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'error', error: err.message });
-        });
-        autoUpdater.on('download-progress', (progressObj) => {
-            if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloading', progress: progressObj.percent });
-        });
-        autoUpdater.on('update-downloaded', (info) => {
-            log(`Electron AutoUpdater: Actualización v${info.version} descargada. Se instalará automáticamente de forma silenciosa al salir o reiniciar.`);
-            if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloaded', info });
-        });
-    } catch (updaterErr) {
-        log(`Electron autoUpdater initialization notice: ${updaterErr.message}`);
-    }
+    const getAutoUpdater = () => {
+        if (electronUpdaterInstance) return electronUpdaterInstance;
+        try {
+            const { autoUpdater } = require('electron-updater');
+            autoUpdater.autoDownload = true;
+            autoUpdater.autoInstallOnAppQuit = true;
+            autoUpdater.allowDowngrade = false;
+            const electronVer = String(process.versions?.electron || '');
+            if (/^22\./.test(electronVer)) {
+                autoUpdater.channel = 'legacy';
+            } else if (electronVer) {
+                autoUpdater.channel = 'modern';
+            }
+            electronUpdaterInstance = autoUpdater;
+
+            autoUpdater.on('checking-for-update', () => {
+                log('Electron AutoUpdater: Buscando actualizaciones...');
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'checking', silent: isSilentUpdateCheck });
+            });
+            autoUpdater.on('update-available', (info) => {
+                log(`Electron AutoUpdater: Nueva versión disponible v${info.version}. Descargando silenciosamente en segundo plano...`);
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'available', info, silent: isSilentUpdateCheck });
+            });
+            autoUpdater.on('update-not-available', (info) => {
+                const silent = isSilentUpdateCheck;
+                isSilentUpdateCheck = false;
+                log('Electron AutoUpdater: El sistema está actualizado.');
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'not-available', info, silent });
+            });
+            autoUpdater.on('error', (err) => {
+                const msg = String(err?.message || err || '');
+                const silent = isSilentUpdateCheck;
+                isSilentUpdateCheck = false;
+                const isMissingChannelManifest = /Cannot find (?:modern|legacy|latest)\.yml|HttpError:\s*404/i.test(msg);
+                const isOfflineError = /ERR_INTERNET_DISCONNECTED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(msg);
+
+                if (silent || isMissingChannelManifest || isOfflineError) {
+                    log(`Electron AutoUpdater notice (silencioso): ${msg}`);
+                    if (mainWindow) {
+                        mainWindow.webContents.send('updater-event', {
+                            status: 'error',
+                            error: msg,
+                            silent: true,
+                            isMissingChannelManifest
+                        });
+                    }
+                    return;
+                }
+
+                log(`Electron AutoUpdater error: ${msg}`);
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'error', error: msg, silent: false });
+            });
+            autoUpdater.on('download-progress', (progressObj) => {
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloading', progress: progressObj.percent });
+            });
+            autoUpdater.on('update-downloaded', (info) => {
+                isSilentUpdateCheck = false;
+                log(`Electron AutoUpdater: Actualización v${info.version} descargada. Se instalará automáticamente de forma silenciosa al salir o reiniciar.`);
+                if (mainWindow) mainWindow.webContents.send('updater-event', { status: 'downloaded', info });
+            });
+            return electronUpdaterInstance;
+        } catch (updaterErr) {
+            log(`Electron autoUpdater initialization notice: ${updaterErr.message}`);
+            return null;
+        }
+    };
+    global.__getIsaacAutoUpdater = getAutoUpdater;
 
     ipcMain.handle('check-for-updates', async (event) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
-        if (electronUpdaterInstance) {
+        const updater = getAutoUpdater();
+        if (updater) {
             try {
                 const res = await Promise.race([
-                    electronUpdaterInstance.checkForUpdates(),
+                    updater.checkForUpdates(),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Consulta nativa expirada (15s, usando verificación API)')), 15000))
                 ]);
                 return { success: true, res };
@@ -1398,9 +1422,10 @@ if ($success) { exit 0 } else { exit 1 }`;
 
     ipcMain.handle('download-update', async (event, downloadUrl) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
-        if (electronUpdaterInstance) {
+        const updater = getAutoUpdater();
+        if (updater) {
             try {
-                await electronUpdaterInstance.downloadUpdate();
+                await updater.downloadUpdate();
                 return { success: true };
             } catch (e) {
                 log(`electronUpdaterInstance error: ${e.message}`);
@@ -1413,14 +1438,25 @@ if ($success) { exit 0 } else { exit 1 }`;
             const os = require('os');
             const { shell } = require('electron');
             let url = downloadUrl;
-            const OFFICIAL_RELEASE_PREFIX = 'https://github.com/mrivero105-oss/american-pos-backend/releases/download/';
+            const OFFICIAL_RELEASE_ORIGIN = 'https://github.com';
+            const OFFICIAL_RELEASE_PATH_PREFIX = '/mrivero105-oss/american-pos-backend/releases/download/';
             if (url && typeof url === 'string') {
                 try {
-                    const parsed = new URL(url);
-                    if (parsed.protocol !== 'https:' || !url.startsWith(OFFICIAL_RELEASE_PREFIX)) {
-                        log(`[SECURITY] Blocked download-update from untrusted URL: ${url}`);
+                    const parsed = new URL(url.trim());
+                    const normalizedHref = parsed.href;
+                    const safePathSegments = parsed.pathname.split('/').filter(Boolean);
+                    const hasTraversal = safePathSegments.some((seg) => seg === '.' || seg === '..') || url.includes('..');
+                    if (
+                        parsed.protocol !== 'https:' ||
+                        parsed.origin !== OFFICIAL_RELEASE_ORIGIN ||
+                        !parsed.pathname.startsWith(OFFICIAL_RELEASE_PATH_PREFIX) ||
+                        hasTraversal ||
+                        !normalizedHref.startsWith(`${OFFICIAL_RELEASE_ORIGIN}${OFFICIAL_RELEASE_PATH_PREFIX}`)
+                    ) {
+                        log(`[SECURITY] Blocked download-update from untrusted/traversal URL: ${url}`);
                         return { success: false, error: 'URL de actualización no autorizada. Solo se permiten descargas desde el repositorio oficial verificado.' };
                     }
+                    url = normalizedHref;
                 } catch (e) {
                     return { success: false, error: 'URL de actualización inválida.' };
                 }
@@ -1439,12 +1475,19 @@ if ($success) { exit 0 } else { exit 1 }`;
 
             let ymlText = null;
             let expectedSha512 = null;
+            const channelYml = (/^22\./.test(String(process.versions?.electron || ''))) ? 'legacy.yml' : 'modern.yml';
             if (!url || typeof url !== 'string') {
-                const res = await axios.get('https://github.com/mrivero105-oss/american-pos-backend/releases/latest/download/latest.yml', {
-                    timeout: 6000,
-                    headers: { 'User-Agent': 'IsaacPOS-Updater-Service/2.0' }
-                });
-                ymlText = res.data || '';
+                let res = null;
+                for (const ymlName of [channelYml, 'latest.yml']) {
+                    try {
+                        res = await axios.get(`https://github.com/mrivero105-oss/american-pos-backend/releases/latest/download/${ymlName}`, {
+                            timeout: 6000,
+                            headers: { 'User-Agent': 'IsaacPOS-Updater-Service/2.0' }
+                        });
+                        if (res?.data) break;
+                    } catch (_e) {}
+                }
+                ymlText = res?.data || '';
                 const versionMatch = ymlText.match(/version:\s*([^\s\n\r]+)/);
                 const remoteTag = versionMatch ? versionMatch[1] : null;
                 const pathMatch = ymlText.match(/path:\s*([^\s\n\r]+)/);
@@ -1458,15 +1501,19 @@ if ($success) { exit 0 } else { exit 1 }`;
                     const parsedUrl = new URL(url);
                     const fileName = path.basename(parsedUrl.pathname);
                     const releaseDir = parsedUrl.pathname.substring(0, parsedUrl.pathname.lastIndexOf('/'));
-                    const ymlCandidate = `${parsedUrl.origin}${releaseDir}/latest.yml`;
-                    const ymlRes = await axios.get(ymlCandidate, {
-                        timeout: 6000,
-                        headers: { 'User-Agent': 'IsaacPOS-Updater-Service/2.0' }
-                    });
-                    ymlText = ymlRes.data || '';
-                    expectedSha512 = extractSha512FromYml(ymlText, fileName);
+                    for (const ymlName of [channelYml, 'latest.yml']) {
+                        try {
+                            const ymlRes = await axios.get(`${parsedUrl.origin}${releaseDir}/${ymlName}`, {
+                                timeout: 6000,
+                                headers: { 'User-Agent': 'IsaacPOS-Updater-Service/2.0' }
+                            });
+                            ymlText = ymlRes?.data || '';
+                            expectedSha512 = extractSha512FromYml(ymlText, fileName);
+                            if (expectedSha512) break;
+                        } catch (_e) {}
+                    }
                 } catch (ymlErr) {
-                    log(`[SECURITY] No se pudo obtener latest.yml para verificar SHA-512 de ${url}: ${ymlErr.message}`);
+                    log(`[SECURITY] No se pudo obtener yml para verificar SHA-512 de ${url}: ${ymlErr.message}`);
                 }
             }
 
@@ -1581,16 +1628,35 @@ if ($success) { exit 0 } else { exit 1 }`;
                             }
                         );
                     });
-                    if (sigStatus === 'HashMismatch' || sigStatus === 'NotTrusted') {
+                    if (sigStatus === 'HashMismatch' || sigStatus === 'NotTrusted' || sigStatus === 'UnknownError') {
                         log(`[SECURITY] Blocked update with compromised Authenticode status (${sigStatus}): ${resolvedPath}`);
                         try { fs.unlinkSync(resolvedPath); } catch (_) {}
                         global.downloadedUpdatePath = null;
                         global.downloadedUpdateMeta = null;
                         return { success: false, error: `Actualización bloqueada por firma Authenticode inválida (${sigStatus}).` };
                     }
-                    if (process.env.REQUIRE_AUTHENTICODE_SIGNATURE === 'true' && sigStatus !== 'Valid') {
-                        log(`[SECURITY] Blocked unsigned update (${sigStatus}) because REQUIRE_AUTHENTICODE_SIGNATURE=true`);
-                        return { success: false, error: `Instalador sin firma Authenticode válida (${sigStatus}).` };
+                    if (sigStatus !== 'Valid') {
+                        if (process.env.REQUIRE_AUTHENTICODE_SIGNATURE === 'true') {
+                            log(`[SECURITY] Blocked unsigned update (${sigStatus}) because REQUIRE_AUTHENTICODE_SIGNATURE=true`);
+                            try { fs.unlinkSync(resolvedPath); } catch (_) {}
+                            global.downloadedUpdatePath = null;
+                            global.downloadedUpdateMeta = null;
+                            return { success: false, error: `Instalador sin firma Authenticode válida (${sigStatus}).` };
+                        }
+                        // Sin firma Authenticode válida, exigir confirmación interactiva explícita del usuario en el proceso principal (nunca ejecución silenciosa por XSS)
+                        const confirmRes = await dialog.showMessageBox(mainWindow || undefined, {
+                            type: 'warning',
+                            buttons: ['Cancelar instalación', 'Instalar actualización oficial'],
+                            defaultId: 0,
+                            cancelId: 0,
+                            title: 'Verificación de Seguridad de Actualización',
+                            message: 'El instalador descargado pasó la verificación SHA-512 oficial, pero no posee firma Authenticode comercial.',
+                            detail: `Estado de firma: ${sigStatus}\nOrigen: ${global.downloadedUpdateMeta?.url || 'GitHub Releases Oficial'}\n\n¿Desea continuar con la instalación?`
+                        });
+                        if (confirmRes.response !== 1) {
+                            log(`[SECURITY] Usuario canceló instalación sin firma Authenticode (${sigStatus}).`);
+                            return { success: false, error: 'Instalación cancelada por el usuario (sin firma Authenticode).' };
+                        }
                     }
                 }
             } catch (hashErr) {
@@ -1608,8 +1674,9 @@ if ($success) { exit 0 } else { exit 1 }`;
                 return { success: false, error: err.message };
             }
         }
-        if (electronUpdaterInstance) {
-            electronUpdaterInstance.quitAndInstall();
+        const updater = typeof global.__getIsaacAutoUpdater === 'function' ? global.__getIsaacAutoUpdater() : electronUpdaterInstance;
+        if (updater) {
+            updater.quitAndInstall();
             return { success: true };
         }
         return { success: false, error: 'Instalador automático no disponible' };
@@ -1629,6 +1696,12 @@ if ($success) { exit 0 } else { exit 1 }`;
 
     ipcMain.handle('test-db-connection', async (event, config) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
+        const ipcUser = await getAuthenticatedIpcUser();
+        const dbCurrentlyUp = Boolean(activeServerHandle && typeof activeServerHandle.isDbReady === 'function' ? activeServerHandle.isDbReady() : true);
+        if (dbCurrentlyUp && !isPrivilegedIpcRole(ipcUser)) {
+            log('[SECURITY] Bloqueado IPC test-db-connection sin rol privilegiado.');
+            return { success: false, error: 'Se requiere sesión de Administrador para probar conexiones de base de datos.' };
+        }
         try {
             const DbConfigManager = require('./config/dbConfigManager');
             return await DbConfigManager.testConnection(config);
@@ -1649,12 +1722,24 @@ if ($success) { exit 0 } else { exit 1 }`;
 
     ipcMain.handle('save-db-config-and-restart', async (event, config) => {
         if (!verifyIpcSender(event)) return { success: false, error: 'Acceso denegado' };
+        const ipcUser = await getAuthenticatedIpcUser();
+        const dbCurrentlyUp = Boolean(activeServerHandle && typeof activeServerHandle.isDbReady === 'function' ? activeServerHandle.isDbReady() : true);
+        if (dbCurrentlyUp && !isPrivilegedIpcRole(ipcUser)) {
+            log('[SECURITY] Bloqueado IPC save-db-config-and-restart sin rol privilegiado.');
+            return { success: false, error: 'Se requiere sesión de Administrador para modificar la configuración de base de datos.' };
+        }
         try {
             const DbConfigManager = require('./config/dbConfigManager');
             const saveRes = DbConfigManager.saveConfig(config);
             if (!saveRes.success) return saveRes;
 
             log('Nueva configuración de BD guardada en AppData. Reiniciando runtime de la aplicación...');
+            if (activeServerHandle && typeof activeServerHandle.stopServer === 'function') {
+                await Promise.race([
+                    activeServerHandle.stopServer().catch(() => {}),
+                    new Promise(resolve => setTimeout(resolve, 3000))
+                ]);
+            }
             app.relaunch();
             app.exit(0);
             return { success: true };
@@ -1677,7 +1762,31 @@ app.whenReady().then(async () => {
     setupIpcHandlers();
 
     // Interceptar aperturas de ventanas nuevas (target="_blank") y adjuntos <webview>
+    const isAllowedMovilwayUrl = (rawUrl) => {
+        const src = String(rawUrl || '').trim();
+        if (!src || src === 'about:blank') return true;
+        try {
+            const parsed = new URL(src);
+            const host = parsed.hostname.toLowerCase();
+            return parsed.protocol === 'https:' && (
+                host === 'movilway.net' || host.endsWith('.movilway.net') ||
+                host === 'movilway.com' || host.endsWith('.movilway.com')
+            );
+        } catch (_) {
+            return false;
+        }
+    };
+
     app.on('web-contents-created', (event, contents) => {
+        if (typeof contents.getType === 'function' && contents.getType() === 'webview') {
+            contents.on('will-navigate', (navEvent, targetUrl) => {
+                if (!isAllowedMovilwayUrl(targetUrl)) {
+                    log(`[SECURITY] Bloqueada navegación de <webview> hacia origen no autorizado: ${targetUrl}`);
+                    navEvent.preventDefault();
+                }
+            });
+        }
+
         contents.on('will-attach-webview', (waEvent, webPreferences, params) => {
             delete webPreferences.preload;
             delete webPreferences.preloadURL;
@@ -1688,20 +1797,8 @@ app.whenReady().then(async () => {
             webPreferences.webSecurity = true;
 
             const src = String(params?.src || '').trim();
-            if (!src || src === 'about:blank') return;
-            try {
-                const parsed = new URL(src);
-                const host = parsed.hostname.toLowerCase();
-                const isAllowedMovilway = parsed.protocol === 'https:' && (
-                    host === 'movilway.net' || host.endsWith('.movilway.net') ||
-                    host === 'movilway.com' || host.endsWith('.movilway.com')
-                );
-                if (!isAllowedMovilway) {
-                    log(`[SECURITY] Bloqueado <webview> hacia origen no autorizado: ${src}`);
-                    waEvent.preventDefault();
-                }
-            } catch (_) {
-                log(`[SECURITY] Bloqueado <webview> con URL inválida: ${src}`);
+            if (!isAllowedMovilwayUrl(src)) {
+                log(`[SECURITY] Bloqueado <webview> hacia origen no autorizado: ${src}`);
                 waEvent.preventDefault();
             }
         });
@@ -1723,95 +1820,84 @@ app.whenReady().then(async () => {
     process.env.USER_DATA_PATH = userDataPath;
     log('Set USER_DATA_PATH env var.');
 
-    // 🔒 Cargar y garantizar secretos criptográficos independientes en UserData .env
-    const userEnvPath = path.join(userDataPath, '.env');
-    if (fs.existsSync(userEnvPath)) {
-        log(`Loading environment variables from UserData .env at: ${userEnvPath}`);
-        require('dotenv').config({ path: userEnvPath });
-    }
-
-    const crypto = require('crypto');
-    const requiredSecrets = ['JWT_SECRET', 'LEGACY_HMAC_SECRET', 'SYNC_SECRET_KEY', 'BACKUP_ENCRYPTION_KEY', 'AUDIT_HMAC_SECRET'];
-    const missingSecrets = requiredSecrets.filter((k) => !process.env[k] || String(process.env[k]).trim().length === 0);
-
-    if (missingSecrets.length > 0) {
-        log(`Provisioning independent cryptographic secrets in UserData .env: ${missingSecrets.join(', ')}`);
-        const generatedLines = [];
-        for (const k of missingSecrets) {
-            const val = crypto.randomBytes(32).toString('hex');
-            process.env[k] = val;
-            generatedLines.push(`${k}=${val}`);
-        }
-        try {
-            if (!fs.existsSync(userEnvPath)) {
-                const defaultEnvContent = [
-                    `# Isaac POS - Archivo de Configuración Local`,
-                    ...generatedLines,
-                    `PORT=3005,5005,8080`,
-                    `DB_DIALECT=postgres`,
-                    `GOOGLE_API_KEY=`
-                ].join('\n') + '\n';
-                fs.writeFileSync(userEnvPath, defaultEnvContent, 'utf8');
-                log('UserData .env file created successfully.');
-            } else {
-                const existingRaw = fs.readFileSync(userEnvPath, 'utf8');
-                const sep = existingRaw.length > 0 && !existingRaw.endsWith('\n') ? '\n' : '';
-                fs.appendFileSync(userEnvPath, sep + generatedLines.join('\n') + '\n', 'utf8');
-                log('UserData .env updated with missing independent secrets.');
-            }
-        } catch (envWriteErr) {
-            log(`Error writing UserData .env file: ${envWriteErr.message}`);
-        }
-    }
-
     try {
-        if (typeof configureAutoLaunch === 'function') {
-            configureAutoLaunch(true);
-        }
-        log('Checking user media directories...');
-        const fs = require('fs');
-        const APP_VERSION = '2.1.5';
+        // 2. Mostrar ventana principal de inmediato con pantalla de carga Splash ANTES de cualquier bóveda DPAPI o BD
+        createWindow();
+        await new Promise((resolve) => setImmediate(resolve));
 
+        // 🔒 Bóveda DPAPI para secretos de instancia (usa sidecar safeStorage en Electron para < 1ms tras el primer run)
+        const userEnvPath = path.join(userDataPath, '.env');
+        try {
+            const SecretVault = require('./config/secretVault');
+            const vaultStatus = SecretVault.provisionAndLoadSecrets({
+                baseDir: userDataPath,
+                requiredKeys: ['JWT_SECRET', 'LEGACY_HMAC_SECRET', 'SYNC_SECRET_KEY', 'BACKUP_ENCRYPTION_KEY', 'AUDIT_HMAC_SECRET'],
+                candidateEnvPaths: [userEnvPath],
+                migrateEnvPaths: [userEnvPath],
+                stripMigratedEnv: true
+            });
+            log(`SecretVault activo (${vaultStatus.scheme || 'existing'}): ${vaultStatus.totalSecrets} secreto(s) cifrado(s) en ${vaultStatus.vaultPath}`);
+            if (vaultStatus.strippedFiles.length > 0) {
+                log(`Secretos heredados migrados desde UserData .env hacia bóveda DPAPI y removidos de texto plano.`);
+            }
+        } catch (vaultErr) {
+            log(`Aviso inicializando SecretVault DPAPI: ${vaultErr.message}`);
+            if (fs.existsSync(userEnvPath)) {
+                require('dotenv').config({ path: userEnvPath });
+            }
+            const cryptoFallback = require('crypto');
+            for (const k of ['JWT_SECRET', 'LEGACY_HMAC_SECRET', 'SYNC_SECRET_KEY', 'BACKUP_ENCRYPTION_KEY', 'AUDIT_HMAC_SECRET']) {
+                if (!process.env[k] || String(process.env[k]).trim().length === 0) {
+                    process.env[k] = cryptoFallback.randomBytes(32).toString('hex');
+                }
+            }
+        }
+
+        // Sincronizar autoinicio único en Windows de forma totalmente asíncrona y no bloqueante
+        const desiredAutoLaunch = getAutoLaunchPreference();
+        setImmediate(() => {
+            configureAutoLaunch(desiredAutoLaunch).catch((alErr) => {
+                log(`Notice configuring async auto-launch: ${alErr.message}`);
+            });
+        });
+
+        log('Checking user media directories...');
         const imagesPath = path.join(userDataPath, 'product_images');
         let sourceImages = path.join(__dirname, 'product_images');
         if (app.isPackaged) {
             sourceImages = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'product_images');
         }
 
-        // Create images directory if not exists
         if (!fs.existsSync(imagesPath)) {
             log('Creating product_images directory in UserData...');
             fs.mkdirSync(imagesPath, { recursive: true });
         }
 
-        // Auto-migración desde 'americanpos' a 'isaac-pos' si existen datos previos
+        // Auto-migración desde 'americanpos' a 'isaac-pos' si existen datos previos (en segundo plano tras abrir el Splash)
         const legacyAppData = path.join(process.env.APPDATA || '', 'americanpos');
         if (fs.existsSync(legacyAppData) && legacyAppData !== userDataPath) {
-            const legacyImages = path.join(legacyAppData, 'product_images');
-            if (fs.existsSync(legacyImages)) {
-                try {
-                    const currentImgs = fs.existsSync(imagesPath) ? fs.readdirSync(imagesPath) : [];
-                    if (currentImgs.length === 0) {
-                        fs.cpSync(legacyImages, imagesPath, { recursive: true });
-                        log('[Migration] Migradas imágenes de productos desde americanpos a isaac-pos');
+            setImmediate(() => {
+                const legacyImages = path.join(legacyAppData, 'product_images');
+                if (fs.existsSync(legacyImages)) {
+                    try {
+                        const currentImgs = fs.existsSync(imagesPath) ? fs.readdirSync(imagesPath) : [];
+                        if (currentImgs.length === 0) {
+                            fs.cpSync(legacyImages, imagesPath, { recursive: true });
+                            log('[Migration] Migradas imágenes de productos desde americanpos a isaac-pos');
+                        }
+                    } catch (e) {
+                        log(`[Migration] Error copiando imágenes legacy: ${e.message}`);
                     }
-                } catch (e) {
-                    log(`[Migration] Error copiando imágenes legacy: ${e.message}`);
                 }
-            }
-            const legacyInvoices = path.join(legacyAppData, 'invoices');
-            const invoicesPath = path.join(userDataPath, 'invoices');
-            if (fs.existsSync(legacyInvoices) && !fs.existsSync(invoicesPath)) {
-                try {
-                    fs.cpSync(legacyInvoices, invoicesPath, { recursive: true });
-                } catch (e) {}
-            }
+                const legacyInvoices = path.join(legacyAppData, 'invoices');
+                const invoicesPath = path.join(userDataPath, 'invoices');
+                if (fs.existsSync(legacyInvoices) && !fs.existsSync(invoicesPath)) {
+                    try {
+                        fs.cpSync(legacyInvoices, invoicesPath, { recursive: true });
+                    } catch (e) {}
+                }
+            });
         }
-
-        // PostgreSQL manages database creation and migrations automatically on connectDB()
-
-        // 1. Mostrar ventana principal de inmediato con pantalla de carga Splash (0.2s response time)
-        createWindow();
 
         // 🔒 Cargar configuración de base de datos activa antes de inicializar servicios
         let activeDbConfig = null;
@@ -1826,30 +1912,48 @@ app.whenReady().then(async () => {
         const isClientTerminal = (activeDbConfig && activeDbConfig.mode === 'client') || process.env.POS_NODE_ROLE === 'LAN_SPOKE';
         const dialect = 'postgres';
 
-        // Solo el Servidor Principal (Master / Localhost) debe verificar/iniciar el motor PostgreSQL local
+        // Lanzar verificación/inicio de PostgreSQL EN PARALELO con carga de Express/index.js para no bloquear el puerto HTTP
+        let pgReadyPromise = Promise.resolve(true);
         if (dialect === 'postgres' && !isClientTerminal) {
-            try {
-                log('Verifying PostgreSQL instance status for Main Server...');
-                const { ensurePostgresRunning } = require('./utils/postgresLauncher');
-                await ensurePostgresRunning();
-            } catch (pgLaunchErr) {
+            log('Verifying PostgreSQL instance status for Main Server (parallel)...');
+            const { ensurePostgresRunning } = require('./utils/postgresLauncher');
+            pgReadyPromise = ensurePostgresRunning().catch((pgLaunchErr) => {
                 log(`[Main] Warning checking PostgreSQL launcher: ${pgLaunchErr.message}`);
-            }
+                return false;
+            });
         } else if (isClientTerminal) {
             log('[Main] Terminal iniciada en modo Caja Secundaria (Cliente LAN). Verificación de PostgreSQL local omitida.');
         }
 
         log('Attempting to require ./index.js');
-        // 2. Iniciar el servidor Express en paralelo
+        // 3. Iniciar el servidor Express en paralelo mientras PostgreSQL termina de verificarse
         const { startServer } = require('./index.js');
         log('./index.js requires successfully.');
 
         const rawPort = process.env.PORT || "3005,5005,8080";
         const ports = rawPort.toString().split(',').map(p => p.trim());
 
-        startServer(ports, userDataPath).then(({ mainPort }) => {
+        startServer(ports, userDataPath).then((serverHandle) => {
+            activeServerHandle = serverHandle;
+            if (isQuittingAfterBackup || gracefulShutdownPromise) {
+                log('Shutdown requested before server startup completed. Stopping server cleanly...');
+                serverHandle.stopServer().catch(() => {});
+                return;
+            }
+            const { mainPort, dbInitPromise } = serverHandle;
             log(`Servidor iniciado en múltiples puertos. Principal: ${mainPort}`);
             createWindow(mainPort);
+
+            // Resiliencia: si Postgres y el pipeline de BD fallan al arrancar, redirigir al asistente de configuración
+            Promise.all([pgReadyPromise, dbInitPromise]).then(([, dbOk]) => {
+                if (dbOk === false && !isQuittingAfterBackup && !gracefulShutdownPromise) {
+                    const setupFile = path.join(__dirname, 'public', 'server-setup.html');
+                    if (fs.existsSync(setupFile) && mainWindow && !mainWindow.isDestroyed()) {
+                        log(`[Resilient Startup] BD no disponible tras arranque paralelo; redirigiendo a Asistente de Servidor: ${setupFile}`);
+                        mainWindow.loadFile(setupFile);
+                    }
+                }
+            }).catch(() => {});
 
             // Background async tasks after window is open
             setImmediate(async () => {
@@ -1871,45 +1975,72 @@ app.whenReady().then(async () => {
                 } catch (imgErr) {
                     log(`Warning during images bootstrap: ${imgErr.message}`);
                 }
+            });
 
-                // AUTO-RELINK: Fix missing links if files exist
+            // AUTO-RELINK diferido 15s tras dbInitPromise y usando solo columnas mínimas
+            const relinkTimer = setTimeout(async () => {
+                if (isQuittingAfterBackup) return;
                 try {
+                    if (dbInitPromise) await dbInitPromise;
+                    const files = fs.existsSync(imagesPath) ? fs.readdirSync(imagesPath) : [];
+                    if (files.length === 0) return;
                     const { Product } = require('./database/models');
-                    const files = fs.readdirSync(imagesPath);
-                    const products = await Product.findAll({ where: { imageUri: [null, ''] } });
-                    if (products.length > 0) {
-                        let count = 0;
-                        for (const p of products) {
-                            const sanitized = p.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-                            const match = files.find(f => f.startsWith(sanitized));
-                            if (match) {
-                                p.imageUri = `/product_images/${match}`;
-                                await p.save();
-                                count++;
+                    const { runWithTenantContext } = require('./database/tenantContext');
+                    await runWithTenantContext({ companyId: '', userId: 'system-autorelink', isSuperAdmin: true }, async () => {
+                        const products = await Product.findAll({
+                            where: { imageUri: [null, ''] },
+                            attributes: ['id', 'name', 'imageUri'],
+                            raw: true
+                        });
+                        if (products.length > 0) {
+                            let count = 0;
+                            for (const p of products) {
+                                const sanitized = String(p.name || '').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                                if (!sanitized) continue;
+                                const match = files.find(f => f.startsWith(sanitized));
+                                if (match) {
+                                    await Product.update({ imageUri: `/product_images/${match}` }, { where: { id: p.id } });
+                                    count++;
+                                }
                             }
+                            if (count > 0) log(`Auto-relink: Successfully linked ${count} products.`);
                         }
-                        if (count > 0) log(`Auto-relink: Successfully linked ${count} products.`);
-                    }
+                    });
                 } catch (relErr) {
                     log(`Warning during auto-relink: ${relErr.message}`);
                 }
-            });
+            }, 15000);
+            if (typeof relinkTimer.unref === 'function') relinkTimer.unref();
 
             // Programar respaldo automático doble en segundo plano cada 4 horas mientras el POS está abierto 24/7
-            setInterval(() => {
+            const autoBackupTimer = setInterval(() => {
                 log('Ejecutando respaldo automático doble periódico cada 4 horas en segundo plano...');
                 performAutoBackup().catch(e => log(`Error en auto-backup periódico: ${e.message}`));
             }, 4 * 60 * 60 * 1000);
+            if (typeof autoBackupTimer.unref === 'function') autoBackupTimer.unref();
 
-            // Verificación y descarga 100% automática y silenciosa de actualizaciones a los 10 segundos del inicio
-            if (electronUpdaterInstance) {
-                setTimeout(() => {
+            // Verificación automática diferida de actualizaciones a los 10s (solo si existe app-update.yml empaquetado)
+            const updTimer = setTimeout(() => {
+                if (isQuittingAfterBackup) return;
+                const appUpdateYml = path.join(process.resourcesPath || '', 'app-update.yml');
+                if (app.isPackaged && !fs.existsSync(appUpdateYml)) {
+                    return;
+                }
+                const updater = typeof global.__getIsaacAutoUpdater === 'function' ? global.__getIsaacAutoUpdater() : null;
+                if (updater) {
+                    if (typeof global.__setIsaacSilentUpdateCheck === 'function') {
+                        global.__setIsaacSilentUpdateCheck(true);
+                    }
                     log('Verificación automática de actualizaciones iniciada (10s post-arranque)...');
-                    electronUpdaterInstance.checkForUpdatesAndNotify().catch(e => {
+                    updater.checkForUpdatesAndNotify().catch(e => {
+                        if (typeof global.__setIsaacSilentUpdateCheck === 'function') {
+                            global.__setIsaacSilentUpdateCheck(false);
+                        }
                         log(`Notice auto-update check: ${e.message}`);
                     });
-                }, 10000);
-            }
+                }
+            }, 10000);
+            if (typeof updTimer.unref === 'function') updTimer.unref();
         }).catch(err => {
             log(`Aviso / Error al iniciar el servidor: ${err.message}\n${err.stack}`);
             console.error('Aviso / Error al iniciar el servidor:', err.message);
@@ -1959,10 +2090,26 @@ app.whenReady().then(async () => {
     });
 });
 
+app.on('before-quit', (event) => {
+    if (!isCleanShutdownCompleted) {
+        event.preventDefault();
+        isQuittingAfterBackup = true;
+        performGracefulShutdown().finally(() => {
+            app.quit();
+        });
+    }
+});
+
 app.on('window-all-closed', function () {
-    log('All windows closed. Terminating process.');
+    log('All windows closed. Terminating process cleanly.');
     if (process.platform !== 'darwin') {
-        app.quit();
-        process.exit(0);
+        if (isCleanShutdownCompleted) {
+            app.quit();
+        } else {
+            isQuittingAfterBackup = true;
+            performGracefulShutdown().finally(() => {
+                app.quit();
+            });
+        }
     }
 });

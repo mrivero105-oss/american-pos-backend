@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Cloud, CloudOff, CloudSync, AlertCircle, RefreshCw, CheckCircle2, ShieldCheck, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertCircle, RefreshCw, CheckCircle2, ShieldCheck, Wifi, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { createPortal } from 'react-dom';
 import { syncService } from '../services/syncService';
@@ -42,38 +42,51 @@ export default function CloudSyncIndicator({ compact = false }) {
             setIsOnline(false);
         };
 
+        let queueRefreshTimer = null;
+        const handleQueueUpdated = () => {
+            if (queueRefreshTimer) clearTimeout(queueRefreshTimer);
+            queueRefreshTimer = setTimeout(() => {
+                queueRefreshTimer = null;
+                if (document.visibilityState === 'visible') fetchStats();
+            }, 1500);
+        };
+
         window.addEventListener('online', handleOnline);
         window.addEventListener('offline', handleOffline);
+        window.addEventListener('sync-queue-updated', handleQueueUpdated);
 
         fetchStats();
         const interval = setInterval(() => {
             if (document.visibilityState === 'visible') {
                 fetchStats();
             }
-        }, 35000);
+        }, 90000); // Polling cada 90s en reposo + refresco reactivo en eventos online/sync-queue-updated
 
         return () => {
+            if (queueRefreshTimer) clearTimeout(queueRefreshTimer);
             window.removeEventListener('online', handleOnline);
             window.removeEventListener('offline', handleOffline);
+            window.removeEventListener('sync-queue-updated', handleQueueUpdated);
             clearInterval(interval);
         };
     }, [fetchStats]);
 
     const handleForceSync = async () => {
-        if (navigator.vibrate) try { navigator.vibrate(25); } catch (_) {}
+        if (navigator.vibrate) try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no soportada */ }
         setIsRefreshing(true);
         try {
             if (syncService.performFullSync) {
                 await syncService.performFullSync();
             }
             await fetchStats();
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[CloudSyncIndicator] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
         setIsRefreshing(false);
     };
 
     const stats = syncData?.stats || { PENDING: 0, SYNCED: 0, RETRYING: 0, FAILED: 0 };
-    const pendingCount = (Number(stats.PENDING) || 0) + (Number(stats.RETRYING) || 0);
-    const hasFailed = (Number(stats.FAILED) || 0) > 0;
+    const isCloudConfigured = syncData?.cloudConfigured !== false;
+    const pendingCount = isCloudConfigured ? ((Number(stats.PENDING) || 0) + (Number(stats.RETRYING) || 0)) : 0;
+    const hasFailed = isCloudConfigured && (Number(stats.FAILED) || 0) > 0;
     const isSyncing = pendingCount > 0 && isOnline;
 
     const effectiveOnline = isOnline && syncData.isOnline !== false;
@@ -88,7 +101,7 @@ export default function CloudSyncIndicator({ compact = false }) {
                 <button
                     type="button"
                     onClick={() => {
-                        if (navigator.vibrate) try { navigator.vibrate(20); } catch (_) {}
+                        if (navigator.vibrate) try { navigator.vibrate(20); } catch { /* Vibración háptica opcional no soportada */ }
                         setIsModalOpen(true);
                     }}
                     className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-all duration-150 cursor-pointer select-none active:scale-95"

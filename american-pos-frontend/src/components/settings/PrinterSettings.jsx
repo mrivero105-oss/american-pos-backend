@@ -1,10 +1,25 @@
 import { useState, useEffect } from 'react';
-import { 
-    Printer, Save, Loader2, Wifi, Network, 
-    Coins, CheckCircle2, AlertCircle, RefreshCw, Layers,
-    Receipt, Sliders, Play, Server, Laptop, Cable, Search,
-    ArrowRightLeft, ShieldCheck, HelpCircle, Eye, Zap,
-    FileText, Check, Activity, Radio, Lock
+import {
+    Printer, 
+    Save, 
+    Loader2, 
+    Network, 
+    Coins, 
+    CheckCircle2, 
+    RefreshCw, 
+    Layers, 
+    Receipt, 
+    Play, 
+    Server, 
+    Laptop, 
+    Search, 
+    ArrowRightLeft, 
+    Eye, 
+    Zap, 
+    FileText, 
+    Activity, 
+    Radio, 
+    Lock
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
@@ -30,7 +45,6 @@ export default function PrinterSettings({
     const [stationPrinter, setStationPrinter] = useState('');
     const [isManualInput, setIsManualInput] = useState(false);
     const [testingNetwork, setTestingNetwork] = useState(false);
-    const [networkTestStatus, setNetworkTestStatus] = useState(null);
     const [scanningNetwork, setScanningNetwork] = useState(false);
     const [discoveredPrinters, setDiscoveredPrinters] = useState([]);
     const [testingCluster, setTestingCluster] = useState(false);
@@ -94,7 +108,6 @@ export default function PrinterSettings({
         }
 
         setTestingNetwork(true);
-        setNetworkTestStatus(null);
         const toastId = toast.loading(`Conectando con ${business.networkPrinterIp}:${business.networkPrinterPort || 9100}...`);
 
         try {
@@ -104,12 +117,10 @@ export default function PrinterSettings({
             });
 
             toast.success(res.data?.message || '¡Prueba enviada a la impresora de red con éxito!', { id: toastId });
-            setNetworkTestStatus({ success: true, message: res.data?.message });
         } catch (err) {
             console.error('Error testing network printer:', err);
             const msg = err.response?.data?.error || err.message || 'Fallo de conexión';
             toast.error(`Error: ${msg}`, { id: toastId });
-            setNetworkTestStatus({ success: false, message: msg });
         } finally {
             setTestingNetwork(false);
         }
@@ -988,7 +999,7 @@ export default function PrinterSettings({
                                 style={{ width: (business.receiptWidth || '80mm') === '58mm' ? '230px' : '300px' }}
                             >
                                 <div className="text-center font-bold text-sm uppercase mb-1">
-                                    {business.name || 'INVERSIONES AMERICAN POS C.A.'}
+                                    {business.name || 'INVERSIONES ISAAC POS C.A.'}
                                 </div>
                                 <div className="text-center text-[10px] text-slate-600">
                                     {taxIdLabel}: {business.rif || (taxIdLabel === 'RUC' ? '1790012345001' : 'J-50123456-7')}

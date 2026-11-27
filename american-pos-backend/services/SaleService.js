@@ -4,6 +4,7 @@ const { generateRobustId, getUserSettings, readJson, readJsonAsync } = require('
 const { SETTINGS_FILE } = require('../config/paths');
 const { Op, Transaction } = require('sequelize');
 const precision = require('../utils/precision');
+const { isVenezuelaCountry, isSingleCurrencyCountry, getRegionConfig } = require('../constants/regionPresets');
 const cache = require('../utils/cacheService');
 const LANClusterService = require('./LANClusterService');
 
@@ -96,9 +97,12 @@ class SaleService {
         saleData.clientTransactionId = clientTransactionId;
         saleData.id = clientTransactionId;
 
-        // 1A. Verificación Persistente en DB (A prueba de caídas o reinicios del servidor Node.js)
+        // 1A. Verificación Persistente en DB (A prueba de caídas o reinicios del servidor Node.js, aislada por empresa)
         const existingSale = await Sale.findByPk(clientTransactionId, { include: [{ model: SaleItem, as: 'SaleItems' }] });
         if (existingSale) {
+            if (existingSale.companyId && String(existingSale.companyId) !== String(companyId)) {
+                throw new Error(`TRANSACCION_DUPLICADA: El ID de transacción ${clientTransactionId} no pertenece a esta empresa.`);
+            }
             console.warn(`[Idempotency] Venta ya persistida en DB interceptada exitosamente: ${clientTransactionId}`);
             return existingSale;
         }
@@ -111,6 +115,9 @@ class SaleService {
                 await new Promise(resolve => setTimeout(resolve, 100));
                 const completed = await Sale.findByPk(clientTransactionId, { include: [{ model: SaleItem, as: 'SaleItems' }] });
                 if (completed) {
+                    if (completed.companyId && String(completed.companyId) !== String(companyId)) {
+                        throw new Error(`TRANSACCION_DUPLICADA: Conflicto de empresa en TX ${clientTransactionId}.`);
+                    }
                     console.log(`[Idempotency] Transacción concurrente ${clientTransactionId} resuelta y recuperada con éxito.`);
                     return completed;
                 }
@@ -142,31 +149,34 @@ class SaleService {
             userBranchId = String(reqUser.activeBranchId || '1')
         } = ctx;
 
-        // 1C. VERIFICACIÓN DE CAJA ABIERTA (Resiliente y Multi-Caja)
+        // 1C. VERIFICACIÓN DE CAJA ABIERTA (Resiliente, Multi-Caja y Aislada por Empresa)
+        const shiftCompanyFilter = (companyId === '2' || companyId === 'default')
+            ? { [Op.or]: [{ companyId: '2' }, { companyId: 'default' }] }
+            : { companyId };
         let openShift = null;
         if (!options.bypassShiftCheck) {
             const currentRegisterId = String(saleData.registerId || '1');
             
             // 1. Buscar turno abierto por el usuario actual en esta caja física
             openShift = await CashShift.findOne({
-                where: { userId: String(userId), registerId: currentRegisterId, status: 'open' }
+                where: { userId: String(userId), registerId: currentRegisterId, status: 'open', ...shiftCompanyFilter }
             });
 
             // 2. Buscar turno abierto por la caja física en uso (ej: Caja 2 / Charcutería / DEV-...)
             if (!openShift && currentRegisterId && currentRegisterId !== '1') {
                 openShift = await CashShift.findOne({
-                    where: { registerId: currentRegisterId, status: 'open' }
+                    where: { registerId: currentRegisterId, status: 'open', ...shiftCompanyFilter }
                 });
             }
 
-            // 3. Fallback: Buscar turno abierto por el usuario actual en cualquier caja
+            // 3. Fallback: Buscar turno abierto por el usuario actual en cualquier caja de su empresa
             if (!openShift) {
                 openShift = await CashShift.findOne({
-                    where: { userId: String(userId), status: 'open' }
+                    where: { userId: String(userId), status: 'open', ...shiftCompanyFilter }
                 });
             }
 
-            // 4. Si el usuario logueado es admin, superadmin, supervisor o coincide por nombre
+            // 4. Si el usuario logueado es admin, superadmin, supervisor o coincide por nombre dentro de su empresa
             if (!openShift) {
                 const userRole = (reqUser.role || '').toLowerCase();
                 const userName = (reqUser.name || reqUser.username || '').toLowerCase().trim();
@@ -176,14 +186,15 @@ class SaleService {
                     openShift = await CashShift.findOne({
                         where: {
                             status: 'open',
+                            ...shiftCompanyFilter,
                             userName: { [likeOp]: `%${userName}%` }
                         }
                     });
                 }
 
-                if (!openShift && ['admin', 'superadmin', 'owner', 'supervisor'].includes(userRole)) {
+                if (!openShift && ['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'supervisor'].includes(userRole)) {
                     openShift = await CashShift.findOne({
-                        where: { status: 'open' },
+                        where: { status: 'open', ...shiftCompanyFilter },
                         order: [['openedAt', 'DESC']]
                     });
                 }
@@ -218,8 +229,8 @@ class SaleService {
                     .filter(Boolean)
             )];
             const { Product } = require('../database/models');
-            const dbProducts = await Product.findAll({
-                where: { id: { [Op.in]: cleanProductIds } },
+                    const dbProducts = await Product.findAll({
+                where: { id: { [Op.in]: cleanProductIds }, ...shiftCompanyFilter },
                 attributes: ['id', 'name', 'category']
             });
             const dbCategoryMap = new Map(dbProducts.map(p => [String(p.id), p.category]));
@@ -239,9 +250,7 @@ class SaleService {
                     isPermitted = allowedNorm.includes(itemCatNorm);
                     if (!isPermitted) {
                         const itemNameNorm = normalizeStationText(dbNameMap.get(pId) || item.name || item.description);
-                        isPermitted = allowedNorm.some(allowed => 
-                            itemNameNorm.includes(allowed) && !itemCatNorm.includes('golosina') && !itemNameNorm.includes('sorpresa')
-                        );
+                        isPermitted = allowedNorm.some(allowed => itemNameNorm.includes(allowed));
                     }
                 }
 
@@ -261,34 +270,40 @@ class SaleService {
             branchId = String(rawBranchId);
         }
 
-        // Verify branch actually exists to prevent FOREIGN KEY constraint errors
-        let dbBranch = null;
-        if (branchId) {
-            dbBranch = await sequelize.models.Branch.findOne({ where: { id: branchId, companyId } });
+        // Verify branch actually exists to prevent FOREIGN KEY constraint errors (con caché TTL 5 min)
+        const branchCacheKey = `resolved_branch_${companyId}_${branchId || 'main'}`;
+        let cachedBranchId = process.env.ISAAC_TEST_ISOLATED !== '1' ? cache.get(branchCacheKey) : null;
+        if (cachedBranchId) {
+            branchId = cachedBranchId;
+        } else {
+            let dbBranch = null;
+            if (branchId) {
+                dbBranch = await sequelize.models.Branch.findOne({ where: { id: branchId, companyId } });
+            }
+            if (!dbBranch) {
+                dbBranch = await sequelize.models.Branch.findOne({ 
+                    where: { companyId, isMain: true },
+                    order: [['createdAt', 'ASC']]
+                });
+            }
+            if (!dbBranch) {
+                dbBranch = await sequelize.models.Branch.findOne({ where: { companyId }, order: [['createdAt', 'ASC']] });
+            }
+            if (!dbBranch) {
+                dbBranch = await sequelize.models.Branch.create({
+                    id: generateRobustId(),
+                    userId,
+                    companyId,
+                    name: 'Principal',
+                    isMain: true,
+                    isActive: true
+                });
+            }
+            branchId = dbBranch.id;
+            if (process.env.ISAAC_TEST_ISOLATED !== '1') {
+                cache.set(branchCacheKey, branchId, 300);
+            }
         }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.findOne({ 
-                where: { companyId, isMain: true },
-                order: [['createdAt', 'ASC']]
-            });
-        }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.findOne({ where: { companyId }, order: [['createdAt', 'ASC']] });
-        }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.findOne({ where: { isMain: true }, order: [['createdAt', 'ASC']] }) || await sequelize.models.Branch.findOne({ order: [['createdAt', 'ASC']] });
-        }
-        if (!dbBranch) {
-            dbBranch = await sequelize.models.Branch.create({
-                id: generateRobustId(),
-                userId,
-                companyId,
-                name: 'Principal',
-                isMain: true,
-                isActive: true
-            });
-        }
-        branchId = dbBranch.id;
 
         if (!items || !items.length) {
             throw new Error('INTEGRITY_ERROR: No se pueden procesar ventas sin productos.');
@@ -445,9 +460,17 @@ class SaleService {
         const settings = await this._getSettings(companyId);
         let recalculatedIgtf = 0;
 
-        // Recálculo Zero-Trust de IVA desde servidor (PVP incluye IVA para productos gravables)
-        const isIvaEnabled = settings.taxConfig?.ivaEnabled !== false && settings.ivaEnabled !== false;
-        const ivaRate = isIvaEnabled ? (Number(settings.taxConfig?.ivaRate ?? settings.ivaRate ?? 16) || 0) : 0;
+        // Recálculo Zero-Trust de IVA/ITBMS/Sales Tax desde servidor (PVP incluye impuesto para productos gravables)
+        const activeCountry = settings.businessInfo?.country || '';
+        const regionCfg = getRegionConfig(activeCountry);
+        const isVenezuela = isVenezuelaCountry(activeCountry);
+        const isSingleCountry = isSingleCurrencyCountry(activeCountry);
+        const isIvaEnabled = settings.taxConfig?.ivaEnabled !== undefined
+            ? Boolean(settings.taxConfig.ivaEnabled)
+            : settings.ivaEnabled !== false;
+        const ivaRate = isIvaEnabled
+            ? (Number(settings.taxConfig?.ivaRate ?? settings.ivaRate ?? regionCfg.taxConfig.ivaRate) || 0)
+            : 0;
         const netSubtotalAfterItemPromo = precision.add([taxableSubtotalAfterItemPromo, exemptSubtotalAfterItemPromo]);
         const netTotalAfterAllDiscounts = Math.max(0, precision.subtract(serverCalculatedSubtotal, totalEffectiveDiscount));
         const globalDiscountRatio = netSubtotalAfterItemPromo > 0
@@ -472,9 +495,45 @@ class SaleService {
             }
         }
 
-        const hasAppliedPromotions = Array.isArray(saleData.appliedPromotions) && saleData.appliedPromotions.length > 0;
-        if (promoDiscountValue > (serverCalculatedSubtotal * 0.10) && !hasAppliedPromotions && !canApplyDiscounts && !saleData.supervisorApprovalId) {
-            throw new Error('AUTH_REQUIRED: Descuento promocional sin promoción activa válida requiere autorización de supervisor.');
+        // 🛡️ ZERO-TRUST PROMOCIONES: Verificar cualquier promoDiscount contra la tabla real de Promotions en BD
+        let verifiedPromoDiscount = 0;
+        let verifiedAppliedPromotions = [];
+        if (promoDiscountValue > 0 && !options.forceOverridePrice) {
+            try {
+                const PromotionService = require('./PromotionService');
+                const evalCartItems = items.map((it) => {
+                    const pid = resolveCleanProductId(it);
+                    const dbP = dbProductMap.get(pid);
+                    return {
+                        id: it.id || pid,
+                        productId: pid,
+                        name: dbP?.name || it.name || '',
+                        category: dbP?.category || it.category || '',
+                        price: Number(it.price) || 0,
+                        quantity: Number(it.quantity) || 0,
+                        factorConversion: Number(it.factorConversion) || 1
+                    };
+                });
+                const primaryPaymentMethod = (Array.isArray(saleData.paymentMethods) && saleData.paymentMethods[0]?.method)
+                    || saleData.paymentMethod
+                    || null;
+                const promoEval = await PromotionService.evaluateCart(evalCartItems, companyId, primaryPaymentMethod);
+                verifiedPromoDiscount = Math.max(0, Number(promoEval?.totalDiscount) || 0);
+                verifiedAppliedPromotions = Array.isArray(promoEval?.appliedPromotions) ? promoEval.appliedPromotions : [];
+            } catch (promoErr) {
+                console.warn('[SaleService] Aviso evaluando promociones Zero-Trust:', promoErr.message);
+                verifiedPromoDiscount = 0;
+            }
+
+            const unverifiedPromoExcess = precision.subtract(promoDiscountValue, verifiedPromoDiscount);
+            if (unverifiedPromoExcess > 0.05 && !canApplyDiscounts && !saleData.supervisorApprovalId) {
+                throw new Error(
+                    `AUTH_REQUIRED: Descuento promocional ($${promoDiscountValue.toFixed(2)}) excede las promociones activas verificadas ($${verifiedPromoDiscount.toFixed(2)}). Se requiere autorización de supervisor.`
+                );
+            }
+        }
+        if (verifiedAppliedPromotions.length > 0) {
+            saleData.appliedPromotions = verifiedAppliedPromotions;
         }
 
         if (discountValue > (serverCalculatedSubtotal * 0.10) && reqUser.role !== 'superadmin') {
@@ -514,20 +573,20 @@ class SaleService {
             }
         }
 
-        const exchangeRate = Number(settings.exchangeRate) || 1.0;
-        console.log(`[SALE-CALC] Subtotal: ${serverCalculatedSubtotal}, Discount: ${discountValue}, Tax(Server): ${serverCalculatedTax}, Rate: ${exchangeRate}`);
+        const exchangeRate = isSingleCountry ? 1.0 : (Number(settings.exchangeRate) || 1.0);
+        console.log(`[SALE-CALC] Country: ${regionCfg.id}, Currency: ${regionCfg.currencyCode}, Subtotal: ${serverCalculatedSubtotal}, Discount: ${discountValue}, Tax(Server ${regionCfg.taxLabel} ${ivaRate}%): ${serverCalculatedTax}, Rate: ${exchangeRate}`);
 
-        const isBinanceIgtfEnabled = Boolean(
+        const isBinanceIgtfEnabled = isVenezuela && Boolean(
             settings.binanceIgtfEnabled ??
             settings.businessInfo?.binanceIgtfEnabled ??
             settings.taxConfig?.binanceIgtfEnabled
         );
-        const isIgtfEnabled = Boolean(
+        const isIgtfEnabled = isVenezuela && Boolean(
             settings.taxConfig?.igtfEnabled !== undefined
                 ? settings.taxConfig.igtfEnabled
                 : settings.igtfEnabled
         );
-        const effectiveIgtfRate = Number(settings.taxConfig?.igtfRate ?? settings.igtfRate ?? 3);
+        const effectiveIgtfRate = isVenezuela ? Number(settings.taxConfig?.igtfRate ?? settings.igtfRate ?? 3) : 0;
 
         // 3. NORMALIZAR PAGOS ANTES DEL CÁLCULO DE IGTF (evita evasión por amountTenderedUsd o métodos sin normalizar)
         const basePrincipalBeforeIgtf = precision.round(Math.max(0, precision.subtract(serverCalculatedSubtotal, totalEffectiveDiscount)), 2);
@@ -541,9 +600,15 @@ class SaleService {
             if (isCrypto) {
                 return isBinanceIgtfEnabled;
             }
+            if (pmCurrency === 'EUR' || pmMethod === 'cash_eur') {
+                return true;
+            }
             return pmCurrency ? pmCurrency === 'USD' : (!pmMethod.includes('_bs') && !pmMethod.includes('_ves'));
         });
-        const totalUsdTendered = foreignCurrencyPayments.reduce((sum, p) => precision.add([sum, Number(p.amount) || 0]), 0);
+        const totalUsdTendered = foreignCurrencyPayments.reduce((sum, p) => {
+            const eqUsd = Number(p.convertedAmountUsd) > 0 ? Number(p.convertedAmountUsd) : (Number(p.amount) || 0);
+            return precision.add([sum, eqUsd]);
+        }, 0);
 
         if (totalUsdTendered > 0 && isIgtfEnabled) {
             const igtfRate = effectiveIgtfRate;
@@ -568,10 +633,16 @@ class SaleService {
 
         let effectiveTolerance = 0.01;
         const hasBinancePayment = normalizedPayments.some(p => p.method === 'binance_usdt' || (p.currency || '').toUpperCase() === 'USDT');
+        const hasEurForeignPayment = !isSingleCountry && normalizedPayments.some(p => p.method === 'cash_eur' || (p.currency || '').toUpperCase() === 'EUR');
         if (hasBinancePayment) {
             const roundingToleranceBs = Number(settings.binanceRoundingToleranceBs ?? settings.businessInfo?.binanceRoundingToleranceBs ?? 0.50);
             const binRate = Number(settings.binanceRate ?? settings.businessInfo?.binanceRate ?? exchangeRate);
             const dynamicTolBs = Math.max(roundingToleranceBs, binRate * 0.006, exchangeRate * 0.006);
+            const toleranceInUsd = exchangeRate > 0 ? (dynamicTolBs / exchangeRate) : 0.02;
+            effectiveTolerance = Math.max(0.01, toleranceInUsd);
+        } else if (hasEurForeignPayment) {
+            const eurRateVal = Number(settings.euroRate ?? settings.businessInfo?.euroRate ?? exchangeRate);
+            const dynamicTolBs = Math.max(0.50, eurRateVal * 0.006, exchangeRate * 0.006);
             const toleranceInUsd = exchangeRate > 0 ? (dynamicTolBs / exchangeRate) : 0.02;
             effectiveTolerance = Math.max(0.01, toleranceInUsd);
         }
@@ -640,8 +711,11 @@ class SaleService {
             if (p.method === 'fiado' || p.method === 'credit') continue;
             const amt = Number(p.amount) || 0;
             if (amt > 0) {
-                const cur = String(p.currency || 'USD').toUpperCase();
-                if (cur === 'VES' || cur === 'BS') {
+                const cur = String(p.currency || regionCfg.currencyCode || 'USD').toUpperCase();
+                const isEurForeign = !isSingleCountry && (cur === 'EUR' || p.method === 'cash_eur');
+                if (Number(p.convertedAmountUsd) > 0 && (cur === 'USDT' || cur === 'VES' || cur === 'BS' || p.method === 'binance_usdt' || isEurForeign)) {
+                    totalCoveredUsd = precision.add([totalCoveredUsd, Number(p.convertedAmountUsd)]);
+                } else if (cur === 'VES' || cur === 'BS') {
                     totalCoveredUsd = precision.add([totalCoveredUsd, exchangeRate > 0 ? precision.divide(amt, exchangeRate) : amt]);
                 } else {
                     totalCoveredUsd = precision.add([totalCoveredUsd, amt]);
@@ -660,6 +734,19 @@ class SaleService {
 
         // --- BEGIN TRANSACTION (POSTGRESQL READ COMMITTED + DETERMINISTIC FOR UPDATE LOCKS) ---
         const t = await sequelize.transaction();
+        const isPgDialect = typeof sequelize.getDialect === 'function' && sequelize.getDialect() === 'postgres';
+        const runInSavepoint = async (spName, fn) => {
+            if (!isPgDialect) return await fn();
+            await sequelize.query(`SAVEPOINT ${spName}`, { transaction: t });
+            try {
+                const res = await fn();
+                await sequelize.query(`RELEASE SAVEPOINT ${spName}`, { transaction: t });
+                return res;
+            } catch (spErr) {
+                await sequelize.query(`ROLLBACK TO SAVEPOINT ${spName}`, { transaction: t }).catch(() => {});
+                throw spErr;
+            }
+        };
 
         try {
             // Resolver caja activa de la venta para numeración correlativa independiente por caja física
@@ -682,7 +769,7 @@ class SaleService {
             let dailyTicketNumber = Number(saleData.dailyTicketNumber || saleData.taxInfo?.dailyTicketNumber) || 0;
 
             try {
-                const [regSeq] = await sequelize.query(`
+                const [regSeq] = await runInSavepoint('sp_daily_ticket_seq', () => sequelize.query(`
                     INSERT INTO "DailyRegisterSequences" ("companyId", "registerId", "dateKey", "currentNumber")
                     VALUES (:companyId, :registerId, :dateKey, 1)
                     ON CONFLICT ("companyId", "registerId", "dateKey")
@@ -692,7 +779,7 @@ class SaleService {
                     replacements: { companyId, registerId: resolvedRegisterId, dateKey },
                     type: sequelize.QueryTypes.SELECT,
                     transaction: t
-                });
+                }));
                 if (regSeq?.currentNumber) {
                     dailyTicketNumber = Number(regSeq.currentNumber);
                 }
@@ -701,14 +788,14 @@ class SaleService {
                 if (!dailyTicketNumber) {
                     const startOfDayIso = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 0, 0, 0, 0).toISOString();
                     const endOfDayIso = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 23, 59, 59, 999).toISOString();
-                    const todaySalesCount = await Sale.count({
+                    const todaySalesCount = await runInSavepoint('sp_daily_ticket_cnt', () => Sale.count({
                         where: {
                             ...companyCondition,
                             ...registerSequenceFilter,
                             date: { [Op.between]: [startOfDayIso, endOfDayIso] }
                         },
                         transaction: t
-                    }).catch(() => 0);
+                    })).catch(() => 0);
                     dailyTicketNumber = todaySalesCount + 1;
                 }
             }
@@ -769,6 +856,77 @@ class SaleService {
                 const idB = String(b.productId || b.id || '').trim().replace(CLEAN_PRODUCT_ID_REGEX, '');
                 return idA.localeCompare(idB);
             });
+
+            // Pre-cargar en lote con LOCK.UPDATE determinístico (anti-deadlock) productos, lotes FEFO y kits BOM del carrito
+            const uniqueCartProductIds = [...new Set(
+                sortedItems
+                    .filter(it => !it.isCustom)
+                    .map(it => String(it.productId || it.id || '').trim().replace(CLEAN_PRODUCT_ID_REGEX, ''))
+                    .filter(id => id && id !== 'undefined' && id !== 'null')
+            )].sort();
+
+            let lockedProductsMap = new Map();
+            let activeLotsByProductMap = null;
+            let kitProductIdsSet = null;
+            if (uniqueCartProductIds.length > 0) {
+                try {
+                    const { BillOfMaterials } = require('../database/models');
+                    // Consultas por lote secuenciales sobre la misma conexión de transacción t (evita pipelining en pg.Client)
+                    const lockedProds = await runInSavepoint('sp_lock_prods', () => Product.findAll({
+                        where: { id: { [Op.in]: uniqueCartProductIds }, ...companyCondition },
+                        order: [['id', 'ASC']],
+                        lock: sequelize.constructor.Transaction.LOCK.UPDATE,
+                        transaction: t
+                    }));
+                    const allActiveLots = await runInSavepoint('sp_lock_lots', () => ProductLot.findAll({
+                        where: {
+                            productId: { [Op.in]: uniqueCartProductIds },
+                            companyId,
+                            quantity: { [Op.gt]: 0 },
+                            status: 'active'
+                        },
+                        order: [
+                            ['productId', 'ASC'],
+                            [sequelize.fn('COALESCE', sequelize.col('expirationDate'), '9999-12-31'), 'ASC'],
+                            ['createdAt', 'ASC']
+                        ],
+                        transaction: t,
+                        lock: sequelize.constructor.Transaction.LOCK.UPDATE
+                    })).catch(() => null);
+                    const kitBoms = (BillOfMaterials && typeof BillOfMaterials.findAll === 'function')
+                        ? await runInSavepoint('sp_kit_boms', () => BillOfMaterials.findAll({
+                            where: { targetProductId: { [Op.in]: uniqueCartProductIds }, isKit: true, isActive: true, companyId },
+                            attributes: ['targetProductId'],
+                            transaction: t,
+                            raw: true
+                        })).catch(() => null)
+                        : null;
+
+                    if (Array.isArray(lockedProds)) {
+                        lockedProductsMap = new Map(lockedProds.map(p => [String(p.id), p]));
+                    }
+                    if (Array.isArray(allActiveLots)) {
+                        activeLotsByProductMap = new Map();
+                        for (const lot of allActiveLots) {
+                            const pidKey = String(lot.productId);
+                            let arr = activeLotsByProductMap.get(pidKey);
+                            if (!arr) { arr = []; activeLotsByProductMap.set(pidKey, arr); }
+                            arr.push(lot);
+                        }
+                    }
+                    if (Array.isArray(kitBoms)) {
+                        kitProductIdsSet = new Set(kitBoms.map(b => String(b.targetProductId)));
+                    }
+                } catch (_) {
+                    lockedProductsMap = new Map();
+                    activeLotsByProductMap = null;
+                    kitProductIdsSet = null;
+                }
+            }
+
+            const stockMovementsBatch = [];
+            const inventoryWarnings = [];
+
             for (const item of sortedItems) {
                 const rawId = String(item.productId || item.id || '').trim();
                 const pId = rawId.replace(CLEAN_PRODUCT_ID_REGEX, '');
@@ -779,7 +937,7 @@ class SaleService {
                 let product = null;
 
                 if (!item.isCustom && pId) {
-                    product = await Product.findOne({
+                    product = lockedProductsMap.get(String(pId)) || await Product.findOne({
                         where: { id: pId, ...companyCondition },
                         lock: sequelize.constructor.Transaction.LOCK.UPDATE,
                         transaction: t
@@ -789,6 +947,13 @@ class SaleService {
                     if (!product) {
                         if (options.bypassStockCheck) {
                             console.warn(`[SYNC-INTEGRITY] Producto "${item.name}" (ID: ${pId}) no existe en el catálogo de la PC. Se procesa como personalizado en caliente para no bloquear la sincronización.`);
+                            inventoryWarnings.push({
+                                type: 'missing_product',
+                                productId: pId,
+                                productName: item.name || 'Producto eliminado',
+                                saleId: clientTransactionId,
+                                soldQuantity: Number(item.quantity) || 1
+                            });
                             cost = Number(item.cost) || 0;
                             category = item.category || category;
                         } else {
@@ -860,6 +1025,16 @@ class SaleService {
                             await sequelize.query("SET LOCAL app.bypass_stock_trigger = 'true';", { transaction: t });
                         }
 
+                        inventoryWarnings.push({
+                            type: 'stock_overdraft',
+                            productId: pId,
+                            productName: product.name,
+                            saleId: clientTransactionId,
+                            expectedStock: stockBefore,
+                            soldQuantity: unitsToDeduct,
+                            overdraftAmount: overdraft
+                        });
+
                         // Registrar auditoría de sobregiro por venta offline concurrente
                         try {
                             const alertId = `ALERT-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -897,20 +1072,22 @@ class SaleService {
 
                     // --- INICIO LÓGICA DE LOTES FIFO ---
                     let remainingQtyToDeduct = unitsToDeduct;
-                    const activeLots = await ProductLot.findAll({
-                        where: { 
-                            productId: pId, 
-                            companyId, 
-                            quantity: { [Op.gt]: 0 }, 
-                            status: 'active' 
-                        },
-                        order: [
-                            [sequelize.fn('COALESCE', sequelize.col('expirationDate'), '9999-12-31'), 'ASC'],
-                            ['createdAt', 'ASC']
-                        ],
-                        transaction: t,
-                        lock: sequelize.constructor.Transaction.LOCK.UPDATE
-                    });
+                    const activeLots = activeLotsByProductMap !== null
+                        ? (activeLotsByProductMap.get(String(pId)) || [])
+                        : await ProductLot.findAll({
+                            where: { 
+                                productId: pId, 
+                                companyId, 
+                                quantity: { [Op.gt]: 0 }, 
+                                status: 'active' 
+                            },
+                            order: [
+                                [sequelize.fn('COALESCE', sequelize.col('expirationDate'), '9999-12-31'), 'ASC'],
+                                ['createdAt', 'ASC']
+                            ],
+                            transaction: t,
+                            lock: sequelize.constructor.Transaction.LOCK.UPDATE
+                        });
 
                     for (const lot of activeLots) {
                         if (remainingQtyToDeduct <= 0) break;
@@ -953,8 +1130,10 @@ class SaleService {
                         }
                     }
 
-                    // 3. Recargar la instancia dentro de la transacción para obtener el valor actualizado real
-                    await product.reload({ transaction: t });
+                    // 3. Actualizar valor en memoria sin ejecutar un SELECT reload() extra por cada ítem
+                    const resolvedMasterStockAfter = precision.subtract(masterStock, unitsToDeduct);
+                    product.stockQuantity = resolvedMasterStockAfter;
+                    product.stock = resolvedMasterStockAfter;
 
                     // 4. Registro incondicional en el Kardex (resuelve también el Hallazgo 6)
                     const movementReason = item.presentationName 
@@ -965,7 +1144,7 @@ class SaleService {
                                 ? `Venta #${saleRecord.id.split('-').pop()} (${itemQty} ${product.midBulkUnitName || 'Media Presentación'} x ${unitsMultiplier} un)`
                                 : `Venta #${saleRecord.id.split('-').pop()}`));
 
-                    await StockMovement.create({
+                    stockMovementsBatch.push({
                         id: generateRobustId(),
                         productId: product.id,
                         branchId: branchId || null,
@@ -974,12 +1153,12 @@ class SaleService {
                         type: 'OUT',
                         quantity: unitsToDeduct,
                         stockBefore,
-                        stockAfter: branchStock ? precision.subtract(stockBefore, unitsToDeduct) : product.stockQuantity,
+                        stockAfter: branchStock ? precision.subtract(stockBefore, unitsToDeduct) : resolvedMasterStockAfter,
                         reason: movementReason,
                         referenceId: saleRecord.id,
                         date: now,
                         timestamp: now
-                    }, { transaction: t });
+                    });
 
                     if (item.variante_id || item.variantId) {
                         const varId = String(item.variante_id || item.variantId);
@@ -1046,32 +1225,34 @@ class SaleService {
                 }, { transaction: t });
                 createdSaleItems.push(createdSaleItem);
 
-                // DEDUCCIÓN AUTOMÁTICA DE COMPONENTES DE RECETA / COMBO (BOM)
-                try {
-                    const ProductionService = require('./ProductionService');
-                    await ProductionService.processKitSaleDeduction(createdSaleItem, t, companyId, {
-                        bypassStockCheck: Boolean(options.bypassStockCheck)
-                    });
-                } catch (kitErr) {
-                    if (!options.bypassStockCheck) {
-                        throw kitErr;
-                    }
-                    console.warn('[SaleService] Déficit BOM en sincronización offline:', kitErr.message);
+                // DEDUCCIÓN AUTOMÁTICA DE COMPONENTES DE RECETA / COMBO (BOM) — Solo si el producto está registrado como Kit
+                if (!kitProductIdsSet || kitProductIdsSet.has(String(pId))) {
                     try {
-                        await StockAlert.create({
-                            id: `ALERT-BOM-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-                            productId: pId || createdSaleItem.productId,
-                            productName: `${item.name || 'Combo'} [BOM]`,
-                            saleId: clientTransactionId,
-                            companyId,
-                            cashierName: reqUser.name || reqUser.username || saleData.cashierName || 'Cajero',
-                            registerName: saleData.registerName || 'Caja Principal',
-                            expectedStock: 0,
-                            soldQuantity: itemQty,
-                            overdraftAmount: itemQty,
-                            resolved: false
-                        }, { transaction: t });
-                    } catch (_) {}
+                        const ProductionService = require('./ProductionService');
+                        await ProductionService.processKitSaleDeduction(createdSaleItem, t, companyId, {
+                            bypassStockCheck: Boolean(options.bypassStockCheck)
+                        });
+                    } catch (kitErr) {
+                        if (!options.bypassStockCheck) {
+                            throw kitErr;
+                        }
+                        console.warn('[SaleService] Déficit BOM en sincronización offline:', kitErr.message);
+                        try {
+                            await StockAlert.create({
+                                id: `ALERT-BOM-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                                productId: pId || createdSaleItem.productId,
+                                productName: `${item.name || 'Combo'} [BOM]`,
+                                saleId: clientTransactionId,
+                                companyId,
+                                cashierName: reqUser.name || reqUser.username || saleData.cashierName || 'Cajero',
+                                registerName: saleData.registerName || 'Caja Principal',
+                                expectedStock: 0,
+                                soldQuantity: itemQty,
+                                overdraftAmount: itemQty,
+                                resolved: false
+                            }, { transaction: t });
+                        } catch (_) {}
+                    }
                 }
 
                 // DESCUENTO AUTOMÁTICO DE EFECTIVO EN GAVETA POR AVANCE DE EFECTIVO (Avance BS)
@@ -1083,6 +1264,25 @@ class SaleService {
                     if (explicitCashBs > 0) {
                         totalCashAdvanceBs = precision.add([totalCashAdvanceBs, explicitCashBs]);
                     }
+                }
+            }
+
+            // 5A. INSERTAR MOVIMIENTOS KARDEX DEL CARRITO EN 1 SOLO BULK INSERT Y MARCAR updatedAt PARA DELTA SYNC
+            if (stockMovementsBatch.length > 0) {
+                if (typeof StockMovement.bulkCreate === 'function') {
+                    await StockMovement.bulkCreate(stockMovementsBatch, { transaction: t });
+                } else {
+                    for (const mov of stockMovementsBatch) {
+                        await StockMovement.create(mov, { transaction: t });
+                    }
+                }
+                // Actualizar updatedAt en lote para que GET /products?since= detecte el cambio de stock al instante
+                const touchedProductIds = [...new Set(stockMovementsBatch.map(m => m.productId).filter(Boolean))];
+                if (touchedProductIds.length > 0 && typeof Product.update === 'function') {
+                    await Product.update(
+                        { updatedAt: new Date() },
+                        { where: { id: { [Op.in]: touchedProductIds } }, silent: true, transaction: t }
+                    ).catch(() => {});
                 }
             }
 
@@ -1126,14 +1326,17 @@ class SaleService {
                     throw new Error(`CREDIT_ERROR: Cliente no encontrado en la base de datos.`);
                 }
 
+                const hasVerifiedCreditOverride = Boolean(options.bypassCreditLimit || supervisorApprovalRecord);
+
                 // 🛡️ REGLA FINANCIERA: Bloqueo explícito por suspensión administrativa
-                if (customer.isCreditBlocked && !options.bypassCreditLimit && !saleData.supervisorApprovalId) {
+                if (customer.isCreditBlocked && !hasVerifiedCreditOverride) {
                     throw new Error(`CREDIT_ERROR: El crédito del cliente "${customer.name}" se encuentra suspendido o bloqueado por administración.`);
                 }
 
                 // 🛡️ REGLA FINANCIERA: Verificación de facturas vencidas por días de mora (creditLimitDays)
+                // Si el cliente tiene allowOverdueCredit === true (desbloqueado para facturar con deudas viejas), se omite el bloqueo por antigüedad.
                 const creditLimitDays = Number(customer.creditLimitDays) || 0;
-                if (creditLimitDays > 0 && Number(customer.creditBalance) > 0 && !options.bypassCreditLimit && !saleData.supervisorApprovalId) {
+                if (creditLimitDays > 0 && Number(customer.creditBalance) > 0 && !customer.allowOverdueCredit && !hasVerifiedCreditOverride) {
                     // Conciliación FIFO exacta de cuentas por cobrar (idéntica a ReportService / Cobranzas):
                     const allCharges = await CreditHistory.findAll({
                         where: { customerId: customer.id, companyId, type: { [Op.in]: ['charge', 'debit'] } },
@@ -1205,10 +1408,10 @@ class SaleService {
                 const currentBalance = Number(customer.creditBalance) || 0;
                 const available = precision.round(precision.subtract(creditLimit, currentBalance), 6);
 
-                if (creditLimit <= 0 && !options.bypassCreditLimit) {
+                if (creditLimit <= 0 && !hasVerifiedCreditOverride) {
                     throw new Error(`CREDIT_ERROR: El cliente "${customer.name}" no tiene límite de crédito asignado.`);
                 }
-                if (creditTotal > available && !options.bypassCreditLimit) {
+                if (creditTotal > available && !hasVerifiedCreditOverride) {
                     throw new Error(`CREDIT_ERROR: Crédito insuficiente para "${customer.name}". Disponible: ${available.toFixed(2)}`);
                 }
 
@@ -1303,6 +1506,15 @@ class SaleService {
 
             // 9. COMMIT FINANCIERO FINAL
             await t.commit();
+            cache.delPrefix('catalog_full_');
+            cache.delPrefix('low_stock_');
+            cache.delPrefix('ai_catalog_');
+            cache.delPrefix('dashboard_summary_');
+            cache.delPrefix('daily_count_');
+            try {
+                const DailyRollupService = require('./DailyRollupService');
+                DailyRollupService.scheduleDayRefresh(companyId, saleDate);
+            } catch (_) {}
 
             // Auditoría post-commit
             this._logAudit(reqUser, 'CREATE_SALE', `Venta completada: ${clientTransactionId}`, clientTransactionId, null, { total: saleTotal }).catch(() => {});
@@ -1344,6 +1556,9 @@ class SaleService {
             });
             if (finalSale && typeof finalSale.setDataValue === 'function') {
                 finalSale.setDataValue('dailyTicketNumber', dailyTicketNumber);
+                if (inventoryWarnings.length > 0) {
+                    finalSale.setDataValue('inventoryWarnings', inventoryWarnings);
+                }
             }
 
             return finalSale;
@@ -1360,20 +1575,28 @@ class SaleService {
     }
 
     /**
-     * Payment Normalization (USD/VES).
+     * Payment Normalization (USD/VES/EUR/COP/USDT).
      */
     _normalizePayments(saleData, saleTotal, exchangeRate, settings = {}) {
+        const country = settings.businessInfo?.country || settings.country || '';
+        const regionCfg = getRegionConfig(country);
+        const isSingleCountry = isSingleCurrencyCountry(country);
+        const baseCurrency = regionCfg.currencyCode || 'USD';
+
         if (saleData.paymentMethods?.length > 0) {
             return saleData.paymentMethods.map(p => {
-                const isBinance = p.method === 'binance_usdt' || (p.currency || '').toUpperCase() === 'USDT';
+                const pCurr = String(p.currency || '').toUpperCase();
+                const isBinance = p.method === 'binance_usdt' || pCurr === 'USDT';
                 if (isBinance) {
                     const amountUsdt = precision.round(Number(p.amount) || 0, 2);
                     const cryptoRate = Number(p.cryptoRate || exchangeRate || 0);
                     let convertedAmountBs = Number(p.convertedAmountBs || 0);
-                    if (!convertedAmountBs && exchangeRate > 0) {
-                        convertedAmountBs = precision.round(precision.multiply(amountUsdt, exchangeRate), 2);
+                    if (!convertedAmountBs && cryptoRate > 0) {
+                        convertedAmountBs = precision.round(precision.multiply(amountUsdt, cryptoRate), 2);
                     }
-                    const convertedAmountUsd = amountUsdt;
+                    const convertedAmountUsd = (convertedAmountBs > 0 && exchangeRate > 0 && cryptoRate > 0 && Math.abs(cryptoRate - exchangeRate) > 0.0001)
+                        ? precision.round(precision.divide(convertedAmountBs, exchangeRate), 2)
+                        : amountUsdt;
                     return {
                         ...p,
                         method: 'binance_usdt',
@@ -1385,6 +1608,37 @@ class SaleService {
                         convertedAmountUsd
                     };
                 }
+
+                // Pago en Euros dentro de Venezuela (moneda extranjera convertible vía tasa oficial Euro BCV)
+                const isForeignEur = !isSingleCountry && (pCurr === 'EUR' || p.method === 'cash_eur');
+                if (isForeignEur) {
+                    const amountEur = precision.round(Number(p.amount) || 0, 2);
+                    const eurRate = Number(p.eurRate || p.euroRate || settings.euroRate || settings.businessInfo?.euroRate || 0);
+                    let convertedAmountBs = Number(p.convertedAmountBs || 0);
+                    if (!convertedAmountBs && eurRate > 0) {
+                        convertedAmountBs = precision.round(precision.multiply(amountEur, eurRate), 2);
+                    }
+                    let convertedAmountUsd = Number(p.convertedAmountUsd || 0);
+                    if (convertedAmountBs > 0 && exchangeRate > 0) {
+                        convertedAmountUsd = precision.round(precision.divide(convertedAmountBs, exchangeRate), 2);
+                    } else if (!convertedAmountUsd) {
+                        convertedAmountUsd = amountEur;
+                    }
+                    return {
+                        ...p,
+                        amount: amountEur,
+                        currency: 'EUR',
+                        eurRate: eurRate > 0 ? eurRate : undefined,
+                        convertedAmountBs: convertedAmountBs > 0 ? convertedAmountBs : undefined,
+                        convertedAmountUsd
+                    };
+                }
+
+                // En países de moneda única (ej. España EUR, Colombia COP), garantizar moneda nativa del país
+                if (isSingleCountry && !pCurr) {
+                    return { ...p, currency: baseCurrency };
+                }
+
                 return p;
             });
         }
@@ -1394,11 +1648,11 @@ class SaleService {
         const tenderedVes = Number(amountTenderedVes);
 
         if (tenderedUsd === 0 && tenderedVes === 0) {
-            return [{ method: paymentMethod, amount: saleTotal, currency: 'USD' }];
+            return [{ method: paymentMethod, amount: saleTotal, currency: baseCurrency }];
         }
 
         const normalized = [];
-        if (tenderedVes > 0) {
+        if (tenderedVes > 0 && !isSingleCountry) {
             const tenderedVesInUsd = precision.normalizeToUsd(tenderedVes, exchangeRate);
             normalized.push({ 
                 method: paymentMethod + '_bs', 
@@ -1411,11 +1665,11 @@ class SaleService {
             normalized.push({ 
                 method: paymentMethod, 
                 amount: precision.round(tenderedUsd, 2), 
-                currency: 'USD' 
+                currency: baseCurrency 
             });
         }
 
-        return normalized.length > 0 ? normalized : [{ method: paymentMethod, amount: saleTotal, currency: 'USD' }];
+        return normalized.length > 0 ? normalized : [{ method: paymentMethod, amount: saleTotal, currency: baseCurrency }];
     }
 
     async updateOrphanSaleCustomer(saleId, customerId, customerName, companyId = null) {

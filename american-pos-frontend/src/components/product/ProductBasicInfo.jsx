@@ -1,5 +1,5 @@
 import React from 'react';
-import { Tag, Check, X, Settings2, Scan, RefreshCw, Loader2, Search, Printer, Plus, Truck, Barcode } from 'lucide-react';
+import { Tag, Check, X, Settings2, Scan, RefreshCw, Loader2, Printer, Plus, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function ProductBasicInfo({
@@ -15,15 +15,12 @@ export default function ProductBasicInfo({
     categories,
     suppliers,
     onAddSupplier,
-    product,
     setScannerMode,
     setIsBarcodeScannerOpen,
     generateInternalBarcode,
     isGeneratingBarcode,
-    handleGenerateBarcodeIA,
     setIsLabelModalOpen
 }) {
-    const [isMobileScreen, setIsMobileScreen] = React.useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
     const [isAddingSupplier, setIsAddingSupplier] = React.useState(false);
     const [isSavingSupplier, setIsSavingSupplier] = React.useState(false);
     const [newSupplierData, setNewSupplierData] = React.useState({
@@ -57,17 +54,12 @@ export default function ProductBasicInfo({
             setIsAddingSupplier(false);
             setNewSupplierData({ name: '', contact: '', phone: '' });
         } catch (err) {
+            console.warn('[ProductBasicInfo] Error capturado en operación:', err?.message || err);
             // Manejado en handler superior
         } finally {
             setIsSavingSupplier(false);
         }
     };
-
-    React.useEffect(() => {
-        const handleResize = () => setIsMobileScreen(window.innerWidth < 768);
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
 
     return (
         <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-xs space-y-4">

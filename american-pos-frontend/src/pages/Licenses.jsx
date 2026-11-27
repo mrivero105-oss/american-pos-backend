@@ -1,29 +1,26 @@
-import { useState, useEffect, useMemo } from 'react';
-import { 
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
     Key, 
-    ShieldCheck, 
     Copy, 
     RefreshCw, 
     CheckCircle2, 
-    AlertCircle, 
-    Clock,
-    Plus,
-    Monitor,
-    Trash2,
-    Calendar,
-    Search,
-    Check,
-    XCircle,
-    ArrowUpRight,
-    Sparkles,
-    Shield
+    Clock, 
+    Plus, 
+    Monitor, 
+    Trash2, 
+    Calendar, 
+    Search, 
+    Check, 
+    Cloud
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../services/api';
 import { toast } from 'react-hot-toast';
 import ConfirmModal from '../components/ConfirmModal';
+import OnlineLicenseControlTab from '../components/OnlineLicenseControlTab';
 
 const Licenses = () => {
+    const [activeTab, setActiveTab] = useState('local');
     const [machineId, setMachineId] = useState('');
     const [statusData, setStatusData] = useState(null);
     const [history, setHistory] = useState([]);
@@ -53,25 +50,21 @@ const Licenses = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [filterStatus, setFilterStatus] = useState('ALL'); // 'ALL', 'AVAILABLE', 'VITALICIA', 'EXPIRED'
 
-    useEffect(() => {
-        fetchData();
-    }, []);
-
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         try {
             setLoading(true);
             const [statusRes, historyRes] = await Promise.all([
                 api.get('/license/status'),
                 api.get('/license/history')
             ]);
-            
+
             const curMid = statusRes.data.machineId || '';
             setMachineId(curMid);
             setStatusData(statusRes.data);
             setHistory(historyRes.data.history || []);
-            
-            if (!targetMid && curMid) {
-                setTargetMid(curMid);
+
+            if (curMid) {
+                setTargetMid((prev) => prev || curMid);
             }
         } catch (error) {
             console.error('Error fetching license data:', error);
@@ -79,7 +72,11 @@ const Licenses = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        fetchData();
+    }, [fetchData]);
 
     const handleGenerateKey = async (e) => {
         e.preventDefault();
@@ -291,7 +288,37 @@ const Licenses = () => {
                 </div>
             </div>
 
-            {/* 2. Cuerpo en Cuadrícula: Panel de Control (Izquierda) + Historial (Derecha) */}
+            {/* Navegación por Pestañas */}
+            <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2 shadow-xs">
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('local')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer ${
+                        activeTab === 'local'
+                            ? 'bg-primary-600 text-white shadow-xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                >
+                    <Key size={15} />
+                    <span>Licencias Locales (RSA Offline)</span>
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('online')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer ${
+                        activeTab === 'online'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                >
+                    <Cloud size={15} />
+                    <span>Control en Línea (Proveedor)</span>
+                </button>
+            </div>
+
+            {activeTab === 'online' ? (
+                <OnlineLicenseControlTab localMachineId={machineId} />
+            ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 
                 {/* COLUMNA IZQUIERDA (5 cols): Estado del Terminal + Formulario Generador */}
@@ -600,7 +627,6 @@ const Licenses = () => {
                                     {filteredHistory.map((item) => {
                                         const isDeleting = deletingId === item.id;
                                         const isVitalicia = !item.expiresAt;
-                                        const isRevokedOrExpired = item.status === 'revoked' || item.status === 'expired';
 
                                         return (
                                             <motion.div
@@ -723,6 +749,7 @@ const Licenses = () => {
                     </div>
                 </div>
             </div>
+            )}
 
             {/* Modal de Confirmación */}
             <ConfirmModal 

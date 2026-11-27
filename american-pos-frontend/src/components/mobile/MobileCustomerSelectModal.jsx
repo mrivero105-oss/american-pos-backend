@@ -1,7 +1,7 @@
-import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Users, Plus, X, Search, UserCheck, CheckCircle, RefreshCw, UserPlus, User, Phone, Edit3 } from 'lucide-react';
+import { ArrowLeft, Users, X, Search, CheckCircle, RefreshCw, UserPlus, User, Phone, Edit3 } from 'lucide-react';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 export default function MobileCustomerSelectModal({
   isOpen,
@@ -22,16 +22,27 @@ export default function MobileCustomerSelectModal({
   isSavingCustomer,
   triggerHaptic = () => {}
 }) {
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isOpen });
+
   return (
     <AnimatePresence>
       {isOpen && (
-          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-xs animate-fadeIn">
+          <div
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-xs animate-fadeIn"
+            style={modalOverlayStyle}
+          >
             <motion.div
               initial={{ y: '100%', opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: '100%', opacity: 0 }}
               transition={{ type: 'spring', damping: 25, stiffness: 300 }}
               className={`w-full max-w-md ${T.modalCard} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-2xl border ${T.border} space-y-3.5 max-h-[92dvh] flex flex-col`}
+              style={modalCardMaxHeightStyle}
             >
               {/* Header del Modal */}
               <div className="flex items-center justify-between border-b pb-2.5 shrink-0">
@@ -124,10 +135,17 @@ export default function MobileCustomerSelectModal({
                     <Search size={15} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${T.textMuted}`} />
                     <input
                       type="text"
+                      enterKeyHint="search"
                       placeholder="Buscar o dictar nombre, cédula..."
                       value={customerSearch}
                       onChange={(e) => setCustomerSearch(e.target.value)}
-                      className={`w-full ${T.inputBg} border rounded-2xl pl-9 pr-14 py-2 text-xs font-bold outline-none focus:border-blue-500 transition-colors`}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && filteredCustomers.length === 1) {
+                          e.preventDefault();
+                          handleSelectCustomer(filteredCustomers[0]);
+                        }
+                      }}
+                      className={`w-full min-h-[44px] ${T.inputBg} border rounded-2xl pl-9 pr-14 py-2 text-base sm:text-sm font-bold outline-none focus:border-blue-500 transition-colors`}
                     />
                     <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
                       {customerSearch && (
@@ -179,7 +197,7 @@ export default function MobileCustomerSelectModal({
                     {filteredCustomers.length === 0 ? (
                       <div className="py-8 text-center space-y-2">
                         <p className="text-xs text-slate-400">
-                          No se encontraron clientes para <b className="text-white">"{customerSearch}"</b>
+                          No se encontraron clientes para <b className="text-white">&ldquo;{customerSearch}&rdquo;</b>
                         </p>
                         <button
                           type="button"
@@ -217,7 +235,7 @@ export default function MobileCustomerSelectModal({
                           }}
                           className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs cursor-pointer shadow-sm active:scale-95 transition-all"
                         >
-                          Crear cliente "{customerSearch}" ahora
+                          Crear cliente &ldquo;{customerSearch}&rdquo; ahora
                         </button>
                       </div>
                     ) : (
@@ -300,7 +318,12 @@ export default function MobileCustomerSelectModal({
                 </div>
               ) : (
                 /* VISTA B: FORMULARIO AÑADIR NUEVO CLIENTE */
-                <form onSubmit={handleSaveNewCustomer} className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-0.5">
+                <form
+                  onSubmit={handleSaveNewCustomer}
+                  onKeyDown={handleFormKeyDown}
+                  onFocusCapture={handleFieldFocusCapture}
+                  className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-0.5"
+                >
                   {/* Nombre Completo */}
                   <div className="space-y-1">
                     <label className={`text-[10px] font-black uppercase tracking-wider ${T.textSecondary} block`}>
@@ -308,12 +331,13 @@ export default function MobileCustomerSelectModal({
                     </label>
                     <input
                       type="text"
+                      enterKeyHint="next"
                       required
                       placeholder="Ej: Manuel Rivero"
                       value={newCustomerForm.name}
                       onChange={(e) => setNewCustomerForm(prev => ({ ...prev, name: e.target.value }))}
                       autoFocus
-                      className={`w-full ${T.inputBg} border rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500`}
+                      className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2 text-base sm:text-sm font-bold outline-none focus:border-blue-500`}
                     />
                   </div>
 
@@ -346,10 +370,11 @@ export default function MobileCustomerSelectModal({
                       )}
                       <input
                         type="text"
+                        enterKeyHint="next"
                         placeholder="Número de documento..."
                         value={newCustomerForm.idDocument}
                         onChange={(e) => setNewCustomerForm(prev => ({ ...prev, idDocument: e.target.value }))}
-                        className={`w-full ${T.inputBg} border rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 font-mono`}
+                        className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2 text-base sm:text-sm font-bold outline-none focus:border-blue-500 font-mono`}
                       />
                     </div>
                   </div>
@@ -363,10 +388,12 @@ export default function MobileCustomerSelectModal({
                       <Phone size={13} className={`absolute left-3 top-1/2 -translate-y-1/2 ${T.textMuted}`} />
                       <input
                         type="tel"
+                        inputMode="tel"
+                        enterKeyHint="next"
                         placeholder="Ej: 0414 1234567"
                         value={newCustomerForm.phone}
                         onChange={(e) => setNewCustomerForm(prev => ({ ...prev, phone: e.target.value }))}
-                        className={`w-full ${T.inputBg} border rounded-xl pl-8 pr-3 py-2 text-xs font-bold outline-none focus:border-emerald-500 font-mono`}
+                        className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl pl-8 pr-3 py-2 text-base sm:text-sm font-bold outline-none focus:border-emerald-500 font-mono`}
                       />
                     </div>
                     <span className="text-[9px] text-emerald-400 font-medium block">
@@ -381,10 +408,11 @@ export default function MobileCustomerSelectModal({
                     </label>
                     <input
                       type="text"
+                      enterKeyHint="next"
                       placeholder="Ej: Av. Bolívar, Local 12"
                       value={newCustomerForm.address}
                       onChange={(e) => setNewCustomerForm(prev => ({ ...prev, address: e.target.value }))}
-                      className={`w-full ${T.inputBg} border rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500`}
+                      className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2 text-base sm:text-sm font-bold outline-none focus:border-blue-500`}
                     />
                   </div>
 
@@ -395,11 +423,13 @@ export default function MobileCustomerSelectModal({
                     </label>
                     <input
                       type="number"
+                      inputMode="decimal"
+                      enterKeyHint="done"
                       step="any"
                       placeholder="0.00"
                       value={newCustomerForm.creditLimit}
                       onChange={(e) => setNewCustomerForm(prev => ({ ...prev, creditLimit: e.target.value }))}
-                      className={`w-full ${T.inputBg} border rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500 font-mono`}
+                      className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2 text-base sm:text-sm font-bold outline-none focus:border-blue-500 font-mono`}
                     />
                   </div>
 

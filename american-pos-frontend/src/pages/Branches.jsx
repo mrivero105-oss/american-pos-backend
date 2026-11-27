@@ -1,11 +1,24 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../services/api';
 import { useAuth } from '../hooks/AuthContext';
-import { 
-    Building2, Plus, Edit2, Trash2, MapPin, Phone, Mail, CheckCircle2, 
-    XCircle, Star, Search, RefreshCcw, ExternalLink, BarChart3, Users,
-    Package, ArrowRightLeft, ShieldCheck, Tag, Navigation,
-    Store, Warehouse, Zap, Award
+import {
+    Building2, 
+    Plus, 
+    Edit2, 
+    Trash2, 
+    MapPin, 
+    Phone, 
+    CheckCircle2, 
+    Star, 
+    Search, 
+    RefreshCcw, 
+    BarChart3, 
+    Users, 
+    Navigation, 
+    Store, 
+    Warehouse, 
+    Zap, 
+    Award
 } from 'lucide-react';
 import BranchModal from '../components/BranchModal';
 import BranchAnalyticsModal from '../components/BranchAnalyticsModal';
@@ -20,7 +33,7 @@ const BRANCH_TYPE_CONFIG = {
 };
 
 export default function Branches() {
-    const { user, login } = useAuth();
+    const { user } = useAuth();
     const [branches, setBranches] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');

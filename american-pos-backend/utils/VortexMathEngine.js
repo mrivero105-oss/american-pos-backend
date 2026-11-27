@@ -42,15 +42,27 @@ const parseNumericInput = (val) => {
 const toBigIntExact = (val) => {
     if (val === null || val === undefined) return 0n;
     if (typeof val === 'bigint') return val * FACTOR;
-    let s = parseToStringExact(val);
+    if (typeof val === 'number' && !Number.isFinite(val)) return 0n;
+    let s = parseToStringExact(val).trim();
+    if (!s) return 0n;
+    // Expandir notación científica (ej. 1e-7, 2.5e+4) de forma segura sin SyntaxError en BigInt
+    if (/[eE]/.test(s)) {
+        const num = Number(s);
+        if (!Number.isFinite(num)) return 0n;
+        s = num.toFixed(10);
+    }
     const sign = s.startsWith('-') ? -1n : 1n;
     if (s.startsWith('-') || s.startsWith('+')) s = s.slice(1);
+    if (!/^\d*(?:\.\d*)?$/.test(s) || s === '' || s === '.') {
+        return 0n;
+    }
     const parts = s.split('.');
-    let integerPart = parts[0] || '0';
-    let fracPart = (parts[1] || '').padEnd(8, '0').slice(0, 8);
+    const integerPart = parts[0] || '0';
+    const fracRaw = parts[1] || '';
+    const fracPart = fracRaw.padEnd(8, '0').slice(0, 8);
     let rawBig = BigInt(integerPart + fracPart);
-    if (parts[1] && parts[1].length > 8) {
-        const nextDigit = parseInt(parts[1][8], 10);
+    if (fracRaw.length > 8) {
+        const nextDigit = parseInt(fracRaw[8], 10);
         if (nextDigit >= 5) rawBig += 1n;
     }
     return sign * rawBig;

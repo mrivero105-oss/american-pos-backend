@@ -21,6 +21,49 @@ router.post('/query', async (req, res) => {
     }
 });
 
+// POST /api/ai/query-stream (Server-Sent Events para menor latencia al primer token)
+router.post('/query-stream', async (req, res) => {
+    const { query, history, context } = req.body || {};
+    const { companyId } = req.user;
+
+    if (!query) {
+        return res.status(400).json({ error: 'La consulta es requerida.' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+    let clientClosed = false;
+    req.on('close', () => {
+        clientClosed = true;
+    });
+
+    const writeEvent = (event, payload) => {
+        if (clientClosed || res.writableEnded) return;
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    try {
+        const fullText = await AIService.askStream(
+            companyId,
+            query,
+            req.user,
+            history || [],
+            context || {},
+            (chunk) => writeEvent('chunk', { text: chunk })
+        );
+        writeEvent('done', { response: fullText });
+    } catch (error) {
+        console.error('[AI_STREAM_ROUTE_ERROR]', error);
+        writeEvent('error', { error: 'Error interno al procesar la IA en streaming.' });
+    } finally {
+        if (!res.writableEnded) res.end();
+    }
+});
+
 // POST /api/ai/manager/analyze
 router.post('/manager/analyze', requirePermission('canViewReports'), async (req, res) => {
     try {

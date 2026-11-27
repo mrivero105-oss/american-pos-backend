@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { usePos } from '../hooks/PosContext';
-import { RotateCcw, X, AlertTriangle, ShoppingCart, Clock } from 'lucide-react';
+import { RotateCcw, X, AlertTriangle, Clock } from 'lucide-react';
 import { formatBs } from '../utils/format';
 
 /**

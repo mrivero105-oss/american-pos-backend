@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react';
 import { MessageCircle, QrCode, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../services/api';
+import { useSocket } from '../hooks/SocketContext';
 
 export default function WhatsappBotIndicator({ onOpenModal }) {
     const [status, setStatus] = useState('DISCONNECTED');
     const [isHovered, setIsHovered] = useState(false);
+    const { socket } = useSocket() || {};
 
     const fetchStatus = async () => {
         try {
@@ -13,10 +15,19 @@ export default function WhatsappBotIndicator({ onOpenModal }) {
             if (data && data.status) {
                 setStatus(data.status);
             }
-        } catch (error) {
+        } catch (_error) {
             // Silencioso para no ensuciar la consola
         }
     };
+
+    useEffect(() => {
+        if (!socket) return;
+        const handleRealtime = (data) => {
+            if (data && data.status) setStatus(data.status);
+        };
+        socket.on('whatsapp_status', handleRealtime);
+        return () => socket.off('whatsapp_status', handleRealtime);
+    }, [socket]);
 
     useEffect(() => {
         // Skip polling on mobile screens where this indicator is hidden in header
@@ -29,7 +40,7 @@ export default function WhatsappBotIndicator({ onOpenModal }) {
             if (document.visibilityState === 'visible') {
                 fetchStatus();
             }
-        }, 20000); // Polling cada 20 segundos en desktop
+        }, 120000); // Polling de respaldo cada 2 min (estado en tiempo real llega vía socket 'whatsapp_status')
 
         return () => clearInterval(interval);
     }, []);

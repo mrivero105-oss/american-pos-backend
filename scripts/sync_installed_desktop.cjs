@@ -4,14 +4,16 @@
  * Utiliza el API nativo de @electron/asar directamente en Node.js.
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execSync } = require('child_process');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const FRONTEND_DIR = path.join(PROJECT_ROOT, 'american-pos-frontend');
 const BACKEND_DIR = path.join(PROJECT_ROOT, 'american-pos-backend');
-const INSTALLED_DIR = 'C:\\Users\\mrive\\AppData\\Local\\Programs\\Isaac POS Modern\\resources';
-const TEMP_EXTRACTED = 'C:\\Users\\mrive\\AppData\\Local\\Temp\\isaac_asar_extracted';
+const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+const INSTALLED_DIR = process.env.ISAAC_MODERN_RESOURCES_DIR || path.join(localAppData, 'Programs', 'Isaac POS Modern', 'resources');
+const TEMP_EXTRACTED = path.join(os.tmpdir(), 'isaac_asar_extracted');
 
 const asar = require(path.join(BACKEND_DIR, 'node_modules/@electron/asar'));
 
@@ -45,25 +47,11 @@ async function main() {
     const stagingPublic = path.join(TEMP_EXTRACTED, 'public');
     const stagingAssets = path.join(stagingPublic, 'assets');
 
-    // Limpiar imágenes obsoletas o con nombres antiguos en assets de staging
+    // Limpiar assets antiguos de Vite para evitar inflar app.asar con hashes obsoletos
     if (fs.existsSync(stagingAssets)) {
-        const obsoletePatterns = [
-            /RH5LqTe5/,
-            /Gi0wQ7b8/,
-            /CLAUhV0B/,
-            /DmyQGpc3/,
-            /logo-x_2IkhiP/,
-            /logo-Bq2dXes1/
-        ];
-        const existingFiles = fs.readdirSync(stagingAssets);
-        for (const f of existingFiles) {
-            if (obsoletePatterns.some(p => p.test(f))) {
-                try {
-                    fs.unlinkSync(path.join(stagingAssets, f));
-                    console.log(`  - Eliminado asset obsoleto en staging: ${f}`);
-                } catch (_) {}
-            }
-        }
+        try {
+            fs.rmSync(stagingAssets, { recursive: true, force: true });
+        } catch (_) {}
     }
 
     // Copiar dist compilado a staging/public
@@ -76,7 +64,7 @@ async function main() {
     }
 
     // Copiar carpetas clave del backend
-    const backendFolders = ['routes', 'services', 'database', 'utils', 'middleware', 'controllers', 'config', 'build', 'schemas', 'static', 'migrations'];
+    const backendFolders = ['constants', 'routes', 'services', 'database', 'utils', 'middleware', 'controllers', 'config', 'build', 'schemas', 'static', 'migrations'];
     for (const folder of backendFolders) {
         const srcFolder = path.join(BACKEND_DIR, folder);
         const destFolder = path.join(TEMP_EXTRACTED, folder);
@@ -85,12 +73,24 @@ async function main() {
         }
     }
 
-    // Copiar archivos raíz del backend esenciales (excluyendo .env por seguridad: main.js gestiona .env en UserData)
-    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.json'];
-    try {
-        const leftoverEnv = path.join(TEMP_EXTRACTED, '.env');
-        if (fs.existsSync(leftoverEnv)) fs.unlinkSync(leftoverEnv);
-    } catch (_) {}
+    // Seguridad: excluir claves privadas RSA o secretos heredados antes de empaquetar app.asar
+    const stagingKeysDir = path.join(TEMP_EXTRACTED, 'utils', 'keys');
+    if (fs.existsSync(stagingKeysDir)) {
+        for (const kFile of fs.readdirSync(stagingKeysDir)) {
+            if (/private/i.test(kFile) && kFile.endsWith('.pem')) {
+                try { fs.unlinkSync(path.join(stagingKeysDir, kFile)); } catch (_) {}
+            }
+        }
+    }
+
+    // Copiar archivos raíz del backend esenciales (excluyendo .env, settings.json y secretos: main.js los gestiona en UserData)
+    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.example.json'];
+    for (const sensitiveName of ['.env', 'settings.json', 'db-config.json', 'cloud_mirror_config.json', '.dbcfg.key.dpapi', 'secrets.vault.json', '.secrets.key.dpapi']) {
+        try {
+            const p = path.join(TEMP_EXTRACTED, sensitiveName);
+            if (fs.existsSync(p)) fs.unlinkSync(p);
+        } catch (_) {}
+    }
     for (const file of backendRootFiles) {
         const srcFile = path.join(BACKEND_DIR, file);
         const destFile = path.join(TEMP_EXTRACTED, file);
@@ -99,13 +99,27 @@ async function main() {
         }
     }
 
-    // Garantizar que node_modules exista en staging (si se limpió Temp, copiar desde backend)
+    // Garantizar que node_modules en staging esté sincronizado con todas las dependencias de package.json
+    const crypto = require('crypto');
     const stagingNodeModules = path.join(TEMP_EXTRACTED, 'node_modules');
     const backendNodeModules = path.join(BACKEND_DIR, 'node_modules');
-    if (!fs.existsSync(path.join(stagingNodeModules, 'express'))) {
+    const nmStampPath = path.join(TEMP_EXTRACTED, '.nm_sync_hash');
+    const pkgRaw = fs.readFileSync(path.join(BACKEND_DIR, 'package.json'), 'utf8');
+    const pkgJson = JSON.parse(pkgRaw);
+    const lockRaw = fs.existsSync(path.join(BACKEND_DIR, 'package-lock.json'))
+        ? fs.readFileSync(path.join(BACKEND_DIR, 'package-lock.json'), 'utf8')
+        : '';
+    const currentNmHash = crypto.createHash('sha256').update(pkgRaw).update(lockRaw).digest('hex');
+    const prevNmHash = fs.existsSync(nmStampPath) ? fs.readFileSync(nmStampPath, 'utf8').trim() : '';
+    const hasAllTopDeps = Object.keys(pkgJson.dependencies || {}).every(dep =>
+        fs.existsSync(path.join(stagingNodeModules, dep, 'package.json'))
+    );
+
+    if (!fs.existsSync(path.join(stagingNodeModules, 'express')) || !hasAllTopDeps || prevNmHash !== currentNmHash) {
         if (fs.existsSync(path.join(backendNodeModules, 'express'))) {
-            console.log('📂 Copiando node_modules del backend hacia staging (no estaba en caché temporal)...');
+            console.log('📂 Sincronizando node_modules completo hacia staging (dependencias actualizadas)...');
             fs.cpSync(backendNodeModules, stagingNodeModules, { recursive: true, force: true });
+            fs.writeFileSync(nmStampPath, currentNmHash, 'utf8');
         }
     }
 

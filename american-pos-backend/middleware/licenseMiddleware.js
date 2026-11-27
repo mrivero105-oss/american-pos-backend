@@ -5,7 +5,16 @@ const getLicenseModel = () => {
     }
     return LicenseModel;
 };
+const { Op } = require('sequelize');
 const licenseUtils = require('../utils/licenseUtils');
+
+let OnlineLicenseServiceRef = null;
+const getOnlineLicenseService = () => {
+    if (!OnlineLicenseServiceRef) {
+        OnlineLicenseServiceRef = require('../services/OnlineLicenseService');
+    }
+    return OnlineLicenseServiceRef;
+};
 
 // Memory Cache for Terminal Licenses
 const terminalLicenseCache = new Map();
@@ -18,7 +27,7 @@ const CACHE_TTL = 1000 * 60 * 5; // 5 minutos
  */
 const verifyLicense = async (req, res, next) => {
     // Exempt routes (activation, health check, business info and mobile sync)
-    const isExactExempt = ['/license/status', '/license/activate', '/hello', '/settings/business', '/settings/is-setup', '/version.json', '/dist.zip', '/api/app-update-info', '/Isaac-POS-Mobile.apk', '/settings/rate'].includes(req.path);
+    const isExactExempt = ['/license/status', '/license/activate', '/license/sync-online', '/hello', '/settings/business', '/settings/is-setup', '/version.json', '/dist.zip', '/api/app-update-info', '/Isaac-POS-Mobile.apk', '/settings/rate'].includes(req.path);
     const isAuthRoute = req.path.startsWith('/auth/') && !req.path.endsWith('/public-cashiers'); 
     // Strict regex to prevent spoofing with `/public-something` anywhere in the path
     const isPublicSync = /^\/[a-zA-Z0-9_-]+\/public-/.test(req.path);
@@ -32,7 +41,8 @@ const verifyLicense = async (req, res, next) => {
         const serverMachineId = await licenseUtils.getMachineId();
         const rawIp = req.ip || req.connection?.remoteAddress || '';
         const clientIp = rawIp.replace('::ffff:', '');
-        const isLocalHost = clientIp === '127.0.0.1' || clientIp === '::1' || req.hostname === 'localhost';
+        // Nunca confiar en req.hostname (cabecera Host spoofeable desde la LAN); solo IP loopback real
+        const isLocalHost = clientIp === '127.0.0.1' || clientIp === '::1';
 
         let terminalId = req.headers['x-terminal-id'] || req.query.terminalId;
         if (!terminalId) {
@@ -40,15 +50,21 @@ const verifyLicense = async (req, res, next) => {
             terminalId = isLocalHost ? serverMachineId : `TERM-MOB-${ipSuffix}`;
         }
 
-        // Return immediately only if cache is fresh AND license has not passed expiresAt
+        // Return immediately only if cache is fresh AND license has not passed expiresAt / offline graceUntil
         const cached = terminalLicenseCache.get(terminalId);
         const cachedExpiresMs = cached?.license?.expiresAt ? new Date(cached.license.expiresAt).getTime() : null;
-        if (cached && (now - cached.cachedAt) < CACHE_TTL && (!cachedExpiresMs || cachedExpiresMs > now)) {
+        const cachedGraceMs = cached?.graceUntilMs || null;
+        if (
+            cached &&
+            (now - cached.cachedAt) < CACHE_TTL &&
+            (!cachedExpiresMs || cachedExpiresMs > now) &&
+            (!cachedGraceMs || cachedGraceMs > now)
+        ) {
             req.license = cached.license;
             req.isInheritedLicense = Boolean(cached.isInherited);
             return next();
         }
-        if (cached && cachedExpiresMs && cachedExpiresMs <= now) {
+        if (cached && ((cachedExpiresMs && cachedExpiresMs <= now) || (cachedGraceMs && cachedGraceMs <= now))) {
             terminalLicenseCache.delete(terminalId);
         }
 
@@ -64,8 +80,37 @@ const verifyLicense = async (req, res, next) => {
             order: [['createdAt', 'DESC']]
         });
 
+        // 1b. Antes de permitir herencia del servidor, verificar si ESTA terminal fue suspendida o revocada explícitamente
+        if (!activeLicense && !isServerHost) {
+            const ownBlockedLicense = await License.findOne({
+                where: {
+                    machineId: terminalId,
+                    status: { [Op.in]: ['suspended', 'revoked'] }
+                },
+                order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
+            });
+            if (ownBlockedLicense) {
+                const suspEval = getOnlineLicenseService().evaluateLocalLicenseWithOnlinePolicy(
+                    ownBlockedLicense,
+                    ownBlockedLicense.machineId,
+                    now
+                );
+                terminalLicenseCache.delete(terminalId);
+                return res.status(403).json({
+                    error: 'licencia_suspendida',
+                    suspended: true,
+                    status: ownBlockedLicense.status,
+                    reason: suspEval.reason,
+                    message: suspEval.reason,
+                    machineId: terminalId,
+                    serverMachineId
+                });
+            }
+        }
+
         // 2. Si la terminal no tiene licencia individual, verificar si el Servidor Principal tiene licencia activa válida
         let isInheritedFromServer = false;
+        let validatedClaims = null;
         if (!activeLicense) {
             const serverLicense = await License.findOne({
                 where: {
@@ -80,11 +125,37 @@ const verifyLicense = async (req, res, next) => {
                 if (serverValidation.valid) {
                     activeLicense = serverLicense;
                     isInheritedFromServer = true;
+                    validatedClaims = serverValidation.claims || null;
                 }
             }
         }
 
         if (!activeLicense) {
+            const suspendedLicense = await License.findOne({
+                where: {
+                    machineId: { [Op.in]: [terminalId, serverMachineId] },
+                    status: { [Op.in]: ['suspended', 'revoked'] }
+                },
+                order: [['createdAt', 'DESC']]
+            });
+            if (suspendedLicense) {
+                const suspEval = getOnlineLicenseService().evaluateLocalLicenseWithOnlinePolicy(
+                    suspendedLicense,
+                    suspendedLicense.machineId,
+                    now
+                );
+                terminalLicenseCache.delete(terminalId);
+                return res.status(403).json({
+                    error: 'licencia_suspendida',
+                    suspended: true,
+                    status: suspendedLicense.status,
+                    reason: suspEval.reason,
+                    message: suspEval.reason,
+                    machineId: terminalId,
+                    serverMachineId
+                });
+            }
+
             terminalLicenseCache.delete(terminalId);
             return res.status(403).json({
                 error: 'licencia_requerida',
@@ -97,6 +168,7 @@ const verifyLicense = async (req, res, next) => {
         }
 
         // 3. Validar criptográficamente si la licencia es propia de la terminal
+        const effectiveMachineId = isInheritedFromServer ? serverMachineId : terminalId;
         if (!isInheritedFromServer) {
             const targetValidateId = isServerHost ? serverMachineId : terminalId;
             const validation = await licenseUtils.validateKey(activeLicense.licenseKey, targetValidateId);
@@ -110,12 +182,50 @@ const verifyLicense = async (req, res, next) => {
                     serverMachineId: serverMachineId
                 });
             }
+            validatedClaims = validation.claims || null;
+        }
+
+        // 3b. Enforcement real de plan/tier firmado en la licencia RSA v2 (si la llave define restricciones)
+        if (!isServerHost && validatedClaims) {
+            const planStr = String(validatedClaims.plan || '').toLowerCase();
+            if (validatedClaims.allowMobile === false || planStr === 'pc_only' || planStr === 'single_pc') {
+                terminalLicenseCache.delete(terminalId);
+                return res.status(403).json({
+                    error: 'plan_no_permite_terminales',
+                    message: 'Tu plan de licencia actual solo autoriza la caja principal PC. Actualiza tu plan para conectar terminales móviles o cajas LAN.',
+                    plan: validatedClaims.plan || 'pc_only',
+                    machineId: terminalId,
+                    serverMachineId
+                });
+            }
+        }
+
+        // 4. Evaluar política de validación / gracia offline en línea (leases firmados RSA)
+        const onlineCheck = getOnlineLicenseService().evaluateLocalLicenseWithOnlinePolicy(
+            activeLicense,
+            effectiveMachineId,
+            now
+        );
+        if (!onlineCheck.allowed) {
+            terminalLicenseCache.delete(terminalId);
+            return res.status(403).json({
+                error: onlineCheck.code || 'licencia_verificacion_requerida',
+                suspended: Boolean(onlineCheck.suspended),
+                graceExpired: Boolean(onlineCheck.graceExpired),
+                status: onlineCheck.status || 'suspended',
+                reason: onlineCheck.reason,
+                message: onlineCheck.reason,
+                graceUntil: onlineCheck.graceUntil || null,
+                machineId: terminalId,
+                serverMachineId
+            });
         }
 
         // Update Cache
         terminalLicenseCache.set(terminalId, {
             license: activeLicense,
             isInherited: isInheritedFromServer,
+            graceUntilMs: onlineCheck.graceUntil ? Date.parse(onlineCheck.graceUntil) : null,
             cachedAt: now
         });
 

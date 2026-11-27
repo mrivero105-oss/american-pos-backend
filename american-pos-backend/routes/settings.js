@@ -1,11 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const { readJson, writeJson, getUserSettings } = require('../utils/helpers');
+const { readJson, writeJson, getUserSettings, normalizeCompanyId } = require('../utils/helpers');
 const { verifyToken, isAdmin, requirePermission, computeDisplayPairingToken } = require('../middleware/auth');
 const { BASE_PATH, SETTINGS_FILE, PAYMENT_METHODS_FILE } = require('../config/paths');
 const cache = require('../utils/cacheService');
 const { User } = require('../database/models');
 const SupabaseSyncService = require('../services/SupabaseSyncService');
+const SettingsStoreService = require('../services/SettingsStoreService');
+const validate = require('../middleware/validate');
+const {
+    positiveRateSchema,
+    taxesSchema,
+    paymentMethodsSchema,
+    setupSchema,
+    regionSchema,
+    autoLaunchSchema,
+    printRawSchema,
+    networkPrinterSchema,
+    dbConfigSchema
+} = require('../schemas/settingsSchema');
 
 const getCachedSettings = () => {
     let settings = cache.get('all_settings');
@@ -16,95 +29,46 @@ const getCachedSettings = () => {
     return settings;
 };
 
-const normalizeCountry = (country) => {
-    if (!country || typeof country !== 'string') return '';
-    return country
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]/g, '');
-};
+const {
+    COUNTRY_PRESETS,
+    normalizeCountry,
+    getPresetKey,
+    getRegionConfig,
+    isVenezuelaCountry,
+    isDollarOnlyCountry,
+    isSingleCurrencyCountry,
+    buildPublicRegionMetadata
+} = require('../constants/regionPresets');
 
-const getPresetKey = (country) => {
-    const clean = normalizeCountry(country);
-    if (['ecuador'].includes(clean)) return 'ecuador';
-    if (['panama'].includes(clean)) return 'panama';
-    if (['usa', 'eeuu', 'estadosunidos', 'unitedstates', 'us'].includes(clean)) return 'usa';
-    if (['colombia'].includes(clean)) return 'colombia';
-    if (['venezuela', 've'].includes(clean)) return 'venezuela';
-    return null;
-};
+const SENSITIVE_SETTINGS_KEY_RE = /(password|pass|secret|apikey|api_key|servicekey|service_key|privatekey|private_key|accesstoken|access_token|refreshtoken|refresh_token|bottoken|bot_token|webhooktoken|webhook_token|synckey|sync_key|authkey|auth_key|smtppass|smtp_pass)/i;
 
-const isDollarOnlyCountry = (country) => {
-    const key = getPresetKey(country);
-    return key === 'ecuador' || key === 'panama' || key === 'usa';
-};
-
-const COUNTRY_PRESETS = {
-    'venezuela': {
-        exchangeRate: 36.5,
-        currencyMode: 'BOTH',
-        taxConfig: { ivaEnabled: true, ivaRate: 16.0, igtfEnabled: true, igtfRate: 3.0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo $', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'cash_bs', name: 'Efectivo Bs', icon: 'DollarSign', type: 'CASH', currency: 'VES' },
-            { id: 'debit', name: 'Punto de Venta', icon: 'CreditCard', type: 'DIGITAL', currency: 'VES' },
-            { id: 'pago_movil', name: 'Pago Móvil', icon: 'Smartphone', type: 'DIGITAL', currency: 'VES' },
-            { id: 'binance_usdt', name: 'Binance Pay (USDT)', icon: 'Wallet', type: 'DIGITAL', currency: 'USDT' },
-            { id: 'zelle', name: 'Zelle', icon: 'Send', type: 'DIGITAL', currency: 'USD' },
-            { id: 'fiado', name: 'Crédito / Fiado', icon: 'User', type: 'CREDIT', currency: 'USD' }
-        ]
-    },
-    'colombia': {
-        exchangeRate: 3950,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 19.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo COP', icon: 'DollarSign', type: 'CASH', currency: 'COP' },
-            { id: 'debit', name: 'Tarjeta Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'COP' },
-            { id: 'nequi', name: 'Nequi / Daviplata', icon: 'Smartphone', type: 'DIGITAL', currency: 'COP' },
-            { id: 'fiado', name: 'Crédito', icon: 'User', type: 'CREDIT', currency: 'COP' }
-        ]
-    },
-    'usa': {
-        exchangeRate: 1.0,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 7.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'card', name: 'Tarjeta / Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'USD' },
-            { id: 'zelle', name: 'Zelle / Venmo', icon: 'Send', type: 'DIGITAL', currency: 'USD' }
-        ]
-    },
-    'panama': {
-        exchangeRate: 1.0,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 7.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'card', name: 'Tarjeta / Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'USD' },
-            { id: 'yappy', name: 'Yappy', icon: 'Smartphone', type: 'DIGITAL', currency: 'USD' }
-        ]
-    },
-    'ecuador': {
-        exchangeRate: 1.0,
-        currencyMode: 'SINGLE',
-        taxConfig: { ivaEnabled: true, ivaRate: 15.0, igtfEnabled: false, igtfRate: 0 },
-        paymentMethods: [
-            { id: 'cash', name: 'Efectivo', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
-            { id: 'card', name: 'Tarjeta / Débito', icon: 'CreditCard', type: 'DIGITAL', currency: 'USD' },
-            { id: 'transfer', name: 'Transferencia', icon: 'Smartphone', type: 'DIGITAL', currency: 'USD' },
-            { id: 'fiado', name: 'Crédito', icon: 'User', type: 'CREDIT', currency: 'USD' }
-        ]
+const sanitizeSettingsForNonAdmin = (value) => {
+    if (Array.isArray(value)) {
+        return value.map(item => sanitizeSettingsForNonAdmin(item));
     }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    const clean = {};
+    for (const [k, v] of Object.entries(value)) {
+        if (SENSITIVE_SETTINGS_KEY_RE.test(k)) {
+            continue;
+        }
+        clean[k] = sanitizeSettingsForNonAdmin(v);
+    }
+    return clean;
 };
 
 router.get('/', verifyToken, async (req, res) => {
     try {
         const allSettings = getCachedSettings();
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
-        const userSettings = getUserSettings(allSettings, companyId);
-        res.json(userSettings || {});
+        const userSettings = getUserSettings(allSettings, companyId) || {};
+        const role = String(req.user?.role || '').toLowerCase();
+        const isPrivilegedSettingsReader =
+            ['admin', 'superadmin', 'owner', 'dueño', 'master'].includes(role) ||
+            req.user?.permissions?.canManageSettings === true;
+        res.json(isPrivilegedSettingsReader ? userSettings : sanitizeSettingsForNonAdmin(userSettings));
     } catch (err) {
         console.error('Error in GET /settings:', err);
         res.status(500).json({ error: 'Error obteniendo configuración' });
@@ -118,9 +82,9 @@ router.get('/rate', async (req, res) => {
         const userSettings = getUserSettings(allSettings, companyId);
 
         const country = userSettings.businessInfo?.country || '';
-        const isUsdSingleCountry = isDollarOnlyCountry(country);
-        const presetKey = getPresetKey(country);
-        const isSingleCountry = isUsdSingleCountry || presetKey === 'colombia';
+        const regionMeta = buildPublicRegionMetadata(country);
+        const isVenezuela = isVenezuelaCountry(country);
+        const isSingleCountry = isSingleCurrencyCountry(country);
         const userCacheKey = req.user?.id ? `user_currency_${req.user.id}` : null;
         let currencyMode = isSingleCountry ? 'SINGLE' : (userCacheKey ? cache.get(userCacheKey) : null);
 
@@ -141,11 +105,11 @@ router.get('/rate', async (req, res) => {
         }
 
         if (process.env.DEBUG_VERBOSE === 'true') {
-            console.log(`[RATE DEBUG] GET /rate - User: ${req.user?.id || 'guest'}, Company: ${companyId}, Rate: ${userSettings.exchangeRate}, Mode: ${currencyMode}`);
+            console.log(`[RATE DEBUG] GET /rate - User: ${req.user?.id || 'guest'}, Company: ${companyId}, Country: ${regionMeta.id}, Rate: ${userSettings.exchangeRate}, Mode: ${currencyMode}`);
         }
 
-        // Si la auto-actualización está activa y hace más de 1 hora que no se sincroniza, refrescar en segundo plano
-        if (!isUsdSingleCountry && userSettings.autoUpdateRate !== false) {
+        // BCV aplica exclusivamente a Venezuela (nunca disparar scraping BCV en Ecuador, Colombia, Panamá o USA)
+        if (isVenezuela && userSettings.autoUpdateRate !== false && !req.user?.isPublicContext && req.user?.role !== 'public_guest') {
             const lastSync = userSettings.lastRateSyncAt ? new Date(userSettings.lastRateSyncAt).getTime() : 0;
             if (Date.now() - lastSync > 1000 * 60 * 60) {
                 const BCVAutoSyncService = require('../services/BCVAutoSyncService');
@@ -154,11 +118,18 @@ router.get('/rate', async (req, res) => {
         }
 
         res.json({
-            rate: isUsdSingleCountry ? 1.0 : (userSettings.exchangeRate || 1.0),
-            currencyMode: isUsdSingleCountry ? 'SINGLE' : currencyMode,
-            autoUpdateRate: isUsdSingleCountry ? false : (userSettings.autoUpdateRate !== false),
-            lastRateSyncAt: userSettings.lastRateSyncAt || null,
-            rateSource: userSettings.rateSource || 'BCV'
+            rate: isSingleCountry ? 1.0 : (userSettings.exchangeRate || 1.0),
+            euroRate: isVenezuela ? (Number(userSettings.euroRate) || 0) : (regionMeta.currencyCode === 'EUR' ? 1.0 : 0),
+            currencyMode: isSingleCountry ? 'SINGLE' : currencyMode,
+            autoUpdateRate: isVenezuela ? (userSettings.autoUpdateRate !== false) : false,
+            lastRateSyncAt: isVenezuela ? (userSettings.lastRateSyncAt || null) : null,
+            rateSource: isVenezuela ? (userSettings.rateSource || 'BCV') : 'LOCAL',
+            country: regionMeta.id,
+            currencyCode: regionMeta.currencyCode,
+            currencySymbol: regionMeta.currencySymbol,
+            taxLabel: regionMeta.taxLabel,
+            taxAuthority: regionMeta.taxAuthority,
+            regionConfig: regionMeta
         });
     } catch (error) {
         console.error('Error getting rate:', error);
@@ -175,6 +146,16 @@ router.get('/bcv', async (req, res) => {
         res.json(result);
     } catch (error) {
         console.error('Error al consultar BCV:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/bcv/euro', async (req, res) => {
+    try {
+        const result = await BCVRateService.getCurrentEuroRate();
+        res.json(result);
+    } catch (error) {
+        console.error('Error al consultar Euro BCV:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -224,11 +205,11 @@ router.get('/binance', async (req, res) => {
     }
 });
 
-router.post('/binance/rate', async (req, res) => {
+router.post('/binance/rate', validate(positiveRateSchema), async (req, res) => {
     try {
-        const role = req.user?.role?.toLowerCase();
+        const { isCompanyAdminRole } = require('../constants/roles');
         const hasPermission = req.user?.permissions?.canManageSettings;
-        const isAuthorized = role === 'admin' || role === 'superadmin' || hasPermission;
+        const isAuthorized = isCompanyAdminRole(req.user?.role) || hasPermission;
         if (!isAuthorized) {
             return res.status(403).json({ error: 'Acceso denegado: Se requieren permisos de administrador o gestión de configuración' });
         }
@@ -247,8 +228,7 @@ router.post('/binance/rate', async (req, res) => {
         if (companyId === '2' && allSettings['default']) {
             allSettings['default'].binanceRate = parsedRate;
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
 
         const io = req.app.get('io') || global.io;
         if (io) {
@@ -263,45 +243,55 @@ router.post('/binance/rate', async (req, res) => {
     }
 });
 
-router.post('/rate', async (req, res) => {
+router.post('/rate', validate(positiveRateSchema), async (req, res) => {
     try {
-        const role = req.user?.role?.toLowerCase();
+        const { isCompanyAdminRole } = require('../constants/roles');
         const hasPermission = req.user?.permissions?.canManageSettings;
-        const isAuthorized = role === 'admin' || role === 'superadmin' || hasPermission;
+        const isAuthorized = isCompanyAdminRole(req.user?.role) || hasPermission;
         if (!isAuthorized) {
             return res.status(403).json({ error: 'Acceso denegado: Se requieren permisos de administrador o gestión de configuración' });
         }
 
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
-        const { rate, currencyMode, autoUpdateRate } = req.body;
+        const { rate, euroRate, currencyMode, autoUpdateRate } = req.body;
         
         const parsedRate = parseFloat(rate);
         if (isNaN(parsedRate) || parsedRate <= 0) {
             return res.status(400).json({ error: 'La tasa de cambio debe ser un número mayor a 0' });
         }
+        const parsedEuroRate = euroRate !== undefined && euroRate !== null && euroRate !== '' ? parseFloat(euroRate) : null;
+        if (parsedEuroRate !== null && (isNaN(parsedEuroRate) || parsedEuroRate <= 0)) {
+            return res.status(400).json({ error: 'La tasa de Euro debe ser un número mayor a 0' });
+        }
 
         const allSettings = getCachedSettings();
         const userSettings = allSettings[companyId] || { exchangeRate: 1.0, businessInfo: {}, currencyMode: 'BOTH' };
         userSettings.exchangeRate = parsedRate;
+        if (parsedEuroRate !== null) {
+            userSettings.euroRate = parsedEuroRate;
+            userSettings.lastEuroRate = parsedEuroRate;
+        }
         userSettings.lastRateSyncAt = new Date().toISOString();
         if (currencyMode) {
             userSettings.currencyMode = currencyMode;
         }
         if (autoUpdateRate !== undefined) {
             userSettings.autoUpdateRate = !!autoUpdateRate;
+            userSettings.rateSource = userSettings.autoUpdateRate ? 'BCV' : 'MANUAL';
         }
         allSettings[companyId] = userSettings;
         if (companyId === '2') {
             allSettings['default'] = { 
                 ...allSettings['default'], 
-                exchangeRate: parsedRate, 
+                exchangeRate: parsedRate,
+                ...(parsedEuroRate !== null ? { euroRate: parsedEuroRate, lastEuroRate: parsedEuroRate } : {}),
                 currencyMode: currencyMode || userSettings.currencyMode,
                 autoUpdateRate: userSettings.autoUpdateRate,
+                rateSource: userSettings.rateSource || (userSettings.autoUpdateRate ? 'BCV' : 'MANUAL'),
                 lastRateSyncAt: userSettings.lastRateSyncAt
             };
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         if (req.user?.id) {
             cache.del(`user_currency_${req.user.id}`);
         }
@@ -316,14 +306,21 @@ router.post('/rate', async (req, res) => {
         if (io) {
             const payload = { 
                 type: 'rate', 
-                exchangeRate: parseFloat(rate),
+                exchangeRate: parsedRate,
+                euroRate: userSettings.euroRate || undefined,
                 currencyMode: currencyMode || userSettings.currencyMode,
                 autoUpdateRate: userSettings.autoUpdateRate
             };
             io.to(companyId).emit('settings_changed', payload);
         }
 
-        res.json({ success: true, rate, currencyMode: userSettings.currencyMode, autoUpdateRate: userSettings.autoUpdateRate });
+        res.json({
+            success: true,
+            rate: parsedRate,
+            euroRate: userSettings.euroRate || null,
+            currencyMode: userSettings.currencyMode,
+            autoUpdateRate: userSettings.autoUpdateRate
+        });
     } catch (error) {
         console.error('Update rate error:', error);
         res.status(500).json({ error: 'Error al actualizar tasa' });
@@ -336,12 +333,40 @@ router.get('/business', async (req, res) => {
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const userSettings = getUserSettings(allSettings, companyId);
         const bInfo = userSettings.businessInfo || { businessMode: 'STANDARD' };
+        const regionMeta = buildPublicRegionMetadata(bInfo.country);
+        const isVenezuela = isVenezuelaCountry(bInfo.country);
+        const taxCfg = userSettings.taxConfig || {};
+        const igtfEnabledVal = isVenezuela
+            ? (taxCfg.igtfEnabled !== undefined ? Boolean(taxCfg.igtfEnabled) : Boolean(userSettings.igtfEnabled))
+            : false;
+        const igtfRateVal = isVenezuela ? (Number(taxCfg.igtfRate ?? userSettings.igtfRate ?? 3) || 0) : 0;
+        const ivaEnabledVal = taxCfg.ivaEnabled !== undefined
+            ? Boolean(taxCfg.ivaEnabled)
+            : (userSettings.ivaEnabled !== false);
+        const defaultCountryIva = getRegionConfig(bInfo.country).taxConfig.ivaRate;
+        const ivaRateVal = Number(taxCfg.ivaRate ?? userSettings.ivaRate ?? defaultCountryIva) || 0;
         
         const methods = userSettings.paymentMethods || [];
         const pmMethod = methods.find(m => m.id === 'pago_movil' || m.pagoMovilBank || m.pagoMovilPhone || m.pagoMovilId) || {};
 
         res.json({
             ...bInfo,
+            regionConfig: regionMeta,
+            currencyCode: regionMeta.currencyCode,
+            currencySymbol: regionMeta.currencySymbol,
+            taxLabel: regionMeta.taxLabel,
+            taxAuthority: regionMeta.taxAuthority,
+            taxConfig: {
+                ...taxCfg,
+                ivaEnabled: ivaEnabledVal,
+                ivaRate: ivaRateVal,
+                igtfEnabled: igtfEnabledVal,
+                igtfRate: igtfRateVal
+            },
+            ivaEnabled: ivaEnabledVal,
+            ivaRate: ivaRateVal,
+            igtfEnabled: igtfEnabledVal,
+            igtfRate: igtfRateVal,
             broadcastPrintingEnabled: bInfo.broadcastPrintingEnabled === true,
             networkPrinterEnabled: bInfo.networkPrinterEnabled === true,
             pagoMovilBank: bInfo.pagoMovilBank || pmMethod.pagoMovilBank || '',
@@ -353,6 +378,7 @@ router.get('/business', async (req, res) => {
             binancePayId: bInfo.binancePayId || '',
             binanceEmail: bInfo.binanceEmail || '',
             binanceRate: userSettings.binanceRate || 0,
+            euroRate: isVenezuela ? (Number(userSettings.euroRate) || 0) : (regionMeta.currencyCode === 'EUR' ? 1.0 : 0),
             binanceQrImage: bInfo.binanceQrImage || '',
             binanceRoundingToleranceBs: bInfo.binanceRoundingToleranceBs ?? userSettings.binanceRoundingToleranceBs ?? 0.50,
             binanceIgtfEnabled: userSettings.binanceIgtfEnabled ?? false,
@@ -421,31 +447,28 @@ router.post('/business', async (req, res) => {
         }
         if (info && info.country) {
             const key = getPresetKey(info.country);
-            if (isDollarOnlyCountry(info.country)) {
+            if (isSingleCurrencyCountry(info.country)) {
                 userSettings.currencyMode = 'SINGLE';
                 userSettings.exchangeRate = 1.0;
-            } else if (key === 'colombia') {
-                userSettings.currencyMode = 'SINGLE';
-                userSettings.exchangeRate = COUNTRY_PRESETS.colombia.exchangeRate || 3950;
+                userSettings.autoUpdateRate = false;
             } else if (key === 'venezuela') {
                 userSettings.currencyMode = 'BOTH';
             }
             if (key && COUNTRY_PRESETS[key]) {
                 if (!userSettings.paymentMethods || !Array.isArray(userSettings.paymentMethods) || userSettings.paymentMethods.length === 0) {
                     if (COUNTRY_PRESETS[key].paymentMethods) {
-                        userSettings.paymentMethods = COUNTRY_PRESETS[key].paymentMethods;
+                        userSettings.paymentMethods = COUNTRY_PRESETS[key].paymentMethods.map(m => ({ ...m }));
                     }
                 }
                 if (!userSettings.taxConfig) {
                     if (COUNTRY_PRESETS[key].taxConfig) {
-                        userSettings.taxConfig = COUNTRY_PRESETS[key].taxConfig;
+                        userSettings.taxConfig = { ...COUNTRY_PRESETS[key].taxConfig };
                     }
                 }
             }
         }
         allSettings[companyId] = userSettings;
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         if (req.user?.id) {
             cache.del(`user_currency_${req.user.id}`);
         }
@@ -476,26 +499,32 @@ router.get('/payment-methods', async (req, res) => {
         const userSettings = getUserSettings(allSettings, companyId);
 
         const country = userSettings.businessInfo?.country || '';
-        const isUsdSingleCountry = isDollarOnlyCountry(country);
+        const regionCfg = getRegionConfig(country);
         const presetKey = getPresetKey(country);
-        const isSingleCountry = isUsdSingleCountry || presetKey === 'colombia';
+        const isSingleCountry = isSingleCurrencyCountry(country);
         const isSingleMode = isSingleCountry || userSettings.currencyMode === 'SINGLE';
 
         let methods = userSettings.paymentMethods;
 
-        if (isUsdSingleCountry) {
+        if (isSingleCountry) {
+            const targetCurrency = regionCfg.currencyCode;
             if (!methods || !Array.isArray(methods) || methods.length === 0) {
-                methods = (COUNTRY_PRESETS[presetKey] || COUNTRY_PRESETS['ecuador']).paymentMethods;
+                methods = regionCfg.paymentMethods.map(m => ({ ...m }));
             } else {
                 methods = methods
-                    .filter(m => m.currency !== 'VES' && !m.id.includes('_bs') && m.id !== 'biopago' && m.id !== 'pago_movil')
+                    .filter(m => {
+                        if (m.currency === 'VES' || m.id.includes('_bs') || m.id === 'biopago' || m.id === 'pago_movil') return false;
+                        if (targetCurrency !== 'EUR' && (m.id === 'cash_eur' || m.currency === 'EUR')) return false;
+                        return true;
+                    })
                     .map(m => {
                         let name = m.name;
-                        if (m.id === 'cash') name = 'Efectivo';
-                        return { ...m, name, currency: 'USD' };
+                        if (m.id === 'cash' && targetCurrency === 'USD') name = 'Efectivo';
+                        if (m.id === 'cash' && targetCurrency === 'EUR') name = 'Efectivo €';
+                        return { ...m, name, currency: targetCurrency };
                     });
                 if (methods.length === 0) {
-                    methods = (COUNTRY_PRESETS[presetKey] || COUNTRY_PRESETS['ecuador']).paymentMethods;
+                    methods = regionCfg.paymentMethods.map(m => ({ ...m }));
                 }
             }
             return res.json(methods);
@@ -514,6 +543,7 @@ router.get('/payment-methods', async (req, res) => {
             } else {
                 methods = [
                     { id: 'cash', name: 'Efectivo $', icon: 'DollarSign', type: 'CASH', currency: 'USD' },
+                    { id: 'cash_eur', name: 'Efectivo €', icon: 'Euro', type: 'CASH', currency: 'EUR' },
                     { id: 'cash_bs', name: 'Efectivo Bs', icon: 'DollarSign', type: 'CASH', currency: 'VES' },
                     { id: 'debit', name: 'Punto de Venta', icon: 'CreditCard', type: 'DIGITAL', currency: 'VES' },
                     { id: 'pago_movil', name: 'Pago Móvil', icon: 'Wallet', type: 'DIGITAL', currency: 'VES' },
@@ -581,7 +611,7 @@ router.get('/payment-methods', async (req, res) => {
     }
 });
 
-router.post('/payment-methods', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/payment-methods', requirePermission('canManageSettings'), validate(paymentMethodsSchema), async (req, res) => {
     try {
         const { paymentMethods } = req.body;
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
@@ -622,8 +652,7 @@ router.post('/payment-methods', requirePermission('canManageSettings'), async (r
                 allSettings['default'].businessInfo = { ...allSettings['default'].businessInfo, ...userSettings.businessInfo };
             }
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
         res.json({ success: true, paymentMethods });
     } catch (error) {
         console.error('Update payment methods error:', error);
@@ -633,36 +662,60 @@ router.post('/payment-methods', requirePermission('canManageSettings'), async (r
 
 router.get('/taxes', async (req, res) => {
     try {
-        const allSettings = readJson(SETTINGS_FILE);
+        const allSettings = getCachedSettings();
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const userSettings = getUserSettings(allSettings, companyId);
-        const defaultTaxes = {
-            ivaEnabled: true,
-            ivaRate: 16.0,
-            igtfEnabled: true,
-            igtfRate: 3.0
-        };
-        res.json(userSettings.taxConfig || defaultTaxes);
+        const country = userSettings.businessInfo?.country || '';
+        const regionCfg = getRegionConfig(country);
+        const isVenezuela = isVenezuelaCountry(country);
+        const stored = userSettings.taxConfig || {};
+        res.json({
+            ivaEnabled: stored.ivaEnabled !== undefined ? Boolean(stored.ivaEnabled) : (userSettings.ivaEnabled !== false),
+            ivaRate: Number(stored.ivaRate ?? userSettings.ivaRate ?? regionCfg.taxConfig.ivaRate) || 0,
+            igtfEnabled: isVenezuela
+                ? (stored.igtfEnabled !== undefined ? Boolean(stored.igtfEnabled) : Boolean(userSettings.igtfEnabled))
+                : false,
+            igtfRate: isVenezuela
+                ? (Number(stored.igtfRate ?? userSettings.igtfRate ?? regionCfg.taxConfig.igtfRate) || 0)
+                : 0,
+            taxLabel: regionCfg.taxLabel,
+            taxFullName: regionCfg.taxFullName,
+            taxAuthority: regionCfg.taxAuthority
+        });
     } catch (error) {
         console.error('Get taxes error:', error);
         res.status(500).json({ error: 'Error al obtener impuestos' });
     }
 });
 
-router.post('/taxes', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/taxes', requirePermission('canManageSettings'), validate(taxesSchema), async (req, res) => {
     try {
-        const taxConfig = req.body;
         const companyId = (!req.user?.companyId || req.user?.companyId === 'default' || req.user?.companyId === 'admin') ? '2' : req.user.companyId;
         const allSettings = getCachedSettings();
         const userSettings = allSettings[companyId] || { exchangeRate: 1.0, businessInfo: {} };
-        userSettings.taxConfig = taxConfig;
+        const isVenezuela = isVenezuelaCountry(userSettings.businessInfo?.country || '');
+        const normalizedTaxConfig = {
+            ...req.body,
+            ivaEnabled: Boolean(req.body.ivaEnabled),
+            ivaRate: Number(req.body.ivaRate) || 0,
+            igtfEnabled: isVenezuela ? Boolean(req.body.igtfEnabled) : false,
+            igtfRate: isVenezuela ? (Number(req.body.igtfRate) || 0) : 0
+        };
+        userSettings.taxConfig = normalizedTaxConfig;
+        userSettings.ivaEnabled = normalizedTaxConfig.ivaEnabled;
+        userSettings.ivaRate = normalizedTaxConfig.ivaRate;
+        userSettings.igtfEnabled = normalizedTaxConfig.igtfEnabled;
+        userSettings.igtfRate = normalizedTaxConfig.igtfRate;
         allSettings[companyId] = userSettings;
         if (companyId === '2' && allSettings['default']) {
-            allSettings['default'].taxConfig = taxConfig;
+            allSettings['default'].taxConfig = { ...normalizedTaxConfig };
+            allSettings['default'].ivaEnabled = normalizedTaxConfig.ivaEnabled;
+            allSettings['default'].ivaRate = normalizedTaxConfig.ivaRate;
+            allSettings['default'].igtfEnabled = normalizedTaxConfig.igtfEnabled;
+            allSettings['default'].igtfRate = normalizedTaxConfig.igtfRate;
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings); // update cache
-        res.json({ success: true, taxConfig });
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
+        res.json({ success: true, taxConfig: normalizedTaxConfig });
     } catch (error) {
         console.error('Update taxes error:', error);
         res.status(500).json({ error: 'Error al actualizar impuestos' });
@@ -682,7 +735,7 @@ router.get('/is-setup', async (req, res) => {
     }
 });
 
-router.post('/setup', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/setup', requirePermission('canManageSettings'), validate(setupSchema), async (req, res) => {
     try {
         const { country, businessName } = req.body;
         if (!country) return res.status(400).json({ error: 'El país es requerido para la configuración' });
@@ -691,15 +744,26 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
         const allSettings = getCachedSettings();
         const userSettings = allSettings[companyId] || { exchangeRate: 1.0, businessInfo: {} };
 
-        const presetKey = getPresetKey(country);
-        const selectedPreset = (presetKey && COUNTRY_PRESETS[presetKey]) || COUNTRY_PRESETS['venezuela'];
-        
-        // Aplicar preset
-        Object.assign(userSettings, selectedPreset);
-        if (isDollarOnlyCountry(country)) {
-            userSettings.currencyMode = 'SINGLE';
-            userSettings.exchangeRate = 1.0;
-        }
+        const presetKey = getPresetKey(country) || 'venezuela';
+        const selectedPreset = COUNTRY_PRESETS[presetKey] || COUNTRY_PRESETS.venezuela;
+        const isSingle = isSingleCurrencyCountry(presetKey);
+        const nextTaxConfig = { ...selectedPreset.taxConfig };
+        const nextPaymentMethods = selectedPreset.paymentMethods.map(m => ({ ...m }));
+        const regionMeta = buildPublicRegionMetadata(presetKey);
+
+        userSettings.exchangeRate = isSingle ? 1.0 : selectedPreset.exchangeRate;
+        userSettings.euroRate = isSingle
+            ? (selectedPreset.currencyCode === 'EUR' ? 1.0 : 0)
+            : (Number(selectedPreset.euroRate) || 0);
+        userSettings.currencyMode = isSingle ? 'SINGLE' : selectedPreset.currencyMode;
+        userSettings.autoUpdateRate = Boolean(selectedPreset.autoUpdateRate);
+        userSettings.taxConfig = nextTaxConfig;
+        userSettings.ivaEnabled = Boolean(nextTaxConfig.ivaEnabled);
+        userSettings.ivaRate = Number(nextTaxConfig.ivaRate) || 0;
+        userSettings.igtfEnabled = Boolean(nextTaxConfig.igtfEnabled);
+        userSettings.igtfRate = Number(nextTaxConfig.igtfRate) || 0;
+        userSettings.paymentMethods = nextPaymentMethods;
+        userSettings.regionConfig = regionMeta;
         
         // Aplicar info de negocio básica
         userSettings.businessInfo = {
@@ -709,7 +773,7 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
             phone: '',
             email: req.user?.email || '',
             receiptWidth: '80mm',
-            country: presetKey || country.toLowerCase()
+            country: presetKey
         };
 
         allSettings[companyId] = userSettings;
@@ -717,12 +781,8 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
             allSettings['default'] = { ...userSettings };
         }
         userSettings.wizardCompleted = true; // Marcar como completado
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
-        if (req.user?.id) {
-            cache.del(`user_currency_${req.user.id}`);
-        }
-        cache.del('user_currency_default');
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
+        cache.delPrefix('user_currency_');
 
         const io = req.app.get('io');
         if (io && companyId) {
@@ -730,11 +790,15 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
                 type: 'region',
                 country: userSettings.businessInfo.country,
                 currencyMode: userSettings.currencyMode,
-                exchangeRate: userSettings.exchangeRate
+                exchangeRate: userSettings.exchangeRate,
+                euroRate: userSettings.euroRate,
+                taxConfig: nextTaxConfig,
+                paymentMethods: nextPaymentMethods,
+                regionConfig: regionMeta
             });
         }
 
-        res.json({ success: true, settings: userSettings });
+        res.json({ success: true, regionConfig: regionMeta, settings: userSettings });
     } catch (error) {
         console.error('Setup error:', error);
         res.status(500).json({ error: 'Error al configurar el sistema' });
@@ -742,7 +806,7 @@ router.post('/setup', requirePermission('canManageSettings'), async (req, res) =
 });
 
 // Change region / country preset mid-lifecycle (from Settings page - Owner/Superadmin only)
-router.post('/region', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/region', requirePermission('canManageSettings'), validate(regionSchema), async (req, res) => {
     try {
         const userRole = String(req.user?.role || '').toLowerCase();
         const isOwner = ['superadmin', 'owner', 'dueño', 'dueno'].includes(userRole);
@@ -761,16 +825,45 @@ router.post('/region', requirePermission('canManageSettings'), async (req, res) 
         const selectedPreset = presetKey ? COUNTRY_PRESETS[presetKey] : null;
         if (!selectedPreset) return res.status(400).json({ error: `País no soportado: ${country}` });
 
-        // Apply preset fields (currency, taxes, payment methods) without overwriting business identity
-        userSettings.exchangeRate = selectedPreset.exchangeRate;
-        userSettings.currencyMode = selectedPreset.currencyMode;
-        userSettings.taxConfig = selectedPreset.taxConfig;
-        userSettings.paymentMethods = selectedPreset.paymentMethods;
-
-        if (isDollarOnlyCountry(country)) {
-            userSettings.currencyMode = 'SINGLE';
-            userSettings.exchangeRate = 1.0;
+        const previousCountry = userSettings.businessInfo?.country || '';
+        // Resguardar tasas BCV previas (USD y EUR) al salir de Venezuela para restaurarlas al regresar
+        if (isVenezuelaCountry(previousCountry)) {
+            if (Number(userSettings.exchangeRate) > 1) {
+                userSettings.lastBcvRate = Number(userSettings.exchangeRate);
+            }
+            if (Number(userSettings.euroRate) > 1) {
+                userSettings.lastEuroRate = Number(userSettings.euroRate);
+            }
         }
+
+        const isTargetSingle = isSingleCurrencyCountry(presetKey);
+        const targetExchangeRate = isTargetSingle
+            ? 1.0
+            : (Number(userSettings.lastBcvRate) > 1
+                ? Number(userSettings.lastBcvRate)
+                : (Number(userSettings.exchangeRate) > 1 ? Number(userSettings.exchangeRate) : selectedPreset.exchangeRate));
+        const targetEuroRate = isTargetSingle
+            ? (selectedPreset.currencyCode === 'EUR' ? 1.0 : 0)
+            : (Number(userSettings.lastEuroRate) > 1
+                ? Number(userSettings.lastEuroRate)
+                : (Number(userSettings.euroRate) > 1 ? Number(userSettings.euroRate) : (selectedPreset.euroRate || 0)));
+
+        const nextTaxConfig = { ...selectedPreset.taxConfig };
+        const nextPaymentMethods = selectedPreset.paymentMethods.map(m => ({ ...m }));
+        const regionMeta = buildPublicRegionMetadata(presetKey);
+
+        // Aplicar preset completo sincronizando tanto taxConfig como campos legacy top-level
+        userSettings.exchangeRate = targetExchangeRate;
+        userSettings.euroRate = targetEuroRate;
+        userSettings.currencyMode = isTargetSingle ? 'SINGLE' : selectedPreset.currencyMode;
+        userSettings.autoUpdateRate = Boolean(selectedPreset.autoUpdateRate);
+        userSettings.taxConfig = nextTaxConfig;
+        userSettings.ivaEnabled = Boolean(nextTaxConfig.ivaEnabled);
+        userSettings.ivaRate = Number(nextTaxConfig.ivaRate) || 0;
+        userSettings.igtfEnabled = Boolean(nextTaxConfig.igtfEnabled);
+        userSettings.igtfRate = Number(nextTaxConfig.igtfRate) || 0;
+        userSettings.paymentMethods = nextPaymentMethods;
+        userSettings.regionConfig = regionMeta;
 
         // Update country in businessInfo without resetting other business fields
         if (!userSettings.businessInfo) userSettings.businessInfo = {};
@@ -780,23 +873,23 @@ router.post('/region', requirePermission('canManageSettings'), async (req, res) 
         if (companyId === '2' && allSettings['default']) {
             allSettings['default'] = { ...userSettings };
         }
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
 
         // Invalidate user-specific currency cache
-        if (req.user?.id) {
-            cache.del(`user_currency_${req.user.id}`);
-        }
-        cache.del('user_currency_default');
+        cache.delPrefix('user_currency_');
 
-        // Emit socket event to notify all clients
+        // Emit socket event to notify all clients with full regional payload
         const io = req.app.get('io');
         if (io) {
             io.to(companyId).emit('settings_changed', {
                 type: 'region',
                 country: presetKey,
                 currencyMode: userSettings.currencyMode,
-                exchangeRate: userSettings.exchangeRate
+                exchangeRate: userSettings.exchangeRate,
+                euroRate: userSettings.euroRate,
+                taxConfig: nextTaxConfig,
+                paymentMethods: nextPaymentMethods,
+                regionConfig: regionMeta
             });
         }
 
@@ -804,6 +897,7 @@ router.post('/region', requirePermission('canManageSettings'), async (req, res) 
             success: true,
             country: presetKey,
             preset: selectedPreset,
+            regionConfig: regionMeta,
             settings: userSettings
         });
     } catch (error) {
@@ -814,71 +908,32 @@ router.post('/region', requirePermission('canManageSettings'), async (req, res) 
 
 router.get('/auto-launch', async (req, res) => {
     try {
-        const { execSync } = require('child_process');
-        let enabled = false;
-        try {
-            const regOutput = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS"', { encoding: 'utf-8' });
-            if (regOutput && regOutput.includes('Isaac POS')) {
-                enabled = true;
-            }
-        } catch (e) {
-            try {
-                const legacyOutput = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS"', { encoding: 'utf-8' });
-                if (legacyOutput && legacyOutput.includes('American POS')) {
-                    enabled = true;
-                }
-            } catch (err) {
-                const allSettings = getCachedSettings();
-                enabled = !!allSettings.autoLaunch;
+        const autoLaunchManager = require('../utils/autoLaunchManager');
+        const userDataPath = process.env.USER_DATA_PATH || BASE_PATH;
+        let enabled = await autoLaunchManager.getWindowsAutoLaunchStatus({ userDataPath });
+        if (!enabled) {
+            const allSettings = getCachedSettings();
+            if (allSettings && typeof allSettings.autoLaunch === 'boolean') {
+                enabled = allSettings.autoLaunch;
             }
         }
-        res.json({ enabled });
+        res.json({ enabled: Boolean(enabled) });
     } catch (error) {
         res.status(500).json({ error: 'Error al obtener estado de inicio automático' });
     }
 });
 
-router.post('/auto-launch', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/auto-launch', requirePermission('canManageSettings'), validate(autoLaunchSchema), async (req, res) => {
     try {
-        const { enabled } = req.body;
-        const { execSync } = require('child_process');
-        const os = require('os');
-        const path = require('path');
-        const fs = require('fs');
+        const enabled = Boolean(req.body?.enabled);
+        const autoLaunchManager = require('../utils/autoLaunchManager');
+        const userDataPath = process.env.USER_DATA_PATH || BASE_PATH;
 
-        let targetPath = process.execPath;
-        if (targetPath.toLowerCase().includes('node.exe') || targetPath.toLowerCase().includes('electron.exe')) {
-            const defaultInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Isaac POS', 'Isaac POS.exe');
-            const fallbackInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'IsaacPOS', 'Isaac POS.exe');
-            const legacyInstallPath = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'American POS', 'American POS.exe');
-            if (fs.existsSync(defaultInstallPath)) {
-                targetPath = defaultInstallPath;
-            } else if (fs.existsSync(fallbackInstallPath)) {
-                targetPath = fallbackInstallPath;
-            } else if (fs.existsSync(legacyInstallPath)) {
-                targetPath = legacyInstallPath;
-            }
-        }
-
-        const isDev = targetPath.toLowerCase().includes('node.exe') || targetPath.toLowerCase().includes('electron.exe');
-
-        if (enabled && !isDev) {
-            try {
-                execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS" /f', { stdio: 'ignore' });
-            } catch (e) {}
-            try {
-                execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS" /t REG_SZ /d "\\"${targetPath}\\"" /f`, { stdio: 'ignore' });
-            } catch (e) {
-                console.error('Reg add error:', e);
-            }
-        } else if (!enabled || isDev) {
-            try {
-                execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Isaac POS" /f', { stdio: 'ignore' });
-            } catch (e) {}
-            try {
-                execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "American POS" /f', { stdio: 'ignore' });
-            } catch (e) {}
-        }
+        const result = await autoLaunchManager.configureWindowsAutoLaunch(enabled, {
+            userDataPath,
+            isPackaged: !process.execPath.toLowerCase().includes('node.exe') && !process.execPath.toLowerCase().includes('electron.exe'),
+            processExecPath: process.execPath
+        });
 
         try {
             let settings = readJson(SETTINGS_FILE) || {};
@@ -887,7 +942,11 @@ router.post('/auto-launch', requirePermission('canManageSettings'), async (req, 
             cache.del('all_settings');
         } catch (e) {}
 
-        res.json({ success: true, enabled });
+        if (!result.success) {
+            return res.status(500).json({ success: false, error: result.error || 'No se pudo actualizar el inicio automático' });
+        }
+
+        res.json({ success: true, enabled, mechanism: result.mechanism });
     } catch (error) {
         console.error('Error setting auto-launch:', error);
         res.status(500).json({ error: 'Error al actualizar el inicio automático' });
@@ -906,11 +965,29 @@ router.post('/email-test', requirePermission('canManageSettings'), async (req, r
     }
 });
 
-router.post('/test-network-printer', async (req, res) => {
+const isSafeLanPrinterHost = (rawHost) => {
+    const h = String(rawHost || '').trim().toLowerCase();
+    if (!h || h.length > 120) return false;
+    if (h === 'localhost') return true;
+    if (/^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(h)) {
+        return true;
+    }
+    return /^[a-z0-9][a-z0-9-]*\.local$/.test(h);
+};
+
+const isSafeSerialPortName = (rawPort) => {
+    const p = String(rawPort || '').trim();
+    return /^COM\d{1,3}$/i.test(p) || /^\/dev\/tty[A-Za-z0-9_-]+$/.test(p);
+};
+
+router.post('/test-network-printer', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const { host, port } = req.body;
         if (!host) {
             return res.status(400).json({ error: 'Debe ingresar la dirección IP de la impresora de red' });
+        }
+        if (!isSafeLanPrinterHost(host)) {
+            return res.status(400).json({ error: 'Solo se permiten direcciones IP de red local privada (LAN) o nombres .local para impresoras.' });
         }
         const NetworkPrinterService = require('../services/NetworkPrinterService');
         const allSettings = getCachedSettings();
@@ -934,7 +1011,7 @@ router.post('/test-network-printer', async (req, res) => {
  * GET /settings/scan-network-printers
  * Escanea la subred local buscando impresoras térmicas con puerto 9100 abierto
  */
-router.get('/scan-network-printers', async (req, res) => {
+router.get('/scan-network-printers', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const NetworkPrinterService = require('../services/NetworkPrinterService');
         const printers = await NetworkPrinterService.scanSubnetForPrinters(9100, 350);
@@ -953,9 +1030,12 @@ router.get('/scan-network-printers', async (req, res) => {
  * POST /settings/test-cluster-printers
  * Dispara un pulso de diagnóstico integral a las 3 impresoras del clúster
  */
-router.post('/test-cluster-printers', async (req, res) => {
+router.post('/test-cluster-printers', requirePermission('canManageSettings'), async (req, res) => {
     try {
         const { networkHost, networkPort } = req.body;
+        if (networkHost && !isSafeLanPrinterHost(networkHost)) {
+            return res.status(400).json({ error: 'Solo se permiten direcciones IP de red local privada (LAN) para impresoras.' });
+        }
         const io = req.app.get('io') || global.io;
         const companyId = req.user?.companyId || 'default';
 
@@ -1021,7 +1101,7 @@ router.get('/system-printers', async (req, res) => {
  * POST /settings/print-raw
  * Envía datos RAW (ESC/POS) a una impresora local de Windows vía backend
  */
-router.post('/print-raw', verifyToken, async (req, res) => {
+router.post('/print-raw', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), validate(printRawSchema), async (req, res) => {
     try {
         const { printerName, content, printMode, autoPrint = false } = req.body;
         const LocalPrinterService = require('../services/LocalPrinterService');
@@ -1042,6 +1122,41 @@ router.post('/print-raw', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Error in print-raw:', error);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /settings/print-network-raw
+ * Envía comandos ESC/POS en Base64 a una impresora térmica LAN (TCP 9100) con protección anti-SSRF.
+ */
+router.post('/print-network-raw', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
+    try {
+        const { ip, host, port = 9100, dataBase64, content } = req.body || {};
+        const targetHost = String(ip || host || '').trim();
+        const targetPort = Number(port) || 9100;
+        if (!targetHost || !isSafeLanPrinterHost(targetHost)) {
+            return res.status(400).json({ success: false, error: 'IP de impresora inválida o fuera de red local permitida.' });
+        }
+        if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+            return res.status(400).json({ success: false, error: 'Puerto TCP de impresora inválido.' });
+        }
+        let payloadBuf;
+        if (dataBase64 && typeof dataBase64 === 'string') {
+            payloadBuf = Buffer.from(dataBase64, 'base64');
+        } else if (content && typeof content === 'string') {
+            payloadBuf = Buffer.from(content, 'latin1');
+        } else {
+            return res.status(400).json({ success: false, error: 'Faltan datos ESC/POS para imprimir.' });
+        }
+        if (payloadBuf.length === 0 || payloadBuf.length > 262144) {
+            return res.status(400).json({ success: false, error: 'Tamaño de trabajo ESC/POS fuera de rango (1B - 256KB).' });
+        }
+        const NetworkPrinterService = require('../services/NetworkPrinterService');
+        const result = await NetworkPrinterService.printNetwork(targetHost, targetPort, payloadBuf);
+        return res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('Error in print-network-raw:', error);
+        return res.status(500).json({ success: false, error: error.message || 'Error imprimiendo por red TCP/IP' });
     }
 });
 
@@ -1153,7 +1268,7 @@ router.post('/open-drawer', verifyToken, async (req, res) => {
 // --- RUTAS DE PROTOCOLO DE BALANZA / BÁSCULA DE MOSTRADOR ---
 const ScaleService = require('../services/ScaleService');
 
-router.get('/scale/ports', verifyToken, async (req, res) => {
+router.get('/scale/ports', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const ports = await ScaleService.listPorts();
         res.json({ success: true, ports });
@@ -1162,9 +1277,12 @@ router.get('/scale/ports', verifyToken, async (req, res) => {
     }
 });
 
-router.get('/scale/read', verifyToken, async (req, res) => {
+router.get('/scale/read', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const port = req.query.port || 'COM1';
+        if (!isSafeSerialPortName(port)) {
+            return res.status(400).json({ success: false, error: 'Nombre de puerto serial inválido' });
+        }
         const baudRate = parseInt(req.query.baudRate, 10) || 9600;
         const result = await ScaleService.readWeight(port, baudRate);
         res.json(result);
@@ -1173,9 +1291,12 @@ router.get('/scale/read', verifyToken, async (req, res) => {
     }
 });
 
-router.post('/scale/tare', verifyToken, async (req, res) => {
+router.post('/scale/tare', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const port = req.body.port || 'COM1';
+        if (!isSafeSerialPortName(port)) {
+            return res.status(400).json({ success: false, error: 'Nombre de puerto serial inválido' });
+        }
         const result = await ScaleService.sendCommand(port, 'T');
         res.json(result);
     } catch (err) {
@@ -1183,9 +1304,12 @@ router.post('/scale/tare', verifyToken, async (req, res) => {
     }
 });
 
-router.post('/scale/zero', verifyToken, async (req, res) => {
+router.post('/scale/zero', verifyToken, requirePermission(['canAccessPOS', 'canManageSettings']), async (req, res) => {
     try {
         const port = req.body.port || 'COM1';
+        if (!isSafeSerialPortName(port)) {
+            return res.status(400).json({ success: false, error: 'Nombre de puerto serial inválido' });
+        }
         const result = await ScaleService.sendCommand(port, 'Z');
         res.json(result);
     } catch (err) {
@@ -1266,7 +1390,7 @@ router.get('/db-config', requirePermission('canManageSettings'), (req, res) => {
  * POST /settings/db-config
  * Guarda la configuración físicamente en disco y prueba la conectividad si es servidor.
  */
-router.post('/db-config', requirePermission('canManageSettings'), async (req, res) => {
+router.post('/db-config', requirePermission('canManageSettings'), validate(dbConfigSchema), async (req, res) => {
     if (!isLocalLoopbackRequest(req)) {
         return res.status(403).json({
             success: false,
@@ -1443,7 +1567,7 @@ router.get('/customer-display', (req, res) => {
     }
 });
 
-router.post('/customer-display', (req, res) => {
+router.post('/customer-display', async (req, res) => {
     try {
         if (!canManageDisplayAds(req)) {
             return res.status(403).json({
@@ -1464,8 +1588,7 @@ router.post('/customer-display', (req, res) => {
             allSettings['default'].customerDisplay = normalized;
         }
 
-        writeJson(SETTINGS_FILE, allSettings);
-        cache.set('all_settings', allSettings);
+        await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
 
         const io = req.app.get('io') || global.io;
         if (io) {

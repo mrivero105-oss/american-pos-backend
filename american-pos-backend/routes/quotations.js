@@ -45,11 +45,33 @@ router.get('/', async (req, res) => {
     }
 });
 
+const ALLOWED_QUOTATION_FIELDS = [
+    'customerId', 'customerName', 'customerPhone', 'customerEmail', 'customerDocument',
+    'items', 'subtotal', 'tax', 'discount', 'total', 'exchangeRate', 'currency',
+    'notes', 'validUntil', 'expiresAt', 'status', 'branchId', 'paymentTerms', 'date'
+];
+const pickQuotationFields = (raw = {}) => {
+    const out = {};
+    for (const key of ALLOWED_QUOTATION_FIELDS) {
+        if (raw[key] !== undefined) out[key] = raw[key];
+    }
+    return out;
+};
+const buildQuotationOwnerScope = (req, id = null) => {
+    const where = { companyId: req.user.companyId };
+    if (id !== null) where.id = id;
+    const role = String(req.user?.role || '').toLowerCase();
+    if (!['admin', 'superadmin', 'owner', 'dueño', 'dueno', 'supervisor', 'gerente'].includes(role)) {
+        where.userId = req.user.id;
+    }
+    return where;
+};
+
 // GET quotation by ID
 router.get('/:id', async (req, res) => {
     try {
         const quote = await Quotation.findOne({
-            where: { id: req.params.id, companyId: req.user.companyId }
+            where: buildQuotationOwnerScope(req, req.params.id)
         });
         if (!quote) return res.status(404).json({ error: 'Cotización no encontrada' });
         res.json(quote);
@@ -62,15 +84,16 @@ router.get('/:id', async (req, res) => {
 // POST Create Quotation
 router.post('/', async (req, res) => {
     try {
-        const customerId = await sanitizeCustomerId(req.body.customerId, req.user.companyId, req.body.customerName);
+        const safeFields = pickQuotationFields(req.body || {});
+        const customerId = await sanitizeCustomerId(safeFields.customerId, req.user.companyId, safeFields.customerName);
         const quoteData = {
-            ...req.body,
-            id: req.body.id ? String(req.body.id) : generateRobustId(),
+            ...safeFields,
+            id: req.body?.id ? String(req.body.id) : generateRobustId(),
             customerId,
             userId: req.user.id,
             companyId: req.user.companyId,
-            date: req.body.date || new Date().toISOString(),
-            status: req.body.status || 'pending'
+            date: safeFields.date || new Date().toISOString(),
+            status: safeFields.status || 'pending'
         };
         const newQuote = await Quotation.create(quoteData);
         res.status(201).json(newQuote);
@@ -83,18 +106,12 @@ router.post('/', async (req, res) => {
 // PUT Update Quotation
 router.put('/:id', async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        delete updateData.id;
-        delete updateData.companyId;
-        delete updateData.userId;
-        delete updateData.createdAt;
-        delete updateData.updatedAt;
-
+        const updateData = pickQuotationFields(req.body || {});
         if (updateData.customerId !== undefined) {
             updateData.customerId = await sanitizeCustomerId(updateData.customerId, req.user.companyId, updateData.customerName);
         }
         const [updated] = await Quotation.update(updateData, {
-            where: { id: req.params.id, companyId: req.user.companyId }
+            where: buildQuotationOwnerScope(req, req.params.id)
         });
         if (updated) {
             res.json({ message: 'Cotización actualizada' });
@@ -111,7 +128,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
     try {
         const deleted = await Quotation.destroy({
-            where: { id: req.params.id, companyId: req.user.companyId }
+            where: buildQuotationOwnerScope(req, req.params.id)
         });
         if (deleted) {
             res.json({ message: 'Cotización eliminada' });

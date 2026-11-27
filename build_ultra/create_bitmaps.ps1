@@ -1,6 +1,7 @@
 Add-Type -AssemblyName System.Drawing
 
-$iconPath = "c:\AndroidStudioProjects\American POS PC\american-pos-backend\public\favicon.ico"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$iconPath = Join-Path $projectRoot "american-pos-backend\public\favicon.ico"
 
 # 1. Wizard Bitmap (164 x 314)
 $wBmp = New-Object System.Drawing.Bitmap 164, 314
@@ -31,7 +32,7 @@ $g.DrawString("ISAAC POS", $fontTitle, $whiteBrush, 82, 140, $sf)
 $g.DrawString("EDICION ULTRA", $fontSub, $cyanBrush, 82, 168, $sf)
 $g.DrawString("Windows 10 / 11", $fontVer, $whiteBrush, 82, 192, $sf)
 
-$wBmp.Save("c:\AndroidStudioProjects\American POS PC\build_ultra\wizard.bmp", [System.Drawing.Imaging.ImageFormat]::Bmp)
+$wBmp.Save((Join-Path $PSScriptRoot "wizard.bmp"), [System.Drawing.Imaging.ImageFormat]::Bmp)
 $g.Dispose()
 $wBmp.Dispose()
 
@@ -48,7 +49,7 @@ if (Test-Path $iconPath) {
     $gh.DrawIcon($ico48, 95, 4)
 }
 
-$hBmp.Save("c:\AndroidStudioProjects\American POS PC\build_ultra\header.bmp", [System.Drawing.Imaging.ImageFormat]::Bmp)
+$hBmp.Save((Join-Path $PSScriptRoot "header.bmp"), [System.Drawing.Imaging.ImageFormat]::Bmp)
 $gh.Dispose()
 $hBmp.Dispose()
 

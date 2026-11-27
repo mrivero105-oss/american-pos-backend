@@ -20,12 +20,14 @@ self.addEventListener('install', (event) => {
   );
 });
 
+const PRESERVED_CACHES = new Set([CACHE_NAME, 'isaac-pos-img-v1']);
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME)
+          .filter((name) => !PRESERVED_CACHES.has(name))
           .map((name) => caches.delete(name))
       );
     })
@@ -65,7 +67,9 @@ self.addEventListener('fetch', (event) => {
             try {
               const cache = await caches.open(CACHE_NAME);
               cache.put(event.request, networkResponse.clone());
-            } catch (_) {}
+            } catch (err) {
+              console.warn('[SW] Error guardando recurso en caché:', err?.message);
+            }
           }
           return networkResponse;
         }).catch(() => null);
@@ -98,7 +102,9 @@ self.addEventListener('fetch', (event) => {
             const cache = await caches.open(CACHE_NAME);
             cache.put('/index.html', networkResponse.clone());
             cache.put('/', networkResponse.clone());
-          } catch (_) {}
+          } catch (err) {
+            console.warn('[SW] Error cacheando shell HTML:', err?.message);
+          }
         }
         return networkResponse;
       })

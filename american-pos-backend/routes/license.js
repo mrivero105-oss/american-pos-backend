@@ -7,6 +7,14 @@ const { Op } = require('sequelize');
 const licenseUtils = require('../utils/licenseUtils');
 const { verifyToken, verifyJwtResilient, isMaster } = require('../middleware/auth');
 const { clearLicenseCache } = require('../middleware/licenseMiddleware');
+const OnlineLicenseService = require('../services/OnlineLicenseService');
+const validate = require('../middleware/validate');
+const {
+    activateLicenseSchema,
+    generateLicenseSchema,
+    syncOnlineLicenseSchema,
+    onlineConfigSchema
+} = require('../schemas/licenseSchema');
 const path = require('path');
 const fs = require('fs');
 
@@ -53,12 +61,13 @@ async function resolveOptionalLicenseOperator(req) {
             attributes: ['id', 'role', 'status', 'companyId', 'currentSessionId', 'email']
         });
         if (!dbUser || dbUser.status !== 'active') return null;
-        if (dbUser.currentSessionId && (!decoded.sessionId || dbUser.currentSessionId !== decoded.sessionId)) {
+        const { isSessionValid } = require('../utils/sessionRegistry');
+        if (!isSessionValid(dbUser.currentSessionId, decoded.sessionId)) {
             return null;
         }
 
         const role = String(dbUser.role || '').toLowerCase();
-        const isMasterUser = ['superadmin', 'owner', 'dueño'].includes(role);
+        const isMasterUser = ['superadmin', 'owner', 'dueño', 'master'].includes(role);
         const isAdminUser = isMasterUser || role === 'admin';
         return { user: dbUser, isMasterUser, isAdminUser };
     } catch (_) {
@@ -107,22 +116,13 @@ router.get(['/download-apk', '/Generador-Licencias.apk', '/apk'], verifyToken, i
  * Serves the official Isaac POS Mobile Android APK installer
  */
 router.get(['/isaac-pos-mobile-apk', '/Isaac-POS-Mobile.apk', '/isaac-pos-apk', '/Isaac-POS.apk', '/pos-apk', '/Isaac%20POS%20Mobile.apk'], (req, res) => {
-    const candidates = [
-        path.join(__dirname, '../public/Isaac-POS-Mobile.apk'),
-        path.join(__dirname, '../public/Isaac-POS.apk'),
-        path.join(__dirname, 'public/Isaac-POS-Mobile.apk'),
-        path.join(__dirname, 'public/Isaac-POS.apk'),
-        path.join(__dirname, '../../Isaac-POS-Mobile.apk'),
-        path.join(__dirname, '../../Isaac-POS.apk'),
-        path.join(process.cwd(), 'Isaac-POS-Mobile.apk'),
-        path.join(process.cwd(), 'Isaac-POS.apk'),
-        path.join(process.cwd(), 'dist_apk/Isaac-POS-Mobile.apk'),
-        path.join(process.cwd(), 'dist_apk/Isaac-POS.apk')
-    ];
-    for (const p of candidates) {
-        if (fs.existsSync(p)) {
-            return res.download(p, 'Isaac-POS-Mobile.apk');
-        }
+    const { resolveMobileDistributionFile } = require('../utils/mobileDistributionPaths');
+    const resolvedApk = resolveMobileDistributionFile(['Isaac-POS-Mobile.apk', 'Isaac-POS.apk'], {
+        baseDir: path.join(__dirname, '..')
+    });
+    if (resolvedApk) {
+        res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+        return res.download(resolvedApk, 'Isaac-POS-Mobile.apk');
     }
     res.status(404).send('APK no encontrado');
 });
@@ -156,6 +156,98 @@ router.get('/sw.js', (req, res) => {
 });
 
 /**
+ * Resuelve el registro de licencia vigente para una terminal (propia o heredada del servidor),
+ * detectando estados suspendidos/revocados y evitando empates de timestamp con licencias antiguas reemplazadas.
+ */
+async function resolveEffectiveLicenseState(terminalId, serverMachineId) {
+    const isServerHost = terminalId === serverMachineId;
+
+    const findLatestForMachine = async (targetId) => {
+        const activeOrSuspended = await License.findOne({
+            where: {
+                machineId: targetId,
+                status: { [Op.in]: ['active', 'suspended'] }
+            },
+            order: [['createdAt', 'DESC'], ['updatedAt', 'DESC']]
+        });
+        if (activeOrSuspended) return activeOrSuspended;
+
+        return License.findOne({
+            where: { machineId: targetId },
+            order: [['createdAt', 'DESC'], ['updatedAt', 'DESC']]
+        });
+    };
+
+    const isRemoteBlockedRecord = (record) => {
+        if (!record) return false;
+        if (record.status === 'suspended') return true;
+        return record.status === 'revoked' && record.meta?.onlineLease?.status === 'revoked';
+    };
+
+    let invalidMessage = null;
+    const terminalRecord = await findLatestForMachine(terminalId);
+    if (terminalRecord) {
+        if (isRemoteBlockedRecord(terminalRecord)) {
+            return {
+                record: terminalRecord,
+                effectiveMachineId: terminalId,
+                isInheritedFromServer: false,
+                blockedByStatus: true,
+                invalidMessage: null
+            };
+        }
+        if (terminalRecord.status === 'active') {
+            const validation = await licenseUtils.validateKey(terminalRecord.licenseKey, terminalId);
+            if (validation.valid) {
+                return {
+                    record: terminalRecord,
+                    effectiveMachineId: terminalId,
+                    isInheritedFromServer: false,
+                    blockedByStatus: false,
+                    invalidMessage: null
+                };
+            }
+            invalidMessage = validation.message || 'Licencia inválida o expirada.';
+        }
+    }
+
+    if (!isServerHost) {
+        const serverRecord = await findLatestForMachine(serverMachineId);
+        if (serverRecord) {
+            if (isRemoteBlockedRecord(serverRecord)) {
+                return {
+                    record: serverRecord,
+                    effectiveMachineId: serverMachineId,
+                    isInheritedFromServer: true,
+                    blockedByStatus: true,
+                    invalidMessage: null
+                };
+            }
+            if (serverRecord.status === 'active') {
+                const serverValidation = await licenseUtils.validateKey(serverRecord.licenseKey, serverMachineId);
+                if (serverValidation.valid) {
+                    return {
+                        record: serverRecord,
+                        effectiveMachineId: serverMachineId,
+                        isInheritedFromServer: true,
+                        blockedByStatus: false,
+                        invalidMessage: null
+                    };
+                }
+            }
+        }
+    }
+
+    return {
+        record: null,
+        effectiveMachineId: isServerHost ? serverMachineId : terminalId,
+        isInheritedFromServer: false,
+        blockedByStatus: false,
+        invalidMessage
+    };
+}
+
+/**
  * GET /license/status
  * Returns terminal HWID and license status for the querying terminal
  */
@@ -175,75 +267,89 @@ router.get('/status', async (req, res) => {
         }
 
         const isServerHost = terminalId === serverMachineId;
+        let resolved = await resolveEffectiveLicenseState(terminalId, serverMachineId);
 
-        // 1. Buscar licencia activa dedicada para esta terminal
-        let activeLicense = await License.findOne({ 
-            where: { 
-                machineId: terminalId,
-                status: 'active' 
-            },
-            order: [['createdAt', 'DESC']]
-        });
-
-        // 2. Si la terminal no tiene licencia individual, verificar la licencia del Servidor
-        let isInheritedFromServer = false;
-        if (!activeLicense) {
-            const serverLicense = await License.findOne({
-                where: {
-                    machineId: serverMachineId,
-                    status: 'active'
-                },
-                order: [['createdAt', 'DESC']]
-            });
-
-            if (serverLicense) {
-                const serverValidation = await licenseUtils.validateKey(serverLicense.licenseKey, serverMachineId);
-                if (serverValidation.valid) {
-                    activeLicense = serverLicense;
-                    isInheritedFromServer = true;
-                }
-            }
+        if ((req.query.forceSync === '1' || req.query.sync === '1') && OnlineLicenseService.getGatewayUrl()) {
+            const syncTargetId = resolved.record ? resolved.effectiveMachineId : serverMachineId;
+            await OnlineLicenseService.syncHeartbeat(syncTargetId).catch(() => null);
+            resolved = await resolveEffectiveLicenseState(terminalId, serverMachineId);
         }
 
-        // Si ni la terminal ni el servidor tienen licencia activa
-        if (!activeLicense) {
+        if (!resolved.record) {
             return res.json({
                 activated: false,
                 machineId: terminalId,
-                serverMachineId: serverMachineId,
+                serverMachineId,
                 isServerHost,
                 isTerminal: !isServerHost,
-                message: isServerHost 
+                gatewayConfigured: Boolean(OnlineLicenseService.getGatewayUrl()),
+                message: resolved.invalidMessage || (isServerHost
                     ? 'El servidor central no cuenta con una licencia activa.'
-                    : 'Terminal no autorizada. El servidor central requiere una licencia activa.'
+                    : 'Terminal no autorizada. El servidor central requiere una licencia activa.')
             });
         }
 
-        // 3. Validar criptográficamente si la licencia es individual (no heredada)
-        if (!isInheritedFromServer) {
-            const targetValidateId = isServerHost ? serverMachineId : terminalId;
-            const validation = await licenseUtils.validateKey(activeLicense.licenseKey, targetValidateId);
+        const { record: activeLicense, effectiveMachineId, isInheritedFromServer, blockedByStatus } = resolved;
 
-            if (!validation.valid) {
-                return res.json({
-                    activated: false,
-                    machineId: terminalId,
-                    serverMachineId: serverMachineId,
-                    isServerHost,
-                    isTerminal: !isServerHost,
-                    message: validation.message || 'Licencia inválida o expirada.'
-                });
-            }
+        if (blockedByStatus) {
+            const reason = activeLicense.meta?.onlineLease?.reason
+                || activeLicense.meta?.suspendedReason
+                || (activeLicense.status === 'revoked'
+                    ? 'Licencia revocada por el proveedor.'
+                    : 'Licencia suspendida por el proveedor.');
+            return res.json({
+                activated: false,
+                suspended: true,
+                revoked: activeLicense.status === 'revoked',
+                blockLocalBypass: true,
+                status: activeLicense.status,
+                reason,
+                expiresAt: activeLicense.expiresAt,
+                machineId: terminalId,
+                serverMachineId,
+                isServerHost,
+                isTerminal: !isServerHost,
+                isInherited: isInheritedFromServer,
+                gatewayConfigured: Boolean(OnlineLicenseService.getGatewayUrl()),
+                message: reason
+            });
+        }
+
+        const policy = OnlineLicenseService.evaluateLocalLicenseWithOnlinePolicy(activeLicense, effectiveMachineId);
+        if (!policy.allowed) {
+            return res.json({
+                activated: false,
+                suspended: Boolean(policy.suspended),
+                revoked: policy.status === 'revoked',
+                graceExpired: Boolean(policy.graceExpired),
+                clockSkew: Boolean(policy.clockSkew),
+                blockLocalBypass: true,
+                status: policy.status || 'blocked',
+                errorCode: policy.code,
+                reason: policy.reason,
+                graceUntil: policy.graceUntil || null,
+                expiresAt: activeLicense.expiresAt,
+                machineId: terminalId,
+                serverMachineId,
+                isServerHost,
+                isTerminal: !isServerHost,
+                isInherited: isInheritedFromServer,
+                onlinePolicy: policy,
+                gatewayConfigured: Boolean(OnlineLicenseService.getGatewayUrl()),
+                message: policy.reason || 'Verificación en línea requerida.'
+            });
         }
 
         res.json({
             activated: true,
             expiresAt: activeLicense.expiresAt,
             machineId: terminalId,
-            serverMachineId: serverMachineId,
+            serverMachineId,
             isServerHost,
             isTerminal: !isServerHost,
             isInherited: isInheritedFromServer,
+            onlinePolicy: policy,
+            gatewayConfigured: Boolean(OnlineLicenseService.getGatewayUrl()),
             message: isServerHost 
                 ? 'Licencia de Servidor activa' 
                 : (isInheritedFromServer 
@@ -259,7 +365,7 @@ router.get('/status', async (req, res) => {
  * POST /license/activate
  * Activates a specific terminal with a key
  */
-router.post('/activate', activateLimiter, async (req, res) => {
+router.post('/activate', activateLimiter, validate(activateLicenseSchema), async (req, res) => {
     try {
         const { key } = req.body;
         if (!key || typeof key !== 'string' || !key.trim() || key.length > 4096) {
@@ -328,6 +434,9 @@ router.post('/activate', activateLimiter, async (req, res) => {
             if (typeof clearLicenseCache === 'function') {
                 clearLicenseCache(terminalId);
             }
+            if (OnlineLicenseService.getGatewayUrl()) {
+                OnlineLicenseService.syncHeartbeat(terminalId).catch(() => {});
+            }
 
             return res.json({
                 success: true,
@@ -343,13 +452,56 @@ router.post('/activate', activateLimiter, async (req, res) => {
             return res.status(400).json({ error: validation.message });
         }
 
-        // Deactivate previous active licenses for THIS specific terminal
-        await License.update({ status: 'revoked' }, { 
-            where: { 
+        // Anti-bypass de suspensión remota: impedir re-activar pegando la misma llave (o una más antigua) cuando la terminal está suspendida/revocada remotamente
+        const suspendedOrRevokedLic = await License.findOne({
+            where: {
                 machineId: terminalId,
-                status: 'active' 
-            } 
+                status: { [Op.in]: ['suspended', 'revoked'] }
+            },
+            order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
         });
+        const existingRemoteStatus = String(existingLicense?.meta?.onlineLease?.status || '').toLowerCase();
+        const existingIsRemotelySuspended = existingRemoteStatus === 'suspended' || existingRemoteStatus === 'revoked';
+        const candidateBlockedLic = existingIsRemotelySuspended
+            ? existingLicense
+            : (!existingLicense ? suspendedOrRevokedLic : null);
+
+        if (candidateBlockedLic) {
+            const remoteStatus = String(candidateBlockedLic.meta?.onlineLease?.status || '').toLowerCase();
+            const isReplacementRevoke = Boolean(candidateBlockedLic.meta?.replacedByActivation) && candidateBlockedLic.status === 'revoked' && remoteStatus !== 'suspended' && remoteStatus !== 'revoked';
+            const isLockedStatus = !isReplacementRevoke && (
+                candidateBlockedLic.status === 'suspended'
+                || candidateBlockedLic.status === 'revoked'
+                || remoteStatus === 'suspended'
+                || remoteStatus === 'revoked'
+            );
+            if (isLockedStatus) {
+                const sameKeyReuse = String(candidateBlockedLic.licenseKey || '').trim() === key.trim();
+                const suspendedAtMs = Number(candidateBlockedLic.meta?.onlineLease?.serverTime)
+                    || Date.parse(candidateBlockedLic.updatedAt || 0)
+                    || 0;
+                const incomingIatMs = Number(validation.claims?.iat || 0);
+                const isNewerAuthorizedKey = !sameKeyReuse && incomingIatMs > suspendedAtMs;
+                if (sameKeyReuse || !isNewerAuthorizedKey) {
+                    return res.status(403).json({
+                        error: 'La licencia de esta terminal fue suspendida o revocada. Solicite la reactivación remota al proveedor o ingrese una nueva llave emitida posteriormente.',
+                        suspended: true,
+                        code: 'licencia_suspendida_reuso'
+                    });
+                }
+            }
+        }
+
+        // Deactivate previous active licenses for THIS specific terminal (marcando reemplazo administrativo)
+        const prevActives = await License.findAll({
+            where: { machineId: terminalId, status: 'active' }
+        });
+        for (const prev of prevActives) {
+            await prev.update({
+                status: 'revoked',
+                meta: { ...(prev.meta || {}), replacedByActivation: true, replacedAt: new Date().toISOString() }
+            });
+        }
 
         // Create new active license for this terminal
         const newLicense = await License.create({
@@ -364,6 +516,9 @@ router.post('/activate', activateLimiter, async (req, res) => {
 
         if (typeof clearLicenseCache === 'function') {
             clearLicenseCache(terminalId);
+        }
+        if (OnlineLicenseService.getGatewayUrl()) {
+            OnlineLicenseService.syncHeartbeat(terminalId).catch(() => {});
         }
 
         res.json({
@@ -380,7 +535,7 @@ router.post('/activate', activateLimiter, async (req, res) => {
  * POST /license/generate
  * Generates a key (Master only)
  */
-router.post('/generate', verifyToken, isMaster, async (req, res) => {
+router.post('/generate', verifyToken, isMaster, validate(generateLicenseSchema), async (req, res) => {
     try {
         const { machineId, days, duration, unit = 'days' } = req.body;
         if (!machineId) return res.status(400).json({ error: 'Machine ID requerido' });
@@ -420,7 +575,7 @@ router.post('/generate', verifyToken, isMaster, async (req, res) => {
  * POST /license/test-generate
  * Master-only key generation (same protection as /generate)
  */
-router.post('/test-generate', verifyToken, isMaster, async (req, res) => {
+router.post('/test-generate', verifyToken, isMaster, validate(generateLicenseSchema), async (req, res) => {
     if (process.env.NODE_ENV === 'production') {
         return res.status(404).json({ error: 'Ruta no disponible en producción' });
     }
@@ -481,6 +636,122 @@ router.delete('/cleanup', verifyToken, isMaster, async (req, res) => {
             success: true, 
             message: `Limpieza completada. Se eliminaron ${deletedCount} registros.`,
             deletedCount 
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /license/sync-online
+ * Forces an immediate heartbeat check against the configured remote License Gateway.
+ */
+router.post('/sync-online', activateLimiter, validate(syncOnlineLicenseSchema), async (req, res) => {
+    try {
+        const serverMachineId = await licenseUtils.getMachineId();
+        const rawTerminalId = req.body?.machineId || req.query?.terminalId || req.headers['x-terminal-id'] || serverMachineId;
+        const terminalId = String(rawTerminalId).trim().slice(0, 128) || serverMachineId;
+
+        const gatewayUrl = OnlineLicenseService.getGatewayUrl();
+        if (!gatewayUrl) {
+            return res.json({
+                success: false,
+                skipped: true,
+                gatewayConfigured: false,
+                machineId: terminalId,
+                reason: 'Gateway de licencias en línea no configurado.'
+            });
+        }
+
+        const resolved = await resolveEffectiveLicenseState(terminalId, serverMachineId);
+        const targetMachineId = resolved.record ? resolved.effectiveMachineId : serverMachineId;
+        const syncResult = await OnlineLicenseService.syncHeartbeat(targetMachineId);
+        const refreshed = await resolveEffectiveLicenseState(terminalId, serverMachineId);
+        const policy = refreshed.record && refreshed.record.status === 'active'
+            ? OnlineLicenseService.evaluateLocalLicenseWithOnlinePolicy(refreshed.record, refreshed.effectiveMachineId)
+            : null;
+
+        const effectiveStatus = syncResult.status || refreshed.record?.status || 'unknown';
+        const effectiveReason = syncResult.reason || refreshed.record?.meta?.onlineLease?.reason || policy?.reason || null;
+
+        return res.json({
+            success: Boolean(syncResult.success),
+            offline: Boolean(syncResult.offline),
+            tampered: Boolean(syncResult.tampered),
+            skipped: Boolean(syncResult.skipped),
+            gatewayConfigured: true,
+            machineId: terminalId,
+            targetMachineId,
+            status: effectiveStatus,
+            suspended: effectiveStatus === 'suspended' || effectiveStatus === 'revoked' || Boolean(policy?.suspended),
+            allowed: Boolean(refreshed.record && !refreshed.blockedByStatus && (policy ? policy.allowed : false)),
+            reason: effectiveReason,
+            graceUntil: syncResult.graceUntil || policy?.graceUntil || null,
+            error: syncResult.error || null
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /license/online-config
+ * Returns current remote License Gateway configuration (Master only)
+ */
+router.get('/online-config', verifyToken, isMaster, async (req, res) => {
+    try {
+        const serverMachineId = await licenseUtils.getMachineId();
+        res.json({
+            success: true,
+            gatewayUrl: OnlineLicenseService.getGatewayUrl(),
+            graceDays: OnlineLicenseService.getDefaultGraceDays(),
+            serverMachineId
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /license/online-config
+ * Saves remote License Gateway URL in local config (Master only)
+ */
+router.post('/online-config', verifyToken, isMaster, validate(onlineConfigSchema), async (req, res) => {
+    try {
+        const rawUrl = typeof req.body?.gatewayUrl === 'string' ? req.body.gatewayUrl.trim() : '';
+        const lockedGateway = String(process.env.LOCKED_LICENSE_GATEWAY_URL || '').trim();
+        if (lockedGateway && rawUrl !== lockedGateway) {
+            const vendorSecret = String(process.env.VENDOR_MASTER_KEY || process.env.OWNER_SECRET_KEY || '').trim();
+            const providedSecret = String(req.body?.vendorSecret || req.headers['x-vendor-secret'] || '').trim();
+            if (!vendorSecret || !providedSecret || !safeEqualSecret(providedSecret, vendorSecret)) {
+                return res.status(403).json({
+                    error: 'El Gateway de licencias en línea está fijado por política del proveedor y no puede modificarse ni desactivarse sin autorización del proveedor.'
+                });
+            }
+        }
+        if (rawUrl) {
+            let parsed;
+            try {
+                parsed = new URL(rawUrl);
+            } catch (_) {
+                return res.status(400).json({ error: 'URL de Gateway inválida.' });
+            }
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                return res.status(400).json({ error: 'El Gateway debe usar protocolo HTTP o HTTPS.' });
+            }
+        }
+
+        const savedUrl = OnlineLicenseService.saveGatewayUrl(rawUrl);
+        if (typeof clearLicenseCache === 'function') {
+            clearLicenseCache();
+        }
+
+        res.json({
+            success: true,
+            gatewayUrl: savedUrl,
+            message: savedUrl
+                ? 'Gateway de licencias en línea guardado correctamente.'
+                : 'Gateway en línea desactivado (modo offline puro).'
         });
     } catch (error) {
         res.status(500).json({ error: error.message });

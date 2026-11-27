@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
 import { 
     ShieldAlert, Key, Copy, CheckCircle2, ArrowRight, RefreshCw, 
-    Smartphone, Wifi, AlertTriangle, Clipboard as ClipboardIcon, Zap, Check, Trash2
+    Smartphone, Wifi, AlertTriangle, Clipboard as ClipboardIcon, Zap, Check, Trash2, Ban, Clock, Cloud
 } from 'lucide-react';
 import { Clipboard as CapClipboard } from '@capacitor/clipboard';
-import api, { updateApiBaseUrl } from '../services/api';
+import api from '../services/api';
 import ServerConfigModal from './ServerConfigModal';
 import { useAuth } from '../hooks/AuthContext';
 import { getTerminalId } from '../utils/terminalIdentity';
@@ -13,11 +12,10 @@ import {
     validateLicenseKeyLocally, 
     extractAndCleanLicenseKey 
 } from '../utils/clientLicenseValidator';
-import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
-export default function ActivationPortal({ machineId, onActivated }) {
+export default function ActivationPortal({ machineId, licenseInfo = null, onActivated }) {
     const { checkLicense } = useAuth();
     const { prompt, confirmDialog } = useConfirmDialog();
     const [key, setKey] = useState('');
@@ -32,10 +30,56 @@ export default function ActivationPortal({ machineId, onActivated }) {
         localStorage.getItem('isaac_pos_server_ip') || 
         localStorage.getItem('american_pos_server_ip') || ''
     );
-    const [isTesting, setIsTesting] = useState(false);
     const [isRechecking, setIsRechecking] = useState(false);
+    const [syncingOnline, setSyncingOnline] = useState(false);
 
     const isConnectionError = machineId === 'CONNECTION-ERROR';
+    const isSuspended = Boolean(licenseInfo?.suspended || licenseInfo?.revoked);
+    const isGraceExpired = Boolean(!isSuspended && (licenseInfo?.graceExpired || licenseInfo?.clockSkew));
+    const isRemoteBlocked = isSuspended || isGraceExpired;
+
+    const handleSyncOnline = async () => {
+        setSyncingOnline(true);
+        setErrorMessage('');
+        try {
+            const targetId = (machineId && machineId !== 'CONNECTION-ERROR') ? machineId : getTerminalId();
+            const { data } = await api.post('/license/sync-online', { machineId: targetId }, { timeout: 12000 });
+            if (data?.allowed || data?.status === 'active') {
+                toast.success('¡Licencia verificada y habilitada en línea!');
+                if (onActivated) {
+                    await onActivated();
+                } else if (checkLicense) {
+                    await checkLicense();
+                }
+                return;
+            }
+            if (data?.skipped) {
+                toast('Este equipo no tiene un Gateway de licencias en línea configurado.', { icon: 'ℹ️' });
+                if (checkLicense) await checkLicense();
+                return;
+            }
+            if (data?.offline) {
+                const msg = data.error || 'Sin conexión con el servidor central de licencias. Verifica tu internet e intenta nuevamente.';
+                setErrorMessage(msg);
+                toast.error(msg);
+                return;
+            }
+            if (data?.suspended) {
+                const msg = data.reason || 'La licencia continúa suspendida por el proveedor.';
+                setErrorMessage(msg);
+                toast.error(msg);
+                if (checkLicense) await checkLicense();
+                return;
+            }
+            if (checkLicense) await checkLicense();
+        } catch (err) {
+            const msg = err.response?.data?.error || 'No se pudo consultar el estado en línea en este momento.';
+            setErrorMessage(msg);
+            toast.error(msg);
+        } finally {
+            setSyncingOnline(false);
+        }
+    };
 
     // Manejador ultra-robusto para pegar llave (PosNativeHardware + Capacitor + Clipboard API + ExecCommand)
     const handlePasteKey = async () => {
@@ -75,7 +119,7 @@ export default function ActivationPortal({ machineId, onActivated }) {
                         textToPaste = result.value.trim();
                     }
                 }
-            } catch (_) {}
+            } catch { /* Canal Capacitor Clipboard no disponible, continuando fallback */ }
         }
 
         // 4. Intentar API estándar de Portapapeles del navegador
@@ -98,7 +142,7 @@ export default function ActivationPortal({ machineId, onActivated }) {
                         textToPaste = textareaEl.value.trim();
                     }
                 }
-            } catch (_) {}
+            } catch { /* Canal de portapapeles no disponible, continuando fallback */ }
         }
 
         if (textToPaste) {
@@ -149,10 +193,25 @@ export default function ActivationPortal({ machineId, onActivated }) {
                 localStorage.setItem('isaac_pos_license_machine_id', targetMid);
                 localStorage.setItem('isaac_pos_license_key', cleanedKey);
                 localStorage.setItem('isaac_pos_license_last_validated', Date.now().toString());
+                if (!isRemoteBlocked) {
+                    localStorage.setItem('isaac_pos_license_info', JSON.stringify({
+                        activated: true,
+                        isInherited: false,
+                        suspended: false,
+                        revoked: false,
+                        graceExpired: false,
+                        clockSkew: false,
+                        blockLocalBypass: false,
+                        status: 'active',
+                        reason: null,
+                        expiresAt: localValidation.expiresAt || null,
+                        updatedAt: Date.now()
+                    }));
+                }
 
                 // Notificar y persistir en el servidor central antes de continuar
                 try {
-                    await api.post('/license/activate', { key: cleanedKey, machineId: targetMid }, { timeout: 4000 });
+                    await api.post('/license/activate', { key: cleanedKey, machineId: targetMid }, { timeout: 2500 });
                 } catch (syncErr) {
                     console.log('[ActivationPortal] Activación persistida localmente (modo autónomo):', syncErr?.message);
                 }
@@ -217,20 +276,20 @@ export default function ActivationPortal({ machineId, onActivated }) {
                 await window.Capacitor.Plugins.PosNativeHardware.writeClipboard({ text: machineId });
                 copied = true;
             }
-        } catch (_) {}
+        } catch { /* Canal de portapapeles no disponible, continuando fallback */ }
 
         if (!copied) {
             try {
                 await CapClipboard.write({ string: machineId });
                 copied = true;
-            } catch (_) {}
+            } catch { /* Canal de portapapeles no disponible, continuando fallback */ }
         }
 
         if (!copied && navigator?.clipboard?.writeText) {
             try {
                 await navigator.clipboard.writeText(machineId);
                 copied = true;
-            } catch (_) {}
+            } catch { /* Canal de portapapeles no disponible, continuando fallback */ }
         }
 
         toast.success('¡ID de Máquina copiado al portapapeles!');
@@ -290,8 +349,20 @@ export default function ActivationPortal({ machineId, onActivated }) {
                         </div>
                         <div className="min-w-0">
                             <h1 className="text-xl font-bold text-white leading-tight mb-1 truncate">ISAAC POS</h1>
-                            <span className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 rounded text-[10px] font-semibold text-amber-400 inline-block">
-                                {isConnectionError ? 'Sin Conexión al Servidor' : 'Requiere Activación'}
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold inline-block border ${
+                                isSuspended
+                                    ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                                    : isGraceExpired
+                                        ? 'bg-orange-500/15 border-orange-500/30 text-orange-300'
+                                        : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                            }`}>
+                                {isSuspended
+                                    ? (licenseInfo?.revoked ? 'Licencia Revocada' : 'Licencia Suspendida')
+                                    : isGraceExpired
+                                        ? 'Verificación Online Requerida'
+                                        : isConnectionError
+                                            ? 'Sin Conexión al Servidor'
+                                            : 'Requiere Activación'}
                             </span>
                         </div>
                     </div>
@@ -308,6 +379,52 @@ export default function ActivationPortal({ machineId, onActivated }) {
                 </div>
 
                 <div className="space-y-5">
+                    {!isConnectionError && isRemoteBlocked && (
+                        <div className={`rounded-xl p-4 sm:p-5 space-y-3 border ${
+                            isSuspended
+                                ? 'bg-rose-500/10 border-rose-500/30'
+                                : 'bg-orange-500/10 border-orange-500/30'
+                        }`}>
+                            <div className="flex items-start gap-3">
+                                {isSuspended
+                                    ? <Ban className="text-rose-400 shrink-0 mt-0.5" size={20} />
+                                    : <Clock className="text-orange-400 shrink-0 mt-0.5" size={20} />}
+                                <div className="min-w-0">
+                                    <h3 className={`text-sm font-bold ${isSuspended ? 'text-rose-300' : 'text-orange-300'}`}>
+                                        {isSuspended
+                                            ? (licenseInfo?.revoked ? 'Licencia Revocada por el Proveedor' : 'Licencia Suspendida Temporalmente')
+                                            : (licenseInfo?.clockSkew ? 'Inconsistencia de Reloj Detectada' : 'Verificación en Línea Requerida')}
+                                    </h3>
+                                    <p className="text-xs text-slate-200 mt-1 leading-relaxed">
+                                        {licenseInfo?.reason || (isSuspended
+                                            ? 'Esta terminal ha sido suspendida remotamente. Contacta a tu proveedor de servicio para reactivarla.'
+                                            : 'Expiró el periodo de gracia sin conexión. Conecta el equipo a Internet y verifica la licencia para continuar.')}
+                                    </p>
+                                    {licenseInfo?.graceUntil && !isSuspended && (
+                                        <p className="text-[11px] text-orange-300/80 mt-1">
+                                            Vigencia offline hasta: {new Date(licenseInfo.graceUntil).toLocaleString()}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={handleSyncOnline}
+                                disabled={syncingOnline}
+                                className={`w-full h-10 px-4 rounded-lg text-white font-semibold text-xs transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50 ${
+                                    isSuspended
+                                        ? 'bg-rose-600 hover:bg-rose-700'
+                                        : 'bg-orange-600 hover:bg-orange-700'
+                                }`}
+                            >
+                                <Cloud size={15} />
+                                <RefreshCw className={syncingOnline ? 'animate-spin' : ''} size={14} />
+                                <span>{syncingOnline ? 'Consultando al Servidor...' : 'Verificar Estado en Línea Ahora'}</span>
+                            </button>
+                        </div>
+                    )}
+
                     {/* Connection Error Banner */}
                     {isConnectionError ? (
                         <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-4 sm:p-5 space-y-3.5">
@@ -452,7 +569,7 @@ export default function ActivationPortal({ machineId, onActivated }) {
                                                     toast('Texto pegado. Verifica que la llave esté completa.', { icon: 'ℹ️' });
                                                 }
                                             }
-                                        } catch (_) {}
+                                        } catch (caughtErr) { console.warn('[ActivationPortal] Error leyendo portapapeles al pegar:', caughtErr?.message || caughtErr); }
                                     }}
                                     onChange={(e) => {
                                         const val = e.target.value;

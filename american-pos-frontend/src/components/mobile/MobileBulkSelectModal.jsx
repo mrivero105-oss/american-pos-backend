@@ -1,7 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  X, Package, Check, ShoppingCart, Plus, Minus, 
-  Sparkles, Layers, Box, Tag, Info
+import { useState, useEffect } from 'react';
+import {
+  X, 
+  Package, 
+  ShoppingCart, 
+  Plus, 
+  Minus, 
+  Layers, 
+  Box
 } from 'lucide-react';
 
 const triggerHaptic = (ms = 12) => {
@@ -9,7 +14,7 @@ const triggerHaptic = (ms = 12) => {
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       navigator.vibrate(ms);
     }
-  } catch (_) {}
+  } catch { /* Vibración háptica opcional no soportada */ }
 };
 
 /**
@@ -23,12 +28,12 @@ export default function MobileBulkSelectModal({
   product,
   exchangeRate = 950,
   onConfirmSelection,
-  T = {},
-  isLight = false
+  T = {}
 }) {
   const [selectedType, setSelectedType] = useState(() => {
-    if (Array.isArray(product?.Presentations) && product.Presentations.length > 0) {
-      return `pres_${product.Presentations[0].id}`;
+    const firstPres = Array.isArray(product?.Presentations) ? product.Presentations.find((p) => p && p.id) : null;
+    if (firstPres) {
+      return `pres_${firstPres.id}`;
     }
     if (Number(product?.unitsPerBulk) > 1) return 'bulk';
     if (Number(product?.unitsPerMidBulk) > 0) return 'mid';
@@ -38,8 +43,9 @@ export default function MobileBulkSelectModal({
 
   useEffect(() => {
     if (product) {
-      if (Array.isArray(product.Presentations) && product.Presentations.length > 0) {
-        setSelectedType(`pres_${product.Presentations[0].id}`);
+      const firstPres = Array.isArray(product.Presentations) ? product.Presentations.find((p) => p && p.id) : null;
+      if (firstPres) {
+        setSelectedType(`pres_${firstPres.id}`);
       } else if (Number(product.unitsPerBulk) > 1) {
         setSelectedType('bulk');
       } else if (Number(product.unitsPerMidBulk) > 0) {
@@ -148,7 +154,7 @@ export default function MobileBulkSelectModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-xs animate-fadeIn">
       <div 
-        className={`w-full max-w-lg rounded-t-xl sm:rounded-xl ${T.modalCard || 'bg-slate-900'} border-t sm:border ${T.border || 'border-slate-800'} shadow-2xl flex flex-col max-h-[92vh] overflow-hidden`}
+        className={`w-full max-w-lg rounded-t-xl sm:rounded-xl ${T.modalCard || 'bg-slate-900'} border-t sm:border ${T.border || 'border-slate-800'} shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden`}
       >
         {/* Encabezado del Modal */}
         <div className={`p-4 border-b ${T.border || 'border-slate-800'} flex items-center justify-between shrink-0 ${T.subPanelBg || 'bg-slate-950/50'}`}>

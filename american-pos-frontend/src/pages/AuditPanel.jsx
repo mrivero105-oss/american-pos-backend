@@ -1,13 +1,35 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../hooks/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
-import { 
-    Shield, Search, Clock, User, RotateCcw, Filter, Activity, 
-    Download, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, 
-    Eye, TrendingUp, AlertTriangle, Tag, Banknote, Calendar, X, 
-    Layers, ArrowRight, FileSpreadsheet, CheckCircle2, CheckCircle, 
-    ShieldAlert, ShieldCheck, XCircle, RefreshCw, CheckCheck
+import {
+    Shield, 
+    Search, 
+    Clock, 
+    User, 
+    RotateCcw, 
+    Filter, 
+    Activity, 
+    ChevronLeft, 
+    ChevronRight, 
+    ChevronsLeft, 
+    ChevronsRight, 
+    Eye, 
+    AlertTriangle, 
+    Tag, 
+    Banknote, 
+    Calendar, 
+    X, 
+    Layers, 
+    ArrowRight, 
+    FileSpreadsheet, 
+    CheckCircle2, 
+    CheckCircle, 
+    ShieldAlert, 
+    ShieldCheck, 
+    XCircle, 
+    RefreshCw, 
+    CheckCheck
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AuditDetailModal from '../components/AuditDetailModal';
@@ -157,14 +179,20 @@ const AuditPanel = () => {
         }
     }, [filters.userId, filters.startDate, filters.endDate]);
 
+    const filtersSearchRef = useRef(filters.search);
+    useEffect(() => {
+        filtersSearchRef.current = filters.search;
+    }, [filters.search]);
+
     // Fetch Paginated Logs
-    const fetchLogs = useCallback(async (customPage = page) => {
+    const fetchLogs = useCallback(async (customPage = page, searchOverride) => {
         try {
             setLoading(true);
             const queryParams = new URLSearchParams();
             queryParams.append('page', customPage);
             queryParams.append('limit', limit);
-            if (filters.search) queryParams.append('search', filters.search);
+            const activeSearch = searchOverride !== undefined ? searchOverride : filtersSearchRef.current;
+            if (activeSearch) queryParams.append('search', activeSearch);
             if (filters.category) queryParams.append('category', filters.category);
             if (filters.action) queryParams.append('action', filters.action);
             if (filters.userId) queryParams.append('userId', filters.userId);
@@ -184,7 +212,7 @@ const AuditPanel = () => {
         } finally {
             setLoading(false);
         }
-    }, [page, limit, filters]);
+    }, [page, limit, filters.category, filters.action, filters.userId, filters.startDate, filters.endDate]);
 
     // Fetch Security Alerts
     const fetchAlerts = useCallback(async () => {
@@ -225,7 +253,7 @@ const AuditPanel = () => {
         if (masterTab === 'logs') {
             fetchLogs();
         }
-    }, [page, limit, filters.category, filters.action, filters.userId, masterTab]);
+    }, [masterTab, fetchLogs]);
 
     useEffect(() => {
         fetchStats();
@@ -414,7 +442,7 @@ const AuditPanel = () => {
             const link = document.createElement('a');
             link.setAttribute('href', encodedUri);
             const dateSuffix = new Date().toISOString().split('T')[0];
-            link.setAttribute('download', `Auditoria_American_POS_${dateSuffix}.csv`);
+            link.setAttribute('download', `Auditoria_Isaac_POS_${dateSuffix}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);

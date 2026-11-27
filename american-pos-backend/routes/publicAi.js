@@ -1,8 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const AIService = require('../services/AIService');
 const { z } = require('zod');
 const rateLimit = require('express-rate-limit');
+let AIServiceRef = null;
+const getAIService = () => {
+    if (!AIServiceRef) {
+        AIServiceRef = require('../services/AIService');
+    }
+    return AIServiceRef;
+};
 
 // 🛡️ SEGURIDAD: Rate Limiting para evitar agotamiento de cuota de IA y DoS
 const publicAiLimiter = rateLimit({
@@ -30,7 +36,7 @@ router.post('/', publicAiLimiter, async (req, res) => {
         const validatedData = aiQuerySchema.parse(req.body);
         const { companyId, query, history } = validatedData;
 
-        const response = await AIService.askCustomerBot(companyId, query, history);
+        const response = await getAIService().askCustomerBot(companyId, query, history);
         res.json({ response });
     } catch (error) {
         if (error instanceof z.ZodError) {

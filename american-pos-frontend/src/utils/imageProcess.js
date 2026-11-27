@@ -1,14 +1,39 @@
+let cachedWebPSupport = null;
+
+/**
+ * Detecta una única vez si el motor Canvas del navegador/WebView soporta codificación WebP.
+ */
+export function supportsWebP() {
+    if (cachedWebPSupport !== null) return cachedWebPSupport;
+    try {
+        if (typeof document === 'undefined') {
+            cachedWebPSupport = false;
+            return false;
+        }
+        const probe = document.createElement('canvas');
+        probe.width = 1;
+        probe.height = 1;
+        const dataUrl = probe.toDataURL('image/webp');
+        cachedWebPSupport = typeof dataUrl === 'string' && dataUrl.startsWith('data:image/webp');
+    } catch {
+        cachedWebPSupport = false;
+    }
+    return cachedWebPSupport;
+}
+
 /**
  * Normalizador y optimizador universal de imágenes para catálogo de productos.
  * Estandariza cualquier imagen a una proporción 1:1 cuadrada uniforme (500x500 px)
- * con fondo blanco limpio de estudio, garantizando alineación visual perfecta en el POS.
+ * con fondo blanco limpio de estudio y compresión WebP automática (fallback JPEG),
+ * garantizando alineación visual perfecta y mínimo consumo de RAM/red en el POS.
  */
 export async function normalizeProductImage(fileOrBase64, options = {}) {
     const {
         size = 500,               // Resolución cuadrada estándar 500x500 px
-        quality = 0.88,            // Calidad óptima (peso < 50 KB)
-        mode = 'contain',          // 'contain' (centrado con margen) o 'cover' (recorte centrado)
-        backgroundColor = '#ffffff'
+        quality = 0.85,           // Calidad óptima WebP/JPEG (peso típico < 35 KB)
+        mode = 'contain',         // 'contain' (centrado con margen) o 'cover' (recorte centrado)
+        backgroundColor = '#ffffff',
+        format = 'auto'           // 'auto' (WebP si hay soporte, fallback JPEG), 'image/webp' o 'image/jpeg'
     } = options;
 
     return new Promise((resolve, reject) => {
@@ -50,8 +75,14 @@ export async function normalizeProductImage(fileOrBase64, options = {}) {
                     ctx.drawImage(img, x, y, drawW, drawH);
                 }
 
-                // 3. Exportar como JPEG estándar
-                const standardizedBase64 = canvas.toDataURL('image/jpeg', quality);
+                // 3. Exportar como WebP cuando esté disponible (25-40% menor peso), con fallback seguro a JPEG
+                const targetMime = format === 'auto'
+                    ? (supportsWebP() ? 'image/webp' : 'image/jpeg')
+                    : format;
+                let standardizedBase64 = canvas.toDataURL(targetMime, quality);
+                if (targetMime === 'image/webp' && !standardizedBase64.startsWith('data:image/webp')) {
+                    standardizedBase64 = canvas.toDataURL('image/jpeg', quality);
+                }
                 resolve(standardizedBase64);
             } catch (err) {
                 console.error('[normalizeProductImage] Error en canvas:', err);

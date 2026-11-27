@@ -1,20 +1,38 @@
 import { useState, useEffect, useMemo } from 'react';
-import { 
-    X, Save, Mail, Lock, User as UserIcon, Shield, RefreshCcw, 
-    Activity, Plus, Key, Phone, Building, Check, Copy, CheckCircle2,
-    Eye, EyeOff, AlertTriangle, Layers, Zap, Sliders, ShieldCheck,
-    ShoppingCart, Users, Package, Truck, Banknote, TrendingUp, Settings,
-    Search, CheckSquare, Square, DollarSign, Coins, Warehouse, Hammer,
-    FileText, Landmark, FileSpreadsheet, PieChart, Scale,
-    Building2, Store, UserCog
+import {
+    X, 
+    Save, 
+    Mail, 
+    Lock, 
+    User as UserIcon, 
+    Shield, 
+    RefreshCcw, 
+    Activity, 
+    Key, 
+    Phone, 
+    Building, 
+    Check, 
+    Copy, 
+    Eye, 
+    EyeOff, 
+    ShieldCheck, 
+    ShoppingCart, 
+    Users, 
+    Package, 
+    Truck, 
+    Banknote, 
+    TrendingUp, 
+    Settings, 
+    Search, 
+    CheckSquare, 
+    Square
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import BaseModal from './BaseModal';
-import { useAuth } from '../hooks/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 
-export const PERMISSION_CATEGORIES = [
+const PERMISSION_CATEGORIES = [
     {
         id: 'sales',
         title: 'Operaciones de Ventas y Cobros (POS)',
@@ -236,7 +254,6 @@ const AVATAR_COLORS = [
 ];
 
 export default function UserModal({ isOpen, onClose, onSave, user, processing, initialTab = 'identity' }) {
-    const { user: currentUser } = useAuth();
     const [activeTab, setActiveTab] = useState('identity'); // 'identity' | 'permissions' | 'security'
     const [showPassword, setShowPassword] = useState(false);
     const [branches, setBranches] = useState([]);
@@ -871,7 +888,7 @@ export default function UserModal({ isOpen, onClose, onSave, user, processing, i
                                             No se encontraron permisos
                                         </h4>
                                         <p className="text-[11px] text-slate-400 mt-1">
-                                            Prueba con otro término de búsqueda o selecciona "Todas las categorías".
+                                            Prueba con otro término de búsqueda o selecciona &ldquo;Todas las categorías&rdquo;.
                                         </p>
                                     </div>
                                 )}

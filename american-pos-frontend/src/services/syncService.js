@@ -3,6 +3,12 @@ import { db } from './db';
 import localDb from '../db/localDb';
 import { cacheAllProductImages } from './imageCache';
 import { getSupabaseHeaders, getSupabaseRestUrl, hasSupabaseConfig } from '../config/supabaseConfig';
+import {
+    fetchBusinessSettingsCached,
+    fetchTaxSettingsCached,
+    fetchExchangeRateCached,
+    fetchPaymentMethodsCached
+} from '../utils/format';
 
 const SYNC_METADATA_KEY = 'last_sync_timestamp';
 let inFlightAutoSyncPromise = null;
@@ -28,7 +34,7 @@ async function getPendingOfflineStockDeductions() {
                 ? sale.items
                 : (Array.isArray(sale.SaleItems) ? sale.SaleItems : []);
             for (const item of items) {
-                const rawProdId = item?.productId ?? item?.producto_id ?? item?.id;
+                const rawProdId = item?.productId ?? item?.producto_id ?? item?.product?.id ?? item?.id;
                 const qty = Number(item?.quantity ?? item?.qty ?? 0);
                 if (!rawProdId || !Number.isFinite(qty) || qty <= 0) continue;
                 const key = String(rawProdId).trim();
@@ -57,10 +63,33 @@ async function getPendingOfflineStockDeductions() {
 }
 
 /**
- * Persiste una colección de forma atómica en el motor unificado (SQLite Nativo Android WAL / UnifiedDB).
+ * Persiste una colección de forma atómica en el motor unificado (SQLite Nativo Android WAL / UnifiedDB),
+ * preservando siempre registros creados offline pendientes de sincronización (off_prod_*, cust_off_*, pending_sync).
  */
 async function persistCollectionAtomically(storeName, items = [], keyPath = 'id') {
-    const safeItems = Array.isArray(items) ? items : [];
+    const safeItems = Array.isArray(items) ? [...items] : [];
+    if (storeName === 'products' || storeName === 'customers') {
+        try {
+            const existing = await db.getAll(storeName).catch(() => []);
+            const incomingIds = new Set(safeItems.map((it) => String(it?.[keyPath] ?? '')).filter(Boolean));
+            const preservedOffline = (Array.isArray(existing) ? existing : []).filter((row) => {
+                if (!row) return false;
+                const idStr = String(row?.[keyPath] ?? '');
+                if (!idStr || incomingIds.has(idStr)) return false;
+                return (
+                    row.status === 'pending_sync' ||
+                    row.isOffline === true ||
+                    idStr.startsWith('off_prod_') ||
+                    idStr.startsWith('cust_off_')
+                );
+            });
+            if (preservedOffline.length > 0) {
+                safeItems.push(...preservedOffline);
+            }
+        } catch (_preserveErr) {
+            // Continuar con safeItems si la lectura previa no está disponible
+        }
+    }
     await db.replaceAllAtomic(storeName, safeItems, keyPath);
 }
 
@@ -162,7 +191,9 @@ export const syncService = {
                     localStorage.setItem('pos_categories', JSON.stringify(['Todas']));
                     try {
                         if (localDb && localDb.variants) await localDb.variants.clear();
-                    } catch (_e) {}
+                    } catch (err) {
+                        console.warn('[Sync] Error limpiando variantes locales:', err?.message);
+                    }
                     window.dispatchEvent(new CustomEvent('pos-data-synced', { detail: { timestamp: new Date().toISOString(), count: 0 } }));
                     return { products: [], count: 0 };
                 }
@@ -340,32 +371,32 @@ export const syncService = {
     /**
      * Sincroniza configuraciones de empresa, monedas, tasas, impuestos y métodos de pago
      */
-    syncSettings: async () => {
+    syncSettings: async (forceRefresh = false) => {
         try {
             console.log('Sync: Starting settings sync...');
             const [busRes, taxRes, rateRes, payRes] = await Promise.allSettled([
-                api.get('/settings/business'),
-                api.get('/settings/taxes'),
-                api.get('/settings/rate'),
-                api.get('/settings/payment-methods')
+                fetchBusinessSettingsCached(forceRefresh),
+                fetchTaxSettingsCached(forceRefresh),
+                fetchExchangeRateCached(forceRefresh),
+                fetchPaymentMethodsCached(forceRefresh)
             ]);
 
-            if (busRes.status === 'fulfilled' && busRes.value?.data) {
-                localStorage.setItem('pos_business_settings', JSON.stringify(busRes.value.data));
-                if (busRes.value.data.businessMode) {
-                    localStorage.setItem('pos_business_mode', busRes.value.data.businessMode);
+            if (busRes.status === 'fulfilled' && busRes.value) {
+                localStorage.setItem('pos_business_settings', JSON.stringify(busRes.value));
+                if (busRes.value.businessMode) {
+                    localStorage.setItem('pos_business_mode', busRes.value.businessMode);
                 }
-                if (busRes.value.data.country) {
-                    localStorage.setItem('pos_country', busRes.value.data.country);
+                if (busRes.value.country) {
+                    localStorage.setItem('pos_country', busRes.value.country);
                 }
             }
 
-            if (taxRes.status === 'fulfilled' && taxRes.value?.data) {
-                localStorage.setItem('pos_tax_settings', JSON.stringify(taxRes.value.data));
+            if (taxRes.status === 'fulfilled' && taxRes.value) {
+                localStorage.setItem('pos_tax_settings', JSON.stringify(taxRes.value));
             }
 
-            if (rateRes.status === 'fulfilled' && rateRes.value?.data) {
-                const rateData = rateRes.value.data;
+            if (rateRes.status === 'fulfilled' && rateRes.value) {
+                const rateData = rateRes.value;
                 const finalRate = rateData.rate || rateData.exchangeRate || 1.0;
                 localStorage.setItem('pos_exchange_rate', String(finalRate));
                 if (rateData.currencyMode) {
@@ -395,8 +426,8 @@ export const syncService = {
                 }
             }
 
-            if (payRes.status === 'fulfilled' && payRes.value?.data) {
-                localStorage.setItem('pos_payment_methods', JSON.stringify(payRes.value.data));
+            if (payRes.status === 'fulfilled' && Array.isArray(payRes.value)) {
+                localStorage.setItem('pos_payment_methods', JSON.stringify(payRes.value));
             }
 
             console.log('Sync: Configuraciones y monedas sincronizadas exitosamente.');
@@ -480,7 +511,9 @@ export const syncService = {
                     localStorage.setItem('pos_categories', JSON.stringify(['Todas']));
                     try {
                         if (localDb && localDb.variants) await localDb.variants.clear();
-                    } catch (_e) {}
+                    } catch (err) {
+                        console.warn('[Sync] Error limpiando variantes locales:', err?.message);
+                    }
                     productsList = [];
                 } else {
                     const formattedProducts = rawProducts.map(p => {
@@ -717,7 +750,9 @@ export const syncService = {
                         localStorage.setItem('pos_categories', JSON.stringify(['Todas']));
                         try {
                             if (localDb && localDb.variants) await localDb.variants.clear();
-                        } catch (_e) {}
+                        } catch (err) {
+                            console.warn('[AutoSync] Error limpiando variantes locales:', err?.message);
+                        }
                         productsList = [];
                     } else {
                         const formattedProducts = rawProducts.map(p => {
@@ -789,7 +824,9 @@ export const syncService = {
                             || data.settings?.rate;
                         if (matchedRate) {
                             localStorage.setItem('pos_exchange_rate', String(matchedRate));
-                            try { db.put('metadata', { key: 'pos_exchange_rate', value: matchedRate }); } catch (_e) {}
+                            db.put('metadata', { key: 'pos_exchange_rate', value: matchedRate }).catch((err) => {
+                                console.warn('[AutoSync] Error guardando tasa en IDB:', err?.message);
+                            });
                         }
                     }
 
@@ -822,14 +859,19 @@ export const syncService = {
                  /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent))
             );
 
-            // En móviles se omite el precacheo masivo en IndexedDB para evitar saturar la CPU/RAM y el hilo de JS.
-            // Las imágenes usan caché HTTP y lazy-loading nativo del navegador.
-            if (!options.skipImages && productsList.length > 0 && !isMobileDevice) {
+            // Descarga incremental y persistencia de imágenes en segundo plano (SQLite WAL en Android + CacheStorage)
+            // Salta instantáneamente las imágenes ya guardadas y cede el hilo en móvil para mantener 60/120 FPS.
+            if (!options.skipImages && productsList.length > 0) {
                 setTimeout(async () => {
                     try {
-                        await cacheAllProductImages(productsList, { concurrency: 2 });
-                    } catch (_e) {}
-                }, 4000);
+                        await cacheAllProductImages(productsList, {
+                            concurrency: 2,
+                            yieldMs: isMobileDevice ? 25 : 0
+                        });
+                    } catch (err) {
+                        console.warn('[AutoSync] Error en precarga secundaria de imágenes:', err?.message);
+                    }
+                }, isMobileDevice ? 2000 : 4000);
             }
 
             const timestamp = new Date().toISOString();
@@ -866,7 +908,9 @@ export const syncService = {
         try {
             const meta = await db.getById('metadata', SYNC_METADATA_KEY);
             if (meta && meta.value) return meta.value;
-        } catch (_err) {}
+        } catch (err) {
+            console.warn('[Sync] Error leyendo última marca de sincronización:', err?.message);
+        }
         return localStorage.getItem('last_sync_timestamp') || null;
     },
 
@@ -878,6 +922,7 @@ export const syncService = {
             const response = await api.get('/sync/stats');
             return response.data;
         } catch (error) {
+            console.debug('[Sync] Fallback de estado de sincronización:', error?.message);
             const isOfflineFlag = localStorage.getItem('isaac_pos_is_offline_mode') === 'true';
             if (isOfflineFlag) {
                 return { stats: { PENDING: 0, SYNCED: 0, RETRYING: 0, FAILED: 0 }, isOnline: false };
@@ -892,4 +937,5 @@ export const syncService = {
     }
 };
 
+export { persistCollectionAtomically, getPendingOfflineStockDeductions };
 export default syncService;

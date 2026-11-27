@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { User } = require('../database/models');
 const { isAdmin, isSuperAdmin, invalidateUserAuthCache } = require('../middleware/auth');
-const { generateRobustId } = require('../utils/helpers');
+const { generateRobustId, safeSecretEqual } = require('../utils/helpers');
+const validate = require('../middleware/validate');
+const { createUserSchema, updateUserSchema, supervisorPinSchema } = require('../schemas/userSchema');
 const { Op } = require('sequelize');
 
 // All user management routes require admin role
@@ -29,7 +31,7 @@ router.get('/', async (req, res) => {
         try {
             users = await User.findAll({
                 where: whereCondition,
-                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash'] }
+                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash', 'currentSessionId'] }
             });
         } catch (attrErr) {
             console.warn('[Get users] Full attributes query failed, falling back to core attributes:', attrErr.message);
@@ -58,11 +60,11 @@ router.get('/', async (req, res) => {
         res.json(safeUsers);
     } catch (error) {
         console.error('Get users error:', error);
-        res.status(500).json({ error: 'Error al obtener usuarios', details: error.message });
+        res.status(500).json({ error: 'Error al obtener usuarios' });
     }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', validate(createUserSchema), async (req, res) => {
     try {
         const { email, username, password, role, name } = req.body;
         const sanitizedEmail = email ? email.trim().toLowerCase() : '';
@@ -154,12 +156,15 @@ router.post('/', async (req, res) => {
     }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', validate(updateUserSchema), async (req, res) => {
     try {
         const { id } = req.params;
         const { email } = req.body;
         
-        console.log(`[DEBUG] Updating user ${id} with body:`, req.body);
+        const redactedKeys = Object.keys(req.body || {}).filter(
+            (k) => !['password', 'supervisorPin', 'quickPin', 'biometricTokenHash'].includes(k)
+        );
+        console.log(`[AUDIT] Updating user ${id} (fields: ${redactedKeys.join(', ') || 'none'})`);
 
         const compId = req.user.companyId || '2';
         const companyCondition = (compId === '2' || compId === 'default')
@@ -244,7 +249,7 @@ router.put('/:id', async (req, res) => {
                             isValidOldPin = await bcrypt.compare(cleanCurrent, targetUser.supervisorPin);
                         }
                     } else {
-                        isValidOldPin = (cleanCurrent === targetUser.supervisorPin || currentSha256 === targetUser.supervisorPin);
+                        isValidOldPin = (safeSecretEqual(cleanCurrent, targetUser.supervisorPin) || safeSecretEqual(currentSha256, targetUser.supervisorPin));
                     }
 
                     if (!isValidOldPin) {
@@ -263,6 +268,11 @@ router.put('/:id', async (req, res) => {
             }
         }
 
+        if (allowedUpdates.password || (allowedUpdates.status && allowedUpdates.status !== 'active')) {
+            const { revokeSession } = require('../utils/sessionRegistry');
+            allowedUpdates.currentSessionId = revokeSession(null, null, { allDevices: true });
+        }
+
         const [updated] = await User.update(allowedUpdates, {
             where: { 
                 id, 
@@ -275,7 +285,7 @@ router.put('/:id', async (req, res) => {
             invalidateUserAuthCache(id);
             const freshUser = await User.findOne({
                 where: { id, companyId: companyCondition },
-                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash'] }
+                attributes: { exclude: ['password', 'quickPin', 'biometricTokenHash', 'currentSessionId'] }
             });
             let userPermissions = freshUser?.permissions || {};
             if (typeof userPermissions === 'string') {
@@ -392,7 +402,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // POST /:id/supervisor-pin - Update supervisor PIN (Admin only)
-router.post('/:id/supervisor-pin', async (req, res) => {
+router.post('/:id/supervisor-pin', validate(supervisorPinSchema), async (req, res) => {
     try {
         const { id } = req.params;
         const { pin, currentPin } = req.body;
@@ -429,7 +439,7 @@ router.post('/:id/supervisor-pin', async (req, res) => {
                     isValidOldPin = await bcrypt.compare(cleanCurrent, user.supervisorPin);
                 }
             } else {
-                isValidOldPin = (cleanCurrent === user.supervisorPin || currentSha256 === user.supervisorPin);
+                isValidOldPin = (safeSecretEqual(cleanCurrent, user.supervisorPin) || safeSecretEqual(currentSha256, user.supervisorPin));
             }
 
             if (!isValidOldPin) {

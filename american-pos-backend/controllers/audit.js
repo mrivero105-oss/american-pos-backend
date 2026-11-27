@@ -352,11 +352,23 @@ const auditController = {
 
             let expectedPrevHash = 'GENESIS_BLOCK_0000000000000000';
             let seenSignedBlock = false;
+            let signedLogsVerified = 0;
+            let dbTriggerLogsCount = 0;
             const tamperedLogs = [];
+            const isDbTriggerRow = (log) => {
+                if (!log || log.recordHash) return false;
+                if (log.previousHash === 'DB_TRIGGER_ROW_AUDIT') return true;
+                return !log.previousHash && /^(Products|Sales|Customers|FixedAssets)_(CREATED|UPDATED|DELETED)$/.test(String(log.action || ''));
+            };
 
             for (const log of logs) {
+                if (isDbTriggerRow(log)) {
+                    dbTriggerLogsCount += 1;
+                    continue;
+                }
                 if (log.recordHash) {
                     seenSignedBlock = true;
+                    signedLogsVerified += 1;
                     if (log.previousHash !== expectedPrevHash) {
                         tamperedLogs.push({
                             id: log.id,
@@ -380,7 +392,7 @@ const auditController = {
 
                     expectedPrevHash = log.recordHash;
                 } else if (seenSignedBlock) {
-                    // Si ya existían bloques firmados en la cadena y aparece un registro con recordHash NULL, fue borrado/alterado maliciosamente
+                    // Si ya existían bloques firmados en la cadena y aparece un registro de aplicación con recordHash NULL, fue alterado maliciosamente
                     tamperedLogs.push({
                         id: log.id,
                         action: log.action,
@@ -397,6 +409,8 @@ const auditController = {
                 success: true,
                 chainValid: isValid,
                 totalLogsVerified: logs.length,
+                signedLogsVerified,
+                dbTriggerLogsCount,
                 tamperedCount: tamperedLogs.length,
                 tamperedLogs,
                 status: isValid ? 'INTEGRITY_VERIFIED_100_PERCENT' : 'TAMPERING_DETECTED',

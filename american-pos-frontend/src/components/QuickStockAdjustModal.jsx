@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Package, Plus, Minus, Hash, Save, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Package, Plus, Minus, Hash, Save, RefreshCw } from 'lucide-react';
 import BaseModal from './BaseModal';
 import SupervisorPinModal from './SupervisorPinModal';
 import { useAuth } from '../hooks/AuthContext';
-import { formatMoney, formatStock } from '../utils/format';
+import { formatStock } from '../utils/format';
 import { getImageUrl } from '../utils/imageUtils';
 import toast from 'react-hot-toast';
 
@@ -117,7 +117,7 @@ export default function QuickStockAdjustModal({ isOpen, onClose, product, onSave
                 <div className="flex items-center gap-3 sm:gap-4 bg-slate-50 dark:bg-white/5 p-3 sm:p-3.5 rounded-2xl border border-slate-200/60 dark:border-white/10">
                     <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-white dark:bg-black/20 border border-slate-200 dark:border-white/10 overflow-hidden flex items-center justify-center shrink-0">
                         {product.imageUri ? (
-                            <img src={getImageUrl(product.imageUri)} alt={product.name} className="w-full h-full object-cover" />
+                            <img src={getImageUrl(product.imageUri)} alt={product.name} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                         ) : (
                             <Package size={22} className="text-slate-400" />
                         )}

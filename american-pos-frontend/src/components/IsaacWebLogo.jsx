@@ -1,6 +1,5 @@
-import React from 'react';
-import logoLight from '../assets/isaac-logo-horizontal.png';
-import logoDark from '../assets/isaac-logo-horizontal-dark.png';
+import logoLight from '../assets/isaac-logo-horizontal.webp';
+import logoDark from '../assets/isaac-logo-horizontal-dark.webp';
 
 /**
  * Logo Oficial de la Web Isaac POS (isaacventas.com)

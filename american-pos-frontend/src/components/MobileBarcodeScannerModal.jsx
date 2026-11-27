@@ -1,18 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, X, Scan, Zap, AlertCircle, CheckCircle2, RefreshCw, SwitchCamera, ZoomIn, Copy, Check, Calendar, Hash, Clock, Plus, Clipboard, Eye, ArrowRight } from 'lucide-react';
+import { X, Scan, Zap, AlertCircle, CheckCircle2, RefreshCw, SwitchCamera, ZoomIn, Copy, Check, Calendar, Hash, Clock, Plus, Eye, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import { hapticTap, hapticSuccess } from '../utils/haptics';
 import api from '../services/api';
-import {
-    MultiFormatReader,
-    BarcodeFormat,
-    DecodeHintType,
-    RGBLuminanceSource,
-    BinaryBitmap,
-    HybridBinarizer
-} from '@zxing/library';
+import { useMobileKeyboardViewport } from '../hooks/useMobileKeyboardViewport';
+
+// Carga lazy bajo demanda de @zxing/library (~440 KB): solo se descarga si no hay ML Kit nativo o como fallback web
+let cachedZxingPromise = null;
+async function loadZxingLibrary() {
+    if (!cachedZxingPromise) {
+        cachedZxingPromise = import('@zxing/library').catch((err) => {
+            cachedZxingPromise = null;
+            throw err;
+        });
+    }
+    return cachedZxingPromise;
+}
 
 // Singleton AudioContext for instant, zero-latency cashier beep
 let sharedAudioCtx = null;
@@ -34,7 +39,7 @@ function playCashierBeep() {
         gain.connect(sharedAudioCtx.destination);
         osc.start();
         osc.stop(sharedAudioCtx.currentTime + 0.12);
-    } catch (_e) {}
+    } catch { /* AudioContext opcional no disponible en este entorno */ }
 }
 
 export default function MobileBarcodeScannerModal({
@@ -42,6 +47,7 @@ export default function MobileBarcodeScannerModal({
     onClose,
     onBarcodeScanned,
     initialMode = 'BARCODE',
+    initialBurstMode = false,
     targetMode = 'CART', // 'CART' | 'ASSIGN' | 'LOOKUP'
     title = '',
     subtitle = '',
@@ -50,12 +56,21 @@ export default function MobileBarcodeScannerModal({
     onOcrDetected = null,
     onSaveNewProduct = null
 }) {
+    const manualInputRef = useRef(null);
+    const {
+        isKeyboardOpen,
+        modalOverlayStyle,
+        modalCardMaxHeightStyle,
+        scrollFieldIntoView
+    } = useMobileKeyboardViewport({ enabled: isOpen });
     const videoRef = useRef(null);
     const animationFrameRef = useRef(null);
     const streamRef = useRef(null);
     const canvasRef = useRef(null);
     const ctxRef = useRef(null);
     const readerRef = useRef(null);
+    const zxingModRef = useRef(null);
+    const mlKitUnavailableRef = useRef(false);
     const nativeDetectorRef = useRef(null);
     const nativeTextDetectorRef = useRef(null);
     const visionWorkerRef = useRef(null);
@@ -83,179 +98,40 @@ export default function MobileBarcodeScannerModal({
     const [maxZoom, setMaxZoom] = useState(1);
     const [lastScanned, setLastScanned] = useState('');
     const [lastMatchedProduct, setLastMatchedProduct] = useState(null);
-    const [burstMode, setBurstMode] = useState(false);
+    const [burstMode, setBurstMode] = useState(Boolean(initialBurstMode));
+    useEffect(() => {
+        if (isOpen && initialBurstMode) {
+            setBurstMode(true);
+        }
+    }, [isOpen, initialBurstMode]);
     const [burstCount, setBurstCount] = useState(0);
     const [scanHistory, setScanHistory] = useState([]);
     const [isHistoryOpen, setIsHistoryOpen] = useState(false);
     const [copiedCode, setCopiedCode] = useState('');
     const [manualCodeInput, setManualCodeInput] = useState('');
     const [isVideoFeedReady, setIsVideoFeedReady] = useState(false);
+    const [nativeScannerActive, setNativeScannerActive] = useState(false);
+    const [preferWebScanner, setPreferWebScanner] = useState(false);
+    const nativeSessionCodesRef = useRef(new Set());
 
     const lastScanTimeRef = useRef(0);
     const lastScanCodeRef = useRef('');
+    const onCloseRef = useRef(onClose);
+    const productsRef = useRef(products);
+    const handleValidBarcodeRef = useRef(null);
 
     useEffect(() => {
-        if (isOpen) {
-            setActiveMode(initialMode || 'BARCODE');
-            setVisionMatches([]);
-            setDetectedOcr({ batchNumber: '', expirationDate: '' });
-            setLastScanned('');
-            setErrorMsg('');
-            setErrorType('');
-            setBurstCount(0);
-            setManualCodeInput('');
-            setIsVideoFeedReady(false);
-            lastScanTimeRef.current = 0;
-            lastScanCodeRef.current = '';
-            setTorchOn(false);
-            setZoomLevel(1);
+        onCloseRef.current = onClose;
+    }, [onClose]);
 
-            // 1. Initialize Hardware-Accelerated Native BarcodeDetector (Chrome / Android WebView)
-            if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-                try {
-                    nativeDetectorRef.current = new window.BarcodeDetector({
-                        formats: [
-                            'ean_13',
-                            'ean_8',
-                            'code_128',
-                            'code_39',
-                            'code_93',
-                            'upc_a',
-                            'upc_e',
-                            'itf',
-                            'qr_code',
-                            'data_matrix',
-                            'aztec'
-                        ]
-                    });
-                } catch (_e) {
-                    nativeDetectorRef.current = null;
-                }
-            }
-
-            // 2. Initialize ZXing Software Reader as high-speed multi-pass fallback
-            const hints = new Map();
-            const formats = [
-                BarcodeFormat.EAN_13,
-                BarcodeFormat.EAN_8,
-                BarcodeFormat.CODE_128,
-                BarcodeFormat.CODE_39,
-                BarcodeFormat.CODE_93,
-                BarcodeFormat.UPC_A,
-                BarcodeFormat.UPC_E,
-                BarcodeFormat.ITF,
-                BarcodeFormat.QR_CODE,
-                BarcodeFormat.DATA_MATRIX
-            ];
-            hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
-            hints.set(DecodeHintType.TRY_HARDER, true);
-
-            const reader = new MultiFormatReader();
-            reader.setHints(hints);
-            readerRef.current = reader;
-
-            // Offscreen Canvas for high-res frame capture
-            const canvas = document.createElement('canvas');
-            canvasRef.current = canvas;
-            ctxRef.current = canvas.getContext('2d', { willReadFrequently: true });
-
-            // 3. Initialize Vision Worker
-            try {
-                visionWorkerRef.current = new Worker(new URL('../workers/visionWorker.js', import.meta.url), { type: 'module' });
-                visionWorkerRef.current.onmessage = (e) => {
-                    if (e.data?.type === 'CLASSIFY_RESULT') {
-                        setVisionMatches(e.data.matches || []);
-                        if (e.data.rawDetected !== undefined) {
-                            setLastDetectedVisionText(e.data.rawDetected);
-                        }
-                    }
-                };
-                if (products && products.length > 0) {
-                    visionWorkerRef.current.postMessage({ type: 'INDEX_CATALOG', payload: products });
-                }
-            } catch (_vErr) {
-                console.warn('[Scanner] Vision worker init notice:', _vErr.message);
-            }
-
-            // 4. Initialize OCR Worker & Native TextDetector
-            try {
-                ocrWorkerRef.current = new Worker(new URL('../workers/ocrWorker.js', import.meta.url), { type: 'module' });
-                ocrWorkerRef.current.onmessage = (e) => {
-                    if (e.data?.type === 'PARSE_RESULT') {
-                        if (e.data.success) {
-                            setDetectedOcr(e.data.data);
-                            playCashierBeep();
-                            hapticSuccess();
-                        } else if (e.data.raw) {
-                            setDetectedOcr(prev => ({ ...prev, rawDetected: e.data.raw }));
-                        }
-                    }
-                };
-
-                if (typeof window !== 'undefined' && 'TextDetector' in window) {
-                    nativeTextDetectorRef.current = new window.TextDetector();
-                }
-            } catch (_oErr) {
-                console.warn('[Scanner] OCR worker init notice:', _oErr.message);
-            }
-
-            let hardwareScanBuffer = '';
-            let lastKeyTimestamp = 0;
-
-            const handleKeyDown = (e) => {
-                if (e.key === 'Escape' || e.key === 'Esc') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (onClose) onClose();
-                    return;
-                }
-
-                // Si el usuario escribe en un campo de texto, no interferir
-                if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
-                    return;
-                }
-
-                const now = Date.now();
-                if (e.key === 'Enter') {
-                    if (hardwareScanBuffer.length >= 3 && (now - lastKeyTimestamp) < 600) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const scannedCode = hardwareScanBuffer.trim();
-                        hardwareScanBuffer = '';
-                        handleValidBarcode(scannedCode);
-                    } else {
-                        hardwareScanBuffer = '';
-                    }
-                } else if (e.key.length === 1) {
-                    if (now - lastKeyTimestamp > 350) {
-                        hardwareScanBuffer = '';
-                    }
-                    hardwareScanBuffer += e.key;
-                    lastKeyTimestamp = now;
-                }
-            };
-            window.addEventListener('keydown', handleKeyDown, true);
-
-            startScanner();
-
-            return () => {
-                window.removeEventListener('keydown', handleKeyDown, true);
-                stopScanner();
-                visionWorkerRef.current?.terminate();
-                ocrWorkerRef.current?.terminate();
-            };
-        } else {
-            stopScanner();
-            visionWorkerRef.current?.terminate();
-            ocrWorkerRef.current?.terminate();
+    useEffect(() => {
+        productsRef.current = products;
+        if (isOpen && visionWorkerRef.current && products && products.length > 0) {
+            visionWorkerRef.current.postMessage({ type: 'INDEX_CATALOG', payload: products });
         }
+    }, [isOpen, products]);
 
-        return () => {
-            stopScanner();
-        };
-    }, [isOpen]);
-
-    const stopScanner = () => {
+    const stopScanner = useCallback(() => {
         if (animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
             animationFrameRef.current = null;
@@ -266,7 +142,7 @@ export default function MobileBarcodeScannerModal({
                 streamRef.current.getTracks().forEach(track => {
                     track.stop();
                 });
-            } catch (_e) {}
+            } catch { /* Liberación de recurso de cámara/escáner ya cerrado */ }
             streamRef.current = null;
         }
 
@@ -277,7 +153,7 @@ export default function MobileBarcodeScannerModal({
         if (readerRef.current) {
             try {
                 readerRef.current.reset();
-            } catch (_e) {}
+            } catch { /* Liberación de recurso de cámara/escáner ya cerrado */ }
         }
 
         // Release offscreen canvas memory
@@ -289,9 +165,9 @@ export default function MobileBarcodeScannerModal({
         }
 
         setIsScanning(false);
-    };
+    }, []);
 
-    const startScanner = async (preferredDeviceId = null) => {
+    const startScanner = useCallback(async (preferredDeviceId = null) => {
         stopScanner();
         setErrorMsg('');
         setErrorType('');
@@ -359,6 +235,7 @@ export default function MobileBarcodeScannerModal({
                     audio: false
                 });
             } catch (strictErr) {
+                console.warn('[MobileBarcodeScannerModal] Error capturado en operación:', strictErr?.message || strictErr);
                 try {
                     mediaStream = await navigator.mediaDevices.getUserMedia({
                         video: { facingMode: 'environment' },
@@ -448,7 +325,6 @@ export default function MobileBarcodeScannerModal({
                 const video = videoRef.current;
                 const canvas = canvasRef.current;
                 const ctx = ctxRef.current;
-                const reader = readerRef.current;
                 const nativeDetector = nativeDetectorRef.current;
 
                 if (video && video.readyState >= 2 && !isProcessingFrame) {
@@ -467,7 +343,7 @@ export default function MobileBarcodeScannerModal({
                                         const rawCode = barcodes[0].rawValue || barcodes[0].displayValue;
                                         if (rawCode) {
                                             detectedByTier1 = true;
-                                            handleValidBarcode(rawCode);
+                                            handleValidBarcodeRef.current?.(rawCode);
                                         }
                                     }
                                 }
@@ -495,28 +371,56 @@ export default function MobileBarcodeScannerModal({
                                         ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropW, cropH);
 
                                         let detectedByMlKit = false;
-                                        if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.scanBarcode) {
+                                        if (typeof window !== 'undefined' && !mlKitUnavailableRef.current && window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.PosNativeHardware?.scanBarcode) {
                                             try {
                                                 const base64Crop = canvas.toDataURL('image/jpeg', 0.82);
                                                 const mlRes = await window.Capacitor.Plugins.PosNativeHardware.scanBarcode({ imageBase64: base64Crop });
                                                 if (mlRes && mlRes.found && mlRes.rawValue) {
                                                     detectedByMlKit = true;
-                                                    handleValidBarcode(mlRes.rawValue);
+                                                    handleValidBarcodeRef.current?.(mlRes.rawValue);
                                                 }
-                                            } catch (_mlErr) {}
+                                            } catch (caughtErr) {
+                                                const msg = String(caughtErr?.message || caughtErr || '');
+                                                if (/play services|unavailable|module|not installed/i.test(msg)) {
+                                                    mlKitUnavailableRef.current = true;
+                                                }
+                                                console.warn('[MobileBarcodeScannerModal] Error en módulo auxiliar de visión/OCR:', msg);
+                                            }
                                         }
 
-                                        if (!detectedByMlKit && reader) {
-                                            const imgData = ctx.getImageData(0, 0, cropW, cropH);
-                                            try {
-                                                const luminanceSource = new RGBLuminanceSource(imgData.data, cropW, cropH);
-                                                const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
-                                                const result = reader.decode(binaryBitmap);
-                                                if (result && result.getText()) {
-                                                    handleValidBarcode(result.getText());
+                                        if (!detectedByMlKit) {
+                                            if (!readerRef.current && (!window.Capacitor?.isNativePlatform?.() || mlKitUnavailableRef.current)) {
+                                                try {
+                                                    const zxing = await loadZxingLibrary();
+                                                    zxingModRef.current = zxing;
+                                                    const h = new Map();
+                                                    h.set(zxing.DecodeHintType.POSSIBLE_FORMATS, [
+                                                        zxing.BarcodeFormat.EAN_13, zxing.BarcodeFormat.EAN_8,
+                                                        zxing.BarcodeFormat.CODE_128, zxing.BarcodeFormat.CODE_39,
+                                                        zxing.BarcodeFormat.CODE_93, zxing.BarcodeFormat.UPC_A,
+                                                        zxing.BarcodeFormat.UPC_E, zxing.BarcodeFormat.ITF,
+                                                        zxing.BarcodeFormat.QR_CODE, zxing.BarcodeFormat.DATA_MATRIX
+                                                    ]);
+                                                    h.set(zxing.DecodeHintType.TRY_HARDER, true);
+                                                    const fallbackReader = new zxing.MultiFormatReader();
+                                                    fallbackReader.setHints(h);
+                                                    readerRef.current = fallbackReader;
+                                                } catch { /* fallback software no disponible */ }
+                                            }
+                                            const activeReader = readerRef.current;
+                                            const zxingMod = zxingModRef.current;
+                                            if (activeReader && zxingMod) {
+                                                const imgData = ctx.getImageData(0, 0, cropW, cropH);
+                                                try {
+                                                    const luminanceSource = new zxingMod.RGBLuminanceSource(imgData.data, cropW, cropH);
+                                                    const binaryBitmap = new zxingMod.BinaryBitmap(new zxingMod.HybridBinarizer(luminanceSource));
+                                                    const result = activeReader.decode(binaryBitmap);
+                                                    if (result && result.getText()) {
+                                                        handleValidBarcodeRef.current?.(result.getText());
+                                                    }
+                                                } catch (_e) {
+                                                    activeReader.reset();
                                                 }
-                                            } catch (_e) {
-                                                reader.reset();
                                             }
                                         }
                                     }
@@ -556,7 +460,7 @@ export default function MobileBarcodeScannerModal({
                                                 if (ocrRes && ocrRes.success && ocrRes.text) {
                                                     detectedText = ocrRes.text;
                                                 }
-                                            } catch (_ocrErr) {}
+                                            } catch (caughtErr) { console.warn('[MobileBarcodeScannerModal] Error en módulo auxiliar de visión/OCR:', caughtErr?.message || caughtErr); }
                                         }
 
                                         if (!detectedText && nativeTextDetectorRef.current) {
@@ -596,7 +500,7 @@ export default function MobileBarcodeScannerModal({
                                                 textRecognized = true;
                                                 ocrWorkerRef.current.postMessage({ type: 'PARSE_TEXT', text: ocrRes.text });
                                             }
-                                        } catch (_ocrErr) {}
+                                        } catch (caughtErr) { console.warn('[MobileBarcodeScannerModal] Error en módulo auxiliar de visión/OCR:', caughtErr?.message || caughtErr); }
                                     }
 
                                     // Vía B: TextDetector nativo si está disponible en Chromium desktop
@@ -623,17 +527,19 @@ export default function MobileBarcodeScannerModal({
                                     }
 
                                     // Vía C: ZXing Software Fallback si no hay detector nativo o no detectó
-                                    if (!codeFound && reader && ocrWorkerRef.current) {
+                                    const activeOcrReader = readerRef.current;
+                                    const activeZxingMod = zxingModRef.current;
+                                    if (!codeFound && activeOcrReader && activeZxingMod && ocrWorkerRef.current) {
                                         try {
                                             const imgData = ctx.getImageData(0, 0, cropW, cropH);
-                                            const luminanceSource = new RGBLuminanceSource(imgData.data, cropW, cropH);
-                                            const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
-                                            const result = reader.decode(binaryBitmap);
+                                            const luminanceSource = new activeZxingMod.RGBLuminanceSource(imgData.data, cropW, cropH);
+                                            const binaryBitmap = new activeZxingMod.BinaryBitmap(new activeZxingMod.HybridBinarizer(luminanceSource));
+                                            const result = activeOcrReader.decode(binaryBitmap);
                                             if (result && result.getText()) {
                                                 ocrWorkerRef.current.postMessage({ type: 'PARSE_TEXT', text: result.getText() });
                                             }
                                         } catch (_e) {
-                                            reader.reset();
+                                            activeOcrReader.reset();
                                         }
                                     }
                                 }
@@ -674,7 +580,7 @@ export default function MobileBarcodeScannerModal({
             }
             setIsScanning(false);
         }
-    };
+    }, [stopScanner]);
 
     const handleSwitchCamera = async () => {
         if (availableCameras.length < 2) return;
@@ -695,7 +601,7 @@ export default function MobileBarcodeScannerModal({
                     });
                 }
             }
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileBarcodeScannerModal] Error en operación de interfaz/dispositivo:', caughtErr?.message || caughtErr); }
     };
 
     const toggleTorch = async () => {
@@ -727,7 +633,7 @@ export default function MobileBarcodeScannerModal({
                     setZoomLevel(nextZoom);
                 }
             }
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileBarcodeScannerModal] Error en operación de interfaz/dispositivo:', caughtErr?.message || caughtErr); }
     };
 
     const handleCopyOcr = async (type = 'both') => {
@@ -748,7 +654,7 @@ export default function MobileBarcodeScannerModal({
                 if (navigator.vibrate) navigator.vibrate(40);
                 toast.success(`📋 Copiado: ${textToCopy}`);
                 return;
-            } catch (_capErr) {}
+            } catch (caughtErr) { console.warn('[MobileBarcodeScannerModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
         }
 
         try {
@@ -775,7 +681,7 @@ export default function MobileBarcodeScannerModal({
             try {
                 await window.Capacitor.Plugins.PosNativeHardware.copyToClipboard({ text });
                 ok = true;
-            } catch (_capErr) {}
+            } catch (caughtErr) { console.warn('[MobileBarcodeScannerModal] Error en operación auxiliar:', caughtErr?.message || caughtErr); }
         }
         if (!ok) {
             try {
@@ -790,7 +696,7 @@ export default function MobileBarcodeScannerModal({
                     document.execCommand('copy');
                     document.body.removeChild(el);
                     ok = true;
-                } catch (_err) {}
+                } catch { /* Copia fallback legacy bloqueada por políticas del navegador */ }
             }
         }
         setCopiedCode(text);
@@ -798,12 +704,12 @@ export default function MobileBarcodeScannerModal({
         toast.success(`📋 Código copiado: ${text}`);
     };
 
-    const handleValidBarcode = (code) => {
+    const handleValidBarcode = (code, { fromNativeScanner = false } = {}) => {
         const cleanCode = String(code || '').replace(/[\r\n\t]+/g, '').trim();
         if (!cleanCode) return;
         const now = Date.now();
-        // Debounce: Ignore identical code within 1.5s
-        if (cleanCode === lastScanCodeRef.current && (now - lastScanTimeRef.current) < 1500) {
+        // Debounce: Ignore identical code within 1.5s (en modo nativo BurstScanGate ya controla el anti-rebote)
+        if (!fromNativeScanner && cleanCode === lastScanCodeRef.current && (now - lastScanTimeRef.current) < 1500) {
             return;
         }
 
@@ -834,14 +740,20 @@ export default function MobileBarcodeScannerModal({
             return [{ code: cleanCode, productName: matched?.name || null, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }, ...filtered].slice(0, 20);
         });
 
-        playCashierBeep();
-        hapticSuccess();
+        if (!fromNativeScanner) {
+            playCashierBeep();
+            hapticSuccess();
+        }
 
         // Transmitir en tiempo real al servidor (para que la PC Principal reciba el código instantáneamente)
-        api.post('/remote-scan', { barcode: cleanCode, source: 'scanner_modal' }).catch(() => {});
+        api.post('/remote-scan', { barcode: cleanCode, source: fromNativeScanner ? 'native_camerax_scanner' : 'scanner_modal' }).catch(() => {});
 
         if (typeof onBarcodeScanned === 'function') {
             onBarcodeScanned(cleanCode);
+        }
+
+        if (fromNativeScanner) {
+            return;
         }
 
         if (targetMode === 'ASSIGN') {
@@ -855,16 +767,285 @@ export default function MobileBarcodeScannerModal({
         }
     };
 
-    if (!isOpen) return null;
+    handleValidBarcodeRef.current = handleValidBarcode;
+
+    // Resetear preferencia web cada vez que el modal se cierra
+    useEffect(() => {
+        if (!isOpen) {
+            setPreferWebScanner(false);
+            setNativeScannerActive(false);
+        }
+    }, [isOpen]);
+
+    // Lanzador automático del escáner nativo CameraX + ML Kit en Android para modo BARCODE
+    const shouldLaunchNativeCameraX = Boolean(
+        isOpen &&
+        !preferWebScanner &&
+        (initialMode || 'BARCODE') === 'BARCODE' &&
+        !mlKitUnavailableRef.current &&
+        typeof window !== 'undefined' &&
+        window.Capacitor?.isNativePlatform?.() &&
+        typeof window.Capacitor?.Plugins?.PosNativeHardware?.startNativeScanner === 'function'
+    );
+
+    useEffect(() => {
+        if (!shouldLaunchNativeCameraX) return;
+
+        let cancelled = false;
+        let listenerHandle = null;
+        nativeSessionCodesRef.current = new Set();
+        setNativeScannerActive(true);
+
+        const plugin = window.Capacitor.Plugins.PosNativeHardware;
+
+        (async () => {
+            try {
+                if (typeof plugin.addListener === 'function') {
+                    listenerHandle = await plugin.addListener('nativeBarcodeScanned', (evt) => {
+                        if (cancelled || !evt?.barcode) return;
+                        const code = String(evt.barcode).trim();
+                        if (!code) return;
+                        nativeSessionCodesRef.current.add(`${code}#${evt.count || 0}`);
+                        handleValidBarcodeRef.current?.(code, { fromNativeScanner: true });
+                    });
+                }
+
+                const res = await plugin.startNativeScanner({
+                    burstMode: Boolean(initialBurstMode) && targetMode !== 'ASSIGN',
+                    title: title || 'Escáner Nativo POS',
+                    subtitle: subtitle || (targetMode === 'ASSIGN' ? 'Apunta al código para asignar' : 'Apunta al código • Toca pantalla para enfocar'),
+                    targetMode: targetMode || 'CART'
+                });
+
+                if (cancelled) return;
+
+                // Procesar lecturas de respaldo solo si no se emitieron por el stream live
+                if (Array.isArray(res?.barcodes) && res.barcodes.length > 0 && nativeSessionCodesRef.current.size === 0) {
+                    for (const code of res.barcodes) {
+                        if (code) handleValidBarcodeRef.current?.(code, { fromNativeScanner: true });
+                    }
+                }
+
+                if (res?.fallbackToWeb) {
+                    if (res.fallbackReason && /MLKIT_UNAVAILABLE/i.test(res.fallbackReason)) {
+                        mlKitUnavailableRef.current = true;
+                    }
+                    setNativeScannerActive(false);
+                    setPreferWebScanner(true);
+                    return;
+                }
+
+                setNativeScannerActive(false);
+                onCloseRef.current?.();
+            } catch (err) {
+                if (cancelled) return;
+                console.warn('[Scanner] Fallback a WebView tras aviso en CameraX nativo:', err?.message || err);
+                setNativeScannerActive(false);
+                setPreferWebScanner(true);
+            } finally {
+                try {
+                    await listenerHandle?.remove?.();
+                } catch { /* listener ya liberado */ }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            try {
+                listenerHandle?.remove?.();
+            } catch { /* listener ya liberado */ }
+        };
+    }, [shouldLaunchNativeCameraX, initialBurstMode, title, subtitle, targetMode]);
+
+    useEffect(() => {
+        if (isOpen && !shouldLaunchNativeCameraX) {
+            setActiveMode(initialMode || 'BARCODE');
+            setVisionMatches([]);
+            setDetectedOcr({ batchNumber: '', expirationDate: '' });
+            setLastScanned('');
+            setErrorMsg('');
+            setErrorType('');
+            setBurstCount(0);
+            setManualCodeInput('');
+            setIsVideoFeedReady(false);
+            lastScanTimeRef.current = 0;
+            lastScanCodeRef.current = '';
+            setTorchOn(false);
+            setZoomLevel(1);
+
+            // 1. Initialize Hardware-Accelerated Native BarcodeDetector (Chrome / Android WebView)
+            if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+                try {
+                    nativeDetectorRef.current = new window.BarcodeDetector({
+                        formats: [
+                            'ean_13',
+                            'ean_8',
+                            'code_128',
+                            'code_39',
+                            'code_93',
+                            'upc_a',
+                            'upc_e',
+                            'itf',
+                            'qr_code',
+                            'data_matrix',
+                            'aztec'
+                        ]
+                    });
+                } catch (_e) {
+                    nativeDetectorRef.current = null;
+                }
+            }
+
+            // 2. Inicializar ZXing Software Reader de forma lazy (440 KB) solo si no hay ML Kit nativo ni BarcodeDetector
+            const hasNativeMlKit = Boolean(
+                typeof window !== 'undefined' &&
+                !mlKitUnavailableRef.current &&
+                window.Capacitor?.isNativePlatform?.() &&
+                window.Capacitor?.Plugins?.PosNativeHardware?.scanBarcode
+            );
+            readerRef.current = null;
+            if (!hasNativeMlKit && !nativeDetectorRef.current) {
+                loadZxingLibrary().then((zxing) => {
+                    zxingModRef.current = zxing;
+                    const hints = new Map();
+                    const formats = [
+                        zxing.BarcodeFormat.EAN_13,
+                        zxing.BarcodeFormat.EAN_8,
+                        zxing.BarcodeFormat.CODE_128,
+                        zxing.BarcodeFormat.CODE_39,
+                        zxing.BarcodeFormat.CODE_93,
+                        zxing.BarcodeFormat.UPC_A,
+                        zxing.BarcodeFormat.UPC_E,
+                        zxing.BarcodeFormat.ITF,
+                        zxing.BarcodeFormat.QR_CODE,
+                        zxing.BarcodeFormat.DATA_MATRIX
+                    ];
+                    hints.set(zxing.DecodeHintType.POSSIBLE_FORMATS, formats);
+                    hints.set(zxing.DecodeHintType.TRY_HARDER, true);
+
+                    const reader = new zxing.MultiFormatReader();
+                    reader.setHints(hints);
+                    readerRef.current = reader;
+                }).catch(() => {
+                    readerRef.current = null;
+                });
+            }
+
+            // Offscreen Canvas for high-res frame capture
+            const canvas = document.createElement('canvas');
+            canvasRef.current = canvas;
+            ctxRef.current = canvas.getContext('2d', { willReadFrequently: true });
+
+            // 3. Initialize Vision Worker
+            try {
+                visionWorkerRef.current = new Worker(new URL('../workers/visionWorker.js', import.meta.url), { type: 'module' });
+                visionWorkerRef.current.onmessage = (e) => {
+                    if (e.data?.type === 'CLASSIFY_RESULT') {
+                        setVisionMatches(e.data.matches || []);
+                        if (e.data.rawDetected !== undefined) {
+                            setLastDetectedVisionText(e.data.rawDetected);
+                        }
+                    }
+                };
+                if (productsRef.current && productsRef.current.length > 0) {
+                    visionWorkerRef.current.postMessage({ type: 'INDEX_CATALOG', payload: productsRef.current });
+                }
+            } catch (_vErr) {
+                console.warn('[Scanner] Vision worker init notice:', _vErr.message);
+            }
+
+            // 4. Initialize OCR Worker & Native TextDetector
+            try {
+                ocrWorkerRef.current = new Worker(new URL('../workers/ocrWorker.js', import.meta.url), { type: 'module' });
+                ocrWorkerRef.current.onmessage = (e) => {
+                    if (e.data?.type === 'PARSE_RESULT') {
+                        if (e.data.success) {
+                            setDetectedOcr(e.data.data);
+                            playCashierBeep();
+                            hapticSuccess();
+                        } else if (e.data.raw) {
+                            setDetectedOcr(prev => ({ ...prev, rawDetected: e.data.raw }));
+                        }
+                    }
+                };
+
+                if (typeof window !== 'undefined' && 'TextDetector' in window) {
+                    nativeTextDetectorRef.current = new window.TextDetector();
+                }
+            } catch (_oErr) {
+                console.warn('[Scanner] OCR worker init notice:', _oErr.message);
+            }
+
+            let hardwareScanBuffer = '';
+            let lastKeyTimestamp = 0;
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Escape' || e.key === 'Esc') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onCloseRef.current?.();
+                    return;
+                }
+
+                // Si el usuario escribe en un campo de texto, no interferir
+                if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+                    return;
+                }
+
+                const now = Date.now();
+                if (e.key === 'Enter') {
+                    if (hardwareScanBuffer.length >= 3 && (now - lastKeyTimestamp) < 600) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const scannedCode = hardwareScanBuffer.trim();
+                        hardwareScanBuffer = '';
+                        handleValidBarcodeRef.current?.(scannedCode);
+                    } else {
+                        hardwareScanBuffer = '';
+                    }
+                } else if (e.key.length === 1) {
+                    if (now - lastKeyTimestamp > 350) {
+                        hardwareScanBuffer = '';
+                    }
+                    hardwareScanBuffer += e.key;
+                    lastKeyTimestamp = now;
+                }
+            };
+            window.addEventListener('keydown', handleKeyDown, true);
+
+            startScanner();
+
+            return () => {
+                window.removeEventListener('keydown', handleKeyDown, true);
+                stopScanner();
+                visionWorkerRef.current?.terminate();
+                ocrWorkerRef.current?.terminate();
+            };
+        } else {
+            stopScanner();
+            visionWorkerRef.current?.terminate();
+            ocrWorkerRef.current?.terminate();
+        }
+
+        return () => {
+            stopScanner();
+        };
+    }, [isOpen, initialMode, shouldLaunchNativeCameraX, startScanner, stopScanner]);
+
+    if (!isOpen || nativeScannerActive || shouldLaunchNativeCameraX) return null;
 
     const modalContent = (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[200000] flex items-center justify-center bg-black/95 backdrop-blur-xl p-3 sm:p-4 pb-safe">
+            <div
+                className="fixed inset-0 z-[200000] flex items-end sm:items-center justify-center bg-black/95 backdrop-blur-xl p-2 sm:p-4 pb-safe overflow-y-auto"
+                style={modalOverlayStyle}
+            >
                 <motion.div
                     initial={{ opacity: 0, scale: 0.94, y: 15 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.94, y: 15 }}
-                    className="relative w-full max-w-md max-h-[92dvh] overflow-y-auto bg-slate-950 rounded-xl border border-slate-800 shadow-2xl flex flex-col z-[200001] custom-scrollbar"
+                    className="relative w-full max-w-md max-h-[92dvh] overflow-y-auto bg-slate-950 rounded-xl border border-slate-800 shadow-2xl flex flex-col z-[200001] custom-scrollbar my-auto"
+                    style={modalCardMaxHeightStyle}
                 >
                     {/* Header */}
                     <div className="p-4 flex items-center justify-between border-b border-white/10 bg-slate-900/80">
@@ -1016,10 +1197,10 @@ export default function MobileBarcodeScannerModal({
                         </button>
                     </div>
 
-                    {/* Viewfinder Window (Centered Full Video Feed) */}
+                    {/* Viewfinder Window (Centered Full Video Feed, responsive a dvh y teclado) */}
                     <div 
                         onClick={triggerAutoFocus}
-                        className="relative w-full aspect-square max-h-[55vh] bg-black overflow-hidden flex items-center justify-center cursor-pointer"
+                        className={`relative w-full aspect-square ${isKeyboardOpen ? 'max-h-[24dvh]' : 'max-h-[46dvh]'} bg-black overflow-hidden flex items-center justify-center cursor-pointer transition-all duration-150`}
                     >
                         {errorMsg ? (
                             <div className="p-6 text-center text-slate-300 space-y-4 max-w-sm z-30">
@@ -1184,7 +1365,7 @@ export default function MobileBarcodeScannerModal({
                                 </span>
                                 {lastDetectedVisionText ? (
                                     <span className="font-mono text-slate-300 truncate max-w-[180px] bg-slate-950 px-2 py-0.5 rounded border border-amber-500/30">
-                                        Detectado: "{lastDetectedVisionText}"
+                                        Detectado: &ldquo;{lastDetectedVisionText}&rdquo;
                                     </span>
                                 ) : (
                                     <span className="text-slate-500 italic">Centre la marca o empaque...</span>
@@ -1245,7 +1426,7 @@ export default function MobileBarcodeScannerModal({
                                 </span>
                                 {detectedOcr.rawDetected ? (
                                     <span className="font-mono text-slate-400 truncate max-w-[180px] bg-slate-950/80 px-1.5 py-0.5 rounded border border-white/5">
-                                        "{detectedOcr.rawDetected.slice(0, 25)}..."
+                                        &ldquo;{detectedOcr.rawDetected.slice(0, 25)}...&rdquo;
                                     </span>
                                 ) : (
                                     <span className="text-slate-500 text-[10px] italic">
@@ -1337,11 +1518,17 @@ export default function MobileBarcodeScannerModal({
                         className="px-3.5 py-2.5 bg-slate-900/90 border-t border-white/10 flex items-center gap-2"
                     >
                         <input 
+                            ref={manualInputRef}
                             type="text"
+                            enterKeyHint="done"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
                             value={manualCodeInput}
                             onChange={(e) => setManualCodeInput(e.target.value)}
+                            onFocus={() => scrollFieldIntoView(manualInputRef.current, 120)}
                             placeholder="O escribe el código aquí..."
-                            className="flex-1 px-3 py-2 bg-slate-950 border border-white/15 rounded-xl text-sm sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-primary-500 font-mono"
+                            className="flex-1 min-h-[44px] px-3 py-2 bg-slate-950 border border-white/15 rounded-xl text-base sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-primary-500 font-mono"
                         />
                         <button
                             type="submit"

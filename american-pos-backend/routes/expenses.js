@@ -2,12 +2,23 @@ const express = require('express');
 const router = express.Router();
 const expenseService = require('../services/ExpenseService');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    createExpenseSchema,
+    updateExpenseSchema,
+    syncExpensesSchema
+} = require('../schemas/expensesSchema');
 
 const emitExpensesChanged = (req, payload = {}) => {
     try {
+        const companyId = String(req.user?.companyId || '2');
+        try {
+            const DailyRollupService = require('../services/DailyRollupService');
+            const targetDate = payload?.expense?.date || req.body?.date || new Date();
+            DailyRollupService.scheduleDayRefresh(companyId, targetDate);
+        } catch (_) {}
         const io = req.app?.get('io');
         if (io) {
-            const companyId = String(req.user?.companyId || '2');
             const eventData = { companyId, timestamp: Date.now(), ...payload };
             io.to(companyId).emit('expenses_changed', eventData);
         }
@@ -17,7 +28,7 @@ const emitExpensesChanged = (req, payload = {}) => {
 };
 
 // GET / - Search and list expenses
-router.get('/', async (req, res) => {
+router.get('/', requirePermission(['canManageExpenses', 'canViewReports', 'canManageCashShift']), async (req, res) => {
     try {
         const expenses = await expenseService.getAllExpenses(req.user.companyId, req.query);
         res.json(expenses);
@@ -28,7 +39,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /summary - Get total expenses amount
-router.get('/summary', async (req, res) => {
+router.get('/summary', requirePermission(['canManageExpenses', 'canViewReports', 'canManageCashShift']), async (req, res) => {
     try {
         const result = await expenseService.getSummary(req.user.companyId, req.query);
         res.json(result);
@@ -39,7 +50,7 @@ router.get('/summary', async (req, res) => {
 });
 
 // POST / - Create a new expense
-router.post('/', requirePermission('canManageExpenses'), async (req, res) => {
+router.post('/', requirePermission('canManageExpenses'), validate(createExpenseSchema), async (req, res) => {
     try {
         const { description, amount } = req.body;
         if (!description || !amount) {
@@ -56,7 +67,7 @@ router.post('/', requirePermission('canManageExpenses'), async (req, res) => {
 });
 
 // PUT /:id - Update an existing expense
-router.put('/:id', requirePermission('canManageExpenses'), async (req, res) => {
+router.put('/:id', requirePermission('canManageExpenses'), validate(updateExpenseSchema), async (req, res) => {
     try {
         const updated = await expenseService.updateExpense(req.user, req.params.id, req.body);
         if (updated) {
@@ -90,7 +101,7 @@ router.delete('/:id', requirePermission('canManageExpenses'), async (req, res) =
 /**
  * POST /public-sync - Sync local mobile expenses to server
  */
-router.post('/public-sync', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/public-sync', require('../middleware/auth').verifyToken, requirePermission('canManageExpenses'), validate(syncExpensesSchema), async (req, res) => {
     try {
         const { expenses } = req.body;
         if (!expenses) return res.status(400).json({ error: 'Data required' });

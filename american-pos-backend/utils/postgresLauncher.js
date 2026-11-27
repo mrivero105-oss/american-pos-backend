@@ -1,7 +1,10 @@
 const net = require('net');
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+
+const recentVerifiedHosts = new Map(); // "host:port" -> timestamp ms
+const VERIFY_CACHE_TTL_MS = 15000;
 
 /**
  * Checks if a TCP port is open and accepting connections
@@ -109,41 +112,85 @@ function findPostgresDataDir() {
 }
 
 /**
- * Cleans an orphaned postmaster.pid file if the recorded PID is dead
- * @param {string} dataDir
+ * Comprueba si el PID registrado en postmaster.pid corresponde a una instancia viva de PostgreSQL.
+ * En Windows, `process.kill(pid, 0)` devuelve EPERM cuando el proceso pertenece a SYSTEM/NetworkService,
+ * por lo que NUNCA debe interpretarse EPERM como proceso muerto.
  */
-function cleanStalePid(dataDir) {
-    if (!dataDir) return;
-    const pidFile = path.join(dataDir, 'postmaster.pid');
-    if (fs.existsSync(pidFile)) {
+function isPostgresPidAlive(pid, { platform = process.platform, killFn = process.kill, execFileSyncFn = execFileSync } = {}) {
+    if (!pid || Number.isNaN(Number(pid))) return false;
+
+    if (platform === 'win32') {
         try {
-            const content = fs.readFileSync(pidFile, 'utf8').split('\n');
-            const pid = parseInt(content[0]?.trim(), 10);
-            if (pid && !isNaN(pid)) {
-                let isPostgresAlive = false;
+            const out = execFileSyncFn('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+                timeout: 2500,
+                encoding: 'utf8',
+                windowsHide: true
+            });
+            const normalized = String(out || '').trim().toLowerCase();
+            if (normalized.includes('postgres')) {
+                return true;
+            }
+            // Si tasklist respondió explícitamente sin registros para ese PID, confirmar con kill
+            if (normalized.includes('informaci') || normalized.includes('no tasks')) {
                 try {
-                    if (process.platform === 'win32') {
-                        const { execSync } = require('child_process');
-                        const output = execSync(`powershell -NoProfile -Command "(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).ProcessName"`, { timeout: 3000 }).toString().trim().toLowerCase();
-                        isPostgresAlive = (output === 'postgres');
-                    } else {
-                        isPostgresAlive = process.kill(pid, 0);
-                    }
-                } catch (e) {
-                    isPostgresAlive = false;
-                }
-                if (!isPostgresAlive) {
-                    console.log(`[PostgreSQL Launcher] 🧹 Limpiando postmaster.pid huérfano (PID ${pid} inactivo o ajeno)...`);
-                    try {
-                        fs.unlinkSync(pidFile);
-                    } catch (unErr) {
-                        console.warn('[PostgreSQL Launcher] No se pudo borrar postmaster.pid:', unErr.message);
-                    }
+                    killFn(pid, 0);
+                    return false;
+                } catch (killErr) {
+                    return killErr && killErr.code === 'EPERM';
                 }
             }
-        } catch (e) {
-            console.warn('[PostgreSQL Launcher] Aviso verificando postmaster.pid:', e.message);
+            // PID existe pero pertenece a otro ejecutable ajeno (PID reciclado)
+            return false;
+        } catch (_taskErr) {
+            // Ante fallo consultando tasklist, usar process.kill tratando EPERM como proceso vivo (fail-safe)
+            try {
+                killFn(pid, 0);
+                return true;
+            } catch (killErr) {
+                return Boolean(killErr && killErr.code === 'EPERM');
+            }
         }
+    }
+
+    try {
+        killFn(pid, 0);
+        return true;
+    } catch (killErr) {
+        return Boolean(killErr && killErr.code === 'EPERM');
+    }
+}
+
+/**
+ * Cleans an orphaned postmaster.pid file ONLY if the recorded PID is genuinely dead/non-postgres.
+ * @param {string} dataDir
+ * @param {object} [opts]
+ * @returns {boolean} true si se eliminó un pidfile huérfano
+ */
+function cleanStalePid(dataDir, opts = {}) {
+    if (!dataDir) return false;
+    const pidFile = path.join(dataDir, 'postmaster.pid');
+    if (!fs.existsSync(pidFile)) return false;
+
+    try {
+        const content = fs.readFileSync(pidFile, 'utf8').split('\n');
+        const pid = parseInt(content[0]?.trim(), 10);
+        if (!pid || Number.isNaN(pid)) return false;
+
+        if (isPostgresPidAlive(pid, opts)) {
+            return false;
+        }
+
+        console.log(`[PostgreSQL Launcher] 🧹 Limpiando postmaster.pid huérfano (PID ${pid} inactivo o ajeno)...`);
+        try {
+            fs.unlinkSync(pidFile);
+            return true;
+        } catch (unErr) {
+            console.warn('[PostgreSQL Launcher] No se pudo borrar postmaster.pid:', unErr.message);
+            return false;
+        }
+    } catch (e) {
+        console.warn('[PostgreSQL Launcher] Aviso verificando postmaster.pid:', e.message);
+        return false;
     }
 }
 
@@ -169,12 +216,22 @@ async function ensurePostgresRunning(maxWaitSeconds = 25) {
 
     const host = (dbConfig && dbConfig.host) || process.env.DB_HOST || '127.0.0.1';
     const port = parseInt((dbConfig && dbConfig.port) || process.env.DB_PORT || '5432', 10);
-
-    // 1. Check if already open
-    const alreadyOpen = await isPortOpen(host, port, 1000);
-    if (alreadyOpen) {
-        console.log(`[PostgreSQL Launcher] ✅ PostgreSQL ya está activo y escuchando en ${host}:${port}`);
+    const cacheKey = `${host}:${port}`;
+    const cachedAt = recentVerifiedHosts.get(cacheKey);
+    if (cachedAt && (Date.now() - cachedAt) < VERIFY_CACHE_TTL_MS) {
         return true;
+    }
+
+    // 1. Check if already open (2 intentos cortos para evitar falsos negativos bajo picos de CPU/I/O)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (await isPortOpen(host, port, 1500)) {
+            recentVerifiedHosts.set(cacheKey, Date.now());
+            console.log(`[PostgreSQL Launcher] ✅ PostgreSQL ya está activo y escuchando en ${host}:${port}`);
+            return true;
+        }
+        if (attempt === 0) {
+            await new Promise(r => setTimeout(r, 250));
+        }
     }
 
     // Only attempt local auto-start if host is localhost / 127.0.0.1
@@ -212,27 +269,26 @@ async function ensurePostgresRunning(maxWaitSeconds = 25) {
             console.log('[PostgreSQL Launcher] 🚀 Iniciando instalador automatizado de PostgreSQL...');
             try {
                 const scriptCandidates = [
-                    path.join(__dirname, '..', 'scripts', 'instalar_postgresql.ps1'),
-                    path.join(__dirname, '..', '..', 'instalar_postgresql.ps1'),
+                    path.join(process.resourcesPath || '', 'scripts', 'instalar_postgresql.ps1'),
                     path.join(process.resourcesPath || '', 'app.asar.unpacked', 'scripts', 'instalar_postgresql.ps1'),
-                    'C:\\Users\\WDAGUtilityAccount\\Desktop\\IsaacPOS_Setup\\instalar_postgresql.ps1'
+                    path.join(__dirname, '..', 'scripts', 'instalar_postgresql.ps1'),
+                    path.join(__dirname, '..', '..', 'scripts', 'instalar_postgresql.ps1'),
+                    path.join(__dirname, '..', '..', 'instalar_postgresql.ps1')
                 ];
                 
                 let runScript = null;
                 for (const sc of scriptCandidates) {
-                    if (fs.existsSync(sc)) {
+                    if (sc && fs.existsSync(sc)) {
                         runScript = sc;
                         break;
                     }
                 }
 
                 const { execSync } = require('child_process');
-                if (runScript) {
-                    execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell.exe -ArgumentList \\"-NoProfile -ExecutionPolicy Bypass -File \\\\\`"${runScript}\\\\\`"\\" -Verb RunAs -Wait"`);
-                } else {
-                    const inlineCmd = `$url='https://get.enterprisedb.com/postgresql/postgresql-16.15-3-windows-x64.exe'; $out=\\"$env:TEMP\\\\pg_inst.exe\\"; curl.exe -L -o $out $url --progress-bar; Start-Process $out -ArgumentList '--mode unattended --unattendedmodeui minimal --superpassword postgres --serverport 5432' -Wait; sc.exe config postgresql-x64-16 start= auto; net start postgresql-x64-16; & 'C:\\\\Program Files\\\\PostgreSQL\\\\16\\\\bin\\\\createdb.exe' -U postgres -h 127.0.0.1 -p 5432 americanpos`;
-                    execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell.exe -ArgumentList \\"-NoProfile -ExecutionPolicy Bypass -Command \\\\\`"${inlineCmd}\\\\\`"\\" -Verb RunAs -Wait"`);
+                if (!runScript) {
+                    throw new Error('No se encontró scripts/instalar_postgresql.ps1 en la instalación para instalar PostgreSQL de forma verificada.');
                 }
+                execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell.exe -ArgumentList \\"-NoProfile -ExecutionPolicy Bypass -File \\\\\`"${runScript}\\\\\`"\\" -Verb RunAs -Wait"`);
 
                 // Poll for port 5432
                 for (let i = 0; i < 40; i++) {
@@ -268,6 +324,7 @@ async function ensurePostgresRunning(maxWaitSeconds = 25) {
     while (Date.now() - startTime < serviceWaitLimitMs) {
         await new Promise(r => setTimeout(r, 600));
         if (await isPortOpen(host, port, 500)) {
+            recentVerifiedHosts.set(cacheKey, Date.now());
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`[PostgreSQL Launcher] ✅ PostgreSQL iniciado mediante Servicio de Windows en ${host}:${port} (${elapsed}s).`);
             return true;
@@ -294,6 +351,7 @@ async function ensurePostgresRunning(maxWaitSeconds = 25) {
             for (let i = 0; i < 15; i++) {
                 await new Promise(r => setTimeout(r, 1000));
                 if (await isPortOpen(host, port, 500)) {
+                    recentVerifiedHosts.set(cacheKey, Date.now());
                     console.log(`[PostgreSQL Launcher] ✅ PostgreSQL iniciado mediante pg_ctl en ${host}:${port}.`);
                     return true;
                 }
@@ -306,6 +364,7 @@ async function ensurePostgresRunning(maxWaitSeconds = 25) {
     // Comprobación final
     const finalCheck = await isPortOpen(host, port, 1000);
     if (finalCheck) {
+        recentVerifiedHosts.set(cacheKey, Date.now());
         console.log(`[PostgreSQL Launcher] ✅ PostgreSQL conectado y listo en ${host}:${port}.`);
         return true;
     }
@@ -318,6 +377,7 @@ module.exports = {
     isPortOpen,
     findPostgresExecutable,
     findPostgresDataDir,
+    isPostgresPidAlive,
     cleanStalePid,
     ensurePostgresRunning
 };

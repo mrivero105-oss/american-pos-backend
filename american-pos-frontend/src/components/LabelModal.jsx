@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Printer, Settings2, Plus, Minus, Tag, CheckSquare, Layers, Eye, Zap } from 'lucide-react';
+import { X, Printer, Plus, Minus, Layers, Eye, Zap } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -27,7 +27,7 @@ export default function LabelModal({ isOpen, onClose, products = [], exchangeRat
         if (isOpen && products && products.length > 0) {
             setLocalProducts(products.map(p => ({ ...p, labelCopies: p.labelCopies || 1 })));
         }
-    }, [isOpen]);
+    }, [isOpen, products]);
 
     useEffect(() => {
         if (isOpen && localProducts.length > 0) {
@@ -232,7 +232,7 @@ export default function LabelModal({ isOpen, onClose, products = [], exchangeRat
             </style>
         `;
 
-        const fullHtml = `<!DOCTYPE html><html><head><title>Imprimir Rótulos - American POS</title>${style}</head><body>${printContent}</body></html>`;
+        const fullHtml = `<!DOCTYPE html><html><head><title>Imprimir Rótulos - Isaac POS</title>${style}</head><body>${printContent}</body></html>`;
 
         // Impresión en iframe invisible en la misma página: CERO apertura de ventanas en blanco about:blank
         let iframe = document.getElementById('label-silent-print-frame');
@@ -271,13 +271,6 @@ export default function LabelModal({ isOpen, onClose, products = [], exchangeRat
         }, 300);
     };
 
-    const handlePrint = () => {
-        if (isThermalRoll) {
-            handleDirectThermalPrint();
-        } else {
-            handleBrowserPrint();
-        }
-    };
 
     return (
         <BaseModal

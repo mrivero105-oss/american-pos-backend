@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { getTerminalId } from '../utils/terminalIdentity';
+import secureMobileStorage from '../utils/secureMobileStorage';
+import { recordNetworkLatency } from './mobileDiagnosticsService';
 
 export const PosNativeHardware = (typeof window !== 'undefined' && window.__posNativeHardwarePlugin)
     ? window.__posNativeHardwarePlugin
@@ -10,15 +12,49 @@ export const PosNativeHardware = (typeof window !== 'undefined' && window.__posN
         return plugin;
     })();
 
-// Helper to ensure URL has port (defaults to 3005)
+/**
+ * Verifica si un host pertenece a red privada local (RFC1918 / loopback / link-local / mDNS .local).
+ * Solo a estos hosts se les permite transporte HTTP sin cifrar (servidor POS en LAN).
+ * Cualquier dominio o IP pública exige HTTPS obligatorio para evitar fuga de JWT/credenciales.
+ */
+export const isPrivateLanOrLocalHost = (rawHost) => {
+    if (!rawHost || typeof rawHost !== 'string') return false;
+    const host = rawHost.trim().toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host) return false;
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) {
+        return true;
+    }
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!ipv4) return false;
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
+    const c = Number(ipv4[3]);
+    const d = Number(ipv4[4]);
+    if ([a, b, c, d].some(n => Number.isNaN(n) || n < 0 || n > 255)) return false;
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+};
+
+// Helper to ensure URL has port (defaults to 3005 for private LAN http/IP) while enforcing HTTPS on public hosts
 export const formatServerUrl = (input) => {
     if (!input || !input.trim()) return '';
-    let clean = input.trim().replace(/:517[34]/, '');
-    const hasProtocol = clean.startsWith('http://') || clean.startsWith('https://');
-    const urlWithoutProto = hasProtocol ? clean.replace(/^https?:\/\//, '') : clean;
-    const hasPort = urlWithoutProto.includes(':');
-    const finalHost = hasPort ? urlWithoutProto : `${urlWithoutProto}:3005`;
-    return `http://${finalHost.replace(/\/$/, '')}`;
+    const clean = input.trim().replace(/:517[34]/, '').replace(/\/+$/, '');
+    const explicitHttps = clean.toLowerCase().startsWith('https://');
+    const explicitHttp = clean.toLowerCase().startsWith('http://');
+    const urlWithoutProto = (explicitHttp || explicitHttps) ? clean.replace(/^https?:\/\//i, '') : clean;
+    const hostAndPort = urlWithoutProto.split('/')[0];
+    const hostOnly = hostAndPort.startsWith('[')
+        ? hostAndPort.replace(/^\[([^\]]+)\].*$/, '$1')
+        : hostAndPort.split(':')[0];
+    const isPrivateHost = isPrivateLanOrLocalHost(hostOnly);
+    const useHttps = explicitHttps || !isPrivateHost;
+    const protocol = useHttps ? 'https://' : 'http://';
+    const hasPort = hostAndPort.includes(':') && !hostAndPort.endsWith(']');
+    const finalHost = (hasPort || useHttps) ? urlWithoutProto : `${urlWithoutProto}:3005`;
+    return `${protocol}${finalHost.replace(/\/+$/, '')}`;
 };
 
 // Get base URL from localStorage (for mobile) or default to local/lan backend (for desktop/browser)
@@ -61,9 +97,9 @@ export const getBaseUrl = () => {
         if (host && host !== 'localhost' && host !== '127.0.0.1' && host !== '') {
             return `http://${host}:3005`;
         }
-        // Fallback default LAN host when running APK for the first time
+        // Sin IP guardada: no apuntar a una IP privada fija; esperar configuración o autoDiscoverServer()
         if (savedIp && !isExplicitlyCleared) return formatServerUrl(savedIp);
-        return 'http://192.168.1.2:3005';
+        return '';
     }
 
     // Auto-detect production vs development (Vite = 5173/5174, Backend = 3005)
@@ -103,14 +139,22 @@ export const updateApiBaseUrl = (newIp) => {
         localStorage.setItem('isaac_pos_server_ip_explicitly_cleared', 'true');
         api.defaults.baseURL = '';
     }
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('api-base-url-changed', {
+            detail: { baseUrl: api.defaults.baseURL || '' }
+        }));
+    }
 };
 
 // Check server health quickly via /hello endpoint (instant latency + real DB readiness)
 export const checkServerHealth = async (customUrl = null, options = {}) => {
     const targetUrl = customUrl ? formatServerUrl(customUrl) : (api.defaults.baseURL || getBaseUrl() || 'http://127.0.0.1:3005');
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
         const res = await axios.get(`${targetUrl}/hello`, { timeout: options.timeoutMs || 3500 });
         if (res.status === 200) {
+            const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+            recordNetworkLatency(elapsed);
             if (res.data && res.data.dbReady === false) return false;
             if (options.requireMasterHost && res.data?.role === 'LAN_SPOKE') return false;
             return true;
@@ -129,6 +173,7 @@ export const checkServerDetailedHealth = async (customUrl = null, timeoutMs = 30
         const res = await axios.get(`${targetUrl}/hello`, { timeout: timeoutMs });
         const latencyMs = Math.round(performance.now() - t0);
         if (res.status === 200 && res.data) {
+            recordNetworkLatency(latencyMs);
             const isDbReady = res.data.dbReady !== false;
             return {
                 healthy: isDbReady,
@@ -164,7 +209,9 @@ export const checkServerDetailedHealth = async (customUrl = null, timeoutMs = 30
                         url: targetUrl
                     };
                 }
-            } catch (e2) {}
+            } catch (e2) {
+                console.warn('[API] Sonda fallback /ping no respondió:', e2?.message);
+            }
         }
         return {
             healthy: false,
@@ -204,7 +251,9 @@ export const scanLocalSubnetServers = async (progressCb = null, onFound = null) 
                 const sHost = udpRes.server.host || udpRes.server.ip;
                 if (sHost) candidates.add(sHost);
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn('[API] Error en descubrimiento UDP LAN:', e?.message);
+        }
     }
 
     // 2. Add local machine loopback
@@ -217,12 +266,10 @@ export const scanLocalSubnetServers = async (progressCb = null, onFound = null) 
     }
 
     // 3. Dynamic Native Android Subnet Detection
-    let detectedSubnet = null;
     if (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform()) {
         try {
             const net = await PosNativeHardware.getNetworkInfo();
             if (net && net.subnet) {
-                detectedSubnet = net.subnet;
                 if (net.gateway) candidates.add(net.gateway);
                 const dynHosts = [2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 20, 50, 100, 200, 254];
                 dynHosts.forEach(n => candidates.add(`${net.subnet}${n}`));
@@ -236,7 +283,9 @@ export const scanLocalSubnetServers = async (progressCb = null, onFound = null) 
                     }
                 }
             }
-        } catch (_err) {}
+        } catch (netErr) {
+            console.warn('[API] No se pudo obtener info de red nativa:', netErr?.message);
+        }
     }
 
     // 4. Infer subnet from saved IP or location hostname if available
@@ -369,7 +418,9 @@ export const autoDiscoverServer = async () => {
                         }
                     }
                 }
-            } catch (_udpErr) {}
+            } catch (udpErr) {
+                console.warn('[API] Falló sonda UDP autoDiscoverServer:', udpErr?.message);
+            }
         }
 
         // Localhost only if server role
@@ -405,7 +456,9 @@ export const autoDiscoverServer = async () => {
                             }
                         }
                     }
-                } catch (_e) {}
+                } catch (netErr) {
+                    console.warn('[API] Error leyendo subred nativa en autoDiscover:', netErr?.message);
+                }
             }
 
             if (typeof window !== 'undefined' && window.location && window.location.hostname) {
@@ -464,7 +517,7 @@ export const autoDiscoverServer = async () => {
     return null;
 };
 
-// Interceptor: Attach baseURL fallback + Authorization Bearer token + LAN Sync Key
+// Interceptor: Attach baseURL fallback + RFC1918/HTTPS guard + Authorization Bearer token + LAN Sync Key
 api.interceptors.request.use((config) => {
     if (!config.baseURL && !config.url?.startsWith('http')) {
         const fallbackUrl = getBaseUrl();
@@ -474,11 +527,22 @@ api.interceptors.request.use((config) => {
             return Promise.reject(new Error('Sin servidor configurado'));
         }
     }
-    const token = localStorage.getItem('auth_token');
+    const targetUrl = config.url?.startsWith('http') ? config.url : (config.baseURL || '');
+    if (targetUrl.toLowerCase().startsWith('http://')) {
+        try {
+            const parsedTarget = new URL(targetUrl);
+            if (!isPrivateLanOrLocalHost(parsedTarget.hostname)) {
+                return Promise.reject(new Error(`Conexión HTTP insegura bloqueada hacia host público (${parsedTarget.hostname}). Usa HTTPS.`));
+            }
+        } catch (_) {
+            return Promise.reject(new Error('URL de servidor inválida o insegura.'));
+        }
+    }
+    const token = secureMobileStorage.getToken();
     if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
         config.headers['Authorization'] = `Bearer ${token}`;
     }
-    const envSyncKey = import.meta.env.VITE_SYNC_SECRET_KEY || localStorage.getItem('sync_secret_key');
+    const envSyncKey = localStorage.getItem('sync_secret_key');
     if (envSyncKey && !config.headers['x-sync-key'] && !config.headers['X-Sync-Key']) {
         config.headers['x-sync-key'] = envSyncKey;
     }
@@ -492,13 +556,34 @@ api.interceptors.request.use((config) => {
         if (termId && !config.headers['x-terminal-id'] && !config.headers['X-Terminal-Id']) {
             config.headers['x-terminal-id'] = termId;
         }
-    } catch (_) {}
+    } catch (termErr) {
+        console.warn('[API] Error adjuntando terminalId:', termErr?.message);
+    }
+    config.__isaacStartTs = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
     return config;
 });
 
+const HEAVY_LATENCY_URL_PATTERN = /\/(ai|catalog|import|parse|reparse|scanners?|backup|restore|reports?|export|pdf|upload|whatsapp|vision|ocr)/i;
+
 // Response Interceptor: Handle 401 Unauthorized & 403 License Required globally
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        const startTs = response?.config?.__isaacStartTs;
+        const reqMethod = String(response?.config?.method || 'get').toLowerCase();
+        const reqUrl = String(response?.config?.url || '');
+        if (typeof startTs === 'number' && reqMethod === 'get' && !HEAVY_LATENCY_URL_PATTERN.test(reqUrl)) {
+            const nowTs = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? performance.now()
+                : Date.now();
+            const elapsedMs = nowTs - startTs;
+            if (elapsedMs >= 0 && elapsedMs <= 15000) {
+                recordNetworkLatency(elapsedMs);
+            }
+        }
+        return response;
+    },
     (error) => {
         if (error.response) {
             if (error.response.status === 401) {
@@ -514,8 +599,13 @@ api.interceptors.response.use(
                 }
             } else if (error.response.status === 403) {
                 const data = error.response.data;
-                if (data && (data.error === 'licencia_requerida' || data.error === 'licencia_invalida')) {
-                    console.warn('[API] Requerimiento de licencia detectado:', data.message);
+                if (data && (
+                    data.error === 'licencia_requerida' ||
+                    data.error === 'licencia_invalida' ||
+                    data.error === 'licencia_suspendida' ||
+                    data.error === 'licencia_verificacion_requerida'
+                )) {
+                    console.warn('[API] Requerimiento de licencia detectado:', data.message || data.reason || data.error);
                     window.dispatchEvent(new CustomEvent('license-required', { detail: data }));
                 }
             }

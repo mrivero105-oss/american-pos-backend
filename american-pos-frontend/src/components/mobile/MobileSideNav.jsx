@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Search, Tag, Printer, VolumeX, Volume2, Columns2, Grid2x2, Cpu, LogOut, ChevronDown, ChevronRight, Zap, Monitor, Fingerprint } from 'lucide-react';
+import { X, Search, Tag, Printer, VolumeX, Volume2, Columns2, Grid2x2, Cpu, LogOut, ChevronDown, ChevronRight, Zap, Monitor, Fingerprint, Edit2 } from 'lucide-react';
 
 const OPERATIONAL_MODULE_IDS = ['pos', 'cash', 'sales', 'customers', 'inventory', 'expenses', 'sync'];
 
@@ -8,13 +8,12 @@ export default function MobileSideNav({
   isOpen,
   onClose,
   triggerHaptic = () => {},
-  T,
-  isLight,
-  isOledMode,
   socketConnected,
   pendingSalesCount,
   businessInfo,
   exchangeRate,
+  canManageSettings = false,
+  onOpenExchangeRateModal = null,
   user,
   onOpenBiometricsModal,
   drawerSearch,
@@ -178,21 +177,41 @@ export default function MobileSideNav({
                   <h3 className={`font-black text-sm truncate leading-tight ${
                     isCarbonSidebar ? 'text-white' : 'text-[#0f172a]'
                   }`}>
-                    {businessInfo.name || 'Bodega Sigfrido y Familia'}
+                    {businessInfo.name || 'Isaac POS'}
                   </h3>
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <span 
-                    className={`px-2 py-1 rounded-[7px] text-[11px] font-mono font-black border select-none ${
-                      isCarbonSidebar
-                        ? 'bg-[#161c26] border-[#283242] text-amber-400 shadow-2xs'
-                        : 'bg-amber-50 border-amber-200 text-amber-800'
-                    }`}
-                    title={`Tasa oficial BCV: Bs. ${exchangeRate.toFixed(2)}`}
-                  >
-                    Bs. {exchangeRate.toFixed(2)}
-                  </span>
+                  {canManageSettings && onOpenExchangeRateModal ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic(12);
+                        onClose();
+                        onOpenExchangeRateModal();
+                      }}
+                      className={`px-2 py-1 rounded-[7px] text-[11px] font-mono font-black border inline-flex items-center gap-1 cursor-pointer active:scale-95 transition-transform ${
+                        isCarbonSidebar
+                          ? 'bg-[#161c26] hover:bg-[#1e2736] border-amber-500/40 text-amber-400 shadow-2xs'
+                          : 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-800'
+                      }`}
+                      title={`Tocar para editar la tasa de cambio (Actual: Bs. ${exchangeRate.toFixed(2)})`}
+                    >
+                      <span>Bs. {exchangeRate.toFixed(2)}</span>
+                      <Edit2 size={10} className="opacity-80 shrink-0" />
+                    </button>
+                  ) : (
+                    <span 
+                      className={`px-2 py-1 rounded-[7px] text-[11px] font-mono font-black border select-none ${
+                        isCarbonSidebar
+                          ? 'bg-[#161c26] border-[#283242] text-amber-400 shadow-2xs'
+                          : 'bg-amber-50 border-amber-200 text-amber-800'
+                      }`}
+                      title={`Tasa oficial BCV: Bs. ${exchangeRate.toFixed(2)}`}
+                    >
+                      Bs. {exchangeRate.toFixed(2)}
+                    </span>
+                  )}
                   <button 
                     type="button"
                     onClick={() => onClose()}
@@ -253,10 +272,11 @@ export default function MobileSideNav({
                 <Search size={14} className={isCarbonSidebar ? 'text-[#7c8799]' : 'text-slate-400'} />
                 <input 
                   type="text"
+                  enterKeyHint="search"
                   placeholder="Buscar módulo en el menú..."
                   value={drawerSearch}
                   onChange={(e) => setDrawerSearch(e.target.value)}
-                  className={`bg-transparent flex-1 text-xs outline-none font-medium ${
+                  className={`bg-transparent flex-1 text-base sm:text-sm outline-none font-medium ${
                     isCarbonSidebar ? 'text-white placeholder-[#647084]' : 'text-[#0f172a] placeholder-slate-400'
                   }`}
                 />
@@ -275,7 +295,7 @@ export default function MobileSideNav({
                 filteredNavSections.length === 0 ? (
                   <div className="py-8 text-center text-xs text-slate-500 space-y-1">
                     <Search size={24} className="mx-auto text-slate-400 mb-2 opacity-60" />
-                    <p className="font-bold">No se encontró "{drawerSearch}"</p>
+                    <p className="font-bold">No se encontró &ldquo;{drawerSearch}&rdquo;</p>
                     <p className="text-[10px] text-slate-400">Intenta buscar por otro nombre o función</p>
                   </div>
                 ) : (

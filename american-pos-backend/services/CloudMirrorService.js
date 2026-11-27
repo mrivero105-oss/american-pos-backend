@@ -126,7 +126,7 @@ class CloudMirrorService {
             providerId: preferredCloud ? preferredCloud.id : 'local_c',
             mirrorPath: preferredCloud ? preferredCloud.suggestedMirrorPath : DEFAULT_LOCAL_MIRROR,
             autoSyncOnBackup: true,
-            encryptMirrorCopies: false,
+            encryptMirrorCopies: true,
             maxMirrorCopies: 15,
             lastSyncAt: null,
             lastSyncedFile: null,
@@ -146,6 +146,49 @@ class CloudMirrorService {
     }
 
     /**
+     * Valida que mirrorPath sea un directorio local seguro (sin UNC, sin rutas de sistema ni raíces de disco).
+     */
+    validateMirrorPath(rawPath) {
+        if (!rawPath || typeof rawPath !== 'string') {
+            return DEFAULT_LOCAL_MIRROR;
+        }
+        const trimmed = rawPath.trim();
+        if (!trimmed || trimmed.includes('\0') || /[\r\n]/.test(trimmed)) {
+            throw new Error('Ruta de carpeta espejo inválida.');
+        }
+        // Bloquear rutas UNC (\\host\share o //host/share) que filtran hashes NTLMv2 o escapan del host local
+        if (trimmed.startsWith('\\\\') || trimmed.startsWith('//')) {
+            throw new Error('No se permiten rutas de red UNC (\\\\servidor\\recurso) como carpeta espejo. Use una carpeta local sincronizada (OneDrive, Google Drive o disco local).');
+        }
+        const resolved = path.resolve(trimmed);
+        const parsed = path.parse(resolved);
+        // Bloquear raíz de unidad completa (ej. C:\ o /)
+        if (resolved === parsed.root) {
+            throw new Error('No se puede utilizar la raíz completa de una unidad como carpeta espejo. Seleccione una subcarpeta dedicada.');
+        }
+        if (process.platform === 'win32') {
+            const lower = resolved.toLowerCase();
+            const forbiddenPrefixes = [
+                'c:\\windows',
+                'c:\\program files',
+                'c:\\program files (x86)',
+                'c:\\programdata',
+                'c:\\system volume information',
+                'c:\\$recycle.bin'
+            ];
+            if (forbiddenPrefixes.some((p) => lower === p || lower.startsWith(`${p}\\`))) {
+                throw new Error('No se permiten directorios críticos del sistema operativo como carpeta espejo.');
+            }
+        } else {
+            const forbiddenUnix = ['/etc', '/bin', '/sbin', '/usr', '/var', '/proc', '/sys', '/dev', '/root'];
+            if (forbiddenUnix.some((p) => resolved === p || resolved.startsWith(`${p}/`))) {
+                throw new Error('No se permiten directorios críticos del sistema como carpeta espejo.');
+            }
+        }
+        return resolved;
+    }
+
+    /**
      * Guarda y valida la configuración de la Carpeta Espejo Cloud
      */
     saveConfig(partialConfig = {}) {
@@ -156,7 +199,7 @@ class CloudMirrorService {
         };
 
         if (next.mirrorPath && typeof next.mirrorPath === 'string') {
-            next.mirrorPath = next.mirrorPath.trim();
+            next.mirrorPath = this.validateMirrorPath(next.mirrorPath);
         } else {
             next.mirrorPath = DEFAULT_LOCAL_MIRROR;
         }
@@ -298,15 +341,17 @@ class CloudMirrorService {
                 }
             }
 
-            // Mantener también copia en C:\IsaacPOS_Respaldos si el destino es otro
+            // Mantener también copia redundante en C:\IsaacPOS_Respaldos respetando el cifrado configurado
             if (process.platform === 'win32' && path.resolve(targetDir) !== path.resolve(DEFAULT_LOCAL_MIRROR)) {
                 try {
                     if (!fs.existsSync(DEFAULT_LOCAL_MIRROR)) {
                         fs.mkdirSync(DEFAULT_LOCAL_MIRROR, { recursive: true });
                     }
-                    const localCopyPath = path.join(DEFAULT_LOCAL_MIRROR, baseName);
-                    if (path.resolve(sourceFilePath) !== path.resolve(localCopyPath)) {
-                        fs.copyFileSync(sourceFilePath, localCopyPath);
+                    const localCopyName = config.encryptMirrorCopies ? targetFileName : baseName;
+                    const localCopySource = config.encryptMirrorCopies ? targetPath : sourceFilePath;
+                    const localCopyPath = path.join(DEFAULT_LOCAL_MIRROR, localCopyName);
+                    if (path.resolve(localCopySource) !== path.resolve(localCopyPath)) {
+                        fs.copyFileSync(localCopySource, localCopyPath);
                     }
                     this.rotateMirrorFolder(DEFAULT_LOCAL_MIRROR, config.maxMirrorCopies || 15);
                 } catch {}
@@ -419,6 +464,17 @@ class CloudMirrorService {
                 return resolve({ canceled: true, error: 'Selector nativo disponible solo en Windows.' });
             }
 
+            let safeInitialDir = '';
+            try {
+                if (initialDir && typeof initialDir === 'string') {
+                    const validated = this.validateMirrorPath(initialDir);
+                    if (fs.existsSync(validated)) safeInitialDir = validated;
+                }
+            } catch (_) {
+                safeInitialDir = '';
+            }
+
+            // Script 100% estático: la ruta inicial viaja en variable de entorno (inmune a inyección ASCII/Unicode)
             const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
 $dummy = New-Object System.Windows.Forms.Form
@@ -428,18 +484,25 @@ $dummy.WindowState = 'Minimized'
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
 $dialog.Description = 'Selecciona tu carpeta de Google Drive, OneDrive, MEGA o unidad de respaldo'
 $dialog.ShowNewFolderButton = $true
-${initialDir && fs.existsSync(initialDir) ? `$dialog.SelectedPath = '${initialDir.replace(/'/g, "''")}'` : ''}
+if ($env:ISAAC_INITIAL_DIR -and (Test-Path -LiteralPath $env:ISAAC_INITIAL_DIR)) {
+    $dialog.SelectedPath = $env:ISAAC_INITIAL_DIR
+}
 $result = $dialog.ShowDialog($dummy)
 if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     Write-Output $dialog.SelectedPath
 }
 $dummy.Dispose()
 `;
+            const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
 
             execFile(
                 'powershell.exe',
-                ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
-                { timeout: 120000, windowsHide: true },
+                ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript],
+                {
+                    timeout: 120000,
+                    windowsHide: true,
+                    env: { ...process.env, ISAAC_INITIAL_DIR: safeInitialDir }
+                },
                 (err, stdout) => {
                     if (err) {
                         return resolve({ canceled: true, error: err.message });

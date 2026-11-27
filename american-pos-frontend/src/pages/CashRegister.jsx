@@ -1,20 +1,35 @@
-import { useState, useEffect } from 'react';
-import { 
-    Wallet, Lock, Unlock, ArrowDownToLine, ArrowUpFromLine, 
-    Calculator, Info, FileText, CheckCircle2, AlertTriangle, User,
-    DollarSign, Receipt, CreditCard, Banknote, Printer, Coins,
-    Plus, History, RefreshCcw, Zap, ArrowRight, ArrowDownLeft,
-    ArrowUpRight, Smartphone, Building2, TrendingUp, Check, Store,
-    Clock, Monitor
+import { useState, useEffect, useCallback } from 'react';
+import {
+    Wallet, 
+    Lock, 
+    Unlock, 
+    Calculator, 
+    FileText, 
+    CheckCircle2, 
+    User, 
+    DollarSign, 
+    Receipt, 
+    CreditCard, 
+    Banknote, 
+    Printer, 
+    Plus, 
+    History, 
+    RefreshCcw, 
+    Zap, 
+    ArrowDownLeft, 
+    ArrowUpRight, 
+    Smartphone, 
+    Building2, 
+    TrendingUp, 
+    Clock, 
+    Monitor
 } from 'lucide-react';
 import api from '../services/api';
-import { formatMoney as formatCurrency, formatUSD, formatBs, fetchGlobalSettings, getGlobalSettings, isSingleCurrencyMode, isVesOnlyMode, isUsdOnlyMode } from '../utils/format';
+import { formatUSD, formatBs, fetchGlobalSettings, isSingleCurrencyMode, isVesOnlyMode } from '../utils/format';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../hooks/AuthContext';
 import { usePos } from '../hooks/PosContext';
 import { printOpeningReceipt, printXReportReceipt, printZReportReceipt, printCashMovementReceipt } from '../utils/printCashReceipts';
-import SupervisorAuthModal from '../components/SupervisorAuthModal';
-import NetworkStatusIndicator from '../components/NetworkStatusIndicator';
 import CloseShiftModal from '../components/CloseShiftModal';
 import CashShiftDetails from '../components/CashShiftDetails';
 import ZReportModal from '../components/ZReportModal';
@@ -24,7 +39,6 @@ export default function CashRegister() {
     const { registerId, registerDisplayName } = usePos();
     const [loading, setLoading] = useState(true);
     const [shift, setShift] = useState(null);
-    const [isAdmin] = useState(['admin', 'owner', 'superadmin'].includes(user?.role));
     const [settings, setSettings] = useState({ rate: 1, currencyMode: 'BOTH' });
     const [paymentMethods, setPaymentMethods] = useState([]);
     
@@ -33,7 +47,6 @@ export default function CashRegister() {
     const [xReport, setXReport] = useState(null);
     const [historyShifts, setHistoryShifts] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
-    const [selectedHistoryShift, setSelectedHistoryShift] = useState(null);
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
 
@@ -43,7 +56,6 @@ export default function CashRegister() {
     const [openAmountBs, setOpenAmountBs] = useState('');
     const [openCashierName, setOpenCashierName] = useState(user?.name || user?.username || '');
     const [openNotes, setOpenNotes] = useState('');
-    const [lastClosedShift, setLastClosedShift] = useState(null);
     const [openDenomsUsd, setOpenDenomsUsd] = useState({
         '100': 0, '50': 0, '20': 0, '10': 0, '5': 0, '1': 0,
         '0.50': 0, '0.25': 0, '0.10': 0, '0.05': 0, '0.01': 0,
@@ -68,11 +80,9 @@ export default function CashRegister() {
     const [zReportModalOpen, setZReportModalOpen] = useState(false);
     const [closedShiftData, setClosedShiftData] = useState(null);
 
-    const isUsdOnly = isUsdOnlyMode(settings);
-    const isVesOnly = isVesOnlyMode(settings);
     const isSingle = isSingleCurrencyMode(settings);
 
-    const loadShift = async (silent = false) => {
+    const loadShift = useCallback(async (silent = false) => {
         setLoading(true);
         try {
             const res = await api.get('/cash/current', { params: { registerId } });
@@ -89,27 +99,43 @@ export default function CashRegister() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [registerId]);
 
-    const fetchLastClosedShift = async () => {
-        try {
-            const { data } = await api.get('/cash/last-closed', { params: { registerId } });
-            setLastClosedShift(data || null);
-        } catch (e) {
-            console.error('Error fetching last closed shift', e);
-        }
-    };
-
-    const fetchPaymentMethods = async () => {
+    const fetchPaymentMethods = useCallback(async () => {
         try {
             const { data } = await api.get('/settings/payment-methods');
             setPaymentMethods(data || []);
         } catch (e) { console.error(e); }
-    };
+    }, []);
+
+    const fetchXReport = useCallback(async () => {
+        try {
+            const { data } = await api.get('/cash/x-report', { params: { registerId } });
+            setXReport(data);
+        } catch (e) {
+            console.error('Error fetching x-report', e);
+        }
+    }, [registerId]);
+
+    const fetchHistory = useCallback(async () => {
+        try {
+            setHistoryLoading(true);
+            const params = { registerId };
+            if (startDate && endDate) {
+                params.startDate = startDate;
+                params.endDate = endDate;
+            }
+            const { data } = await api.get('/cash/history', { params });
+            setHistoryShifts(data || []);
+        } catch (e) {
+            console.error('Error fetching history', e);
+        } finally {
+            setHistoryLoading(false);
+        }
+    }, [registerId, startDate, endDate]);
 
     useEffect(() => {
         loadShift();
-        fetchLastClosedShift();
         fetchHistory();
         fetchPaymentMethods();
         fetchGlobalSettings().then(res => {
@@ -128,41 +154,16 @@ export default function CashRegister() {
         };
         window.addEventListener('shift_status_changed', handleShiftChanged);
         return () => window.removeEventListener('shift_status_changed', handleShiftChanged);
-    }, [registerId]);
+    }, [registerId, loadShift, fetchHistory, fetchPaymentMethods]);
 
+    const hasActiveShift = Boolean(shift);
     useEffect(() => {
-        if (activeTab === 'corte_x' && shift) {
+        if (activeTab === 'corte_x' && hasActiveShift) {
             fetchXReport();
         } else if (activeTab === 'historial') {
             fetchHistory();
         }
-    }, [activeTab, startDate, endDate]);
-
-    const fetchXReport = async () => {
-        try {
-            const { data } = await api.get('/cash/x-report', { params: { registerId } });
-            setXReport(data);
-        } catch (e) {
-            console.error('Error fetching x-report', e);
-        }
-    };
-
-    const fetchHistory = async () => {
-        try {
-            setHistoryLoading(true);
-            const params = { registerId };
-            if (startDate && endDate) {
-                params.startDate = startDate;
-                params.endDate = endDate;
-            }
-            const { data } = await api.get('/cash/history', { params });
-            setHistoryShifts(data || []);
-        } catch (e) {
-            console.error('Error fetching history', e);
-        } finally {
-            setHistoryLoading(false);
-        }
-    };
+    }, [activeTab, hasActiveShift, fetchXReport, fetchHistory]);
 
     const denomsUsdTotal = () => {
         const bills = ['100', '50', '20', '10', '5', '1'].reduce(
@@ -174,13 +175,6 @@ export default function CashRegister() {
         return Math.round((bills + coins + (Number(openDenomsUsd.looseCoins) || 0)) * 100) / 100;
     };
 
-    const handleApplyLastShiftBalance = () => {
-        if (!lastClosedShift) return;
-        const finalUsd = Number(lastClosedShift.finalAmount) || 0;
-        setOpenMode('DIRECT');
-        setOpenAmountUsd(finalUsd > 0 ? String(finalUsd) : '');
-        toast.success(`Fondo del turno anterior aplicado ($${finalUsd.toFixed(2)})`);
-    };
 
     const handleKickDrawer = async () => {
         const targetPrinter = localStorage.getItem('pos_station_printer') || settings?.printerName || '';
@@ -313,7 +307,6 @@ export default function CashRegister() {
             window.dispatchEvent(new CustomEvent('shift_status_changed', { detail: { isOpen: false, shift: null } }));
         }
         loadShift();
-        fetchLastClosedShift();
         fetchHistory();
     };
 

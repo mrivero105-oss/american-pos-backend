@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { 
-    X, FileText, CheckCircle2, AlertTriangle, RefreshCw, 
-    ArrowDownRight, Plus, Trash2, Package, User, DollarSign, 
-    Banknote, ShieldAlert
+import {
+    X, 
+    FileText, 
+    RefreshCw, 
+    Trash2
 } from 'lucide-react';
 import api from '../services/api';
 import { formatMoney } from '../utils/format';
@@ -16,7 +17,7 @@ export default function CreditNoteModal({ isOpen, onClose, initialSale, onCreate
     const [reenterStock, setReenterStock] = useState(true);
     const [currency, setCurrency] = useState('VES');
     const [exchangeRate, setExchangeRate] = useState(1.0);
-    const [notes, setNotes] = useState('');
+    const notes = '';
     
     // Items being returned
     const [items, setItems] = useState([]);

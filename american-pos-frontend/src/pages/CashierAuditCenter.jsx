@@ -1,16 +1,29 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { 
-    Shield, ShieldAlert, Monitor, Banknote, DollarSign, 
-    ArrowDownToLine, ArrowUpFromLine, AlertTriangle, CheckCircle2, 
-    Clock, User, Users, RefreshCw, Printer, Search, 
-    Zap, Activity, Eye, FileText, AlertCircle, 
-    SlidersHorizontal, TrendingDown, TrendingUp,
-    Lock, X, ChevronRight, ShieldCheck, HelpCircle, Layers,
+import {
+    Shield, 
+    Monitor, 
+    Banknote, 
+    DollarSign, 
+    ArrowDownToLine, 
+    ArrowUpFromLine, 
+    User, 
+    Users, 
+    RefreshCw, 
+    Printer, 
+    Search, 
+    Zap, 
+    Activity, 
+    Eye, 
+    FileText, 
+    TrendingUp, 
+    Lock, 
+    X, 
+    ShieldCheck, 
     Edit2
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { formatUSD, formatBs, formatDate, getGlobalSettings, isSingleCurrencyMode } from '../utils/format';
+import { formatUSD, formatBs, formatDate, isSingleCurrencyMode } from '../utils/format';
 import { useSocket } from '../hooks/SocketContext';
 import { useAuth } from '../hooks/AuthContext';
 import BaseModal from '../components/BaseModal';

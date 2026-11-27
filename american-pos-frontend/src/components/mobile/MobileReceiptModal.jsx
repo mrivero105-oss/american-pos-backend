@@ -1,6 +1,7 @@
-import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Printer, Settings, Share2, CheckCircle2, X } from 'lucide-react';
+import { getRegionConfig } from '../../utils/regionConfig';
+import mobilePrinterService from '../../services/mobilePrinterService';
 
 export default function MobileReceiptModal({
   receipt,
@@ -17,6 +18,13 @@ export default function MobileReceiptModal({
   const printedReceipt = receipt;
   const companyName = businessInfo?.name || localStorage.getItem('company_name') || 'Isaac POS';
   const companyRif = businessInfo?.rif || localStorage.getItem('company_rif') || '';
+  const regionCfg = getRegionConfig(businessInfo?.country);
+  const taxLabel = businessInfo?.taxConfig?.taxLabel || businessInfo?.taxLabel || regionCfg.taxLabel || 'IVA';
+  const taxRate = Number(businessInfo?.taxConfig?.ivaRate ?? businessInfo?.ivaRate ?? regionCfg.defaultTaxRate);
+  const taxEnabled = businessInfo?.taxConfig?.ivaEnabled !== undefined ? Boolean(businessInfo.taxConfig.ivaEnabled) : (businessInfo?.ivaEnabled !== false);
+  const activePrinter = typeof mobilePrinterService.getActivePrinterSummary === 'function'
+    ? mobilePrinterService.getActivePrinterSummary()
+    : { configured: false, label: '' };
 
   return (
     <AnimatePresence>
@@ -40,7 +48,7 @@ export default function MobileReceiptModal({
           exit={{ scale: 0.92, opacity: 0, y: 15 }}
           transition={{ type: 'spring', damping: 25, stiffness: 320 }}
           onClick={(e) => e.stopPropagation()}
-          className="relative w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-2xl shadow-2xl space-y-2.5 border-dashed border-2 border-slate-300 max-h-[92vh] overflow-y-auto custom-scrollbar select-none z-10"
+          className="relative w-full max-w-xs bg-white text-slate-950 font-mono text-[11px] p-5 rounded-2xl shadow-2xl space-y-2.5 border-dashed border-2 border-slate-300 max-h-[92dvh] overflow-y-auto custom-scrollbar select-none z-10"
         >
           {/* Botón flotante para cerrar */}
           <button
@@ -118,7 +126,7 @@ export default function MobileReceiptModal({
               <span>${Number(printedReceipt.subtotal || printedReceipt.totalUSD || 0).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-slate-500">
-              <span>IVA (16% INCLUIDO):</span>
+              <span>{taxEnabled && taxRate > 0 ? `${taxLabel} (${taxRate}% INCLUIDO):` : `${taxLabel} (EXENTO):`}</span>
               <span>${Number(printedReceipt.tax || printedReceipt.taxUSD || 0).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-emerald-800 font-black text-xs pt-0.5">
@@ -158,9 +166,12 @@ export default function MobileReceiptModal({
                 triggerHaptic(15);
                 onPrintBluetooth(printedReceipt);
               }}
-              className="w-full bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
+              className="w-full bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
             >
-              <Printer size={14} /> Imprimir Térmica Bluetooth
+              <Printer size={14} className="shrink-0" />
+              <span className="truncate">
+                {activePrinter?.configured ? `Imprimir (${activePrinter.label})` : 'Imprimir Térmica Bluetooth'}
+              </span>
             </button>
             <button
               type="button"

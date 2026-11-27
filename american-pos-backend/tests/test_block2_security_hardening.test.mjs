@@ -53,6 +53,7 @@ const createdIds = {
     quarantines: [],
     purchaseOrders: [],
     auditLogs: [],
+    licenseKeys: [],
     files: []
 };
 
@@ -124,6 +125,11 @@ test.after(async () => {
         }
         if (createdIds.users.length && models.User) {
             await models.User.destroy({ where: { id: createdIds.users } }).catch(() => {});
+        }
+        if (createdIds.licenseKeys.length && models.License) {
+            await runWithTenantContext({ companyId: '', userId: 'b2-cleanup', isSuperAdmin: true }, async () => {
+                await models.License.destroy({ where: { licenseKey: createdIds.licenseKeys } }).catch(() => {});
+            });
         }
     } catch (_) {}
     for (const f of createdIds.files) {
@@ -235,6 +241,7 @@ test('Bloque 2 (2A-2D): Hardening Criptográfico, RLS PostgreSQL, Auth/Sessions,
     // Activar licencia RSA v2 en esta terminal usando superadmin
     const machineId = await licenseUtils.getMachineId();
     const validV2Key = licenseUtils.generateKeyV2(machineId, 30, 'days');
+    createdIds.licenseKeys.push(validV2Key);
     const actRes = await fetch(`${baseUrl}/license/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superLogin.token}` },
@@ -276,6 +283,41 @@ test('Bloque 2 (2A-2D): Hardening Criptográfico, RLS PostgreSQL, Auth/Sessions,
             assert.equal(encRes.success, true);
             BackupEncryptionService.decryptFile(tmpEnc, tmpDec);
             assert.equal(fs.readFileSync(tmpDec, 'utf8'), 'contenido-sensible-respaldo');
+
+            // Prueba multi-chunk (> 256 KB para cruzar múltiples bloques de 64 KB) + detección de manipulación
+            const largeIn = path.join(isolatedUserDataDir, 'bk-large.bin');
+            const largeEnc = path.join(isolatedUserDataDir, 'bk-large.enc');
+            const largeDec = path.join(isolatedUserDataDir, 'bk-large-dec.bin');
+            const randomPayload = crypto.randomBytes(260 * 1024);
+            fs.writeFileSync(largeIn, randomPayload);
+            const encLarge = BackupEncryptionService.encryptFile(largeIn, largeEnc);
+            assert.equal(encLarge.originalSize, randomPayload.length);
+            const decLarge = BackupEncryptionService.decryptFile(largeEnc, largeDec);
+            assert.equal(decLarge.decryptedSize, randomPayload.length);
+            assert.equal(Buffer.compare(fs.readFileSync(largeDec), randomPayload), 0);
+
+            // Manipular último byte de ciphertext debe fallar autenticación y no sobreescribir largeDec
+            const tamperedEnc = fs.readFileSync(largeEnc);
+            tamperedEnc[tamperedEnc.length - 1] ^= 0xff;
+            fs.writeFileSync(largeEnc, tamperedEnc);
+            assert.throws(() => BackupEncryptionService.decryptFile(largeEnc, largeDec), /autenticación criptográfica/);
+
+            // Verificar createZipArchive + extractZipArchive por descriptor de archivo (STORE + DEFLATE)
+            const { createZipArchive, extractZipArchive } = require('../utils/snapshotHelper');
+            const zipSrcA = path.join(isolatedUserDataDir, 'zip_a.txt');
+            const zipSrcB = path.join(isolatedUserDataDir, 'zip_b.bin');
+            const zipOut = path.join(isolatedUserDataDir, 'test_stream.zip');
+            const zipExtractDir = path.join(isolatedUserDataDir, 'zip_extracted');
+            fs.writeFileSync(zipSrcA, 'TEXTO_REPETIDO_'.repeat(300), 'utf8');
+            const smallBin = crypto.randomBytes(1024);
+            fs.writeFileSync(zipSrcB, smallBin);
+            createZipArchive(zipOut, [
+                { relPath: 'sub/zip_a.txt', fullPath: zipSrcA },
+                { relPath: 'zip_b.bin', fullPath: zipSrcB }
+            ]);
+            extractZipArchive(zipOut, zipExtractDir);
+            assert.equal(fs.readFileSync(path.join(zipExtractDir, 'sub', 'zip_a.txt'), 'utf8'), 'TEXTO_REPETIDO_'.repeat(300));
+            assert.equal(Buffer.compare(fs.readFileSync(path.join(zipExtractDir, 'zip_b.bin')), smallBin), 0);
 
             delete process.env.BACKUP_ENCRYPTION_KEY;
             assert.throws(() => BackupEncryptionService.encryptFile(tmpIn, tmpEnc), /BACKUP_ENCRYPTION_KEY/);
@@ -352,6 +394,25 @@ test('Bloque 2 (2A-2D): Hardening Criptográfico, RLS PostgreSQL, Auth/Sessions,
         const migratedDisk = JSON.parse(fs.readFileSync(DbConfigManager.getConfigFilePath(), 'utf8'));
         assert.equal(migratedDisk.passwordEncrypted, true);
         assert.equal(migratedDisk.password, undefined);
+
+        // DPAPI fail-closed en Windows producción cuando DPAPI no está disponible + lectura legacy
+        const { protectString, unprotectString } = require('../utils/dpapiCrypto');
+        if (process.platform === 'win32') {
+            assert.throws(() => protectString('secret-prod-check', {
+                keyFilePath: '',
+                forceNonTest: true,
+                allowSafeStorageFallback: false,
+                skipIfEnvKey: false
+            }), /WINDOWS_DPAPI_UNAVAILABLE/);
+        }
+        const optInFallback = protectString('secret-fallback-check', {
+            keyFilePath: '',
+            forceNonTest: true,
+            allowSafeStorageFallback: false,
+            allowInsecureFallback: true
+        });
+        assert.equal(optInFallback.scheme, 'aes256gcm');
+        assert.equal(unprotectString(optInFallback.cipher, optInFallback.scheme), 'secret-fallback-check');
 
         // Validación anti SQL Injection en dbName
         assert.throws(() => DbConfigManager.validateDatabaseName('americanpos; DROP TABLE users;--'), /inválido/);
@@ -815,5 +876,103 @@ test('Bloque 2 (2A-2D): Hardening Criptográfico, RLS PostgreSQL, Auth/Sessions,
         const importedProd = await Product.findOne({ where: { barcode: uniqueImpBarcode, companyId: compA } });
         assert.ok(importedProd, 'Producto importado con ExcelJS debe existir en BD');
         createdIds.products.push(importedProd.id);
+    });
+
+    await t.test('2E: TLS LAN opcional automático (X.509 ECDSA P-256 + SANs + HTTPS real)', async () => {
+        const https = require('https');
+        const { ensureLanTlsCredentials } = require('../utils/lanTlsCert');
+
+        // 1. Verificar generación X.509 v3 + idempotencia
+        const firstBundle = ensureLanTlsCredentials(isolatedUserDataDir);
+        assert.equal(firstBundle.regenerated, true);
+        assert.ok(firstBundle.ips.includes('127.0.0.1'));
+        assert.ok(firstBundle.dnsNames.includes('localhost'));
+        assert.equal(fs.existsSync(firstBundle.certPath), true);
+        assert.equal(fs.existsSync(firstBundle.keyPath), true);
+
+        const secondBundle = ensureLanTlsCredentials(isolatedUserDataDir);
+        assert.equal(secondBundle.regenerated, false);
+        assert.equal(secondBundle.fingerprint256, firstBundle.fingerprint256);
+
+        // 2. Arrancar servidor con TLS LAN opcional activado y verificar handshake TLS real
+        const prevEnableLanTls = process.env.ENABLE_LAN_TLS;
+        delete process.env.ENABLE_LAN_TLS;
+        let tlsSrv = null;
+        try {
+            tlsSrv = await startServer([0], { userDataPath: isolatedUserDataDir, enableLanTls: true });
+            await tlsSrv.dbInitPromise;
+            assert.equal(tlsSrv.isHttps, true, 'startServer debe reportar isHttps=true con enableLanTls');
+            assert.equal(tlsSrv.protocol, 'https');
+
+            const unauthCertDownload = await new Promise((resolve, reject) => {
+                const req = https.request({
+                    hostname: '127.0.0.1',
+                    port: tlsSrv.mainPort,
+                    path: '/system/lan-cert',
+                    method: 'GET',
+                    ca: firstBundle.cert,
+                    rejectUnauthorized: true
+                }, (res) => {
+                    let body = '';
+                    res.on('data', (chunk) => { body += chunk; });
+                    res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+                });
+                req.on('error', reject);
+                req.end();
+            });
+            assert.equal(unauthCertDownload.status, 401, 'GET /system/lan-cert sin token debe exigir autenticación');
+
+            // 3. Verificar descarga pública del X.509 y /system/lan-cert/info con token autenticado sobre HTTPS
+            const freshOwnerLogin = await loginAndGetToken(baseUrl, ownerA.username, testPwd);
+            const certDownload = await new Promise((resolve, reject) => {
+                const req = https.request({
+                    hostname: '127.0.0.1',
+                    port: tlsSrv.mainPort,
+                    path: '/system/lan-cert',
+                    method: 'GET',
+                    ca: firstBundle.cert,
+                    rejectUnauthorized: true,
+                    headers: { Authorization: `Bearer ${freshOwnerLogin.token}` }
+                }, (res) => {
+                    let body = '';
+                    res.on('data', (chunk) => { body += chunk; });
+                    res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+                });
+                req.on('error', reject);
+                req.end();
+            });
+
+            assert.equal(certDownload.status, 200);
+            assert.equal(certDownload.body.trim(), firstBundle.cert.trim());
+            assert.equal(certDownload.body.includes('PRIVATE KEY'), false, 'GET /system/lan-cert nunca debe exponer clave privada');
+
+            const infoRes = await new Promise((resolve, reject) => {
+                const req = https.request({
+                    hostname: '127.0.0.1',
+                    port: tlsSrv.mainPort,
+                    path: '/system/lan-cert/info',
+                    method: 'GET',
+                    ca: firstBundle.cert,
+                    rejectUnauthorized: true,
+                    headers: { Authorization: `Bearer ${freshOwnerLogin.token}` }
+                }, (res) => {
+                    let body = '';
+                    res.on('data', (chunk) => { body += chunk; });
+                    res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+                });
+                req.on('error', reject);
+                req.end();
+            });
+
+            assert.equal(infoRes.status, 200);
+            assert.equal(infoRes.body.configured, true);
+            assert.equal(infoRes.body.fingerprint256, firstBundle.fingerprint256);
+        } finally {
+            if (prevEnableLanTls !== undefined) process.env.ENABLE_LAN_TLS = prevEnableLanTls;
+            else delete process.env.ENABLE_LAN_TLS;
+            if (tlsSrv) {
+                await tlsSrv.stopServer({ closeDb: false });
+            }
+        }
     });
 });

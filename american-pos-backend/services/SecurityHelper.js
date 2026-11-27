@@ -61,11 +61,16 @@ class SecurityHelper {
      * Includes backward compatibility for older clients that don't sign with companyId.
      */
     static verifySignature(payload, companyId, branchId, timestamp, signature) {
-        // 1. Protección contra Replay Attack (TTL de 5 minutos)
+        // 1. Protección contra Replay Attack (ventana simétrica pasada/futura de 5 minutos)
         const now = Date.now();
-        const requestTime = parseInt(timestamp, 10);
-        if (isNaN(requestTime) || now - requestTime > 5 * 60 * 1000) {
-            console.warn(`[SecurityHelper] HMAC Replay Attack o Timestamp caducado para la sucursal ${branchId}`);
+        const requestTime = Number(timestamp);
+        if (!Number.isFinite(requestTime) || Math.abs(now - requestTime) > 5 * 60 * 1000) {
+            console.warn(`[SecurityHelper] HMAC Replay Attack o Timestamp fuera de ventana para la sucursal ${branchId}`);
+            return false;
+        }
+
+        if (typeof signature !== 'string' || !/^[a-f0-9]+$/i.test(signature) || signature.length % 2 !== 0) {
+            console.warn(`[SecurityHelper] Formato de firma HMAC inválido para sucursal ${branchId}`);
             return false;
         }
 

@@ -2,6 +2,11 @@ const express = require('express');
 const router = express.Router();
 const FixedAssetService = require('../services/FixedAssetService');
 const { verifyToken, isAdmin, requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    registerAssetSchema,
+    depreciateAssetsSchema
+} = require('../schemas/fixedAssetsSchema');
 
 router.use(verifyToken);
 router.use(requirePermission('canManageAssets'));
@@ -18,7 +23,7 @@ router.get('/', async (req, res) => {
 });
 
 // Registrar nuevo activo
-router.post('/', async (req, res) => {
+router.post('/', validate(registerAssetSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const asset = await FixedAssetService.registerAsset({
@@ -32,7 +37,7 @@ router.post('/', async (req, res) => {
 });
 
 // Ejecutar corrida mensual de depreciación
-router.post('/depreciate', isAdmin, async (req, res) => {
+router.post('/depreciate', isAdmin, validate(depreciateAssetsSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const userId = req.user?.id || null;

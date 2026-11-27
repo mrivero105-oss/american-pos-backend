@@ -1,13 +1,25 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-    Building2, Clock, MessageSquare, Plus, RefreshCw, TrendingDown,
-    Calendar, Search, FileText, ExternalLink, X, ShieldAlert,
-    Download, Printer, Lock, Unlock, Banknote, History
+    Building2, 
+    MessageSquare, 
+    Plus, 
+    RefreshCw, 
+    TrendingDown, 
+    Calendar, 
+    Search, 
+    ExternalLink, 
+    X, 
+    Download, 
+    Printer, 
+    Lock, 
+    Unlock, 
+    Banknote, 
+    History
 } from 'lucide-react';
 import api from '../services/api';
-import { usePos } from '../hooks/PosContext';
+import { useBusinessSettingsStore } from '../stores/useBusinessSettingsStore';
 import { useAuth } from '../hooks/AuthContext';
 import AbonoModal from '../components/AbonoModal';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
@@ -36,8 +48,8 @@ const ACTION_TYPE_LABELS = {
     CREDIT_UNBLOCKED: 'Rehabilitación de Crédito'
 };
 
-export default function AssetsAndCollections() {
-    const { exchangeRate } = usePos();
+export default function AssetsAndCollections({ initialTab = null } = {}) {
+    const exchangeRate = useBusinessSettingsStore((s) => s.rate);
     const { hasPermission } = useAuth();
     const { confirm, confirmDialog } = useConfirmDialog();
     const location = useLocation();
@@ -46,23 +58,33 @@ export default function AssetsAndCollections() {
     const canCollections = hasPermission ? hasPermission('customers.collections') : true;
     const canAssets = hasPermission ? hasPermission('management.assets') : true;
 
-    // Determine whether the user entered via "Radar de Cobranza" (?tab=collections) or "Activos Fijos" (?tab=assets)
+    // Determine whether the user entered via "Radar de Cobranza" (?tab=collections o initialTab="collections") or "Activos Fijos"
     const isCollectionsModule = useMemo(() => {
+        if (initialTab === 'collections') return true;
+        if (initialTab === 'assets' || initialTab === 'depreciation') return false;
         const params = new URLSearchParams(location.search);
         const tabParam = params.get('tab');
         if (tabParam === 'collections') return true;
         if (tabParam === 'assets' || tabParam === 'depreciation') return false;
         return canCollections && !canAssets;
-    }, [location.search, canCollections, canAssets]);
+    }, [initialTab, location.search, canCollections, canAssets]);
 
-    const [assetSubTab, setAssetSubTab] = useState('assets'); // 'assets' | 'depreciation'
+    const [assetSubTab, setAssetSubTab] = useState(initialTab === 'depreciation' ? 'depreciation' : 'assets'); // 'assets' | 'depreciation'
 
     useEffect(() => {
+        if (initialTab === 'depreciation') {
+            setAssetSubTab('depreciation');
+            return;
+        }
+        if (initialTab === 'assets') {
+            setAssetSubTab('assets');
+            return;
+        }
         const params = new URLSearchParams(location.search);
         const tabParam = params.get('tab');
         if (tabParam === 'depreciation') setAssetSubTab('depreciation');
         else if (tabParam === 'assets') setAssetSubTab('assets');
-    }, [location.search]);
+    }, [initialTab, location.search]);
 
     // =========================================================================
     // STATE: RADAR DE COBRANZA & ANTIGÜEDAD DE CARTERA (AGING MATRIX)
@@ -109,7 +131,6 @@ export default function AssetsAndCollections() {
     // STATE: PROPIEDAD, PLANTA Y EQUIPO (ACTIVOS FIJOS NIC 16)
     // =========================================================================
     const [assetsList, setAssetsList] = useState([]);
-    const [loadingAssets, setLoadingAssets] = useState(false);
     const [assetSearch, setAssetSearch] = useState('');
     const [assetCategoryFilter, setAssetCategoryFilter] = useState('ALL');
     const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
@@ -135,16 +156,7 @@ export default function AssetsAndCollections() {
     });
     const [depreciating, setDepreciating] = useState(false);
 
-    useEffect(() => {
-        if (isCollectionsModule && canCollections) {
-            fetchAgingReport(includeZeroBalance);
-            api.get('/settings/payment-methods').then(r => setPaymentMethods(r.data || [])).catch(() => {});
-        } else if (!isCollectionsModule && canAssets) {
-            fetchAssets();
-        }
-    }, [isCollectionsModule, canCollections, canAssets, includeZeroBalance]);
-
-    const fetchAgingReport = async (withZero = includeZeroBalance) => {
+    const fetchAgingReport = useCallback(async (withZero = includeZeroBalance) => {
         try {
             setLoadingCollections(true);
             const res = await api.get('/collections/aging', {
@@ -161,34 +173,42 @@ export default function AssetsAndCollections() {
         } finally {
             setLoadingCollections(false);
         }
-    };
+    }, [includeZeroBalance]);
 
-    const fetchAssets = async () => {
+    const fetchAssets = useCallback(async () => {
         try {
-            setLoadingAssets(true);
             const res = await api.get('/assets');
             if (res.data?.success || res.data?.ok) {
                 setAssetsList(res.data.assets || []);
             }
         } catch (err) {
             console.error('Error cargando activos fijos:', err);
-        } finally {
-            setLoadingAssets(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (isCollectionsModule && canCollections) {
+            fetchAgingReport(includeZeroBalance);
+            api.get('/settings/payment-methods').then(r => setPaymentMethods(r.data || [])).catch(() => {});
+        } else if (!isCollectionsModule && canAssets) {
+            fetchAssets();
+        }
+    }, [isCollectionsModule, canCollections, canAssets, includeZeroBalance, fetchAgingReport, fetchAssets]);
 
     const handleToggleBlock = async (customer) => {
         const cId = customer.customerId || customer.id;
-        const nextBlocked = !customer.isCreditBlocked;
+        const currentlyBlocked = Boolean(customer.isCreditBlocked || customer.isEffectivelyBlocked);
+        const nextBlocked = !currentlyBlocked;
         try {
             const res = await api.post(`/collections/toggle-block/${cId}`, {
-                isBlocked: nextBlocked
+                isBlocked: nextBlocked,
+                allowOverdueCredit: !nextBlocked
             });
             if (res.data?.success || res.data?.ok) {
                 showToast(
                     nextBlocked
                         ? `Crédito en caja suspendido para ${customer.name}`
-                        : `Línea de crédito rehabilitada para ${customer.name}`,
+                        : `Cliente desbloqueado: ${customer.name} ya puede recibir facturas con deuda pendiente`,
                     nextBlocked ? 'info' : 'success'
                 );
                 fetchAgingReport(includeZeroBalance);
@@ -209,6 +229,7 @@ export default function AssetsAndCollections() {
                 setWhatsappModalData({ ...res.data, customerId });
             }
         } catch (err) {
+            console.warn('[AssetsAndCollections] Error capturado en operación:', err?.message || err);
             showToast('Error al generar estado de cuenta para WhatsApp', 'error');
         }
     };
@@ -229,6 +250,7 @@ export default function AssetsAndCollections() {
                 fetchAgingReport(includeZeroBalance);
             }
         } catch (err) {
+            console.warn('[AssetsAndCollections] Error capturado en operación:', err?.message || err);
             showToast('Error al guardar gestión de cobranza', 'error');
         }
     };
@@ -304,6 +326,7 @@ export default function AssetsAndCollections() {
                 setIsAssetHistoryOpen(true);
             }
         } catch (err) {
+            console.warn('[AssetsAndCollections] Error capturado en operación:', err?.message || err);
             showToast('Error consultando historial de depreciación', 'error');
         }
     };
@@ -358,7 +381,7 @@ export default function AssetsAndCollections() {
             if (statusFilter === '16_30') return (parseFloat(c.days16to30) || 0) > 0.01;
             if (statusFilter === '31_60') return (parseFloat(c.days31to60) || 0) > 0.01;
             if (statusFilter === 'OVER_60') return (parseFloat(c.daysOver60) || 0) > 0.01;
-            if (statusFilter === 'BLOCKED') return Boolean(c.isCreditBlocked);
+            if (statusFilter === 'BLOCKED') return Boolean(c.isCreditBlocked || c.isEffectivelyBlocked);
             return true;
         });
     }, [agingData.customers, searchTerm, statusFilter]);
@@ -723,8 +746,10 @@ export default function AssetsAndCollections() {
                                                 </td>
                                                 <td className="py-2.5 px-3 text-center">
                                                     <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border inline-block ${
-                                                        c.isCreditBlocked || c.status === 'RED'
+                                                        c.isCreditBlocked || (c.status === 'RED' && !c.allowOverdueCredit)
                                                             ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800'
+                                                            : c.allowOverdueCredit && c.hasOverdueDebt
+                                                            ? 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800'
                                                             : c.status === 'ORANGE' || c.status === 'YELLOW'
                                                             ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800'
                                                             : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
@@ -803,13 +828,28 @@ export default function AssetsAndCollections() {
                                                             type="button"
                                                             onClick={() => handleToggleBlock(c)}
                                                             className={`h-7 px-2 rounded border text-[11px] font-semibold flex items-center gap-1 cursor-pointer ${
-                                                                c.isCreditBlocked
-                                                                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                                                (c.isCreditBlocked || c.isEffectivelyBlocked)
+                                                                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800'
+                                                                    : c.allowOverdueCredit
+                                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
                                                                     : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300'
                                                             }`}
-                                                            title={c.isCreditBlocked ? 'Clic para rehabilitar crédito en caja' : 'Clic para suspender preventivamente el crédito en caja'}
+                                                            title={
+                                                                (c.isCreditBlocked || c.isEffectivelyBlocked)
+                                                                    ? 'Desbloquear cliente para seguir facturando con deudas viejas'
+                                                                    : c.allowOverdueCredit
+                                                                    ? 'Mora permitida activa · Clic para volver a bloquear crédito en caja'
+                                                                    : 'Clic para suspender preventivamente el crédito en caja'
+                                                            }
                                                         >
-                                                            {c.isCreditBlocked ? <Lock size={11} /> : <Unlock size={11} />}
+                                                            {(c.isCreditBlocked || c.isEffectivelyBlocked) ? (
+                                                                <>
+                                                                    <Lock size={11} />
+                                                                    <span>Desbloquear</span>
+                                                                </>
+                                                            ) : (
+                                                                <Unlock size={11} />
+                                                            )}
                                                         </button>
                                                         <button
                                                             type="button"

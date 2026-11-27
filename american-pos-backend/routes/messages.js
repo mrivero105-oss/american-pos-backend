@@ -129,10 +129,10 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// Marcar mensajes como leídos por el usuario (aislado por empresa)
+// Marcar mensajes como leídos por el usuario autenticado (aislado por empresa, anti-IDOR)
 router.put('/read', async (req, res) => {
     try {
-        const userId = req.body.userId || req.user?.id;
+        const userId = req.user?.id;
         const companyId = req.user?.companyId || 'default';
         
         if (!userId) {

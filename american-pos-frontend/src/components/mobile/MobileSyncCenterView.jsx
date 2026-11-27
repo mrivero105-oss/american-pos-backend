@@ -1,15 +1,53 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  ArrowLeft, RefreshCw, ShieldCheck, Wifi, WifiOff, 
-  Database, Server, CheckCircle, AlertTriangle, Layers, 
-  Activity, ArrowDownCircle, Zap, Sparkles, DownloadCloud, Check, Landmark
+import { useState, useEffect, useCallback } from 'react';
+import {
+  ArrowLeft, 
+  RefreshCw, 
+  ShieldCheck, 
+  Database, 
+  Layers, 
+  Activity, 
+  ArrowDownCircle, 
+  Zap, 
+  Sparkles, 
+  DownloadCloud, 
+  Check, 
+  Landmark,
+  AlertTriangle,
+  RotateCcw,
+  Trash2,
+  Bug,
+  Copy,
+  Share2
 } from 'lucide-react';
 import api from '../../services/api';
+import { db as primaryDb } from '../../services/db';
+import localDb from '../../db/localDb';
 import otaUpdateService from '../../services/otaUpdateService';
 import cloudRateSyncService from '../../services/cloudRateSyncService';
+import {
+  getDiagnosticEvents,
+  clearDiagnosticEvents,
+  subscribeDiagnosticEvents,
+  collectDeviceHealthSnapshot,
+  buildDiagnosticReportText,
+  getLastNetworkLatency,
+  subscribeNetworkLatency,
+  recordNetworkLatency
+} from '../../services/mobileDiagnosticsService';
+
+const SYNC_ALERTS_STORAGE_KEY = 'pos_mobile_sync_alerts_v1';
+
+const readStoredSyncAlerts = () => {
+  try {
+    const raw = sessionStorage.getItem(SYNC_ALERTS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
 
 export default function MobileSyncCenterView({
-  isOnline = true,
   socketConnected = true,
   pendingSalesCount = 0,
   productsCount = 0,
@@ -17,12 +55,12 @@ export default function MobileSyncCenterView({
   onSyncNow,
   onRefreshCatalog,
   T,
-  isLight,
   onBackToPOS,
   showToast,
-  onOpenServerConfig
+  onOpenServerConfig,
+  canManageSettings = false
 }) {
-  const [latencyMs, setLatencyMs] = useState(null);
+  const [latencyMs, setLatencyMs] = useState(() => getLastNetworkLatency()?.latencyMs ?? null);
   const [isTestingPing, setIsTestingPing] = useState(false);
   const [appVersion, setAppVersion] = useState('Consultando...');
   const [isUpdatingOta, setIsUpdatingOta] = useState(false);
@@ -34,7 +72,117 @@ export default function MobileSyncCenterView({
     const saved = localStorage.getItem('pos_rate_updated_at');
     return saved ? new Date(saved).toLocaleTimeString() : null;
   });
-  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+  const [quarantinedSales, setQuarantinedSales] = useState([]);
+  const [failedQueueItems, setFailedQueueItems] = useState([]);
+  const [syncAlerts, setSyncAlerts] = useState(() => readStoredSyncAlerts());
+  const [diagEvents, setDiagEvents] = useState(() => (canManageSettings ? getDiagnosticEvents({ limit: 80 }) : []));
+  const [diagFilter, setDiagFilter] = useState('all'); // 'all' | 'error' | 'warn' | 'ota'
+  const [diagHealth, setDiagHealth] = useState(null);
+  const [diagExpanded, setDiagExpanded] = useState(false);
+
+  const loadQuarantineAndAlerts = useCallback(async () => {
+    try {
+      let qSales = [];
+      if (localDb?.sales) {
+        qSales = await localDb.sales.where('status').equals('quarantined').toArray().catch(() => []);
+      } else {
+        qSales = await primaryDb.getByIndex('sales', 'status', 'quarantined').catch(() => []);
+      }
+      setQuarantinedSales(Array.isArray(qSales) ? qSales : []);
+    } catch {
+      setQuarantinedSales([]);
+    }
+
+    try {
+      const allQueue = await primaryDb.getAll('syncQueue').catch(() => []);
+      const failed = Array.isArray(allQueue)
+        ? allQueue.filter((item) => item?.failedPermanent || item?.status === 'sync_error')
+        : [];
+      setFailedQueueItems(failed);
+    } catch {
+      setFailedQueueItems([]);
+    }
+
+    setSyncAlerts(readStoredSyncAlerts());
+  }, []);
+
+  const handleRetryQuarantinedSale = async (sale) => {
+    if (!sale?.id) return;
+    try {
+      const resetPatch = {
+        status: 'pending_sync',
+        syncRetryCount: 0,
+        quarantineReason: null,
+        quarantinedAt: null
+      };
+      if (localDb?.sales) {
+        await localDb.sales.update(sale.id, resetPatch).catch(() => {});
+      }
+      const existing = await primaryDb.getById('sales', sale.id).catch(() => null);
+      if (existing) {
+        await primaryDb.put('sales', { ...existing, ...resetPatch }).catch(() => {});
+      }
+      await loadQuarantineAndAlerts();
+      showToast?.('🔄 Venta reencolada para sincronización');
+      onSyncNow?.();
+    } catch (err) {
+      showToast?.(`Error al reencolar venta: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleDiscardQuarantinedSale = async (saleId) => {
+    if (!saleId) return;
+    try {
+      if (localDb?.sales) {
+        await localDb.sales.delete(saleId).catch(() => {});
+      }
+      await primaryDb.delete('sales', saleId).catch(() => {});
+      await loadQuarantineAndAlerts();
+      window.dispatchEvent(new CustomEvent('sync-queue-updated', { detail: { count: 1 } }));
+      showToast?.('🗑️ Registro de cuarentena descartado');
+    } catch (err) {
+      showToast?.(`Error al descartar registro: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleRetryQueueItem = async (item) => {
+    if (!item?.id) return;
+    try {
+      await primaryDb.put('syncQueue', {
+        ...item,
+        status: 'pending',
+        failedPermanent: false,
+        retryCount: 0,
+        lastError: null
+      });
+      await loadQuarantineAndAlerts();
+      showToast?.('🔄 Operación reencolada');
+      onSyncNow?.();
+    } catch (err) {
+      showToast?.(`Error al reintentar operación: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleDiscardQueueItem = async (itemId) => {
+    if (!itemId) return;
+    try {
+      await primaryDb.delete('syncQueue', itemId);
+      await loadQuarantineAndAlerts();
+      window.dispatchEvent(new CustomEvent('sync-queue-updated', { detail: { count: 1 } }));
+      showToast?.('🗑️ Operación descartada de la cola');
+    } catch (err) {
+      showToast?.(`Error al descartar operación: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleClearSyncAlerts = () => {
+    try {
+      sessionStorage.removeItem(SYNC_ALERTS_STORAGE_KEY);
+    } catch {
+      // Ignorar si sessionStorage falla
+    }
+    setSyncAlerts([]);
+  };
 
   const handleRefreshCloudRate = async () => {
     setIsUpdatingRate(true);
@@ -55,6 +203,36 @@ export default function MobileSyncCenterView({
   useEffect(() => {
     otaUpdateService.getCurrentVersion().then((v) => setAppVersion(v));
     setOtaUpdateReady(otaUpdateService.isUpdateReady());
+    const unsubOtaReady = otaUpdateService.subscribeUpdateReady(({ ready }) => {
+      if (ready) setOtaUpdateReady(true);
+    });
+    loadQuarantineAndAlerts();
+
+    const handleSyncEvents = () => {
+      loadQuarantineAndAlerts();
+    };
+    window.addEventListener('sync-queue-conflict', handleSyncEvents);
+    window.addEventListener('sync-queue-error', handleSyncEvents);
+    window.addEventListener('lan-stock-deficit-detected', handleSyncEvents);
+    window.addEventListener('sync-queue-updated', handleSyncEvents);
+    window.addEventListener('offline-sales-synced', handleSyncEvents);
+
+    let unsubDiag = () => {};
+    if (canManageSettings) {
+      setDiagEvents(getDiagnosticEvents({ limit: 80 }));
+      collectDeviceHealthSnapshot({ appVersion: otaUpdateService.getNewVersion?.() || undefined })
+        .then((snap) => setDiagHealth(snap))
+        .catch(() => {});
+      unsubDiag = subscribeDiagnosticEvents(() => {
+        setDiagEvents(getDiagnosticEvents({ limit: 80 }));
+      });
+    }
+
+    const unsubLatency = subscribeNetworkLatency((sample) => {
+      if (typeof sample?.latencyMs === 'number') {
+        setLatencyMs(sample.latencyMs);
+      }
+    });
 
     // Iniciar y suscribirse al servicio de sincronización automática 24/7 en tiempo real
     cloudRateSyncService.init();
@@ -65,16 +243,84 @@ export default function MobileSyncCenterView({
       if (data?.updatedAt) {
         setRateUpdatedAt(new Date(data.updatedAt).toLocaleTimeString());
       }
-      if (data?.isConnected !== undefined) {
-        setIsRealtimeConnected(data.isConnected);
-      }
       if (data?.rateChanged && showToast) {
         showToast(`⚡ Tasa actualizada automáticamente: ${data.rate} Bs/$`, 'success');
       }
     });
 
-    return () => unsub();
-  }, [showToast]);
+    return () => {
+      unsub();
+      unsubLatency();
+      unsubOtaReady();
+      unsubDiag();
+      window.removeEventListener('sync-queue-conflict', handleSyncEvents);
+      window.removeEventListener('sync-queue-error', handleSyncEvents);
+      window.removeEventListener('lan-stock-deficit-detected', handleSyncEvents);
+      window.removeEventListener('sync-queue-updated', handleSyncEvents);
+      window.removeEventListener('offline-sales-synced', handleSyncEvents);
+    };
+  }, [showToast, loadQuarantineAndAlerts, canManageSettings]);
+
+  const handleCopyDiagnostics = async () => {
+    try {
+      const report = await buildDiagnosticReportText({
+        appVersion,
+        socketConnected,
+        pendingSalesCount,
+        productsCount,
+        latencyMs
+      });
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(report);
+        showToast?.('📋 Reporte diagnóstico copiado al portapapeles');
+      } else {
+        showToast?.('Portapapeles no disponible en este dispositivo', 'error');
+      }
+    } catch (err) {
+      showToast?.(`Error al copiar diagnóstico: ${err?.message || 'desconocido'}`, 'error');
+    }
+  };
+
+  const handleShareDiagnostics = async () => {
+    try {
+      const report = await buildDiagnosticReportText({
+        appVersion,
+        socketConnected,
+        pendingSalesCount,
+        productsCount,
+        latencyMs
+      });
+      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        const file = typeof File !== 'undefined'
+          ? new File([report], `isaac-pos-diagnostico-${Date.now()}.json`, { type: 'application/json' })
+          : null;
+        if (file && navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ title: 'Diagnóstico Isaac POS Móvil', files: [file] });
+          return;
+        }
+        await navigator.share({ title: 'Diagnóstico Isaac POS Móvil', text: report.slice(0, 3500) });
+        return;
+      }
+      const blob = new Blob([report], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `isaac-pos-diagnostico-${Date.now()}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      showToast?.('📥 Reporte diagnóstico descargado (.json)');
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        showToast?.(`Error al compartir diagnóstico: ${err?.message || 'desconocido'}`, 'error');
+      }
+    }
+  };
+
+  const handleClearDiagnostics = () => {
+    clearDiagnosticEvents();
+    setDiagEvents([]);
+    showToast?.('🧹 Historial diagnóstico limpiado');
+  };
 
   const handleCheckOtaUpdate = async () => {
     setIsUpdatingOta(true);
@@ -106,7 +352,8 @@ export default function MobileSyncCenterView({
     const start = performance.now();
     try {
       await api.get('/hello', { timeout: 2500 });
-      const duration = Math.round(performance.now() - start);
+      const duration = Math.max(1, Math.round(performance.now() - start));
+      recordNetworkLatency(duration);
       setLatencyMs(duration);
       showToast?.(`✅ Servidor PC en línea • Latencia: ${duration} ms`);
     } catch (_e) {
@@ -144,7 +391,7 @@ export default function MobileSyncCenterView({
         <button
           onClick={handleTestPing}
           disabled={isTestingPing}
-          className={`px-3 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-1.5 ${T.textSecondary} hover:${T.textPrimary}`}
+          className={`px-3 py-1.5 rounded-xl ${T.btnGhost} border ${T.border} text-xs font-bold flex items-center gap-1.5 ${T.textSecondary} hover:opacity-100`}
         >
           <Activity size={13} className={isTestingPing ? 'animate-pulse text-blue-500' : ''} />
           <span>{isTestingPing ? 'Probando...' : 'Test Ping'}</span>
@@ -192,8 +439,18 @@ export default function MobileSyncCenterView({
             </div>
             <div>
               <span className={`text-[10px] font-bold ${T.textMuted} uppercase block`}>Latencia LAN</span>
-              <span className={`font-bold text-[11px] ${latencyMs === 'offline' ? 'text-rose-500' : latencyMs ? 'text-emerald-500' : T.textPrimary}`}>
-                {latencyMs === 'offline' ? 'Inaccesible' : latencyMs ? `${latencyMs} ms` : 'Normal (~1-3 ms)'}
+              <span className={`font-bold text-[11px] ${
+                latencyMs === 'offline'
+                  ? 'text-rose-500'
+                  : typeof latencyMs === 'number'
+                    ? (latencyMs <= 100 ? 'text-emerald-500' : latencyMs <= 350 ? 'text-amber-500' : 'text-rose-500')
+                    : T.textPrimary
+              }`}>
+                {latencyMs === 'offline'
+                  ? 'Inaccesible'
+                  : typeof latencyMs === 'number'
+                    ? `${latencyMs} ms${latencyMs <= 100 ? ' • Óptima' : latencyMs <= 350 ? ' • Lenta' : ' • Alta'}`
+                    : 'Sin medir aún'}
               </span>
             </div>
           </div>
@@ -256,6 +513,103 @@ export default function MobileSyncCenterView({
           </button>
         </div>
 
+        {/* PANEL DE CUARENTENA Y ALERTAS DE SINCRONIZACIÓN */}
+        {(quarantinedSales.length > 0 || failedQueueItems.length > 0 || syncAlerts.length > 0) && (
+          <div className={`p-4 rounded-xl ${T.subPanelBg} border border-rose-500/40 space-y-3`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-rose-500">
+                <AlertTriangle size={16} />
+                <h3 className="text-xs font-bold uppercase tracking-wider">
+                  Cuarentena y Alertas ({quarantinedSales.length + failedQueueItems.length + syncAlerts.length})
+                </h3>
+              </div>
+              {syncAlerts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearSyncAlerts}
+                  className="text-[10px] font-bold text-slate-400 hover:text-rose-400 underline cursor-pointer"
+                >
+                  Limpiar avisos
+                </button>
+              )}
+            </div>
+
+            {quarantinedSales.map((sale) => (
+              <div key={sale.id} className={`p-3 rounded-lg border ${T.border} ${T.modalSubCard} space-y-2`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className={`text-xs font-bold ${T.textPrimary} truncate`}>
+                      Venta en Cuarentena #{String(sale.invoiceNumber || sale.id).slice(-8)}
+                    </p>
+                    <p className="text-[11px] text-rose-400 break-words">
+                      {sale.quarantineReason || sale.lastSyncError || 'Rechazada por el servidor durante la sincronización'}
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-amber-400 shrink-0">
+                    ${Number(sale.totalUSD || sale.total || 0).toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleRetryQuarantinedSale(sale)}
+                    className="flex-1 min-h-[36px] rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Reintentar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDiscardQuarantinedSale(sale.id)}
+                    className="px-3 min-h-[36px] rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                    <span>Descartar</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {failedQueueItems.map((item) => (
+              <div key={item.id} className={`p-3 rounded-lg border ${T.border} ${T.modalSubCard} space-y-2`}>
+                <div className="min-w-0">
+                  <p className={`text-xs font-bold ${T.textPrimary} truncate`}>
+                    Acción fallida: {(item.method || 'POST').toUpperCase()} {item.endpoint}
+                  </p>
+                  <p className="text-[11px] text-rose-400 break-words">
+                    {item.lastError || `Error HTTP ${item.lastHttpStatus || '4xx'}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleRetryQueueItem(item)}
+                    className="flex-1 min-h-[36px] rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Reintentar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDiscardQueueItem(item.id)}
+                    className="px-3 min-h-[36px] rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                    <span>Descartar</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {syncAlerts.map((al) => (
+              <div key={al.id} className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-[11px] space-y-0.5">
+                <p className="font-bold text-amber-400">{al.title}</p>
+                <p className={T.textSecondary}>{al.message}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* SECCIÓN TASA DE CAMBIO 24/7 EN LA NUBE */}
         <div className={`p-4 rounded-xl ${T.subPanelBg} border ${T.border} space-y-3`}>
           <div className="flex items-center justify-between">
@@ -293,7 +647,7 @@ export default function MobileSyncCenterView({
           <button
             onClick={handleRefreshCloudRate}
             disabled={isUpdatingRate}
-            className={`w-full min-h-[40px] rounded-lg ${T.btnGhost} border ${T.border} font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-2 ${T.textMuted} hover:${T.textPrimary} hover:border-emerald-500/40 active:scale-95 transition-colors cursor-pointer`}
+            className={`w-full min-h-[44px] rounded-lg ${T.btnGhost} border ${T.border} font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-2 ${T.textMuted} hover:opacity-100 hover:border-emerald-500/40 active:scale-95 transition-colors cursor-pointer`}
           >
             <RefreshCw size={14} className={isUpdatingRate ? 'animate-spin text-emerald-400' : 'text-slate-400'} />
             <span>{isUpdatingRate ? 'Consultando en Supabase...' : 'Verificar Tasa Manualmente (Opcional)'}</span>
@@ -357,6 +711,140 @@ export default function MobileSyncCenterView({
             </button>
           )}
         </div>
+
+        {/* PANEL DIAGNÓSTICO DEL TERMINAL — CAJA NEGRA SANITIZADA (SOLO ADMINISTRADORES / canManageSettings) */}
+        {canManageSettings && (
+          <div className={`p-4 rounded-xl ${T.subPanelBg} border ${T.border} space-y-3`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/25 shrink-0">
+                  <Bug size={16} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className={`text-xs font-bold ${T.textPrimary} truncate`}>Diagnóstico del Terminal (Caja Negra)</h3>
+                  <p className={`text-[10px] ${T.textMuted}`}>
+                    {diagEvents.filter((e) => e.level === 'error').length} errores • {diagEvents.filter((e) => e.level === 'warn').length} avisos • Solo Admin
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDiagExpanded((prev) => !prev)}
+                className={`px-2.5 py-1.5 rounded-lg ${T.btnGhost} border ${T.border} text-[11px] font-bold ${T.textPrimary} shrink-0 cursor-pointer active:scale-95`}
+              >
+                {diagExpanded ? 'Ocultar' : 'Ver eventos'}
+              </button>
+            </div>
+
+            {diagHealth && (
+              <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>APK Code: </span>
+                  <span className={T.textPrimary}>{String(diagHealth.apkVersionCode)}</span>
+                </div>
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>WebView: </span>
+                  <span className={T.textPrimary}>{diagHealth.webViewVersion || 'N/A'}</span>
+                </div>
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>Pantalla: </span>
+                  <span className={T.textPrimary}>{diagHealth.viewport}</span>
+                </div>
+                <div className={`p-2 rounded-lg border ${T.border} ${T.appBg}`}>
+                  <span className={T.textMuted}>Storage: </span>
+                  <span className={T.textPrimary}>
+                    {diagHealth.storage ? `${diagHealth.storage.usedMB} MB` : 'N/A'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={handleCopyDiagnostics}
+                className={`min-h-[40px] rounded-lg ${T.btnGhost} border ${T.border} text-[11px] font-bold ${T.textPrimary} flex items-center justify-center gap-1.5 cursor-pointer active:scale-95`}
+              >
+                <Copy size={13} />
+                <span>Copiar</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleShareDiagnostics}
+                className="min-h-[40px] rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <Share2 size={13} />
+                <span>Compartir</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleClearDiagnostics}
+                className={`min-h-[40px] rounded-lg ${T.btnGhost} border ${T.border} text-[11px] font-bold text-rose-400 flex items-center justify-center gap-1.5 cursor-pointer active:scale-95`}
+              >
+                <Trash2 size={13} />
+                <span>Limpiar</span>
+              </button>
+            </div>
+
+            {diagExpanded && (
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                  {[
+                    { id: 'all', label: 'Todos' },
+                    { id: 'error', label: 'Errores' },
+                    { id: 'warn', label: 'Avisos' },
+                    { id: 'ota', label: 'OTA' }
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setDiagFilter(tab.id)}
+                      className={`px-2.5 py-1 rounded-full text-[10px] font-bold border shrink-0 cursor-pointer ${
+                        diagFilter === tab.id
+                          ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                          : `${T.btnGhost} ${T.border} ${T.textMuted}`
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className={`max-h-56 overflow-y-auto rounded-lg border ${T.border} ${T.appBg} divide-y divide-slate-800/60`}>
+                  {(() => {
+                    const filtered = diagEvents.filter((ev) => {
+                      if (diagFilter === 'all') return true;
+                      if (diagFilter === 'ota') return ev.category === 'ota';
+                      return ev.level === diagFilter;
+                    });
+                    if (filtered.length === 0) {
+                      return (
+                        <p className={`p-3 text-center text-[11px] ${T.textMuted}`}>
+                          Sin eventos registrados para este filtro.
+                        </p>
+                      );
+                    }
+                    return filtered.slice(0, 40).map((ev) => (
+                      <div key={ev.id} className="p-2 text-[10px] space-y-0.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`font-black uppercase ${
+                            ev.level === 'error' ? 'text-rose-400' : ev.level === 'warn' ? 'text-amber-400' : 'text-sky-400'
+                          }`}>
+                            [{ev.category}] {ev.level}
+                          </span>
+                          <span className={`font-mono text-[9px] ${T.textMuted}`}>
+                            {new Date(ev.ts).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <p className={`${T.textSecondary} break-words leading-snug`}>{ev.message}</p>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* GARANTÍAS DE SEGURIDAD Y RENDIMIENTO */}
         <div className={`p-3.5 rounded-xl ${T.subPanelBg} border ${T.border} space-y-2`}>

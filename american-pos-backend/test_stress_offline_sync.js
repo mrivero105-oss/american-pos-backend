@@ -1,4 +1,14 @@
+// Aislamiento obligatorio: jamás ejecutar pruebas de estrés contra la BD de producción
+process.env.ISAAC_TEST_ISOLATED = '1';
+process.env.NODE_ENV = 'test';
+process.env.DB_NAME_FORCE = 'americanpos_test';
+process.env.DISABLE_BACKGROUND_WORKERS = 'true';
+
 const { sequelize } = require('./database/connection');
+if (sequelize.config && sequelize.config.database !== 'americanpos_test') {
+    console.error(`[ABORT] Base de datos no aislada detectada (${sequelize.config.database}). Abortando para proteger datos reales.`);
+    process.exit(1);
+}
 const { Product, Sale, SaleItem, BranchStock, StockMovement, QuarantineSale } = require('./database/models');
 const SaleService = require('./services/SaleService');
 

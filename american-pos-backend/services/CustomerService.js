@@ -115,7 +115,21 @@ class CustomerService {
      */
     async createCustomer(reqUser, customerData) {
         const { id: userId, companyId } = reqUser;
-        const { name, idDocument, email, phone, address, creditLimit, notes } = customerData;
+        const {
+            name,
+            idDocument,
+            email,
+            phone,
+            address,
+            creditLimit,
+            creditLimitDays,
+            isCreditBlocked,
+            allowOverdueCredit,
+            notes
+        } = customerData;
+
+        const normalizedBlocked = Boolean(isCreditBlocked);
+        const normalizedAllowOverdue = normalizedBlocked ? false : Boolean(allowOverdueCredit);
 
         const newCustomer = await Customer.create({
             id: generateRobustId(),
@@ -127,6 +141,9 @@ class CustomerService {
             phone,
             address,
             creditLimit: Number(creditLimit) || 0,
+            creditLimitDays: creditLimitDays !== undefined ? Math.max(0, parseInt(creditLimitDays, 10) || 0) : 30,
+            isCreditBlocked: normalizedBlocked,
+            allowOverdueCredit: normalizedAllowOverdue,
             notes,
             creditBalance: 0
         });
@@ -149,7 +166,21 @@ class CustomerService {
         const oldValues = customer.toJSON();
         
         // Sanitize update data to prevent overwriting protected fields
-        const { name, idDocument, email, phone, address, creditLimit, notes, isVIP, isActive, loyaltyPoints } = updateData;
+        const {
+            name,
+            idDocument,
+            email,
+            phone,
+            address,
+            creditLimit,
+            creditLimitDays,
+            isCreditBlocked,
+            allowOverdueCredit,
+            notes,
+            isVIP,
+            isActive,
+            loyaltyPoints
+        } = updateData;
         const sanitizedUpdate = {};
         if (name !== undefined) sanitizedUpdate.name = name;
         if (idDocument !== undefined) sanitizedUpdate.idDocument = idDocument;
@@ -157,6 +188,19 @@ class CustomerService {
         if (phone !== undefined) sanitizedUpdate.phone = phone;
         if (address !== undefined) sanitizedUpdate.address = address;
         if (creditLimit !== undefined) sanitizedUpdate.creditLimit = Number(creditLimit);
+        if (creditLimitDays !== undefined) sanitizedUpdate.creditLimitDays = Math.max(0, parseInt(creditLimitDays, 10) || 0);
+        if (isCreditBlocked !== undefined) {
+            sanitizedUpdate.isCreditBlocked = Boolean(isCreditBlocked);
+            if (sanitizedUpdate.isCreditBlocked) {
+                sanitizedUpdate.allowOverdueCredit = false;
+            }
+        }
+        if (allowOverdueCredit !== undefined && !sanitizedUpdate.isCreditBlocked) {
+            sanitizedUpdate.allowOverdueCredit = Boolean(allowOverdueCredit);
+            if (sanitizedUpdate.allowOverdueCredit) {
+                sanitizedUpdate.isCreditBlocked = false;
+            }
+        }
         if (notes !== undefined) sanitizedUpdate.notes = notes;
         if (isVIP !== undefined) sanitizedUpdate.isVIP = Boolean(isVIP);
         if (isActive !== undefined) sanitizedUpdate.isActive = Boolean(isActive);

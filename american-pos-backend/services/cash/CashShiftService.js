@@ -205,11 +205,10 @@ module.exports = {
         }
 
         const getRegisterSortRank = (reg) => {
-            const name = (reg.registerName || '').toLowerCase();
-            const user = (reg.userName || '').toLowerCase();
-            if (name.includes('caja 1') || name === '1' || user.includes('manuel')) return 1;
-            if (name.includes('caja 2') || name === '2' || user.includes('carmen')) return 2;
-            if (name.includes('caja 3') || name === '3' || user.includes('adrian')) return 3;
+            const name = (reg.registerName || '').toLowerCase().trim();
+            if (name.includes('caja 1') || name === '1' || name.includes('principal')) return 1;
+            if (name.includes('caja 2') || name === '2') return 2;
+            if (name.includes('caja 3') || name === '3') return 3;
             const match = name.match(/\d+/);
             if (match) return 10 + parseInt(match[0], 10);
             return 100;
@@ -325,11 +324,7 @@ module.exports = {
         const registerId = openingData.registerId || '1';
         let registerName = (openingData.registerName || openingData.registerDisplayName || '').trim();
         if (!registerName) {
-            const uName = (userName || '').toLowerCase();
-            if (uName.includes('manuel') || userId === '2' || userId === 'admin') registerName = 'Caja 1';
-            else if (uName.includes('carmen')) registerName = 'Caja 2';
-            else if (uName.includes('adrian')) registerName = 'Caja 3';
-            else registerName = `Caja ${registerId || '1'}`;
+            registerName = `Caja ${registerId || '1'}`;
         }
 
         // 🛡️ TRANSACCIÓN ATÓMICA DE APERTURA CON BLOQUEO ANTI-DUPLICADOS

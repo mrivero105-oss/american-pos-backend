@@ -1,35 +1,29 @@
 import { useState, useEffect, useRef, useMemo, memo, lazy, Suspense } from 'react';
-import { 
+import {
     Search, 
     RefreshCw, 
-    Zap, 
-    X,
-    LayoutGrid,
-    List,
-    Square,
-    Circle,
-    Scan,
-    PackageX,
-    PackageCheck,
-    CloudOff,
-    Users,
-    UserPlus,
-    ChevronDown,
-    CheckCircle2,
-    Pencil,
+    X, 
+    LayoutGrid, 
+    List, 
+    Scan, 
+    PackageX, 
+    CloudOff, 
+    Users, 
+    UserPlus, 
+    CheckCircle2, 
+    Pencil, 
     Filter
 } from 'lucide-react';
 import ProductItem from './ProductItem';
 import StationProductView from './StationProductView';
-import { groupProductsByFamily } from '../utils/productFamilies';
+import VirtualProductList from './common/VirtualProductList';
 const MobileBarcodeScannerModal = lazy(() => import('./MobileBarcodeScannerModal'));
 import { usePos } from '../hooks/PosContext';
 import useHorizontalScroll from '../hooks/useHorizontalScroll';
 import { hapticTap } from '../utils/haptics';
-import { isUsdOnlyMode, isDollarOnlyCountry } from '../utils/format';
 
 // Native-speed uncontrolled SearchBox with zero IME/keyboard interference
-const SearchBox = memo(({ searchTerm, onSearchChange, onBarcodeScan, searchInputRef, onKeyDown, onOpenScanner, totalCount }) => {
+const SearchBox = memo(function SearchBox({ searchTerm, onSearchChange, onBarcodeScan, searchInputRef, onKeyDown, onOpenScanner, totalCount }) {
     const internalRef = useRef(null);
     const inputRef = searchInputRef || internalRef;
     const [hasText, setHasText] = useState(Boolean(searchTerm));
@@ -221,7 +215,7 @@ const SearchBox = memo(({ searchTerm, onSearchChange, onBarcodeScan, searchInput
     );
 });
 
-const ProductGrid = memo(({
+const ProductGrid = memo(function ProductGrid({
     loading,
     allProducts,
     filteredProducts,
@@ -237,7 +231,6 @@ const ProductGrid = memo(({
     selectedIndex,
     setSelectedIndex,
     searchInputRef,
-    posViewMode,
     setPosViewMode,
     viewLayout = 'grid',
     setViewLayout,
@@ -251,7 +244,7 @@ const ProductGrid = memo(({
     onOpenNewCustomer,
     onEditCustomer,
     customers = []
-}) => {
+}) {
     const categoryRef = useHorizontalScroll();
     const gridContainerRef = useRef(null);
     const customerDropdownRef = useRef(null);
@@ -259,8 +252,6 @@ const ProductGrid = memo(({
     const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
     const [customerSearchTerm, setCustomerSearchTerm] = useState('');
     const [highlightedCustomerIndex, setHighlightedCustomerIndex] = useState(-1);
-    const isMobileDevice = typeof window !== 'undefined' && window.innerWidth < 640;
-    const [visibleLimit, setVisibleLimit] = useState(isMobileDevice ? 30 : 120);
     const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
 
     // Filtrar clientes para el selector de cabecera
@@ -330,10 +321,7 @@ const ProductGrid = memo(({
         window.addEventListener('keydown', handlePosShortcuts);
         return () => window.removeEventListener('keydown', handlePosShortcuts);
     }, [isCustomerDropdownOpen, searchInputRef]);
-    const { 
-        setCurrencyMode: setContextCurrencyMode, 
-        isUsdOnly, 
-        country, 
+    const {
         allowedCategories: posAllowedCategories,
         allowedProducts: posAllowedProducts
     } = usePos();
@@ -378,47 +366,23 @@ const ProductGrid = memo(({
     }, [hasStationLimit, unifiedProducts, viewLayout]);
 
 
-    // Reset visible limit on search or category filter to minimize DOM footprint
+    const gridGap = viewLayout === 'list' ? 8 : (viewLayout === 'grid_round' ? 14 : 12);
+    const virtualColumnsConfig = useMemo(() => (
+        viewLayout === 'list'
+            ? 1
+            : { minItemWidth: 215, gap: gridGap, padX: 28 }
+    ), [viewLayout, gridGap]);
+
+    const estimateRowHeight = useMemo(() => (
+        viewLayout === 'list' ? 74 : (viewLayout === 'grid_round' ? 260 : 256)
+    ), [viewLayout]);
+
+    // Resetear scroll al cambiar búsqueda, categoría o vista
     useEffect(() => {
-        setVisibleLimit(isMobileDevice ? 30 : 120);
         if (gridContainerRef.current) {
             gridContainerRef.current.scrollTop = 0;
         }
-    }, [searchTerm, category, isMobileDevice]);
-
-
-    // Auto-scroll to selected index if keyboard navigation is used
-    useEffect(() => {
-        if (selectedIndex !== -1) {
-            if (selectedIndex >= visibleLimit - 8) {
-                setVisibleLimit(prev => Math.max(prev + (isMobileDevice ? 24 : 48), selectedIndex + 20));
-            }
-            if (gridContainerRef.current) {
-                const selectedEl = document.getElementById(`product-${unifiedProducts[selectedIndex]?.id}`);
-                if (selectedEl) {
-                    selectedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }
-            }
-        }
-    }, [selectedIndex, unifiedProducts, visibleLimit, isMobileDevice]);
-
-    const scrollTickingRef = useRef(false);
-
-    const handleGridScroll = (e) => {
-        if (!scrollTickingRef.current) {
-            scrollTickingRef.current = true;
-            const target = e.currentTarget;
-            requestAnimationFrame(() => {
-                if (target) {
-                    const { scrollTop, scrollHeight, clientHeight } = target;
-                    if (scrollHeight - scrollTop - clientHeight < 450) {
-                        setVisibleLimit(prev => Math.min(prev + (isMobileDevice ? 16 : 32), unifiedProducts.length));
-                    }
-                }
-                scrollTickingRef.current = false;
-            });
-        }
-    };
+    }, [searchTerm, category, viewLayout]);
 
     return (
         <div className="pos-catalog-shell flex-1 flex flex-col min-h-0 bg-[#e4e9f0] dark:bg-slate-900 relative overflow-hidden">
@@ -820,10 +784,9 @@ const ProductGrid = memo(({
                 </div>
             </div>
 
-            {/* Standard Robust Grid with Native Scrolling */}
+            {/* Virtualized Grid & List powered by @tanstack/react-virtual */}
             <div 
                 ref={gridContainerRef}
-                onScroll={handleGridScroll}
                 className="pos-catalog-canvas flex-1 min-h-0 overflow-y-auto p-2.5 sm:p-3.5 pb-[calc(9rem+env(safe-area-inset-bottom,0px))] lg:pb-8 overscroll-contain no-scrollbar bg-[#e4e9f0] dark:bg-slate-950/70"
             >
                 {loading && allProducts.length === 0 ? (
@@ -881,37 +844,37 @@ const ProductGrid = memo(({
                         ))}
                     </div>
                 ) : (
-                    <div className={
-                        viewLayout === 'list' 
-                            ? 'flex flex-col gap-2' 
-                            : viewLayout === 'grid_round'
-                                ? 'grid gap-3 sm:gap-3.5 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
-                                : 'grid gap-2.5 sm:gap-3 grid-cols-[repeat(auto-fill,minmax(215px,1fr))]'
-                    }>
-                        {unifiedProducts.slice(0, visibleLimit).map((product, index) => (
-                            <div
-                                key={product.id}
-                                className={
-                                    (viewLayout === 'list' ? 'min-h-[68px] h-auto cv-auto-row' : 
-                                    viewLayout === 'grid_round' ? 'aspect-square w-full max-w-[350px] mx-auto cv-auto-card' : 
-                                    'h-full flex flex-col cv-auto-card')
-                                }
-                            >
-                                <ProductItem
-                                    product={product}
-                                    onAdd={handleAddToCart}
-                                    onEdit={handleQuickEdit}
-                                    isAdmin={isAdmin}
-                                    currencyMode={currencyMode}
-                                    exchangeRate={exchangeRate}
-                                    isSelected={index === selectedIndex}
-                                    viewMode="NORMAL"
-                                    viewLayout={viewLayout}
-                                    intelligence={stockIntelligence[product.id]}
-                                />
-                            </div>
-                        ))}
-                    </div>
+                    <VirtualProductList
+                        items={unifiedProducts}
+                        scrollElementRef={gridContainerRef}
+                        columns={virtualColumnsConfig}
+                        gap={gridGap}
+                        estimateSize={estimateRowHeight}
+                        overscan={4}
+                        scrollToIndex={selectedIndex}
+                        layoutKey={viewLayout}
+                        itemWrapperClassName={
+                            viewLayout === 'list'
+                                ? 'min-h-[68px] h-auto'
+                                : viewLayout === 'grid_round'
+                                    ? 'aspect-square w-full max-w-[350px] mx-auto'
+                                    : 'h-full flex flex-col'
+                        }
+                        renderItem={(product, absIndex) => (
+                            <ProductItem
+                                product={product}
+                                onAdd={handleAddToCart}
+                                onEdit={handleQuickEdit}
+                                isAdmin={isAdmin}
+                                currencyMode={currencyMode}
+                                exchangeRate={exchangeRate}
+                                isSelected={absIndex === selectedIndex}
+                                viewMode="NORMAL"
+                                viewLayout={viewLayout}
+                                intelligence={stockIntelligence[product.id]}
+                            />
+                        )}
+                    />
                 )}
             </div>
 

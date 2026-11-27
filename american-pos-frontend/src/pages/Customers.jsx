@@ -1,13 +1,26 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { 
-    Search, Plus, Edit2, Trash2, Users, Star, Banknote, X, 
-    History as HistoryIcon, Clock, MessageCircle, Download, 
-    Upload, AlertCircle, CheckCircle, UserX, UserCheck, 
-    FileText, Award, Eye, TrendingUp, CreditCard, ShieldCheck,
-    Check, Copy, AlertTriangle, RefreshCw, ChevronRight, IdCard,
-    ArrowUpRight, ArrowDownRight, MoreHorizontal, Phone, CheckCircle2
+import {
+    Search, 
+    Plus, 
+    Edit2, 
+    Trash2, 
+    Users, 
+    Star, 
+    Banknote, 
+    X, 
+    History as HistoryIcon, 
+    MessageCircle, 
+    Download, 
+    Upload, 
+    FileText, 
+    Award, 
+    Eye, 
+    CreditCard, 
+    Check, 
+    Copy, 
+    RefreshCw
 } from 'lucide-react';
 import CustomerModal from '../components/CustomerModal';
 import AbonoModal from '../components/AbonoModal';
@@ -19,7 +32,7 @@ import RedeemPointsModal from '../components/RedeemPointsModal';
 import AccountStatementModal from '../components/AccountStatementModal';
 import CustomerImportModal from '../components/CustomerImportModal';
 import { db } from '../services/db';
-import { formatMoney, fetchGlobalSettings, isUsdOnlyMode } from '../utils/format';
+import { fetchGlobalSettings, isUsdOnlyMode } from '../utils/format';
 import { triggerHaptic } from '../utils/haptics';
 
 export default function Customers() {
@@ -74,59 +87,48 @@ export default function Customers() {
         confirmText: 'Confirmar'
     });
 
-    useEffect(() => {
-        setPage(1);
-    }, [debouncedSearchTerm, filterTab]);
-
-    useEffect(() => {
-        fetchCustomers(page === 1);
-        loadSettings();
-        fetchBusinessSettings();
-        fetchPaymentMethods();
-    }, [debouncedSearchTerm, filterTab, page]);
-
-    const loadSettings = async () => {
+    const loadSettings = useCallback(async () => {
         const s = await fetchGlobalSettings();
         setSettings(s);
-    };
+    }, []);
 
-    const fetchBusinessSettings = async () => {
+    const fetchBusinessSettings = useCallback(async () => {
         try {
             const res = await api.get('/settings/business');
             setBusinessSettings(res.data || {});
         } catch (e) {
             console.error('Error fetching business settings', e);
         }
-    };
+    }, []);
 
-    const fetchPaymentMethods = async () => {
+    const fetchPaymentMethods = useCallback(async () => {
         try {
             const { data } = await api.get('/settings/payment-methods');
             setPaymentMethods(data || []);
         } catch (e) {
             console.error('Error fetching payment methods:', e);
         }
-    };
+    }, []);
 
-    const fetchCustomers = async (resetPage = false) => {
+    const fetchCustomers = useCallback(async (resetPage = false) => {
         try {
             if (resetPage) setLoading(true);
             const currentPage = resetPage ? 1 : page;
             const params = new URLSearchParams();
             params.append('limit', limit);
             params.append('page', currentPage);
-            
+
             if (filterTab !== 'all') {
                 params.append('filter', filterTab);
             }
-            
+
             if (debouncedSearchTerm) {
                 params.append('search', debouncedSearchTerm);
             }
-            
+
             const res = await api.get(`/customers?${params.toString()}`);
             const customerData = Array.isArray(res.data) ? res.data : (res.data.customers || []);
-            
+
             if (currentPage === 1) {
                 setCustomers(customerData);
             } else {
@@ -148,7 +150,18 @@ export default function Customers() {
             setLoading(false);
             setIsRefreshing(false);
         }
-    };
+    }, [page, limit, filterTab, debouncedSearchTerm]);
+
+    useEffect(() => {
+        setPage(1);
+    }, [debouncedSearchTerm, filterTab]);
+
+    useEffect(() => {
+        fetchCustomers(page === 1);
+        loadSettings();
+        fetchBusinessSettings();
+        fetchPaymentMethods();
+    }, [page, fetchCustomers, loadSettings, fetchBusinessSettings, fetchPaymentMethods]);
 
     const handleRefresh = () => {
         triggerHaptic('light');
@@ -237,6 +250,8 @@ export default function Customers() {
             toast.success(newStatus ? 'Cliente reactivado con éxito' : 'Cliente archivado');
             fetchCustomers(true);
         } catch (error) {
+            console.warn('[Customers] Error capturado en operación:', error?.message || error);
+            console.error('[Customers] Error al actualizar estado del cliente:', error);
             toast.error('Error al actualizar estado del cliente');
         }
     };
@@ -338,7 +353,7 @@ export default function Customers() {
         const debtUsd = parseFloat(customer.creditBalance) || 0;
         const rate = settings.rate || 1;
         const debtBs = (debtUsd * rate).toFixed(2);
-        const bizName = businessSettings.name || 'American POS';
+        const bizName = businessSettings.name || 'Isaac POS';
         
         let message = `Estimado(a) *${customer.name}*, le contactamos de *${bizName}*.\n\n`;
         if (debtUsd > 0) {

@@ -1,27 +1,44 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  ArrowLeft, DollarSign, Plus, Trash2, Calendar, 
-  CheckCircle, RefreshCw, X, Save, AlertCircle,
-  Edit2, Search, Eye, Tag, FileText, Check, AlertTriangle,
-  Receipt, Clock, User
+import { useState, useEffect, useMemo } from 'react';
+import {
+  ArrowLeft, 
+  DollarSign, 
+  Plus, 
+  Trash2, 
+  RefreshCw, 
+  X, 
+  Save, 
+  Edit2, 
+  Search, 
+  Eye, 
+  Receipt, 
+  Clock
 } from 'lucide-react';
 import api from '../../services/api';
 import { db as primaryDb } from '../../services/db';
 import localDb from '../../db/localDb';
 import { VoiceMicButton } from '../../utils/voiceSearch';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+import { useOfflineQueueCounts } from '../../hooks/useOfflineQueueCounts';
 
 const LOCAL_EXPENSES_KEY = 'isaac_pos_mobile_expenses';
 
 const persistExpensesLocally = async (list) => {
-  try {
-    localStorage.setItem(LOCAL_EXPENSES_KEY, JSON.stringify(list.slice(0, 200)));
-  } catch (_) {}
+  const incoming = Array.isArray(list) ? list : [];
+  let merged = incoming;
   try {
     if (localDb && localDb.expenses) {
-      await localDb.expenses.clear();
-      await localDb.expenses.bulkPut(list.slice(0, 200));
+      const existing = await localDb.expenses.toArray().catch(() => []);
+      const incomingIds = new Set(incoming.map(e => String(e?.id || '')));
+      const pendingOnly = (existing || []).filter(
+        e => e && (e.status === 'pending_sync' || String(e.id || '').startsWith('exp_')) && !incomingIds.has(String(e.id || ''))
+      );
+      merged = [...pendingOnly, ...incoming].slice(0, 200);
+      await primaryDb.replaceAllAtomic('expenses', merged, 'id');
     }
-  } catch (_) {}
+  } catch (caughtErr) { console.warn('[MobileExpensesView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
+  try {
+    localStorage.setItem(LOCAL_EXPENSES_KEY, JSON.stringify(merged.slice(0, 200)));
+  } catch (caughtErr) { console.warn('[MobileExpensesView] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 };
 
 const triggerHaptic = (ms = 15) => {
@@ -29,7 +46,7 @@ const triggerHaptic = (ms = 15) => {
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       navigator.vibrate(ms);
     }
-  } catch (_) {}
+  } catch { /* Vibración háptica opcional no soportada */ }
 };
 
 const EXPENSE_CATEGORIES = [
@@ -48,17 +65,24 @@ export default function MobileExpensesView({
   exchangeRate = 950,
   user,
   T,
-  isLight,
   onBackToPOS,
+  onOpenSyncCenter = null,
   showToast
 }) {
   const [expenses, setExpenses] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todos');
+  const { counts: offlineCounts } = useOfflineQueueCounts();
 
   // Modal para Crear / Editar Gasto
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isFormModalOpen });
   const [editingExpense, setEditingExpense] = useState(null); // null = crear, obj = editar
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
@@ -102,7 +126,7 @@ export default function MobileExpensesView({
           return;
         }
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobileExpensesView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
 
     try {
       const saved = localStorage.getItem(LOCAL_EXPENSES_KEY);
@@ -110,7 +134,7 @@ export default function MobileExpensesView({
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) setExpenses(parsed);
       }
-    } catch (_) {}
+    } catch (caughtErr) { console.warn('[MobileExpensesView] Error parseando JSON local:', caughtErr?.message || caughtErr); }
     setIsLoading(false);
   };
 
@@ -174,7 +198,7 @@ export default function MobileExpensesView({
     triggerHaptic(20);
     setEditingExpense(exp);
     setAmount(String(exp.amount || exp.monto || ''));
-    setCurrency((exp.currency || 'USD').toUpperCase() === 'BS' || (exp.currency || '').toUpperCase() === 'VES' ? 'BS' : 'USD');
+    setCurrency(['BS', 'VES', 'BS.'].includes(String(exp.currency || 'USD').toUpperCase()) ? 'VES' : 'USD');
     setDescription(exp.description || exp.concepto || '');
     setCategory(exp.category || exp.categoria || 'Operativo');
     setPaymentMethod(exp.paymentMethod || 'Efectivo USD');
@@ -196,17 +220,19 @@ export default function MobileExpensesView({
     }
 
     setIsSubmitting(true);
+    const normalizedCur = ['BS', 'VES', 'BS.'].includes(String(currency || 'USD').toUpperCase()) ? 'VES' : 'USD';
+    const safeRate = Number(exchangeRate) > 0 ? Number(exchangeRate) : 1;
     const payload = {
       amount: parsedAmount,
       monto: parsedAmount,
-      currency,
+      currency: normalizedCur,
       description: description.trim(),
       concepto: description.trim(),
       category,
       categoria: category,
       paymentMethod,
       notes: notes.trim(),
-      exchangeRate,
+      exchangeRate: safeRate,
       date: editingExpense ? editingExpense.date : new Date().toISOString(),
       registeredBy: user?.name || user?.username || 'Cajero Móvil'
     };
@@ -226,8 +252,14 @@ export default function MobileExpensesView({
         setIsFormModalOpen(false);
         if (detailExpense?.id === expId) setDetailExpense(updated);
       } catch (err) {
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          const msg = err?.response?.data?.error || err?.response?.data?.message || 'No tienes permiso para modificar este gasto';
+          showToast?.(`⚠️ ${msg}`);
+          return;
+        }
         console.warn('Error al actualizar gasto en servidor, guardando local:', err);
-        const updated = { ...editingExpense, ...payload };
+        const updated = { ...editingExpense, ...payload, status: 'pending_sync' };
         setExpenses(prev => {
           const next = prev.map(e => e.id === expId ? updated : e);
           persistExpensesLocally(next);
@@ -241,7 +273,7 @@ export default function MobileExpensesView({
             payload,
             createdAt: new Date().toISOString()
           });
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[MobileExpensesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         showToast?.('⚡ Gasto actualizado offline');
         setIsFormModalOpen(false);
         if (detailExpense?.id === expId) setDetailExpense(updated);
@@ -253,20 +285,28 @@ export default function MobileExpensesView({
       const newExpense = {
         id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         ...payload,
+        status: 'pending_sync',
         createdAt: new Date().toISOString()
       };
 
       try {
         const res = await api.post('/expenses', payload, { timeout: 4000 });
-        const created = res.data || newExpense;
+        const created = res.data || { ...newExpense, status: 'synced' };
         setExpenses(prev => {
           const next = [created, ...prev];
           persistExpensesLocally(next);
           return next;
         });
         showToast?.('✅ Gasto registrado en el servidor');
-      } catch (_err) {
-        console.warn('Servidor inaccesible, guardando gasto en cola local:', _err);
+        setIsFormModalOpen(false);
+      } catch (err) {
+        const httpStatus = err?.response?.status;
+        if (httpStatus && httpStatus >= 400 && httpStatus < 500) {
+          const msg = err?.response?.data?.error || err?.response?.data?.message || 'No tienes permiso para registrar gastos';
+          showToast?.(`⚠️ ${msg}`);
+          return;
+        }
+        console.warn('Servidor inaccesible, guardando gasto en cola local:', err);
         setExpenses(prev => {
           const next = [newExpense, ...prev];
           persistExpensesLocally(next);
@@ -275,16 +315,17 @@ export default function MobileExpensesView({
         try {
           await primaryDb.put('syncQueue', {
             id: `exp_sync_${Date.now()}`,
+            tempLocalId: newExpense.id,
             endpoint: '/expenses',
             method: 'POST',
             payload: newExpense,
             createdAt: new Date().toISOString()
           });
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[MobileExpensesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
         showToast?.('⚡ Gasto guardado offline en teléfono');
+        setIsFormModalOpen(false);
       } finally {
         setIsSubmitting(false);
-        setIsFormModalOpen(false);
       }
     }
   };
@@ -334,7 +375,7 @@ export default function MobileExpensesView({
           method: 'DELETE',
           createdAt: new Date().toISOString()
         });
-      } catch (_) {}
+      } catch (caughtErr) { console.warn('[MobileExpensesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
       showToast?.('⚡ Gasto eliminado offline');
       setDeleteConfirm(null);
       if (detailExpense?.id === exp.id) setDetailExpense(null);
@@ -365,13 +406,26 @@ export default function MobileExpensesView({
           </div>
         </div>
 
-        <button
-          onClick={handleOpenCreate}
-          className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer whitespace-nowrap"
-        >
-          <Plus size={14} />
-          <span>+ Gasto</span>
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {offlineCounts.expenses > 0 && (
+            <button
+              type="button"
+              onClick={() => onOpenSyncCenter?.()}
+              className="px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-500 text-[10px] font-black flex items-center gap-1 cursor-pointer active:scale-95"
+              title="Gastos pendientes por sincronizar"
+            >
+              <Clock size={11} />
+              <span>{offlineCounts.expenses} pend.</span>
+            </button>
+          )}
+          <button
+            onClick={handleOpenCreate}
+            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer whitespace-nowrap"
+          >
+            <Plus size={14} />
+            <span>+ Gasto</span>
+          </button>
+        </div>
       </div>
 
       {/* 2. TARJETAS DE RESUMEN Y TOTALES */}
@@ -407,10 +461,11 @@ export default function MobileExpensesView({
           <Search size={14} className={T.textMuted} />
           <input 
             type="text"
+            enterKeyHint="search"
             placeholder="Buscar por concepto, categoría o responsable..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className={`bg-transparent flex-1 text-xs outline-none ${T.textPrimary} font-medium`}
+            className={`bg-transparent flex-1 text-base sm:text-sm outline-none ${T.textPrimary} font-medium`}
           />
           {searchQuery && (
             <button onClick={() => setSearchQuery('')} className={T.textMuted}>
@@ -465,7 +520,7 @@ export default function MobileExpensesView({
               {searchQuery ? 'No se encontraron gastos con esa búsqueda' : 'No hay egresos registrados en esta categoría'}
             </p>
             <p className={`text-[11px] ${T.textMuted}`}>
-              Usa el botón "+ Gasto" arriba para registrar compras de caja chica
+              Usa el botón &ldquo;+ Gasto&rdquo; arriba para registrar compras de caja chica
             </p>
           </div>
         ) : (
@@ -555,8 +610,14 @@ export default function MobileExpensesView({
 
       {/* 4. MODAL: CREAR / EDITAR GASTO */}
       {isFormModalOpen && (
-        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-sm ${T.modalCard} rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar`}>
+        <div
+          className="fixed inset-0 bg-black/85 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto"
+          style={modalOverlayStyle}
+        >
+          <div
+            className={`w-full max-w-sm ${T.modalCard} rounded-2xl sm:rounded-xl p-4 sm:p-5 shadow-2xl space-y-3.5 max-h-[92dvh] overflow-y-auto custom-scrollbar my-auto`}
+            style={modalCardMaxHeightStyle}
+          >
             {/* Header del Modal */}
             <div className={`flex items-center justify-between border-b ${T.border} pb-3`}>
               <div className="flex items-center gap-2">
@@ -575,6 +636,7 @@ export default function MobileExpensesView({
                 </div>
               </div>
               <button 
+                type="button"
                 onClick={() => setIsFormModalOpen(false)} 
                 className={`p-1 rounded-lg ${T.btnGhost} text-slate-400 hover:text-rose-500`}
               >
@@ -582,24 +644,31 @@ export default function MobileExpensesView({
               </button>
             </div>
 
-            <form onSubmit={handleSaveExpense} className="space-y-3">
+            <form
+              onSubmit={handleSaveExpense}
+              onKeyDown={handleFormKeyDown}
+              onFocusCapture={handleFieldFocusCapture}
+              className="space-y-3"
+            >
               {/* Monto y Selector de Moneda */}
               <div className="space-y-1">
                 <label className={`text-[10px] font-extrabold ${T.textSecondary} uppercase tracking-wider block`}>
                   Monto del Gasto *
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <div className={`flex-1 flex items-center px-3 py-2 rounded-xl ${T.inputBg} border ${T.border}`}>
+                  <div className={`flex-1 flex items-center px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} min-h-[44px]`}>
                     <span className="text-rose-500 font-bold text-sm mr-1.5">
                       {currency === 'USD' ? '$' : 'Bs'}
                     </span>
                     <input 
                       type="number"
+                      inputMode="decimal"
+                      enterKeyHint="next"
                       step="0.01"
                       placeholder="0.00"
                       value={amount}
                       onChange={(e) => setAmount(e.target.value)}
-                      className={`bg-transparent flex-1 text-sm font-black ${T.textPrimary} outline-none`}
+                      className={`bg-transparent flex-1 text-base sm:text-sm font-black ${T.textPrimary} outline-none`}
                       required
                       autoFocus
                     />
@@ -614,10 +683,10 @@ export default function MobileExpensesView({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setCurrency('BS')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'BS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                      onClick={() => setCurrency('VES')}
+                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${currency === 'VES' || currency === 'BS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
                     >
-                      BS
+                      Bs (VES)
                     </button>
                   </div>
                 </div>
@@ -638,10 +707,11 @@ export default function MobileExpensesView({
                 </label>
                 <input 
                   type="text"
+                  enterKeyHint="next"
                   placeholder="Ej. Compra de bolsas, hielo, flete..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none`}
                   required
                 />
               </div>
@@ -654,7 +724,7 @@ export default function MobileExpensesView({
                 <select 
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none cursor-pointer`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none cursor-pointer`}
                 >
                   <option value="Operativo">Operativo</option>
                   <option value="Suministros">Suministros & Empaque</option>
@@ -675,7 +745,7 @@ export default function MobileExpensesView({
                 <select 
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-bold outline-none cursor-pointer`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-bold outline-none cursor-pointer`}
                 >
                   <option value="Efectivo USD">Efectivo USD</option>
                   <option value="Efectivo Bs">Efectivo Bs</option>
@@ -693,10 +763,11 @@ export default function MobileExpensesView({
                 </label>
                 <input 
                   type="text"
+                  enterKeyHint="done"
                   placeholder="Nº de factura, proveedor, etc."
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-lg ${T.inputBg} border ${T.border} ${T.textPrimary} text-xs font-medium outline-none`}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-lg ${T.inputBg} border ${T.border} ${T.textPrimary} text-base sm:text-sm font-medium outline-none`}
                 />
               </div>
 
@@ -761,17 +832,30 @@ export default function MobileExpensesView({
             </div>
 
             {/* Monto Principal */}
-            <div className={`p-4 rounded-xl ${T.ticketItemBg} border ${T.border} text-center space-y-1`}>
-              <span className={`text-[10px] font-bold ${T.textMuted} uppercase tracking-wider block`}>
-                Monto Erogado
-              </span>
-              <div className="text-2xl font-bold text-rose-500">
-                -${(detailExpense.currency === 'BS' ? (detailExpense.amount / exchangeRate) : detailExpense.amount).toFixed(2)} USD
-              </div>
-              <div className={`text-xs font-semibold ${T.textSecondary}`}>
-                ≈ Bs. {(detailExpense.currency === 'BS' ? detailExpense.amount : (detailExpense.amount * exchangeRate)).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </div>
-            </div>
+            {(() => {
+              const rawAmt = Number(detailExpense.amount ?? detailExpense.monto ?? 0) || 0;
+              const cur = String(detailExpense.currency || 'USD').toUpperCase();
+              const isVes = cur === 'BS' || cur === 'VES' || cur === 'BS.';
+              const rate = Number(detailExpense.exchangeRate || exchangeRate) || 1;
+              const isAlreadyUsdNormalized = detailExpense.status !== 'pending_sync' && isVes && detailExpense.nativeAmount;
+              const usdVal = isAlreadyUsdNormalized ? rawAmt : (isVes ? (rawAmt / rate) : rawAmt);
+              const bsVal = detailExpense.nativeAmount
+                ? Number(detailExpense.nativeAmount)
+                : (isVes ? rawAmt : (rawAmt * rate));
+              return (
+                <div className={`p-4 rounded-xl ${T.ticketItemBg} border ${T.border} text-center space-y-1`}>
+                  <span className={`text-[10px] font-bold ${T.textMuted} uppercase tracking-wider block`}>
+                    Monto Erogado
+                  </span>
+                  <div className="text-2xl font-bold text-rose-500">
+                    -${usdVal.toFixed(2)} USD
+                  </div>
+                  <div className={`text-xs font-semibold ${T.textSecondary}`}>
+                    ≈ Bs. {bsVal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Datos detallados */}
             <div className={`p-3.5 rounded-xl ${T.ticketItemBg} border ${T.border} space-y-2.5 text-xs`}>

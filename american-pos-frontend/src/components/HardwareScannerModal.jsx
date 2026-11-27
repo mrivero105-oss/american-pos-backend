@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Printer, RefreshCw, CheckCircle2, AlertCircle, Eye, Camera, Upload, X, ShieldCheck } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Printer, RefreshCw, CheckCircle2, AlertCircle, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import api from '../services/api';

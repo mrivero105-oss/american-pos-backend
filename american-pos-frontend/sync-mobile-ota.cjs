@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 
@@ -12,15 +13,25 @@ try {
   }
 } catch (_) {}
 
-const buildTimestamp = Math.floor(Date.now() / 1000);
-const fullVersion = `${baseVersion}.${buildTimestamp}`;
-const buildTimeIso = new Date().toISOString();
-
 const srcDir = path.resolve(__dirname, 'dist-mobile');
 if (!fs.existsSync(srcDir)) {
   console.error('[MOBILE OTA SYNC] Error: No existe el directorio dist-mobile. Ejecute vite build --config vite.mobile.config.js primero.');
   process.exit(1);
 }
+
+// Reutilizar exactamente la misma versión incrustada en el bundle Vite (evita que el APK recién instalado descargue su propio OTA)
+const buildTimestamp = Math.floor(Date.now() / 1000);
+let fullVersion = `${baseVersion}.${buildTimestamp}`;
+const buildMarkerPath = path.join(srcDir, '.build-version');
+try {
+  if (fs.existsSync(buildMarkerPath)) {
+    const marker = JSON.parse(fs.readFileSync(buildMarkerPath, 'utf8'));
+    if (marker && typeof marker.version === 'string' && marker.version.trim()) {
+      fullVersion = marker.version.trim();
+    }
+  }
+} catch (_) {}
+const buildTimeIso = new Date().toISOString();
 
 // 1. Actualizar versión de caché en dist-mobile/sw.js
 try {
@@ -34,32 +45,58 @@ try {
   console.warn('[MOBILE OTA SYNC] Aviso actualizando sw.js:', swErr.message);
 }
 
-// 2. Comprimir dist-mobile/ para paquete OTA (.zip) excluyendo archivos .apk
+// 2. Comprimir dist-mobile/ para paquete OTA (.zip) excluyendo .apk, version.json y .build-version
 console.log('[MOBILE OTA SYNC] Empaquetando dist-mobile en dist.zip para actualizaciones OTA...');
 const zip = new AdmZip();
-zip.addLocalFolder(srcDir, '', (filename) => !filename.toLowerCase().endsWith('.apk'));
+zip.addLocalFolder(srcDir, '', (filename) => {
+  const lower = filename.toLowerCase();
+  const base = path.basename(lower);
+  return !lower.endsWith('.apk') && base !== 'version.json' && base !== '.build-version';
+});
 const zipBuffer = zip.toBuffer();
 const checksum = crypto.createHash('sha256').update(zipBuffer).digest('hex');
+
+// 3. Firma digital RSA-SHA256 obligatoria con clave dedicada fuera del repo Git
+const defaultLocalKeyPath = path.join(os.homedir(), '.isaac-pos-secrets', 'ota_signing_private.pem');
+const otaPrivKeyInline = process.env.OTA_SIGNING_PRIVATE_KEY_PEM;
+const otaPrivKeyPath = process.env.OTA_SIGNING_PRIVATE_KEY_PATH || (fs.existsSync(defaultLocalKeyPath) ? defaultLocalKeyPath : null);
+let otaPrivKeyPem = otaPrivKeyInline ? otaPrivKeyInline.replace(/\\n/g, '\n') : null;
+if (!otaPrivKeyPem && otaPrivKeyPath && fs.existsSync(path.resolve(otaPrivKeyPath))) {
+  otaPrivKeyPem = fs.readFileSync(path.resolve(otaPrivKeyPath), 'utf8');
+}
+
+let otaSignature = null;
+let otaManifestSignature = null;
+if (otaPrivKeyPem) {
+  otaSignature = crypto.sign('sha256', zipBuffer, otaPrivKeyPem).toString('base64');
+  const manifestCanonical = `${fullVersion}|${checksum}|${buildTimeIso}`;
+  otaManifestSignature = crypto.sign('sha256', Buffer.from(manifestCanonical, 'utf8'), otaPrivKeyPem).toString('base64');
+} else if (process.env.ALLOW_UNSIGNED_OTA_DEV !== 'true') {
+  throw new Error(
+    'OTA_SIGNING_PRIVATE_KEY_PEM / OTA_SIGNING_PRIVATE_KEY_PATH es obligatorio para publicar paquetes OTA firmados (o define ALLOW_UNSIGNED_OTA_DEV=true solo en desarrollo).'
+  );
+}
 
 const versionPayload = {
   version: fullVersion,
   buildTime: buildTimeIso,
   bundleUrl: '/dist.zip',
-  checksum: checksum,
+  checksum,
+  ...(otaSignature ? { otaSignature, otaManifestSignature, otaSignatureAlg: 'RSA-SHA256' } : {}),
   apkUrl: '/Isaac-POS-Mobile.apk'
 };
 
-// Guardar version.json dentro de dist-mobile para que el APK nativo conozca su versión exacta
+// Guardar version.json en dist-mobile (fuera del dist.zip) para referencia del APK nativo
 fs.writeFileSync(path.join(srcDir, 'version.json'), JSON.stringify(versionPayload, null, 2), 'utf8');
 
 console.log(
-  `[MOBILE OTA SYNC] Paquete OTA móvil listo: v${fullVersion} (${(zipBuffer.length / (1024 * 1024)).toFixed(2)} MB) | SHA-256: ${checksum.slice(0, 10)}...`
+  `[MOBILE OTA SYNC] Paquete OTA móvil listo: v${fullVersion} (${(zipBuffer.length / (1024 * 1024)).toFixed(2)} MB) | SHA-256: ${checksum.slice(0, 12)}... | Firmado RSA-SHA256: ${otaSignature ? 'SÍ' : 'NO'}`
 );
 
-// 3. Publicar únicamente dist.zip y version.json en el servidor (CERO impacto en los archivos web de Desktop)
+// 4. Publicar dist.zip, version.json y APK en el servidor backend
 const targetDirs = [
   path.resolve(__dirname, '../american-pos-backend/public'),
-  'C:\\Users\\mrive\\AppData\\Local\\Temp\\isaac_asar_extracted\\public'
+  ...(process.env.ISAAC_EXTRA_PUBLIC_DIR ? [path.resolve(process.env.ISAAC_EXTRA_PUBLIC_DIR)] : [])
 ];
 
 const apkReleasePath = path.resolve(__dirname, 'android/app/build/outputs/apk/release/app-release.apk');
@@ -86,7 +123,7 @@ for (const targetDir of targetDirs) {
   }
 }
 
-// 4. Publicar automáticamente en Supabase Storage (para actualizaciones 24/7 en Internet con datos móviles)
+// 5. Publicación automática en Supabase Storage usando fetch nativo (Node 20+/24)
 (async () => {
   const dns = require('dns');
   if (dns.setDefaultResultOrder) {
@@ -96,56 +133,53 @@ for (const targetDir of targetDirs) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
   if (!supabaseUrl || !supabaseKey) {
-    throw new Error('SUPABASE_URL y SUPABASE_SERVICE_KEY deben definirse en variables de entorno.');
+    if (process.env.REQUIRE_OTA_CLOUD_PUBLISH === 'true') {
+      throw new Error('SUPABASE_URL y SUPABASE_SERVICE_KEY deben definirse cuando REQUIRE_OTA_CLOUD_PUBLISH=true.');
+    }
+    console.log('[MOBILE OTA SYNC] ℹ️ Paquete OTA local generado. Subida a Supabase Storage omitida (define SUPABASE_URL y SUPABASE_SERVICE_KEY para publicar en nube).');
+    return;
   }
 
   try {
-    const axios = require('../american-pos-backend/node_modules/axios');
     console.log('[MOBILE OTA SYNC] ☁️ Publicando dist.zip y version.json en Supabase Storage (Internet 24/7)...');
-    
-    // Subir dist.zip
-    await axios.post(
-      `${supabaseUrl}/storage/v1/object/app-updates/dist.zip`,
-      zipBuffer,
-      {
-        headers: {
-          Authorization: `Bearer ${supabaseKey}`,
-          apikey: supabaseKey,
-          'Content-Type': 'application/zip',
-          'x-upsert': 'true',
-          'User-Agent': 'IsaacPOS-PC-Server/1.0'
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        timeout: 90000
-      }
-    );
 
-    // Manifiesto con URL pública de Supabase
+    const zipUploadRes = await fetch(`${supabaseUrl}/storage/v1/object/app-updates/dist.zip`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        'Content-Type': 'application/zip',
+        'x-upsert': 'true'
+      },
+      body: zipBuffer
+    });
+    if (!zipUploadRes.ok) {
+      throw new Error(`HTTP ${zipUploadRes.status} subiendo dist.zip: ${await zipUploadRes.text()}`);
+    }
+
     const cloudVersionPayload = {
       ...versionPayload,
       bundleUrl: `${supabaseUrl}/storage/v1/object/public/app-updates/dist.zip`
     };
+    const verUploadRes = await fetch(`${supabaseUrl}/storage/v1/object/app-updates/version.json`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        'Content-Type': 'application/json',
+        'x-upsert': 'true'
+      },
+      body: JSON.stringify(cloudVersionPayload, null, 2)
+    });
+    if (!verUploadRes.ok) {
+      throw new Error(`HTTP ${verUploadRes.status} subiendo version.json: ${await verUploadRes.text()}`);
+    }
 
-    // Subir version.json
-    await axios.post(
-      `${supabaseUrl}/storage/v1/object/app-updates/version.json`,
-      JSON.stringify(cloudVersionPayload, null, 2),
-      {
-        headers: {
-          Authorization: `Bearer ${supabaseKey}`,
-          apikey: supabaseKey,
-          'Content-Type': 'application/json',
-          'x-upsert': 'true',
-          'User-Agent': 'IsaacPOS-PC-Server/1.0'
-        },
-        timeout: 20000
-      }
-    );
-
-    console.log('[MOBILE OTA SYNC] ✅ Actualización OTA publicada exitosamente en Supabase Storage.');
-    console.log(`[MOBILE OTA SYNC] 🌐 URL Manifiesto: ${supabaseUrl}/storage/v1/object/public/app-updates/version.json`);
-  } catch (err) {
-    console.warn('[MOBILE OTA SYNC] ⚠️ No se pudo publicar en Supabase Storage:', err.response?.data || err.message);
+    console.log('[MOBILE OTA SYNC] ✅ ¡dist.zip y version.json firmados publicados en Supabase Storage!');
+  } catch (cloudErr) {
+    console.warn('[MOBILE OTA SYNC] ⚠️ No se pudo subir a Supabase Storage:', cloudErr.message);
+    if (process.env.REQUIRE_OTA_CLOUD_PUBLISH === 'true') {
+      process.exit(1);
+    }
   }
 })();

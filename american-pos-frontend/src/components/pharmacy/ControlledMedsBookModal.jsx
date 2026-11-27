@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Printer, X, ShieldCheck, FileText } from 'lucide-react';
+import { Printer, X, ShieldCheck } from 'lucide-react';
 import api from '../../services/api';
 
 export default function ControlledMedsBookModal({ isOpen, onClose }) {

@@ -16,7 +16,8 @@ async function main() {
     const FRONTEND_DIST = path.join(ROOT, 'american-pos-frontend', 'dist');
     const BACKEND_DIR = path.join(ROOT, 'american-pos-backend');
     const STAGING = path.join(ROOT, 'build-temp', 'asar_staging');
-    const INSTALLED_DIR = 'C:\\Users\\mrive\\AppData\\Local\\Programs\\Isaac POS Modern\\resources';
+    const localAppData = process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local');
+    const INSTALLED_DIR = process.env.ISAAC_MODERN_RESOURCES_DIR || path.join(localAppData, 'Programs', 'Isaac POS Modern', 'resources');
     const TARGET_ASAR = path.join(INSTALLED_DIR, 'app.asar');
     const TEMP_ASAR = path.join(INSTALLED_DIR, 'app.asar.new');
 
@@ -32,12 +33,22 @@ async function main() {
     fs.mkdirSync(STAGING, { recursive: true });
 
     // Copiar backend completo excepto node_modules/cache/logs pesados
-    const backendFolders = ['routes', 'controllers', 'services', 'database', 'middleware', 'utils', 'config', 'schemas', 'static', 'migrations', 'scripts'];
+    const backendFolders = ['constants', 'routes', 'controllers', 'services', 'database', 'middleware', 'utils', 'config', 'schemas', 'static', 'migrations', 'scripts'];
     for (const folder of backendFolders) {
         const src = path.join(BACKEND_DIR, folder);
         const dest = path.join(STAGING, folder);
         if (fs.existsSync(src)) {
             fs.cpSync(src, dest, { recursive: true });
+        }
+    }
+
+    // Seguridad: purgar cualquier llave privada o archivo sensible copiado desde subcarpetas (ej. utils/keys/private.pem)
+    const keysDirStaging = path.join(STAGING, 'utils', 'keys');
+    if (fs.existsSync(keysDirStaging)) {
+        for (const kFile of fs.readdirSync(keysDirStaging)) {
+            if (/private/i.test(kFile) && kFile.endsWith('.pem')) {
+                fs.unlinkSync(path.join(keysDirStaging, kFile));
+            }
         }
     }
 
@@ -49,8 +60,8 @@ async function main() {
         fs.cpSync(srcNm, destNm, { recursive: true });
     }
 
-    // Copiar archivos raíz del backend (excluyendo .env por seguridad: main.js gestiona .env en UserData)
-    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.json'];
+    // Copiar archivos raíz del backend (excluyendo .env, settings.json y secretos: main.js los gestiona en UserData)
+    const backendRootFiles = ['main.js', 'index.js', 'preload.js', 'paths.js', 'package.json', 'payment_methods.json', 'settings.example.json'];
     for (const f of backendRootFiles) {
         const srcF = path.join(BACKEND_DIR, f);
         const destF = path.join(STAGING, f);

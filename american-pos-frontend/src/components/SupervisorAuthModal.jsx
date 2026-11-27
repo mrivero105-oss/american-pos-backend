@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ShieldCheck, Key, UserCheck } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
@@ -20,16 +20,7 @@ export default function SupervisorAuthModal({
     const [loading, setLoading] = useState(false);
     const [fetching, setFetching] = useState(false);
 
-    useEffect(() => {
-        if (isOpen) {
-            fetchSupervisors();
-        } else {
-            setPin('');
-            setSelectedSupervisor('');
-        }
-    }, [isOpen]);
-
-    const fetchSupervisors = async () => {
+    const fetchSupervisors = useCallback(async () => {
         try {
             setFetching(true);
             const { data } = await api.get('/auth/supervisors');
@@ -47,7 +38,16 @@ export default function SupervisorAuthModal({
         } finally {
             setFetching(false);
         }
-    };
+    }, [currentUser]);
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchSupervisors();
+        } else {
+            setPin('');
+            setSelectedSupervisor('');
+        }
+    }, [isOpen, fetchSupervisors]);
 
     const handleAuthorize = async (e) => {
         e.preventDefault();

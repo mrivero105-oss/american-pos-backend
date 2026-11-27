@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { 
     BarChart3, RefreshCw, AlertCircle, CheckCircle2, 
     TrendingUp, Boxes, Compass, ArrowUpRight, Clock
 } from 'lucide-react';
-import { motion } from 'framer-motion';
 import api from '../../services/api';
 
 export default function AIPredictiveAnalytics({ range = 'today' }) {

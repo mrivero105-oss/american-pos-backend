@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Layers, X, Plus } from 'lucide-react';
 import api from '../../services/api';
 
@@ -6,13 +6,8 @@ export default function EquivalentsModal({ isOpen, onClose, product, onSelectSub
   const [equivalents, setEquivalents] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (isOpen && product) {
-      fetchEquivalents();
-    }
-  }, [isOpen, product]);
-
-  const fetchEquivalents = async () => {
+  const fetchEquivalents = useCallback(async () => {
+    if (!product) return;
     setLoading(true);
     try {
       const response = await api.get('/products', { params: { limit: 200 } });
@@ -38,7 +33,13 @@ export default function EquivalentsModal({ isOpen, onClose, product, onSelectSub
     } finally {
       setLoading(false);
     }
-  };
+  }, [product]);
+
+  useEffect(() => {
+    if (isOpen && product) {
+      fetchEquivalents();
+    }
+  }, [isOpen, product, fetchEquivalents]);
 
   if (!isOpen || !product) return null;
 

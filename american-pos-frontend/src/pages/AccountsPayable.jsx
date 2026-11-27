@@ -1,20 +1,29 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { 
-    Search, Truck, Star, Banknote, X, 
-    History as HistoryIcon, Download,
-    TrendingUp, ArrowRight, DollarSign,
-    Filter, Receipt as ReceiptIcon,
-    AlertCircle, FilePlus, Eye, Calendar,
-    Clock, ShieldAlert, FileText, CheckCircle,
-    CheckCircle2, Layers, ArrowDownLeft
+import {
+    Search, 
+    Truck, 
+    Banknote, 
+    History as HistoryIcon, 
+    Download, 
+    TrendingUp, 
+    Receipt as ReceiptIcon, 
+    AlertCircle, 
+    FilePlus, 
+    Eye, 
+    Calendar, 
+    Clock, 
+    ShieldAlert, 
+    CheckCircle, 
+    CheckCircle2, 
+    Layers
 } from 'lucide-react';
 import SupplierCreditModal from '../components/SupplierCreditModal';
 import RegisterSupplierInvoiceModal from '../components/RegisterSupplierInvoiceModal';
 import InvoiceViewerModal from '../components/InvoiceViewerModal';
 import SupplierPaymentVoucherModal from '../components/SupplierPaymentVoucherModal';
-import { formatMoney, fetchGlobalSettings } from '../utils/format';
+import { fetchGlobalSettings } from '../utils/format';
 
 export default function AccountsPayable() {
     const [activeTab, setActiveTab] = useState('pending'); // 'pending' | 'paid' | 'all'
@@ -34,7 +43,6 @@ export default function AccountsPayable() {
     const [bcvRate, setBcvRate] = useState(791.3248);
     const [bcvDate, setBcvDate] = useState(new Date().toISOString().split('T')[0]);
     const [bcvSource, setBcvSource] = useState('BCV Oficial');
-    const [bcvLoading, setBcvLoading] = useState(false);
 
     // Modal states
     const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
@@ -56,7 +64,6 @@ export default function AccountsPayable() {
 
     const fetchBcvRate = async () => {
         try {
-            setBcvLoading(true);
             const res = await api.get('/suppliers/bcv-rate');
             if (res.data?.rate && res.data.rate > 0) {
                 setBcvRate(Number(res.data.rate));
@@ -65,8 +72,6 @@ export default function AccountsPayable() {
             }
         } catch (e) {
             console.warn('[ACCOUNTS PAYABLE] Error consultando tasa BCV:', e);
-        } finally {
-            setBcvLoading(false);
         }
     };
 

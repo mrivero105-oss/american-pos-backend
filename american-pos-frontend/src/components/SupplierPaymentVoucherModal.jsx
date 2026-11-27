@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
-import { X, CheckCircle2, DollarSign, Calendar, FileText, Printer, Eye, Truck, ShieldCheck, ArrowRight, ExternalLink, TrendingUp, Info } from 'lucide-react';
+import { X, CheckCircle2, Calendar, Printer, Eye, Truck, ShieldCheck, ExternalLink, TrendingUp } from 'lucide-react';
 import BaseModal from './BaseModal';
 import InvoiceViewerModal from './InvoiceViewerModal';
-import { formatMoney, isDollarOnlyCountry } from '../utils/format';
+import { isDollarOnlyCountry } from '../utils/format';
 
 export default function SupplierPaymentVoucherModal({ isOpen, onClose, invoice, settings, onOpenSupplierHistory }) {
     const effectiveCountry = settings?.country || localStorage.getItem('pos_country') || '';
@@ -21,7 +21,6 @@ export default function SupplierPaymentVoucherModal({ isOpen, onClose, invoice, 
     const paymentAmountVes = Number(invoice.paymentAmountVes || (amountUsd * paymentRate).toFixed(2));
     const diffVes = Number((paymentAmountVes - arrivalAmountVes).toFixed(2));
 
-    const isPaid = invoice.status === 'PAID' || Number(invoice.balanceRemaining || 0) <= 0.005;
 
     const formatDateTime = (dateStr) => {
         if (!dateStr) return 'N/A';

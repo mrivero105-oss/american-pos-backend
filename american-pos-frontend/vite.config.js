@@ -1,83 +1,24 @@
-import react from '@vitejs/plugin-react';
+import process from 'node:process';
+import babel from '@rolldown/plugin-babel';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
-// Patch Tailwind v4 color-mix on custom CSS variables for Electron 22 / Chromium 108
-function patchTailwindPrimaryOpacity(css) {
-  const regex = /@supports\s*\(color:color-mix\(in lab,red,red\)\)\{([^{}]+)\{([^{}]+)\}\}/g;
-  const items = [];
-  let m;
-  while ((m = regex.exec(css)) !== null) {
-    const fullBlock = m[0];
-    const sel = m[1].trim();
-    const decls = m[2].trim();
-    
-    const primaryMatch = decls.match(/var\(--color-primary-(\d+)\)\s*(\d+)%/);
-    if (primaryMatch) {
-      const shade = primaryMatch[1];
-      const pct = parseInt(primaryMatch[2], 10);
-      const alpha = (pct / 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-      
-      const propMatch = decls.match(/([a-z-]+)\s*:/);
-      if (propMatch) {
-        const prop = propMatch[1];
-        items.push({ fullBlock, sel, prop, shade, alpha });
-      }
-    }
-  }
-
-  items.forEach(item => {
-    const escapedSel = item.sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const ruleRegex = new RegExp('([^{}]*?' + escapedSel + '[^{}]*?)\\{([^{}]*?' + item.prop + '\\s*:\\s*var\\(--color-primary-' + item.shade + '\\)[^{}]*?)\\}');
-    const match = ruleRegex.exec(css);
-    if (match) {
-      const fullRule = match[0];
-      const selList = match[1];
-      const body = match[2];
-      
-      const selectors = selList.split(',').map(s => s.trim());
-      if (selectors.includes(item.sel)) {
-        const remaining = selectors.filter(s => s !== item.sel);
-        const newRules = [];
-        if (remaining.length > 0) {
-          newRules.push(remaining.join(',') + '{' + body + '}');
-        }
-        const newBody = body.replace(
-          new RegExp(item.prop + '\\s*:\\s*var\\(--color-primary-' + item.shade + '\\)'),
-          item.prop + ':rgba(var(--app-primary-' + item.shade + '-rgb),' + item.alpha + ')'
-        );
-        newRules.push(item.sel + '{' + newBody + '}');
-        css = css.replace(fullRule, newRules.join(''));
-      }
-    }
-    css = css.replace(item.fullBlock, '');
-  });
-
-  return css;
-}
-
-function electronChromiumColorFixPlugin() {
-  return {
-    name: 'electron-chromium-108-color-fix',
-    enforce: 'post',
-    generateBundle(options, bundle) {
-      for (const fileName in bundle) {
-        if (fileName.endsWith('.css')) {
-          const chunk = bundle[fileName];
-          if (chunk && chunk.source) {
-            chunk.source = patchTailwindPrimaryOpacity(chunk.source.toString());
-          }
+export default defineConfig(({ command }) => ({
+  // Por seguridad de distribución, nunca incrustar VITE_SUPABASE_URL ni VITE_SUPABASE_ANON_KEY en builds comerciales
+  // salvo que el compilador autorice explícitamente VITE_ALLOW_EMBED_SUPABASE=true.
+  ...(command === 'build' && process.env.VITE_ALLOW_EMBED_SUPABASE !== 'true'
+    ? {
+        define: {
+          'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(''),
+          'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('')
         }
       }
-    }
-  };
-}
-
-export default defineConfig({
+    : {}),
   plugins: [
     react(),
-    tailwindcss(),
-    electronChromiumColorFixPlugin()
+    babel({ presets: [reactCompilerPreset()] }),
+    tailwindcss()
   ],
   resolve: {
     dedupe: ['react', 'react-dom'],
@@ -148,29 +89,38 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: false,
-    target: ['es2020', 'chrome108'],
-    cssTarget: 'chrome108',
+    target: ['es2023', 'chrome130'],
+    cssTarget: 'chrome130',
     chunkSizeWarningLimit: 500,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-icons': ['lucide-react'],
-          'vendor-docs': ['jspdf', 'html2canvas-pro'],
-          'vendor-charts': ['recharts'],
-          'vendor-motion': ['framer-motion'],
-          'vendor-zxing': ['@zxing/library'],
-          'vendor-realtime': ['socket.io-client'],
-          'vendor-capacitor': ['@capacitor/core', '@capacitor/clipboard', '@capgo/capacitor-updater'],
-          'vendor-qr': ['qrcode', 'jsbarcode'],
-          'vendor-state': ['zustand', 'dexie'],
-          'vendor-utils': ['axios', 'date-fns', 'uuid', 'fuse.js']
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/');
+          if (normalized.includes('commonjsHelpers')) return 'vendor-react';
+          if (!normalized.includes('/node_modules/')) return undefined;
+          const rules = [
+            ['vendor-react', ['/node_modules/react/', '/node_modules/react-dom/', '/node_modules/react-router/', '/node_modules/react-router-dom/', '/node_modules/@remix-run/router/', '/node_modules/scheduler/']],
+            ['vendor-icons', ['/node_modules/lucide-react/']],
+            ['vendor-docs', ['/node_modules/jspdf/', '/node_modules/html2canvas-pro/']],
+            ['vendor-charts', ['/node_modules/recharts/']],
+            ['vendor-motion', ['/node_modules/framer-motion/', '/node_modules/motion-dom/', '/node_modules/motion-utils/']],
+            ['vendor-zxing', ['/node_modules/@zxing/library/']],
+            ['vendor-realtime', ['/node_modules/socket.io-client/', '/node_modules/engine.io-client/', '/node_modules/socket.io-parser/']],
+            ['vendor-capacitor', ['/node_modules/@capacitor/core/', '/node_modules/@capacitor/clipboard/', '/node_modules/@capgo/capacitor-updater/']],
+            ['vendor-qr', ['/node_modules/qrcode/', '/node_modules/jsbarcode/']],
+            ['vendor-state', ['/node_modules/zustand/']],
+            ['vendor-utils', ['/node_modules/axios/', '/node_modules/date-fns/', '/node_modules/uuid/']]
+          ];
+          for (const [chunkName, patterns] of rules) {
+            if (patterns.some((p) => normalized.includes(p))) return chunkName;
+          }
+          return undefined;
         }
       }
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom', 'react-window', 'fuse.js']
+    include: ['react', 'react-dom', 'react-router-dom']
   },
   base: './'
-});
+}));

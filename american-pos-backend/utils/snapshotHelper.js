@@ -3,19 +3,46 @@ const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
 
+const IO_CHUNK_SIZE = 64 * 1024;
+const STREAM_STORE_THRESHOLD = 16 * 1024 * 1024; // 16 MB: evita picos de RAM en deflate síncrono
+
 /**
- * Pure JavaScript CRC32 Calculator
+ * Calcula CRC32 usando aceleración nativa Node (zlib.crc32) con respaldo incremental puro JS.
  */
-function crc32(buf) {
-    let crc = -1;
+function crc32Update(buf, previousCrc = 0) {
+    if (typeof zlib.crc32 === 'function') {
+        return zlib.crc32(buf, previousCrc >>> 0) >>> 0;
+    }
+    let crc = (previousCrc ^ -1);
     for (let i = 0; i < buf.length; i++) {
-        const byte = buf[i];
-        crc = crc ^ byte;
+        crc = crc ^ buf[i];
         for (let j = 0; j < 8; j++) {
             crc = (crc >>> 1) ^ (-(crc & 1) & 0xEDB88320);
         }
     }
     return (crc ^ -1) >>> 0;
+}
+
+function crc32(buf) {
+    return crc32Update(buf, 0);
+}
+
+function computeFileStatsIncremental(filePath) {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const chunk = Buffer.allocUnsafe(IO_CHUNK_SIZE);
+        let crc = 0;
+        let totalSize = 0;
+        let bytesRead = 0;
+        while ((bytesRead = fs.readSync(fd, chunk, 0, IO_CHUNK_SIZE, null)) > 0) {
+            const slice = chunk.subarray(0, bytesRead);
+            crc = crc32Update(slice, crc);
+            totalSize += bytesRead;
+        }
+        return { crc: crc >>> 0, totalSize };
+    } finally {
+        try { fs.closeSync(fd); } catch (_closeErr) { /* noop */ }
+    }
 }
 
 /**
@@ -48,6 +75,7 @@ function createZipArchive(zipPath, fileList) {
     let validFilesCount = 0;
 
     const outFd = fs.openSync(zipPath, 'w');
+    const copyBuffer = Buffer.allocUnsafe(IO_CHUNK_SIZE);
 
     try {
         for (const item of fileList) {
@@ -55,25 +83,36 @@ function createZipArchive(zipPath, fileList) {
             const stat = fs.statSync(item.fullPath);
             if (stat.isDirectory()) continue;
 
-            let fileData;
+            const fileNameBuffer = Buffer.from(item.relPath.replace(/\\/g, '/'), 'utf8');
+            const flags = 2048; // Bit 11 set for UTF-8 support
+            let crc = 0;
+            let uncompressedSize = 0;
+            let compressedSize = 0;
+            let method = 0;
+            let inlinePayload = null;
+
             try {
-                fileData = fs.readFileSync(item.fullPath);
+                if (stat.size > STREAM_STORE_THRESHOLD) {
+                    // Streaming STORE para archivos enormes (>16 MB): RAM máxima 64 KB
+                    const stats = computeFileStatsIncremental(item.fullPath);
+                    crc = stats.crc;
+                    uncompressedSize = stats.totalSize;
+                    compressedSize = uncompressedSize;
+                    method = 0;
+                } else {
+                    const fileData = fs.readFileSync(item.fullPath);
+                    const compressedData = zlib.deflateRawSync(fileData);
+                    const useDeflate = compressedData.length < fileData.length;
+                    inlinePayload = useDeflate ? compressedData : fileData;
+                    method = useDeflate ? 8 : 0;
+                    crc = crc32(fileData);
+                    uncompressedSize = fileData.length;
+                    compressedSize = inlinePayload.length;
+                }
             } catch (e) {
                 console.error(`[Snapshot System] Warning: Skipping locked file ${item.fullPath}: ${e.message}`);
                 continue;
             }
-
-            const fileNameBuffer = Buffer.from(item.relPath.replace(/\\/g, '/'), 'utf8');
-            const compressedData = zlib.deflateRawSync(fileData);
-
-            const useDeflate = compressedData.length < fileData.length;
-            const finalData = useDeflate ? compressedData : fileData;
-            const method = useDeflate ? 8 : 0;
-
-            const crc = crc32(fileData);
-            const uncompressedSize = fileData.length;
-            const compressedSize = finalData.length;
-            const flags = 2048; // Bit 11 set for UTF-8 support
 
             // Local File Header
             const lfh = Buffer.alloc(30 + fileNameBuffer.length);
@@ -91,7 +130,19 @@ function createZipArchive(zipPath, fileList) {
             fileNameBuffer.copy(lfh, 30);
 
             fs.writeSync(outFd, lfh);
-            fs.writeSync(outFd, finalData);
+            if (inlinePayload) {
+                fs.writeSync(outFd, inlinePayload);
+            } else {
+                const inFd = fs.openSync(item.fullPath, 'r');
+                try {
+                    let bytesRead = 0;
+                    while ((bytesRead = fs.readSync(inFd, copyBuffer, 0, IO_CHUNK_SIZE, null)) > 0) {
+                        fs.writeSync(outFd, copyBuffer, 0, bytesRead);
+                    }
+                } finally {
+                    try { fs.closeSync(inFd); } catch (_closeInErr) { /* noop */ }
+                }
+            }
 
             // Central Directory Header
             const cdh = Buffer.alloc(46 + fileNameBuffer.length);
@@ -115,7 +166,7 @@ function createZipArchive(zipPath, fileList) {
             fileNameBuffer.copy(cdh, 46);
 
             cdHeaders.push(cdh);
-            currentOffset += lfh.length + finalData.length;
+            currentOffset += lfh.length + compressedSize;
             validFilesCount++;
         }
 
@@ -148,95 +199,143 @@ function createZipArchive(zipPath, fileList) {
 }
 
 /**
- * Universal Pure JavaScript ZIP Extractor (Central Directory Parser)
- * Compatible with Windows 7, 8, 10, 11, Linux, macOS without external dependencies.
+ * Universal Pure JavaScript ZIP Extractor (Central Directory Parser via File Descriptor)
+ * Lee EOCD, Central Directory y cada entrada por desplazamiento sin cargar el archivo ZIP entero en RAM.
  */
 function extractZipArchive(zipPath, targetDir) {
     if (!fs.existsSync(targetDir)) {
         fs.mkdirSync(targetDir, { recursive: true });
     }
-    const buffer = fs.readFileSync(zipPath);
-    if (buffer.length < 22) return;
+    const stat = fs.statSync(zipPath);
+    if (stat.size < 22) return;
 
-    let eocdOffset = -1;
-    for (let i = buffer.length - 22; i >= 0; i--) {
-        if (buffer.readUInt32LE(i) === 0x06054b50) {
-            eocdOffset = i;
-            break;
+    const resolvedTargetDir = path.resolve(targetDir);
+    const inFd = fs.openSync(zipPath, 'r');
+
+    try {
+        const tailLen = Math.min(stat.size, 65557);
+        const tailOffset = stat.size - tailLen;
+        const tailBuf = Buffer.allocUnsafe(tailLen);
+        fs.readSync(inFd, tailBuf, 0, tailLen, tailOffset);
+
+        let eocdPos = -1;
+        for (let i = tailLen - 22; i >= 0; i--) {
+            if (tailBuf.readUInt32LE(i) === 0x06054b50) {
+                eocdPos = i;
+                break;
+            }
         }
-    }
 
-    if (eocdOffset === -1) {
-        throw new Error('Formato ZIP inválido: No se encontró la cabecera EOCD.');
-    }
+        if (eocdPos === -1) {
+            throw new Error('Formato ZIP inválido: No se encontró la cabecera EOCD.');
+        }
 
-    const totalRecords = buffer.readUInt16LE(eocdOffset + 10);
-    const cdOffset = buffer.readUInt32LE(eocdOffset + 16);
+        const totalRecords = tailBuf.readUInt16LE(eocdPos + 10);
+        const cdSize = tailBuf.readUInt32LE(eocdPos + 12);
+        const cdOffset = tailBuf.readUInt32LE(eocdPos + 16);
+        const cdBufferLen = Math.min(cdSize || (stat.size - cdOffset), stat.size - cdOffset);
+        if (cdOffset + cdBufferLen > stat.size) {
+            throw new Error('Formato ZIP inválido: Central Directory fuera de rango.');
+        }
 
-    let currentCd = cdOffset;
-    for (let i = 0; i < totalRecords; i++) {
-        if (currentCd + 46 > buffer.length) break;
-        const sig = buffer.readUInt32LE(currentCd);
-        if (sig !== 0x02014b50) break;
+        const cdBuffer = Buffer.allocUnsafe(cdBufferLen);
+        fs.readSync(inFd, cdBuffer, 0, cdBufferLen, cdOffset);
 
-        const flags = buffer.readUInt16LE(currentCd + 8);
-        const method = buffer.readUInt16LE(currentCd + 10);
-        const compressedSize = buffer.readUInt32LE(currentCd + 20);
-        const fileNameLen = buffer.readUInt16LE(currentCd + 28);
-        const extraLen = buffer.readUInt16LE(currentCd + 30);
-        const commentLen = buffer.readUInt16LE(currentCd + 32);
-        const localHeaderOffset = buffer.readUInt32LE(currentCd + 42);
+        const lfhHeader = Buffer.allocUnsafe(30);
+        const streamChunk = Buffer.allocUnsafe(IO_CHUNK_SIZE);
 
-        const isUtf8 = (flags & 2048) !== 0;
-        const fileName = buffer.toString(isUtf8 ? 'utf8' : 'latin1', currentCd + 46, currentCd + 46 + fileNameLen);
+        let currentCd = 0;
+        for (let i = 0; i < totalRecords; i++) {
+            if (currentCd + 46 > cdBuffer.length) break;
+            const sig = cdBuffer.readUInt32LE(currentCd);
+            if (sig !== 0x02014b50) break;
 
-        currentCd += 46 + fileNameLen + extraLen + commentLen;
+            const flags = cdBuffer.readUInt16LE(currentCd + 8);
+            const method = cdBuffer.readUInt16LE(currentCd + 10);
+            const compressedSize = cdBuffer.readUInt32LE(currentCd + 20);
+            const fileNameLen = cdBuffer.readUInt16LE(currentCd + 28);
+            const extraLen = cdBuffer.readUInt16LE(currentCd + 30);
+            const commentLen = cdBuffer.readUInt16LE(currentCd + 32);
+            const localHeaderOffset = cdBuffer.readUInt32LE(currentCd + 42);
 
-        if (fileName.endsWith('/') || fileName.endsWith('\\')) continue;
+            const isUtf8 = (flags & 2048) !== 0;
+            const fileName = cdBuffer.toString(isUtf8 ? 'utf8' : 'latin1', currentCd + 46, currentCd + 46 + fileNameLen);
 
-        if (localHeaderOffset + 30 > buffer.length) continue;
-        const localSig = buffer.readUInt32LE(localHeaderOffset);
-        if (localSig !== 0x04034b50) continue;
+            currentCd += 46 + fileNameLen + extraLen + commentLen;
 
-        const localNameLen = buffer.readUInt16LE(localHeaderOffset + 26);
-        const localExtraLen = buffer.readUInt16LE(localHeaderOffset + 28);
-        const dataOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
+            if (!fileName || fileName.endsWith('/') || fileName.endsWith('\\')) continue;
+            if (localHeaderOffset + 30 > stat.size) continue;
 
-        if (dataOffset + compressedSize <= buffer.length) {
-            const compressedData = buffer.slice(dataOffset, dataOffset + compressedSize);
-            let uncompressedData;
-            if (method === 8) {
+            fs.readSync(inFd, lfhHeader, 0, 30, localHeaderOffset);
+            const localSig = lfhHeader.readUInt32LE(0);
+            if (localSig !== 0x04034b50) continue;
+
+            const localNameLen = lfhHeader.readUInt16LE(26);
+            const localExtraLen = lfhHeader.readUInt16LE(28);
+            const dataOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
+            if (dataOffset + compressedSize > stat.size) continue;
+
+            const normalizedRel = fileName.replace(/\//g, path.sep);
+            const destPath = path.resolve(targetDir, normalizedRel);
+
+            // Blindaje contra ataques de Zip-Slip (salto de directorio)
+            if (!destPath.startsWith(resolvedTargetDir + path.sep) && destPath !== resolvedTargetDir) {
+                console.warn(`[Snapshot System] ⚠️ Zip Slip attempt blocked for entry: ${fileName}`);
+                continue;
+            }
+
+            const destDir = path.dirname(destPath);
+            if (!fs.existsSync(destDir)) {
+                fs.mkdirSync(destDir, { recursive: true });
+            }
+
+            if (method === 0) {
+                const MAX_ENTRY_BYTES = 250 * 1024 * 1024;
+                if (compressedSize > MAX_ENTRY_BYTES) {
+                    throw new Error(`Entrada ZIP excede el límite seguro de tamaño (${fileName}).`);
+                }
+                const outFd = fs.openSync(destPath, 'w');
                 try {
-                    uncompressedData = zlib.inflateRawSync(compressedData);
+                    let remaining = compressedSize;
+                    let readPos = dataOffset;
+                    while (remaining > 0) {
+                        const toRead = Math.min(IO_CHUNK_SIZE, remaining);
+                        const bytesRead = fs.readSync(inFd, streamChunk, 0, toRead, readPos);
+                        if (bytesRead <= 0) break;
+                        fs.writeSync(outFd, streamChunk, 0, bytesRead);
+                        readPos += bytesRead;
+                        remaining -= bytesRead;
+                    }
+                } finally {
+                    try { fs.closeSync(outFd); } catch (_closeOutErr) { /* noop */ }
+                }
+            } else if (method === 8) {
+                const MAX_ENTRY_BYTES = 250 * 1024 * 1024;
+                if (compressedSize > MAX_ENTRY_BYTES) {
+                    throw new Error(`Entrada ZIP comprimida excede el límite seguro (${fileName}).`);
+                }
+                const compressedData = Buffer.allocUnsafe(compressedSize);
+                if (compressedSize > 0) {
+                    fs.readSync(inFd, compressedData, 0, compressedSize, dataOffset);
+                }
+                const inflateOpts = { maxOutputLength: MAX_ENTRY_BYTES };
+                let uncompressedData;
+                try {
+                    uncompressedData = zlib.inflateRawSync(compressedData, inflateOpts);
                 } catch (_e1) {
                     try {
-                        uncompressedData = zlib.unzipSync(compressedData);
+                        uncompressedData = zlib.unzipSync(compressedData, inflateOpts);
                     } catch (_e2) {
-                        uncompressedData = zlib.inflateSync(compressedData);
+                        uncompressedData = zlib.inflateSync(compressedData, inflateOpts);
                     }
                 }
-            } else if (method === 0) {
-                uncompressedData = compressedData;
-            }
-
-            if (uncompressedData && fileName) {
-                const normalizedRel = fileName.replace(/\//g, path.sep);
-                const resolvedTargetDir = path.resolve(targetDir);
-                const destPath = path.resolve(targetDir, normalizedRel);
-
-                // Blindaje contra ataques de Zip-Slip (salto de directorio)
-                if (!destPath.startsWith(resolvedTargetDir + path.sep) && destPath !== resolvedTargetDir) {
-                    console.warn(`[Snapshot System] ⚠️ Zip Slip attempt blocked for entry: ${fileName}`);
-                    continue;
+                if (uncompressedData) {
+                    fs.writeFileSync(destPath, uncompressedData);
                 }
-
-                const destDir = path.dirname(destPath);
-                if (!fs.existsSync(destDir)) {
-                    fs.mkdirSync(destDir, { recursive: true });
-                }
-                fs.writeFileSync(destPath, uncompressedData);
             }
         }
+    } finally {
+        try { fs.closeSync(inFd); } catch (_closeInErr) { /* noop */ }
     }
 }
 

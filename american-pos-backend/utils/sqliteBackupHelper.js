@@ -75,7 +75,19 @@ async function performPostgresBackup(userDataPath) {
         const tmpBackupPath = `${backupPath}.tmp`;
         await new Promise((resolve, reject) => {
             const env = { ...process.env, PGPASSWORD: dbPassword };
-            const args = ['-h', String(dbHost), '-p', String(dbPort), '-U', String(dbUser), '-F', 'p', '-b', '-f', tmpBackupPath, String(dbName)];
+            const args = [
+                '-h', String(dbHost),
+                '-p', String(dbPort),
+                '-U', String(dbUser),
+                '--clean',
+                '--if-exists',
+                '--no-owner',
+                '--no-privileges',
+                '-F', 'p',
+                '-b',
+                '-f', tmpBackupPath,
+                String(dbName)
+            ];
             execFile(pgDumpBin, args, { env, timeout: 120000 }, (error) => {
                 if (error) {
                     logMsg(`pg_dump failed: ${error.message}. Falling back to Sequelize JSON export.`);
@@ -98,17 +110,21 @@ async function performPostgresBackup(userDataPath) {
             });
         }).catch(async () => {
             const models = require('../database/models');
-            const exportData = {};
-            for (const [name, model] of Object.entries(models)) {
-                if (model && typeof model.findAll === 'function') {
-                    try {
-                        exportData[name] = await model.findAll({ raw: true });
-                    } catch (modelErr) {
-                        logMsg(`Warning exporting table ${name}: ${modelErr.message}`);
-                        exportData[name] = [];
+            const { runWithTenantContext } = require('../database/tenantContext');
+            const exportData = await runWithTenantContext({ companyId: '', userId: 'system-backup', isSuperAdmin: true }, async () => {
+                const data = {};
+                for (const [name, model] of Object.entries(models)) {
+                    if (model && typeof model.findAll === 'function') {
+                        try {
+                            data[name] = await model.findAll({ raw: true });
+                        } catch (modelErr) {
+                            logMsg(`Warning exporting table ${name}: ${modelErr.message}`);
+                            data[name] = [];
+                        }
                     }
                 }
-            }
+                return data;
+            });
             const jsonPath = backupPath.replace('.sql', '.json');
             fs.writeFileSync(jsonPath, JSON.stringify(exportData, null, 2));
             logMsg(`JSON export completed: ${jsonPath}`);

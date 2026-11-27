@@ -7,11 +7,9 @@
  */
 
 import {
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY,
-  hasSupabaseConfig,
-  getSupabaseRealtimeWsUrl,
-  getSupabaseRestUrl,
+  hasSupabaseConfig, 
+  getSupabaseRealtimeWsUrl, 
+  getSupabaseRestUrl, 
   getSupabaseHeaders
 } from '../config/supabaseConfig';
 
@@ -49,26 +47,33 @@ class CloudRateSyncService {
     // 2. Consulta inmediata al arrancar
     this.checkRate();
 
-    // 3. Iniciar WebSocket Realtime con Supabase
-    this.connectRealtimeWs();
+    // 3. Si no hay Supabase configurado en el build, no iniciar WebSocket ni polling infinito
+    if (!getSupabaseRealtimeWsUrl()) {
+      console.log('[CloudRateSync] Sin configuración Supabase activa; polling en la nube desactivado.');
+      return;
+    }
 
-    // 4. Iniciar sondeo de respaldo cada 6 segundos
+    // 4. Iniciar WebSocket Realtime con Supabase y sondeo de respaldo
+    this.connectRealtimeWs();
     this.startPolling();
 
-    // 5. Escuchar cambios de visibilidad / foco de la app
+    // 5. Escuchar cambios de visibilidad / foco de la app (con referencias nombradas para cleanup limpio)
     if (typeof window !== 'undefined') {
-      window.addEventListener('focus', () => this.checkRate());
-      window.addEventListener('online', () => {
+      this._onFocus = () => this.checkRate();
+      this._onOnline = () => {
         this.checkRate();
         this.connectRealtimeWs();
-      });
+      };
+      this._onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          this.checkRate();
+          if (!this.isConnected) this.connectRealtimeWs();
+        }
+      };
+      window.addEventListener('focus', this._onFocus);
+      window.addEventListener('online', this._onOnline);
       if (typeof document !== 'undefined') {
-        document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') {
-            this.checkRate();
-            if (!this.isConnected) this.connectRealtimeWs();
-          }
-        });
+        document.addEventListener('visibilitychange', this._onVisibilityChange);
       }
     }
 
@@ -134,7 +139,9 @@ class CloudRateSyncService {
               this.checkRate();
             }
           }
-        } catch (_e) {}
+        } catch (err) {
+          console.warn('[CloudRateSync] Mensaje WS no procesable:', err?.message);
+        }
       };
 
       this.ws.onerror = () => {
@@ -189,15 +196,26 @@ class CloudRateSyncService {
     this.stopPolling();
     clearInterval(this.heartbeatTimer);
     clearTimeout(this.reconnectTimer);
+    if (typeof window !== 'undefined') {
+      if (this._onFocus) window.removeEventListener('focus', this._onFocus);
+      if (this._onOnline) window.removeEventListener('online', this._onOnline);
+      if (typeof document !== 'undefined' && this._onVisibilityChange) {
+        document.removeEventListener('visibilitychange', this._onVisibilityChange);
+      }
+    }
+    this._onFocus = null;
+    this._onOnline = null;
+    this._onVisibilityChange = null;
     if (this.ws) {
       try {
         this.ws.onclose = null;
         this.ws.onerror = null;
         this.ws.close();
-      } catch (_e) {}
+      } catch { /* WebSocket ya cerrado */ }
       this.ws = null;
     }
     this.isConnected = false;
+    this._initialized = false;
   }
 
   async checkRate() {
@@ -247,7 +265,9 @@ class CloudRateSyncService {
       localStorage.setItem('pos_cached_exchange_rate', String(newRate));
       if (mode) localStorage.setItem('pos_currency_mode', mode);
       if (this.lastUpdatedAt) localStorage.setItem('pos_rate_updated_at', this.lastUpdatedAt);
-    } catch (_e) {}
+    } catch (err) {
+      console.warn('[CloudRateSync] Error guardando tasa en localStorage:', err?.message);
+    }
 
     // Notificar a observadores si hubo cambio
     if (rateChanged) {
@@ -269,7 +289,9 @@ class CloudRateSyncService {
     this.listeners.forEach((fn) => {
       try {
         fn({ rate: newRate, mode, updatedAt: this.lastUpdatedAt, rateChanged, isConnected: this.isConnected });
-      } catch (_e) {}
+      } catch (err) {
+        console.warn('[CloudRateSync] Error en listener de tasa:', err?.message);
+      }
     });
   }
 
@@ -283,7 +305,9 @@ class CloudRateSyncService {
         isConnected: this.isConnected,
         rateChanged: false
       });
-    } catch (_e) {}
+    } catch (err) {
+      console.warn('[CloudRateSync] Error notificando estado inicial:', err?.message);
+    }
     return () => this.listeners.delete(listener);
   }
 
@@ -291,7 +315,9 @@ class CloudRateSyncService {
     this.listeners.forEach((fn) => {
       try {
         fn({ isConnected: connected, rate: this.lastRate, updatedAt: this.lastUpdatedAt });
-      } catch (_e) {}
+      } catch (err) {
+        console.warn('[CloudRateSync] Error notificando cambio de estado:', err?.message);
+      }
     });
   }
 }

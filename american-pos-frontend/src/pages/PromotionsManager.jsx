@@ -1,12 +1,29 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { 
-    Plus, Trash2, Edit3, CheckCircle2, XCircle, 
-    Calendar, Clock, Tag, Package, Percent, ShoppingBag, 
-    AlertCircle, Search, Layers, RefreshCw, X, CreditCard,
-    Check, Store, Banknote, Smartphone,
-    Building2, Zap, Fingerprint, SlidersHorizontal, ArrowRight,
-    Loader2, ChevronRight
+import {
+    Plus, 
+    Trash2, 
+    Edit3, 
+    CheckCircle2, 
+    XCircle, 
+    Calendar, 
+    Clock, 
+    Tag, 
+    Package, 
+    Percent, 
+    ShoppingBag, 
+    Search, 
+    Layers, 
+    RefreshCw, 
+    X, 
+    CreditCard, 
+    Store, 
+    Banknote, 
+    Smartphone, 
+    Building2, 
+    Zap, 
+    Fingerprint, 
+    Loader2
 } from 'lucide-react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
@@ -121,10 +138,49 @@ export default function PromotionsManager() {
         allowStacking: false
     });
 
+    const allCatalogProductsRef = useRef([]);
+    useEffect(() => {
+        allCatalogProductsRef.current = allCatalogProducts;
+    }, [allCatalogProducts]);
+
+    const fetchPromotions = useCallback(async () => {
+        try {
+            setLoading(true);
+            const { data } = await api.get('/promotions');
+            if (data.success) {
+                setPromotions(data.promotions || []);
+            }
+        } catch (err) {
+            console.error('Error fetching promotions:', err);
+            toast.error('Error al cargar promociones');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    const loadCatalogData = useCallback(async () => {
+        try {
+            const list = await db.getAll('products');
+            if (list && list.length > 0) {
+                setAllCatalogProducts(list);
+                const uniqueCats = [...new Set(list.map(p => p.category).filter(Boolean))];
+                setCategories(uniqueCats);
+            } else {
+                const res = await api.get('/products', { params: { limit: 100 } });
+                const prods = res.data?.products || (Array.isArray(res.data) ? res.data : []);
+                setAllCatalogProducts(prods);
+                const uniqueCats = [...new Set(prods.map(p => p.category).filter(Boolean))];
+                setCategories(uniqueCats);
+            }
+        } catch (err) {
+            console.warn('Error loading catalog products for promos:', err);
+        }
+    }, []);
+
     useEffect(() => {
         fetchPromotions();
         loadCatalogData();
-    }, []);
+    }, [fetchPromotions, loadCatalogData]);
 
     // Cerrar modal con tecla Escape
     useEffect(() => {
@@ -142,7 +198,7 @@ export default function PromotionsManager() {
     useEffect(() => {
         if (form.targetProductIds && form.targetProductIds.length > 0) {
             form.targetProductIds.forEach(prodId => {
-                const existing = allCatalogProducts.find(p => String(p.id) === String(prodId));
+                const existing = allCatalogProductsRef.current.find(p => String(p.id) === String(prodId));
                 if (existing && (!existing.Presentations || existing.Presentations.length === 0)) {
                     api.get(`/products/${prodId}`).then(res => {
                         if (res.data?.Presentations && res.data.Presentations.length > 0) {
@@ -157,40 +213,6 @@ export default function PromotionsManager() {
             });
         }
     }, [form.targetProductIds]);
-
-    const fetchPromotions = async () => {
-        try {
-            setLoading(true);
-            const { data } = await api.get('/promotions');
-            if (data.success) {
-                setPromotions(data.promotions || []);
-            }
-        } catch (err) {
-            console.error('Error fetching promotions:', err);
-            toast.error('Error al cargar promociones');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const loadCatalogData = async () => {
-        try {
-            const list = await db.getAll('products');
-            if (list && list.length > 0) {
-                setAllCatalogProducts(list);
-                const uniqueCats = [...new Set(list.map(p => p.category).filter(Boolean))];
-                setCategories(uniqueCats);
-            } else {
-                const res = await api.get('/products', { params: { limit: 100 } });
-                const prods = res.data?.products || (Array.isArray(res.data) ? res.data : []);
-                setAllCatalogProducts(prods);
-                const uniqueCats = [...new Set(prods.map(p => p.category).filter(Boolean))];
-                setCategories(uniqueCats);
-            }
-        } catch (err) {
-            console.warn('Error loading catalog products for promos:', err);
-        }
-    };
 
     const handleOpenModal = (promo = null) => {
         if (promo) {
@@ -339,6 +361,8 @@ export default function PromotionsManager() {
             setPromotions(prev => prev.map(p => p.id === promo.id ? { ...p, isActive: newStatus } : p));
             toast.success(newStatus ? `Promoción activada` : `Promoción pausada`);
         } catch (err) {
+            console.warn('[PromotionsManager] Error capturado en operación:', err?.message || err);
+            console.error('[PromotionsManager] Error al cambiar estado:', err);
             toast.error('Error al cambiar estado');
         }
     };

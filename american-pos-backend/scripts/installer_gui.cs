@@ -288,13 +288,21 @@ namespace IsaacPOS.Installer {
                 long payloadStart = fs.Length - 8 - payloadLen;
                 fs.Seek(payloadStart, SeekOrigin.Begin);
 
+                string fullInstallRoot = Path.GetFullPath(installDir);
+                if (!fullInstallRoot.EndsWith(Path.DirectorySeparatorChar.ToString())) {
+                    fullInstallRoot += Path.DirectorySeparatorChar;
+                }
+
                 using (ZipArchive archive = new ZipArchive(fs, ZipArchiveMode.Read, true)) {
                     int total = archive.Entries.Count;
                     worker.ReportProgress(20, string.Format("Descomprimiendo {0} archivos del sistema...", total));
 
                     for (int i = 0; i < total; i++) {
                         ZipArchiveEntry entry = archive.Entries[i];
-                        string destFilePath = Path.Combine(installDir, entry.FullName);
+                        string destFilePath = Path.GetFullPath(Path.Combine(fullInstallRoot, entry.FullName));
+                        if (!destFilePath.StartsWith(fullInstallRoot, StringComparison.OrdinalIgnoreCase)) {
+                            throw new UnauthorizedAccessException("Entrada ZIP inválida detectada (Zip-Slip): " + entry.FullName);
+                        }
 
                         if (string.IsNullOrEmpty(entry.Name)) {
                             // Directory
@@ -303,12 +311,13 @@ namespace IsaacPOS.Installer {
                         }
 
                         string parent = Path.GetDirectoryName(destFilePath);
-                        if (!Directory.Exists(parent)) Directory.CreateDirectory(parent);
+                        if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent)) Directory.CreateDirectory(parent);
 
                         try {
                             entry.ExtractToFile(destFilePath, true);
-                        } catch (Exception ex) {
-                            // Non-fatal if locked file
+                        } catch (IOException ioEx) {
+                            // Tolerar únicamente archivo bloqueado en uso; propagar errores de integridad o permisos
+                            worker.ReportProgress(20 + (int)((i / (double)total) * 60), "Archivo en uso omitido: " + entry.Name + " (" + ioEx.Message + ")");
                         }
 
                         if (i % 250 == 0 || i == total - 1) {

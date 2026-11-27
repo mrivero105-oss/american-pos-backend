@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, Check, Trash2, Scale, Box, ArrowRight, CornerDownLeft } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Check, Scale, Box } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const triggerHaptic = (ms = 12) => {
@@ -7,7 +7,7 @@ const triggerHaptic = (ms = 12) => {
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       navigator.vibrate(ms);
     }
-  } catch (_) {}
+  } catch { /* Vibración háptica opcional no soportada */ }
 };
 
 /**
@@ -20,7 +20,6 @@ export default function MobileQuantityModal({
   onClose,
   item,
   onApplyQuantity,
-  T = {},
   isLight = false
 }) {
   const [valStr, setValStr] = useState('1');

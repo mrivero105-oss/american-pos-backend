@@ -5,10 +5,19 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { User } = require('../database/models');
-const { generateRobustId } = require('../utils/helpers');
+const { generateRobustId, safeSecretEqual } = require('../utils/helpers');
 const auditController = require('../controllers/audit');
 const { verifyLicense } = require('../middleware/licenseMiddleware');
 const { invalidateUserAuthCache } = require('../middleware/auth');
+const { generateSessionId, addSession, revokeSession, isSessionValid } = require('../utils/sessionRegistry');
+const validate = require('../middleware/validate');
+const {
+    loginSchema,
+    quickUnlockSchema,
+    supervisorAuthorizeSchema,
+    changePinSchema,
+    setQuickPinSchema
+} = require('../schemas/authSchema');
 
 const quickUnlockLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
@@ -35,7 +44,7 @@ const ipCleanupTimer = setInterval(() => {
 }, 5 * 60 * 1000);
 if (typeof ipCleanupTimer.unref === 'function') ipCleanupTimer.unref();
 
-router.post('/login', async (req, res) => {
+router.post('/login', validate(loginSchema), async (req, res) => {
     const { email, username, password } = req.body;
     const clientIp = (req.ip || req.connection?.remoteAddress || '127.0.0.1').replace('::ffff:', '');
     const isLoopback = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost';
@@ -144,8 +153,8 @@ router.post('/login', async (req, res) => {
             if (currentPassword.startsWith('$2') || currentPassword.length > 30) {
                 isMatch = await bcrypt.compare(password, currentPassword);
             } else {
-                // Legacy plaintext password check
-                if (password === currentPassword) {
+                // Legacy plaintext password check (constant-time)
+                if (safeSecretEqual(password, currentPassword)) {
                     isMatch = true;
                     // Auto-upgrade password to bcrypt
                     try {
@@ -174,7 +183,7 @@ router.post('/login', async (req, res) => {
                             isMatch = await bcrypt.compare(sha256Pin, currentPin);
                         }
                     } else {
-                        if (String(password) === currentPin) {
+                        if (safeSecretEqual(String(password), currentPin)) {
                             isMatch = true;
                         }
                     }
@@ -187,14 +196,15 @@ router.post('/login', async (req, res) => {
             }
 
             if (isMatch) {
-                // Reset failed attempts & generate new session ID
+                // Reset failed attempts & register concurrent session ID (permite PC + móvil simultáneos)
                 if (!isLoopback) ipFailedAttempts.delete(clientIp);
-                const sessionId = `SESS-${require('crypto').randomUUID()}`;
+                const sessionId = generateSessionId();
+                const updatedSessions = addSession(authenticatedUser.currentSessionId, sessionId);
                 try {
                     await authenticatedUser.update({
                         failedLoginAttempts: 0,
                         lockUntil: null,
-                        currentSessionId: sessionId
+                        currentSessionId: updatedSessions
                     });
                     invalidateUserAuthCache(authenticatedUser.id);
                 } catch (resetErr) {
@@ -342,10 +352,8 @@ router.post('/login', async (req, res) => {
         }
     } catch (error) {
         console.error('[LOGIN] Internal error stack trace:', error.stack);
-        const hint = error.message && error.message.length < 200 ? error.message : 'Unknown';
-        res.status(500).json({ 
-            error: 'Error interno del servidor',
-            hint: hint
+        res.status(500).json({
+            error: 'Error interno del servidor'
         });
     }
 });
@@ -366,8 +374,11 @@ router.post('/logout', async (req, res) => {
             }
             if (decoded && decoded.id) {
                 invalidateUserAuthCache(decoded.id);
+                const dbUser = await User.findByPk(decoded.id, { attributes: ['id', 'currentSessionId'] }).catch(() => null);
+                const allDevices = Boolean(req.body && req.body.allDevices);
+                const nextSessionState = revokeSession(dbUser?.currentSessionId, decoded.sessionId, { allDevices });
                 await User.update(
-                    { currentSessionId: `REVOKED_${crypto.randomUUID()}` },
+                    { currentSessionId: nextSessionState },
                     { where: { id: decoded.id } }
                 ).catch(() => {});
             }
@@ -414,11 +425,7 @@ router.get('/me', (req, res, next) => {
         }
         const dbSession = user.currentSessionId ? String(user.currentSessionId) : '';
         const tokenSession = req.user.sessionId ? String(req.user.sessionId) : '';
-        if (dbSession) {
-            if (dbSession.startsWith('REVOKED_') || tokenSession !== dbSession) {
-                return res.json({ authenticated: false, user: null });
-            }
-        } else if (tokenSession) {
+        if (!isSessionValid(dbSession, tokenSession)) {
             return res.json({ authenticated: false, user: null });
         }
 
@@ -460,7 +467,7 @@ router.get('/cashiers', require('../middleware/auth').verifyToken, async (req, r
 /**
  * POST /change-pin - Update user PIN/Password (Protected)
  */
-router.post('/change-pin', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/change-pin', require('../middleware/auth').verifyToken, validate(changePinSchema), async (req, res) => {
     try {
         const { oldPin, newPin } = req.body;
         if (!oldPin || !newPin) {
@@ -506,7 +513,7 @@ router.get('/supervisors', require('../middleware/auth').verifyToken, async (req
 });
 
 // POST /supervisor-authorize - Validar PIN de supervisor y autorizar acción
-router.post('/supervisor-authorize', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/supervisor-authorize', require('../middleware/auth').verifyToken, validate(supervisorAuthorizeSchema), async (req, res) => {
     try {
         const AuthorizationService = require('../services/AuthorizationService');
         const approval = await AuthorizationService.authorizeAction(req.user, req.body);
@@ -517,7 +524,7 @@ router.post('/supervisor-authorize', require('../middleware/auth').verifyToken, 
     }
 });
 
-router.post('/supervisor_authorize', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/supervisor_authorize', require('../middleware/auth').verifyToken, validate(supervisorAuthorizeSchema), async (req, res) => {
     try {
         const AuthorizationService = require('../services/AuthorizationService');
         const approval = await AuthorizationService.authorizeAction(req.user, req.body);
@@ -534,7 +541,8 @@ router.get('/public-cashiers', verifyLicense, async (req, res) => {
         const { User } = require('../database/models');
         const { Op } = require('sequelize');
         
-        const targetCompanyId = String(req.user?.companyId || req.query.companyId || process.env.DEFAULT_COMPANY_ID || '2');
+        // Ignorar req.query.companyId para prevenir enumeración cross-tenant sin autenticar
+        const targetCompanyId = String(req.user?.companyId || process.env.DEFAULT_COMPANY_ID || '2');
         const whereClause = {
             status: 'active',
             role: { [Op.in]: ['cashier', 'seller', 'user', 'cajero', 'vendedor'] },
@@ -554,7 +562,7 @@ router.get('/public-cashiers', verifyLicense, async (req, res) => {
 });
 
 // POST /quick-unlock - Desbloqueo rápido de sesión por PIN o contraseña tras inactividad
-router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').verifyToken, validate(quickUnlockSchema), async (req, res) => {
     try {
         const { pinOrPassword } = req.body;
         if (!pinOrPassword) {
@@ -576,7 +584,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
         if (user.quickPin) {
             if (user.quickPin.startsWith('$2')) {
                 isMatch = await bcrypt.compare(inputStr, user.quickPin);
-            } else if (inputStr === user.quickPin) {
+            } else if (safeSecretEqual(inputStr, user.quickPin)) {
                 isMatch = true;
                 user.quickPin = await bcrypt.hash(inputStr, 10);
                 await user.save().catch(() => {});
@@ -592,7 +600,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
                 if (!isMatch) {
                     isMatch = await bcrypt.compare(inputStr, currentPin);
                 }
-            } else if (inputStr === currentPin) {
+            } else if (safeSecretEqual(inputStr, currentPin)) {
                 isMatch = true;
                 user.supervisorPin = await bcrypt.hash(shaInput, 10);
                 await user.save().catch(() => {});
@@ -603,7 +611,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
         if (!isMatch && user.password) {
             if (user.password.startsWith('$2')) {
                 isMatch = await bcrypt.compare(inputStr, user.password);
-            } else if (inputStr === user.password) {
+            } else if (safeSecretEqual(inputStr, user.password)) {
                 isMatch = true;
                 user.password = await bcrypt.hash(inputStr, 10);
                 await user.save().catch(() => {});
@@ -635,7 +643,7 @@ router.post('/quick-unlock', quickUnlockLimiter, require('../middleware/auth').v
 });
 
 // POST /set-quick-pin - Configurar PIN rápido de cajero (Requiere re-autenticación obligatoria)
-router.post('/set-quick-pin', require('../middleware/auth').verifyToken, async (req, res) => {
+router.post('/set-quick-pin', require('../middleware/auth').verifyToken, validate(setQuickPinSchema), async (req, res) => {
     try {
         const { pin, currentPassword } = req.body;
         if (!pin || String(pin).length < 4) {
@@ -655,7 +663,7 @@ router.post('/set-quick-pin', require('../middleware/auth').verifyToken, async (
             const curPass = user.password || '';
             if (curPass.startsWith('$2') || curPass.length > 30) {
                 isAuthValid = await bcrypt.compare(String(currentPassword), curPass);
-            } else if (String(currentPassword) === curPass) {
+            } else if (safeSecretEqual(String(currentPassword), curPass)) {
                 isAuthValid = true;
             }
 
@@ -682,17 +690,100 @@ router.post('/set-quick-pin', require('../middleware/auth').verifyToken, async (
 });
 
 // ============================================================================
-// 🔒 ENDPOINTS DE AUTENTICACIÓN Y ENROLAMIENTO BIOMÉTRICO (HUELLA DACTILAR)
-// Arquitectura Zero-Trust: La muestra de huella nunca sale del hardware seguro (TEE).
-// El backend valida el token criptográfico firmado por el dispositivo y emite el JWT.
+// 🔒 ENDPOINTS DE AUTENTICACIÓN Y ENROLAMIENTO BIOMÉTRICO v2 (ECDSA P-256 HARDWARE-BACKED)
+// Arquitectura Zero-Trust: La llave privada vive exclusivamente en AndroidKeyStore (TEE/StrongBox)
+// vinculada a BIOMETRIC_STRONG + CryptoObject. El backend guarda solo la clave pública SPKI
+// y verifica firmas ECDSA SHA-256 sobre retos de un solo uso con TTL de 60s.
 // ============================================================================
 
-// POST /auth/biometrics/register - Registrar / vincular huella dactilar para el usuario autenticado
+const BIOMETRIC_V2_PREFIX = 'v2:ecdsa:';
+const BIOMETRIC_CHALLENGE_TTL_MS = 60 * 1000;
+const biometricChallenges = new Map(); // challengeId -> { challenge, userId, username, ip, expiresAt }
+const bioChallengeCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of biometricChallenges.entries()) {
+        if (!entry || entry.expiresAt <= now) {
+            biometricChallenges.delete(id);
+        }
+    }
+}, 60 * 1000);
+if (typeof bioChallengeCleanupTimer.unref === 'function') bioChallengeCleanupTimer.unref();
+
+const parseEcdsaP256SpkiPublicKey = (spkiBase64) => {
+    if (!spkiBase64 || typeof spkiBase64 !== 'string') return null;
+    const cleanB64 = spkiBase64.trim();
+    if (cleanB64.length < 64 || cleanB64.length > 240) return null;
+    try {
+        const derBuf = Buffer.from(cleanB64, 'base64');
+        if (!derBuf.length) return null;
+        const pubKey = crypto.createPublicKey({ key: derBuf, format: 'der', type: 'spki' });
+        if (pubKey.asymmetricKeyType !== 'ec') return null;
+        const curve = pubKey.asymmetricKeyDetails?.namedCurve;
+        if (curve && curve !== 'prime256v1' && curve !== 'P-256') return null;
+        return { pubKey, canonicalBase64: derBuf.toString('base64') };
+    } catch (_) {
+        return null;
+    }
+};
+
+// POST /auth/biometrics/challenge - Emite un reto criptográfico de un solo uso (TTL 60s)
+router.post('/biometrics/challenge', quickUnlockLimiter, async (req, res) => {
+    const clientIp = (req.ip || req.connection?.remoteAddress || '127.0.0.1').replace('::ffff:', '');
+    const isLoopback = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost';
+    const ipRecord = ipFailedAttempts.get(clientIp);
+    if (!isLoopback && ipRecord && ipRecord.lockUntil && ipRecord.lockUntil > Date.now()) {
+        const minutesLeft = Math.ceil((ipRecord.lockUntil - Date.now()) / 60000);
+        return res.status(429).json({
+            error: `Dirección IP bloqueada temporalmente. Intente en ${minutesLeft} minuto(s).`,
+            locked: true,
+            minutesLeft
+        });
+    }
+
+    const { userId = null, username = null } = req.body || {};
+    if (biometricChallenges.size >= 1000) {
+        const oldestKey = biometricChallenges.keys().next().value;
+        if (oldestKey) biometricChallenges.delete(oldestKey);
+    }
+
+    const challengeId = typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : crypto.randomBytes(16).toString('hex');
+    const challenge = crypto.randomBytes(32).toString('base64');
+    const expiresAt = Date.now() + BIOMETRIC_CHALLENGE_TTL_MS;
+
+    biometricChallenges.set(challengeId, {
+        challenge,
+        userId: userId ? String(userId).trim() : null,
+        username: username ? String(username).trim().toLowerCase() : null,
+        ip: clientIp,
+        expiresAt
+    });
+
+    return res.json({
+        success: true,
+        challengeId,
+        challenge,
+        expiresInMs: BIOMETRIC_CHALLENGE_TTL_MS
+    });
+});
+
+// POST /auth/biometrics/register - Registrar clave pública ECDSA P-256 generada en hardware
 router.post('/biometrics/register', require('../middleware/auth').verifyToken, async (req, res) => {
     try {
-        const { biometricToken, deviceName } = req.body;
-        if (!biometricToken || String(biometricToken).trim().length < 32) {
-            return res.status(400).json({ error: 'Token biométrico inválido o insuficiente entropía criptográfica' });
+        const { publicKeySpki, deviceName } = req.body || {};
+        if (!publicKeySpki) {
+            return res.status(400).json({
+                code: 'BIOMETRIC_V2_REQUIRED',
+                error: 'El registro biométrico requiere una clave pública ECDSA P-256 generada en hardware seguro (v2).'
+            });
+        }
+
+        const parsedKey = parseEcdsaP256SpkiPublicKey(publicKeySpki);
+        if (!parsedKey) {
+            return res.status(400).json({
+                error: 'Clave pública biométrica inválida. Se requiere formato SPKI DER ECDSA P-256.'
+            });
         }
 
         let user = null;
@@ -709,10 +800,7 @@ router.post('/biometrics/register', require('../middleware/auth').verifyToken, a
             return res.status(404).json({ error: 'Usuario no encontrado en la base de datos' });
         }
 
-        const crypto = require('crypto');
-        const tokenHash = crypto.createHash('sha256').update(String(biometricToken).trim()).digest('hex');
-
-        user.biometricTokenHash = tokenHash;
+        user.biometricTokenHash = `${BIOMETRIC_V2_PREFIX}${parsedKey.canonicalBase64}`;
         user.biometricEnrolledAt = new Date();
         user.biometricDeviceName = (deviceName || 'Terminal POS').trim().substring(0, 100);
         await user.save();
@@ -721,13 +809,14 @@ router.post('/biometrics/register', require('../middleware/auth').verifyToken, a
             user.id,
             user.companyId || 'default',
             'BIOMETRIC_REGISTER',
-            `Huella dactilar registrada exitosamente en dispositivo: ${user.biometricDeviceName}`,
+            `Huella dactilar ECDSA P-256 v2 registrada en dispositivo: ${user.biometricDeviceName}`,
             user.id
         );
 
         return res.json({
             success: true,
-            message: 'Huella dactilar registrada y vinculada exitosamente a tu cuenta',
+            version: 2,
+            message: 'Huella dactilar registrada y vinculada al hardware seguro de este dispositivo',
             enrolledAt: user.biometricEnrolledAt,
             deviceName: user.biometricDeviceName
         });
@@ -737,16 +826,20 @@ router.post('/biometrics/register', require('../middleware/auth').verifyToken, a
     }
 });
 
-// GET /auth/biometrics/status - Consulta el estado de enrolamiento biométrico del usuario actual
+// GET /auth/biometrics/status - Consulta el estado de enrolamiento biométrico v2 del usuario actual
 router.get('/biometrics/status', require('../middleware/auth').verifyToken, async (req, res) => {
     try {
         const user = await User.findByPk(req.user.id);
         if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
+        const stored = String(user.biometricTokenHash || '');
+        const isV2Enrolled = stored.startsWith(BIOMETRIC_V2_PREFIX);
         return res.json({
-            enrolled: Boolean(user.biometricTokenHash),
-            enrolledAt: user.biometricEnrolledAt || null,
-            deviceName: user.biometricDeviceName || null
+            enrolled: isV2Enrolled,
+            version: isV2Enrolled ? 2 : null,
+            requiresReEnroll: Boolean(stored && !isV2Enrolled),
+            enrolledAt: isV2Enrolled ? (user.biometricEnrolledAt || null) : null,
+            deviceName: isV2Enrolled ? (user.biometricDeviceName || null) : null
         });
     } catch (err) {
         console.error('[AUTH] Error en /biometrics/status:', err);
@@ -754,9 +847,9 @@ router.get('/biometrics/status', require('../middleware/auth').verifyToken, asyn
     }
 });
 
-// POST /auth/biometrics/login - Inicio de sesión mediante Huella Dactilar
+// POST /auth/biometrics/login - Inicio de sesión biométrico v2 (challenge-response ECDSA P-256)
 router.post('/biometrics/login', async (req, res) => {
-    const { userId, username, biometricToken } = req.body;
+    const { userId, username, challengeId, signature } = req.body || {};
     const clientIp = (req.ip || req.connection?.remoteAddress || '127.0.0.1').replace('::ffff:', '');
     const isLoopback = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost';
 
@@ -771,8 +864,21 @@ router.post('/biometrics/login', async (req, res) => {
         });
     }
 
-    if ((!userId && !username) || !biometricToken) {
-        return res.status(400).json({ error: 'Faltan datos de autenticación biométrica' });
+    if ((!userId && !username) || !challengeId || !signature) {
+        return res.status(401).json({
+            code: 'BIOMETRIC_V2_REQUIRED',
+            error: 'La biometría legacy v1 fue retirada por seguridad. Inicia sesión con tu contraseña y vuelve a registrar tu huella.'
+        });
+    }
+
+    // Consumo atómico de un solo uso del reto (anti-replay incluso ante fallos)
+    const challengeEntry = biometricChallenges.get(String(challengeId));
+    biometricChallenges.delete(String(challengeId));
+    if (!challengeEntry || challengeEntry.expiresAt <= Date.now()) {
+        return res.status(401).json({
+            code: 'BIOMETRIC_CHALLENGE_EXPIRED',
+            error: 'El reto criptográfico biométrico expiró o ya fue utilizado. Intente nuevamente.'
+        });
     }
 
     try {
@@ -799,6 +905,11 @@ router.post('/biometrics/login', async (req, res) => {
             return res.status(401).json({ error: 'Cuenta desactivada o suspendida. Contacta al administrador.' });
         }
 
+        // Validar que el reto emitido corresponda al mismo usuario si se ató al solicitarlo
+        if (challengeEntry.userId && String(challengeEntry.userId) !== String(user.id)) {
+            return res.status(401).json({ error: 'El reto biométrico no corresponde a este usuario.' });
+        }
+
         // 🛡️ Bloqueo Progresivo de cuenta
         if (user.lockUntil && new Date(user.lockUntil) > new Date()) {
             const diffMs = new Date(user.lockUntil).getTime() - Date.now();
@@ -810,29 +921,33 @@ router.post('/biometrics/login', async (req, res) => {
             });
         }
 
-        if (!user.biometricTokenHash) {
+        const storedKeyRaw = String(user.biometricTokenHash || '');
+        if (!storedKeyRaw) {
             return res.status(400).json({ error: 'Este usuario no tiene huella dactilar registrada en el sistema. Ingrese con contraseña.' });
         }
+        if (!storedKeyRaw.startsWith(BIOMETRIC_V2_PREFIX)) {
+            return res.status(401).json({
+                code: 'BIOMETRIC_V2_REQUIRED',
+                error: 'Tu registro biométrico anterior (v1) caducó por actualización de seguridad. Ingresa con contraseña y vuelve a registrar tu huella.'
+            });
+        }
 
-        // Validación criptográfica en tiempo constante (timing-safe)
-        const crypto = require('crypto');
-        const candidateHash = crypto.createHash('sha256').update(String(biometricToken).trim()).digest('hex');
-        
+        const parsedPubKey = parseEcdsaP256SpkiPublicKey(storedKeyRaw.slice(BIOMETRIC_V2_PREFIX.length));
         let isMatch = false;
-        try {
-            const candidateBuf = Buffer.from(candidateHash, 'utf8');
-            const storedBuf = Buffer.from(user.biometricTokenHash, 'utf8');
-            if (candidateBuf.length === storedBuf.length) {
-                isMatch = crypto.timingSafeEqual(candidateBuf, storedBuf);
+        if (parsedPubKey) {
+            try {
+                const sigBuf = Buffer.from(String(signature).trim(), 'base64');
+                const challengeBuf = Buffer.from(String(challengeEntry.challenge), 'utf8');
+                isMatch = crypto.verify('sha256', challengeBuf, parsedPubKey.pubKey, sigBuf);
+            } catch (_verifyErr) {
+                isMatch = false;
             }
-        } catch (_cmpErr) {
-            isMatch = false;
         }
 
         if (!isMatch) {
             const attempts = (Number(user.failedLoginAttempts) || 0) + 1;
             let lockUntil = null;
-            let errorMsg = 'Verificación biométrica rechazada. Token no coincide.';
+            let errorMsg = 'Firma biométrica de hardware inválida o rechazada.';
 
             if (attempts >= 5) {
                 lockUntil = new Date(Date.now() + 15 * 60 * 1000);
@@ -844,10 +959,16 @@ router.post('/biometrics/login', async (req, res) => {
                 lockUntil: lockUntil
             }).catch(() => {});
 
+            if (!isLoopback) {
+                const ipCount = (ipRecord?.count || 0) + 1;
+                const ipLock = ipCount >= 5 ? Date.now() + 15 * 60 * 1000 : 0;
+                ipFailedAttempts.set(clientIp, { count: ipCount, lockUntil: ipLock, lastAttempt: Date.now() });
+            }
+
             auditController.createAlert(
                 'security_risk',
                 attempts >= 5 ? 'critical' : 'high',
-                `Fallo de autenticación biométrica (${attempts}/5) para usuario: ${user.username || user.email}`,
+                `Fallo de autenticación biométrica ECDSA v2 (${attempts}/5) para usuario: ${user.username || user.email}`,
                 user.id,
                 user.companyId || 'default',
                 { ip: req.ip, attempts, lockUntil }
@@ -856,14 +977,15 @@ router.post('/biometrics/login', async (req, res) => {
             return res.status(401).json({ error: errorMsg });
         }
 
-        // Éxito: Resetear intentos fallidos y crear sesión legítima
+        // Éxito: Resetear intentos fallidos y agregar sesión legítima concurrente
         if (!isLoopback) ipFailedAttempts.delete(clientIp);
-        const sessionId = `SESS-${crypto.randomUUID()}`;
+        const sessionId = generateSessionId();
+        const updatedSessions = addSession(user.currentSessionId, sessionId);
 
         await user.update({
             failedLoginAttempts: 0,
             lockUntil: null,
-            currentSessionId: sessionId
+            currentSessionId: updatedSessions
         }).catch(() => {});
         invalidateUserAuthCache(user.id);
 
@@ -914,12 +1036,13 @@ router.post('/biometrics/login', async (req, res) => {
             user.id,
             user.companyId || 'default',
             'LOGIN_BIOMETRIC',
-            `Inicio de sesión exitoso con Huella Dactilar (Dispositivo: ${user.biometricDeviceName || 'POS Terminal'})`,
+            `Inicio de sesión ECDSA P-256 v2 con Huella Dactilar (Dispositivo: ${user.biometricDeviceName || 'POS Terminal'})`,
             user.id
         );
 
         return res.json({
             success: true,
+            version: 2,
             token: token,
             user: userWithoutPassword
         });

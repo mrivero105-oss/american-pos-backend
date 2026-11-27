@@ -1,19 +1,48 @@
 {
   "appId": "com.isaacpos.frontend",
-  "productName": "Isaac POS Modern",
-  "electronVersion": "31.4.0",
+  "productName": "Isaac POS",
+  "electronVersion": "45.4.1",
+  "electronFuses": {
+    "runAsNode": false,
+    "enableCookieEncryption": true,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true,
+    "grantFileProtocolExtraPrivileges": false
+  },
   "compression": "normal",
   "npmRebuild": false,
   "asar": true,
   "asarUnpack": [
     "**/node_modules/**/*.node",
-    "**/bin/**/*",
-    "**/scripts/**/*"
+    "**/bin/**/*"
   ],
   "extraResources": [
     {
       "from": "scripts",
-      "to": "scripts"
+      "to": "scripts",
+      "filter": [
+        "instalar_postgresql.ps1",
+        "harden_windows_security.ps1"
+      ]
+    },
+    {
+      "from": "public",
+      "to": "mobile-ota",
+      "filter": [
+        "dist.zip",
+        "version.json",
+        "Isaac-POS-Mobile.apk"
+      ]
+    }
+  ],
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "mrivero105-oss",
+      "repo": "american-pos-backend",
+      "channel": "modern"
     }
   ],
   "directories": {
@@ -21,12 +50,25 @@
   },
   "files": [
     "**/*",
+    "!scripts/**",
+    "!private/**",
+    "!audit_*.json",
+    "!coverage/**",
+    "!**/*.zip",
+    "!**/*.tar.gz",
     "!**/*.sqlite",
     "!**/*.sqlite*",
     "!**/*.bak",
     "!**/*.dev_backup",
     "!**/serviceAccountKey.json",
     "!**/.env*",
+    "!**/.dbcfg.key.dpapi",
+    "!**/.dbcfg.key.dpapi.ess",
+    "!**/.secrets.key.dpapi",
+    "!**/.secrets.key.dpapi.ess",
+    "!**/*.dpapi.ess",
+    "!**/secrets.vault.json",
+    "!**/*.vault.json",
     "!env_backup.txt",
     "!app_fixed.asar",
     "!test_backup.zip",
@@ -49,6 +91,8 @@
     "!db-config.json",
     "!settings.json",
     "!cloud_mirror_config.json",
+    "!cloud_license_config.json",
+    "!**/cloud_license_config.json",
     "!.git/**",
     "!**/*.md",
     "!LICENSE",
@@ -61,6 +105,10 @@
     "!node_modules/@electron/rebuild/**",
     "!node_modules/builder-util/**",
     "!node_modules/typescript/**",
+    "!node_modules/**/*.map",
+    "!node_modules/**/*.d.ts",
+    "!node_modules/**/*.d.mts",
+    "!node_modules/**/*.d.cts",
     "!tests/**",
     "!test-results/**",
     "!playwright-report/**",
@@ -92,7 +140,7 @@
       }
     ],
     "icon": "build/icon.ico",
-    "requestedExecutionLevel": "highestAvailable",
+    "requestedExecutionLevel": "asInvoker",
     "artifactName": "4_IsaacPOS_Windows10_11_Modern_Setup.${ext}"
   },
   "nsis": {

@@ -1,7 +1,10 @@
 {
-  "version": "24.4.0.1794744237",
-  "buildTime": "2026-11-15T12:03:57.572Z",
+  "version": "24.4.0.1795709030",
+  "buildTime": "2026-11-26T16:04:56.335Z",
   "bundleUrl": "/dist.zip",
-  "checksum": "ab5e85be13da7ac413dedfdf3fd380d077173d963c2bbf5fdb46e987ed551f90",
+  "checksum": "18abdb17e59afa5ddb704f0eab0869d556e1d85e072998e8ba19028e4713a192",
+  "otaSignature": "XHVHXa/VVOPYzzblHWGeIm4jFJCdcCTyjej/AHT2gq3d8OES4SXhZo4QU7TgDMw4F5Zaw24REqx9tMZEQL72vujXP8BJXZXPr16dvxeml50Wt/MtwdP6A9mhPtiy3WvYrnCZAN6M8Fvpfbbw7owGb0K5uPAvTzDgbB7czzkOtCecTkwkiJB7YNFcxgkc/asvFw5cUhQZ1mLjLgV66ClPvSXtWZCheCbyiHgjeb8xLv82HYJmmBM4yn/zDw6ROSI1bDvbUzLF1A9vCtHkNNap7YMdMB/ont+f9WjYdHZbw4i8pGJBWGD3q+NRJ56iKrLZAYgXnfE90aSOGlJ+B7sOvA==",
+  "otaManifestSignature": "DasemQRStmJddph3ykLGYOrnO0RQJrgIOlXdMDY6y+yUhTqEa91XFiTK/Ecb/O8F/BRdGOufb9vbQH5i+wMFUsiFj4EGq7PFwQp1dgmTC26UG577XlpYPy6MAIS2jlJ0ZXS+foljgQoik3sJ6c1Id3oahYyz7KxZ4ORWb06FXziPrC0IiqowHsXOSN5VRnWcBVmGe+gWjMBYT1kXBiPns8TvCxoOsBEn/vzRa+W1X7GAOWSWlgLgTU/XuRhJOkFjEw4GYjj/0OmMrIwYmjDRE3p5Jb3Cax7ZeGh9Mo2Zu4N0aLIGxYQsxIytJ3bxyVUl8hjZBwqWt6/cUTOTS9JNVQ==",
+  "otaSignatureAlg": "RSA-SHA256",
   "apkUrl": "/Isaac-POS-Mobile.apk"
 }

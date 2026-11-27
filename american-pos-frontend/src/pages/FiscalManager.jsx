@@ -1,15 +1,25 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { 
-    FileSpreadsheet, FileText, Calendar, Download, Printer, 
-    Plus, Search, Filter, ArrowUpRight, ArrowDownRight, 
-    CheckCircle2, AlertTriangle, RefreshCw, Calculator, 
-    Landmark, DollarSign, Banknote, ShieldAlert, Layers, 
-    Building2, Trash2, Edit2, ExternalLink, X, ChevronRight, Hash,
-    Info, Settings2, Activity, Terminal
+import {
+    FileSpreadsheet, 
+    FileText, 
+    Download, 
+    Printer, 
+    Plus, 
+    Search, 
+    AlertTriangle, 
+    RefreshCw, 
+    Calculator, 
+    DollarSign, 
+    ShieldAlert, 
+    X, 
+    Info, 
+    Settings2, 
+    Activity, 
+    Terminal
 } from 'lucide-react';
 import api from '../services/api';
-import { formatMoney } from '../utils/format';
+import { formatMoney, getRegionConfig } from '../utils/format';
 import CreditNoteModal from '../components/CreditNoteModal';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -27,6 +37,25 @@ const MONTHS = [
     { value: 11, label: 'Noviembre' },
     { value: 12, label: 'Diciembre' }
 ];
+
+const getLocalDateISO = (d = new Date()) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const getConfiguredFiscalSettings = () => {
+    try {
+        const raw = localStorage.getItem('pos_business_settings');
+        return raw ? (JSON.parse(raw) || {}) : {};
+    } catch (_) {
+        return {};
+    }
+};
+
+// FiscalService entrega montos ya convertidos a Bolívares (VES); forzar rate=1 evita doble conversión por la tasa BCV.
+const formatVesBook = (val) => formatMoney(Number(val) || 0, 'VES', { rate: 1, currencyMode: 'VES' });
 
 export default function FiscalManager() {
     const currentDate = new Date();
@@ -159,10 +188,16 @@ export default function FiscalManager() {
         executeFiscalTransmission(action, label);
     };
 
+    const configuredSettings = useMemo(() => getConfiguredFiscalSettings(), []);
+    const defaultIvaPct = useMemo(() => {
+        const parsed = Number(configuredSettings?.ivaRate ?? configuredSettings?.taxRate ?? 16);
+        return parsed > 0 ? parsed : 16;
+    }, [configuredSettings]);
+
     // Manual Record Form
     const [manualForm, setManualForm] = useState({
         bookType: 'VENTAS',
-        recordDate: new Date().toISOString().split('T')[0],
+        recordDate: getLocalDateISO(),
         documentType: 'FACTURA',
         documentNumber: '',
         controlNumber: '',
@@ -172,7 +207,7 @@ export default function FiscalManager() {
         totalAmount: '',
         exemptAmount: '0',
         taxableBase: '',
-        taxRate: '16.00',
+        taxRate: defaultIvaPct.toFixed(2),
         taxAmount: '',
         retainedIvaAmount: '0',
         igtfAmount: '0',
@@ -183,12 +218,12 @@ export default function FiscalManager() {
     const [retentionForm, setRetentionForm] = useState({
         retentionType: 'IVA_75',
         retentionCategory: 'EMITIDA_A_PROVEEDOR',
-        recordDate: new Date().toISOString().split('T')[0],
+        recordDate: getLocalDateISO(),
         entityRif: '',
         entityName: '',
         invoiceNumber: '',
         controlNumber: '',
-        invoiceDate: new Date().toISOString().split('T')[0],
+        invoiceDate: getLocalDateISO(),
         invoiceTotalAmount: '',
         baseAmount: '',
         taxAmount: '',
@@ -197,49 +232,12 @@ export default function FiscalManager() {
         notes: ''
     });
 
-    const effectiveCountry = (localStorage.getItem('pos_country') || '').toLowerCase();
+    const effectiveCountry = (configuredSettings?.country || localStorage.getItem('pos_country') || '').toLowerCase();
     const isVenezuela = effectiveCountry === 'venezuela' || effectiveCountry === 've' || !effectiveCountry;
 
     const [saving, setSaving] = useState(false);
 
-    useEffect(() => {
-        if (!isVenezuela) return;
-        loadFiscalData();
-    }, [selectedYear, selectedMonth, activeTab, isVenezuela]);
-
-    // Filter active records by search
-    const filteredRecords = useMemo(() => {
-        const source = activeTab === 'sales' ? salesBook.records : purchasesBook.records;
-        if (!source) return [];
-        const term = searchTerm.toLowerCase();
-        return source.filter(r => 
-            (r.documentNumber || '').toLowerCase().includes(term) ||
-            (r.entityName || '').toLowerCase().includes(term) ||
-            (r.entityRif || '').toLowerCase().includes(term) ||
-            (r.controlNumber || '').toLowerCase().includes(term)
-        );
-    }, [activeTab, salesBook, purchasesBook, searchTerm]);
-
-    if (!isVenezuela) {
-        return (
-            <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 text-center animate-in fade-in duration-300">
-                <div className="w-16 h-16 bg-amber-500/10 text-amber-500 rounded-xl flex items-center justify-center border border-amber-500/20 mb-4">
-                    <ShieldAlert size={32} />
-                </div>
-                <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
-                    Módulo Fiscal Exclusivo de Venezuela
-                </h2>
-                <p className="text-sm font-normal text-slate-500 dark:text-slate-400 max-w-lg mt-2">
-                    La gestión de libros fiscales de compras/ventas, comprobantes de retención e IGTF aplican según la providencia administrativa del SENIAT en Venezuela.
-                </p>
-                <div className="mt-4 px-3.5 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
-                    Su nodo actual está operando en modalidad {effectiveCountry ? effectiveCountry.toUpperCase() : 'DÓLAR (USD)'}
-                </div>
-            </div>
-        );
-    }
-
-    const loadFiscalData = async () => {
+    const loadFiscalData = useCallback(async () => {
         try {
             setLoading(true);
             const params = { year: selectedYear, month: selectedMonth };
@@ -265,7 +263,53 @@ export default function FiscalManager() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [selectedYear, selectedMonth, activeTab]);
+
+    useEffect(() => {
+        if (!isVenezuela) return;
+        loadFiscalData();
+    }, [isVenezuela, loadFiscalData]);
+
+    // Filter active records by search
+    const filteredRecords = useMemo(() => {
+        const source = activeTab === 'sales' ? salesBook.records : purchasesBook.records;
+        if (!source) return [];
+        const term = searchTerm.toLowerCase();
+        return source.filter(r => 
+            (r.documentNumber || '').toLowerCase().includes(term) ||
+            (r.entityName || '').toLowerCase().includes(term) ||
+            (r.entityRif || '').toLowerCase().includes(term) ||
+            (r.controlNumber || '').toLowerCase().includes(term)
+        );
+    }, [activeTab, salesBook, purchasesBook, searchTerm]);
+
+    if (!isVenezuela) {
+        const activeRegion = getRegionConfig(effectiveCountry);
+        return (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 text-center animate-in fade-in duration-300">
+                <div className="w-16 h-16 bg-amber-500/10 text-amber-500 rounded-xl flex items-center justify-center border border-amber-500/20 mb-4">
+                    <ShieldAlert size={32} />
+                </div>
+                <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
+                    Libros Fiscales SENIAT (Exclusivo Venezuela)
+                </h2>
+                <p className="text-sm font-normal text-slate-500 dark:text-slate-400 max-w-lg mt-2">
+                    Tu sistema está configurado para <strong>{activeRegion.name}</strong> ({activeRegion.taxAuthority}). Los comprobantes y ventas del POS aplican automáticamente <strong>{activeRegion.taxSummary}</strong> en moneda <strong>{activeRegion.currencyCode}</strong> con identificación <strong>{activeRegion.taxIdLabel}</strong>.
+                </p>
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    <span className="px-3.5 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                        País: {activeRegion.name} ({activeRegion.code})
+                    </span>
+                    <span className="px-3.5 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-blue-600 dark:text-blue-400 text-xs font-semibold">
+                        Moneda: {activeRegion.currencyBadge}
+                    </span>
+                    <span className="px-3.5 py-1.5 bg-slate-500/10 border border-slate-500/20 rounded-lg text-slate-700 dark:text-slate-300 text-xs font-semibold">
+                        Ente Fiscal: {activeRegion.taxAuthority} · {activeRegion.taxLabel}
+                    </span>
+                </div>
+            </div>
+        );
+    }
 
     // Handle Manual Fiscal Record Save
     const handleSaveManualRecord = async (e) => {
@@ -551,31 +595,31 @@ export default function FiscalManager() {
                             <div className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Total Facturado</span>
                                 <span className="text-base sm:text-lg font-black text-slate-900 dark:text-white tabular-nums">
-                                    {formatMoney(salesBook.totals.totalVentas || 0, 'VES')}
+                                    {formatVesBook(salesBook.totals.totalVentas || 0)}
                                 </span>
                             </div>
                             <div className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Base Imponible</span>
                                 <span className="text-base sm:text-lg font-black text-blue-600 dark:text-blue-400 tabular-nums">
-                                    {formatMoney(salesBook.totals.totalBaseImponible || 0, 'VES')}
+                                    {formatVesBook(salesBook.totals.totalBaseImponible || 0)}
                                 </span>
                             </div>
                             <div className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-primary-500 block">Débito Fiscal (16%)</span>
                                 <span className="text-base sm:text-lg font-black text-primary-600 dark:text-primary-400 tabular-nums">
-                                    {formatMoney(salesBook.totals.totalDebitoFiscal || 0, 'VES')}
+                                    {formatVesBook(salesBook.totals.totalDebitoFiscal || 0)}
                                 </span>
                             </div>
                             <div className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Ventas Exentas</span>
                                 <span className="text-base sm:text-lg font-black text-slate-700 dark:text-slate-300 tabular-nums">
-                                    {formatMoney(salesBook.totals.totalExento || 0, 'VES')}
+                                    {formatVesBook(salesBook.totals.totalExento || 0)}
                                 </span>
                             </div>
                             <div className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm col-span-2 sm:col-span-1">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 block">IGTF (3% Divisas)</span>
                                 <span className="text-base sm:text-lg font-black text-amber-500 tabular-nums">
-                                    {formatMoney(salesBook.totals.totalIgtf || 0, 'VES')}
+                                    {formatVesBook(salesBook.totals.totalIgtf || 0)}
                                 </span>
                             </div>
                         </div>
@@ -645,13 +689,13 @@ export default function FiscalManager() {
                                                     <div>
                                                         <span className="text-slate-400 block text-[9px] uppercase font-sans">Base Imponible</span>
                                                         <span className="font-bold text-slate-700 dark:text-slate-300">
-                                                            {formatMoney(r.taxableBase, 'VES')}
+                                                            {formatVesBook(r.taxableBase)}
                                                         </span>
                                                     </div>
                                                     <div className="text-right">
-                                                        <span className="text-slate-400 block text-[9px] uppercase font-sans">IVA (16%)</span>
+                                                        <span className="text-slate-400 block text-[9px] uppercase font-sans">IVA ({r.taxRate ?? defaultIvaPct}%)</span>
                                                         <span className="font-bold text-primary-600 dark:text-primary-400">
-                                                            {formatMoney(r.taxAmount, 'VES')}
+                                                            {formatVesBook(r.taxAmount)}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -659,7 +703,7 @@ export default function FiscalManager() {
                                                 <div className="flex items-center justify-between pt-1 border-t border-slate-100 dark:border-white/5">
                                                     <span className="text-[10px] uppercase font-bold text-slate-400">Total Factura</span>
                                                     <span className="text-sm font-black font-mono text-slate-900 dark:text-white">
-                                                        {formatMoney(r.totalAmount, 'VES')}
+                                                        {formatVesBook(r.totalAmount)}
                                                     </span>
                                                 </div>
                                             </div>
@@ -725,20 +769,20 @@ export default function FiscalManager() {
                                                         <td className="py-3 px-3 text-slate-500">{r.controlNumber || '-'}</td>
                                                         <td className="py-3 px-3 text-slate-500">{r.affectedInvoiceNumber || '-'}</td>
                                                         <td className="py-3 px-3 text-right font-black tabular-nums">
-                                                            {formatMoney(r.totalAmount, 'VES')}
+                                                            {formatVesBook(r.totalAmount)}
                                                         </td>
                                                         <td className="py-3 px-3 text-right tabular-nums text-slate-400">
-                                                            {formatMoney(r.exemptAmount, 'VES')}
+                                                            {formatVesBook(r.exemptAmount)}
                                                         </td>
                                                         <td className="py-3 px-3 text-right font-bold tabular-nums text-slate-700 dark:text-slate-300">
-                                                            {formatMoney(r.taxableBase, 'VES')}
+                                                            {formatVesBook(r.taxableBase)}
                                                         </td>
                                                         <td className="py-3 px-3 text-center">{r.taxRate}%</td>
                                                         <td className="py-3 px-3 text-right font-bold tabular-nums text-primary-500">
-                                                            {formatMoney(r.taxAmount, 'VES')}
+                                                            {formatVesBook(r.taxAmount)}
                                                         </td>
                                                         <td className="py-3 px-3 text-right tabular-nums text-amber-500">
-                                                            {Number(r.igtfAmount) > 0 ? formatMoney(r.igtfAmount, 'VES') : '-'}
+                                                            {Number(r.igtfAmount) > 0 ? formatVesBook(r.igtfAmount) : '-'}
                                                         </td>
                                                     </tr>
                                                 );
@@ -759,25 +803,25 @@ export default function FiscalManager() {
                             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Total Compras</span>
                                 <span className="text-lg font-black text-slate-900 dark:text-white tabular-nums">
-                                    {formatMoney(purchasesBook.totals.totalCompras || 0, 'VES')}
+                                    {formatVesBook(purchasesBook.totals.totalCompras || 0)}
                                 </span>
                             </div>
                             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Base Imponible</span>
                                 <span className="text-lg font-black text-blue-600 dark:text-blue-400 tabular-nums">
-                                    {formatMoney(purchasesBook.totals.totalBaseImponible || 0, 'VES')}
+                                    {formatVesBook(purchasesBook.totals.totalBaseImponible || 0)}
                                 </span>
                             </div>
                             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-emerald-500 block">Crédito Fiscal (IVA 16%)</span>
                                 <span className="text-lg font-black text-emerald-600 dark:text-emerald-400 tabular-nums">
-                                    {formatMoney(purchasesBook.totals.totalCreditoFiscal || 0, 'VES')}
+                                    {formatVesBook(purchasesBook.totals.totalCreditoFiscal || 0)}
                                 </span>
                             </div>
                             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-white/10 shadow-sm">
                                 <span className="text-[10px] font-black uppercase tracking-wider text-rose-500 block">Retenciones Aplicadas (75%)</span>
                                 <span className="text-lg font-black text-rose-500 tabular-nums">
-                                    {formatMoney(purchasesBook.totals.totalIvaRetenido || 0, 'VES')}
+                                    {formatVesBook(purchasesBook.totals.totalIvaRetenido || 0)}
                                 </span>
                             </div>
                         </div>
@@ -843,13 +887,13 @@ export default function FiscalManager() {
                                                 <div>
                                                     <span className="text-slate-400 block text-[9px] uppercase font-sans">Base Imponible</span>
                                                     <span className="font-bold text-slate-700 dark:text-slate-300">
-                                                        {formatMoney(r.taxableBase, 'VES')}
+                                                        {formatVesBook(r.taxableBase)}
                                                     </span>
                                                 </div>
                                                 <div className="text-right">
                                                     <span className="text-slate-400 block text-[9px] uppercase font-sans">IVA Crédito ({r.taxRate}%)</span>
                                                     <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                                                        {formatMoney(r.taxAmount, 'VES')}
+                                                        {formatVesBook(r.taxAmount)}
                                                     </span>
                                                 </div>
                                             </div>
@@ -858,7 +902,7 @@ export default function FiscalManager() {
                                                 <div className="flex items-center justify-between text-[11px] font-mono bg-rose-50 dark:bg-rose-500/10 px-2.5 py-1 rounded-lg">
                                                     <span className="text-rose-600 dark:text-rose-400 text-[10px] uppercase font-sans font-bold">Retención IVA</span>
                                                     <span className="font-black text-rose-600 dark:text-rose-400">
-                                                        -{formatMoney(r.retainedIvaAmount, 'VES')}
+                                                        -{formatVesBook(r.retainedIvaAmount)}
                                                     </span>
                                                 </div>
                                             )}
@@ -866,7 +910,7 @@ export default function FiscalManager() {
                                             <div className="flex items-center justify-between pt-1 border-t border-slate-100 dark:border-white/5">
                                                 <span className="text-[10px] uppercase font-bold text-slate-400">Total Compra</span>
                                                 <span className="text-sm font-black font-mono text-slate-900 dark:text-white">
-                                                    {formatMoney(r.totalAmount, 'VES')}
+                                                    {formatVesBook(r.totalAmount)}
                                                 </span>
                                             </div>
                                         </div>
@@ -922,20 +966,20 @@ export default function FiscalManager() {
                                                     </td>
                                                     <td className="py-3 px-3 text-slate-500">{r.controlNumber || '-'}</td>
                                                     <td className="py-3 px-3 text-right font-black tabular-nums">
-                                                        {formatMoney(r.totalAmount, 'VES')}
+                                                        {formatVesBook(r.totalAmount)}
                                                     </td>
                                                     <td className="py-3 px-3 text-right tabular-nums text-slate-400">
-                                                        {formatMoney(r.exemptAmount, 'VES')}
+                                                        {formatVesBook(r.exemptAmount)}
                                                     </td>
                                                     <td className="py-3 px-3 text-right font-bold tabular-nums text-slate-700 dark:text-slate-300">
-                                                        {formatMoney(r.taxableBase, 'VES')}
+                                                        {formatVesBook(r.taxableBase)}
                                                     </td>
                                                     <td className="py-3 px-3 text-center">{r.taxRate}%</td>
                                                     <td className="py-3 px-3 text-right font-bold tabular-nums text-emerald-500">
-                                                        {formatMoney(r.taxAmount, 'VES')}
+                                                        {formatVesBook(r.taxAmount)}
                                                     </td>
                                                     <td className="py-3 px-3 text-right tabular-nums text-rose-500 font-bold">
-                                                        {Number(r.retainedIvaAmount) > 0 ? formatMoney(r.retainedIvaAmount, 'VES') : '-'}
+                                                        {Number(r.retainedIvaAmount) > 0 ? formatVesBook(r.retainedIvaAmount) : '-'}
                                                     </td>
                                                 </tr>
                                             ))
@@ -1008,7 +1052,7 @@ export default function FiscalManager() {
                                         <div className="flex items-center justify-between text-xs">
                                             <span className="text-slate-400">Monto Retenido:</span>
                                             <span className="text-base font-black text-rose-500 tabular-nums">
-                                                {formatMoney(ret.retainedAmount, 'VES')}
+                                                {formatVesBook(ret.retainedAmount)}
                                             </span>
                                         </div>
                                     </div>
@@ -1043,13 +1087,13 @@ export default function FiscalManager() {
                                         <div className="flex justify-between py-1.5">
                                             <span className="text-slate-500 font-bold">Total Débito Fiscal (IVA en Ventas):</span>
                                             <span className="font-mono font-black text-primary-500 tabular-nums text-sm">
-                                                +{formatMoney(taxSummary.debitoFiscal, 'VES')}
+                                                +{formatVesBook(taxSummary.debitoFiscal)}
                                             </span>
                                         </div>
                                         <div className="flex justify-between py-1.5">
                                             <span className="text-slate-500 font-bold">(-) Total Crédito Fiscal (IVA en Compras):</span>
                                             <span className="font-mono font-black text-emerald-500 tabular-nums text-sm">
-                                                -{formatMoney(taxSummary.creditoFiscal, 'VES')}
+                                                -{formatVesBook(taxSummary.creditoFiscal)}
                                             </span>
                                         </div>
                                         <div className="flex justify-between py-2 border-t-2 border-slate-200 dark:border-white/10 font-bold">
@@ -1057,13 +1101,13 @@ export default function FiscalManager() {
                                             <span className={`font-mono font-black tabular-nums text-sm ${
                                                 taxSummary.balanceIva > 0 ? 'text-rose-500' : 'text-emerald-500'
                                             }`}>
-                                                {formatMoney(taxSummary.balanceIva, 'VES')}
+                                                {formatVesBook(taxSummary.balanceIva)}
                                             </span>
                                         </div>
                                         <div className="flex justify-between py-1.5">
                                             <span className="text-slate-500">(-) Retenciones de IVA del período:</span>
                                             <span className="font-mono font-bold text-slate-700 dark:text-slate-300 tabular-nums">
-                                                -{formatMoney(taxSummary.retencionesIvaRecibidas, 'VES')}
+                                                -{formatVesBook(taxSummary.retencionesIvaRecibidas)}
                                             </span>
                                         </div>
                                         <div className="flex justify-between py-3 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl">
@@ -1078,7 +1122,7 @@ export default function FiscalManager() {
                                             <span className={`text-xl font-black tabular-nums ${
                                                 taxSummary.impuestoPorPagarIva > 0 ? 'text-rose-500' : 'text-emerald-500'
                                             }`}>
-                                                {formatMoney(taxSummary.impuestoPorPagarIva > 0 ? taxSummary.impuestoPorPagarIva : taxSummary.saldoAFavorIva, 'VES')}
+                                                {formatVesBook(taxSummary.impuestoPorPagarIva > 0 ? taxSummary.impuestoPorPagarIva : taxSummary.saldoAFavorIva)}
                                             </span>
                                         </div>
                                     </div>
@@ -1104,19 +1148,19 @@ export default function FiscalManager() {
                                         <div className="flex justify-between py-2">
                                             <span className="text-slate-500 font-bold">Total IGTF 3% Percibido en Efectivo Divisas:</span>
                                             <span className="font-mono font-black text-amber-500 tabular-nums text-sm">
-                                                {formatMoney(taxSummary.igtfPorEnterar, 'VES')}
+                                                {formatVesBook(taxSummary.igtfPorEnterar)}
                                             </span>
                                         </div>
                                         <div className="flex justify-between py-2">
                                             <span className="text-slate-500 font-bold">Ventas Brutas del Período:</span>
                                             <span className="font-mono font-bold text-slate-800 dark:text-white tabular-nums">
-                                                {formatMoney(taxSummary.ventasTotales, 'VES')}
+                                                {formatVesBook(taxSummary.ventasTotales)}
                                             </span>
                                         </div>
                                         <div className="flex justify-between py-2">
                                             <span className="text-slate-500 font-bold">Compras Brutas del Período:</span>
                                             <span className="font-mono font-bold text-slate-800 dark:text-white tabular-nums">
-                                                {formatMoney(taxSummary.comprasTotales, 'VES')}
+                                                {formatVesBook(taxSummary.comprasTotales)}
                                             </span>
                                         </div>
                                     </div>
@@ -1506,7 +1550,8 @@ export default function FiscalManager() {
                                         value={manualForm.taxableBase}
                                         onChange={(e) => {
                                             const base = Number(e.target.value) || 0;
-                                            const tax = base * 0.16;
+                                            const taxPct = Number(manualForm.taxRate || defaultIvaPct) || 0;
+                                            const tax = base * (taxPct / 100);
                                             setManualForm({
                                                 ...manualForm,
                                                 taxableBase: e.target.value,
@@ -1688,7 +1733,7 @@ export default function FiscalManager() {
                                         value={retentionForm.baseAmount}
                                         onChange={(e) => {
                                             const base = Number(e.target.value) || 0;
-                                            const tax = base * 0.16;
+                                            const tax = base * (defaultIvaPct / 100);
                                             const pct = Number(retentionForm.retentionPercentage) / 100;
                                             setRetentionForm({
                                                 ...retentionForm,

@@ -3,6 +3,7 @@ const SupabaseSyncService = require('./SupabaseSyncService');
 const { readJson, writeJson, getUserSettings } = require('../utils/helpers');
 const { SETTINGS_FILE } = require('../config/paths');
 const cache = require('../utils/cacheService');
+const { isSingleCurrencyCountry } = require('../constants/regionPresets');
 
 /**
  * BCVAutoSyncService
@@ -19,6 +20,7 @@ class BCVAutoSyncService {
     constructor() {
         this.io = null;
         this.timer = null;
+        this.startupTimer = null;
         this.isSyncing = false;
         this.lastSyncTime = null;
         this.lastKnownRate = null;
@@ -35,11 +37,14 @@ class BCVAutoSyncService {
         console.log('[BCVAutoSync] 🚀 Inicializando servicio de actualización automática de tasa BCV...');
 
         // Ejecutar primera verificación 5 segundos después del arranque
-        setTimeout(() => {
+        if (this.startupTimer) clearTimeout(this.startupTimer);
+        this.startupTimer = setTimeout(() => {
+            this.startupTimer = null;
             this.syncRate({ reason: 'STARTUP' }).catch(err => {
                 console.warn('[BCVAutoSync] Aviso en sincronización inicial:', err.message);
             });
         }, 5000);
+        if (typeof this.startupTimer.unref === 'function') this.startupTimer.unref();
 
         // Intervalo periódico: cada 30 minutos
         if (this.timer) clearInterval(this.timer);
@@ -48,6 +53,18 @@ class BCVAutoSyncService {
                 console.warn('[BCVAutoSync] Aviso en sincronización periódica:', err.message);
             });
         }, 1000 * 60 * 30);
+        if (typeof this.timer.unref === 'function') this.timer.unref();
+    }
+
+    stop() {
+        if (this.startupTimer) {
+            clearTimeout(this.startupTimer);
+            this.startupTimer = null;
+        }
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
     }
 
     /**
@@ -68,17 +85,16 @@ class BCVAutoSyncService {
             const companyId = '2'; // Empresa principal activa
             const userSettings = getUserSettings(allSettings, companyId);
 
-            // Verificar si el país es de moneda fija única (Ecuador, Panamá, USA)
-            const country = (userSettings.businessInfo?.country || '').toLowerCase();
-            const isUsdCountry = ['ecuador', 'panama', 'usa', 'estados unidos'].some(c => country.includes(c));
-            if (isUsdCountry && !force) {
-                console.log('[BCVAutoSync] Omitiendo sincronización: país configurado como 100% USD.');
+            // Verificar si el país es de moneda fija única (Ecuador, Colombia, Panamá, USA, España/Europa)
+            const country = userSettings.businessInfo?.country || userSettings.country || '';
+            if (isSingleCurrencyCountry(country) && !force) {
+                console.log(`[BCVAutoSync] Omitiendo sincronización: país de moneda única (${country}).`);
                 // Sincronizar inmediatamente a la nube de Supabase (24/7)
                 SupabaseSyncService.syncConfig(true).catch(err => {
                     console.warn('[BCVAutoSync] Error sincronizando tasa a Supabase:', err.message);
                 });
 
-                return { success: false, reason: 'USD_ONLY_COUNTRY' };
+                return { success: false, reason: 'SINGLE_CURRENCY_COUNTRY' };
             }
 
             // Verificar si la actualización automática está activada por el usuario
@@ -93,7 +109,7 @@ class BCVAutoSyncService {
                 return { success: false, reason: 'AUTO_UPDATE_DISABLED' };
             }
 
-            console.log(`[BCVAutoSync] 🔍 Consultando tasa oficial vigente del BCV (${reason})...`);
+            console.log(`[BCVAutoSync] 🔍 Consultando tasas oficiales vigentes del BCV (${reason})...`);
             const bcvResult = await BCVRateService.getOfficialRate();
 
             if (!bcvResult || !bcvResult.rate || isNaN(bcvResult.rate) || bcvResult.rate <= 0) {
@@ -102,15 +118,23 @@ class BCVAutoSyncService {
 
             const newRate = Number(bcvResult.rate);
             const currentRate = Number(userSettings.exchangeRate || 1.0);
+            const currentEuroRate = Number(userSettings.euroRate || 0);
+            const fetchedEuroRate = Number(bcvResult.euroRate || 0);
+            const newEuroRate = fetchedEuroRate > 0 ? fetchedEuroRate : currentEuroRate;
             this.lastSyncTime = new Date().toISOString();
 
-            // Si la tasa cambió o si es forzada
+            // Si la tasa USD o EUR cambió o si es forzada
             const rateChanged = Math.abs(newRate - currentRate) > 0.0001;
+            const euroChanged = fetchedEuroRate > 0 && Math.abs(fetchedEuroRate - currentEuroRate) > 0.0001;
 
-            if (rateChanged || force) {
-                console.log(`[BCVAutoSync] 💱 Tasa oficial actualizada: ${currentRate} Bs/$ ➔ ${newRate} Bs/$ (Fuente: ${bcvResult.source})`);
+            if (rateChanged || euroChanged || force) {
+                console.log(`[BCVAutoSync] 💱 Tasa oficial actualizada: ${currentRate} Bs/$ ➔ ${newRate} Bs/$${newEuroRate > 0 ? ` | Euro: ${newEuroRate} Bs/€` : ''} (Fuente: ${bcvResult.source})`);
 
                 userSettings.exchangeRate = newRate;
+                if (newEuroRate > 0) {
+                    userSettings.euroRate = newEuroRate;
+                    userSettings.lastEuroRate = newEuroRate;
+                }
                 userSettings.lastRateSyncAt = this.lastSyncTime;
                 userSettings.rateSource = bcvResult.source || 'BCV';
                 userSettings.autoUpdateRate = true;
@@ -118,13 +142,17 @@ class BCVAutoSyncService {
                 allSettings[companyId] = userSettings;
                 if (allSettings['default']) {
                     allSettings['default'].exchangeRate = newRate;
+                    if (newEuroRate > 0) {
+                        allSettings['default'].euroRate = newEuroRate;
+                        allSettings['default'].lastEuroRate = newEuroRate;
+                    }
                     allSettings['default'].lastRateSyncAt = this.lastSyncTime;
                     allSettings['default'].rateSource = bcvResult.source || 'BCV';
                     allSettings['default'].autoUpdateRate = true;
                 }
 
-                writeJson(SETTINGS_FILE, allSettings);
-                cache.set('all_settings', allSettings);
+                const SettingsStoreService = require('./SettingsStoreService');
+                await SettingsStoreService.persistCompanySettings(companyId, userSettings, allSettings);
                 cache.del(`user_currency_1`);
                 cache.del(`user_currency_2`);
 
@@ -136,6 +164,7 @@ class BCVAutoSyncService {
                     const payload = {
                         type: 'rate',
                         exchangeRate: newRate,
+                        euroRate: newEuroRate > 0 ? newEuroRate : undefined,
                         currencyMode: userSettings.currencyMode || 'BOTH',
                         autoUpdateRate: true,
                         source: bcvResult.source || 'BCV',
@@ -147,7 +176,7 @@ class BCVAutoSyncService {
                     for (const room of roomsToNotify) {
                         io.to(room).emit('settings_changed', payload);
                     }
-                    console.log(`[BCVAutoSync] 📡 Evento WebSocket emitido a terminales: ${newRate} Bs/$`);
+                    console.log(`[BCVAutoSync] 📡 Evento WebSocket emitido a terminales: ${newRate} Bs/$${newEuroRate > 0 ? ` | ${newEuroRate} Bs/€` : ''}`);
                 }
 
                 // Sincronizar inmediatamente a la nube de Supabase (24/7)
@@ -159,12 +188,14 @@ class BCVAutoSyncService {
                     success: true,
                     updated: true,
                     rate: newRate,
+                    euroRate: newEuroRate > 0 ? newEuroRate : null,
                     previousRate: currentRate,
+                    previousEuroRate: currentEuroRate,
                     source: bcvResult.source,
                     syncedAt: this.lastSyncTime
                 };
             } else {
-                console.log(`[BCVAutoSync] ✅ Tasa verificada sin cambios: ${currentRate} Bs/$ (al día).`);
+                console.log(`[BCVAutoSync] ✅ Tasa verificada sin cambios: ${currentRate} Bs/$${currentEuroRate > 0 ? ` | ${currentEuroRate} Bs/€` : ''} (al día).`);
                 // Sincronizar inmediatamente a la nube de Supabase (24/7)
                 SupabaseSyncService.syncConfig(true).catch(err => {
                     console.warn('[BCVAutoSync] Error sincronizando tasa a Supabase:', err.message);
@@ -174,6 +205,7 @@ class BCVAutoSyncService {
                     success: true,
                     updated: false,
                     rate: currentRate,
+                    euroRate: currentEuroRate > 0 ? currentEuroRate : null,
                     source: bcvResult.source,
                     syncedAt: this.lastSyncTime
                 };

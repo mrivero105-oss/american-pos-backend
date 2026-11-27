@@ -13,7 +13,7 @@ export const hapticTap = () => {
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
             navigator.vibrate(15);
         }
-    } catch (_e) {}
+    } catch { /* Vibración háptica no soportada */ }
 };
 
 export const hapticSuccess = () => {
@@ -25,7 +25,7 @@ export const hapticSuccess = () => {
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
             navigator.vibrate([20, 40, 20]);
         }
-    } catch (_e) {}
+    } catch { /* Vibración háptica no soportada */ }
 };
 
 export const hapticHeavy = () => {
@@ -37,7 +37,7 @@ export const hapticHeavy = () => {
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
             navigator.vibrate(45);
         }
-    } catch (_e) {}
+    } catch { /* Vibración háptica no soportada */ }
 };
 
 export const hapticError = () => {
@@ -49,7 +49,7 @@ export const hapticError = () => {
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
             navigator.vibrate([60, 40, 60]);
         }
-    } catch (_e) {}
+    } catch { /* Vibración háptica no soportada */ }
 };
 
 export const triggerHaptic = (typeOrMs = 'light') => {

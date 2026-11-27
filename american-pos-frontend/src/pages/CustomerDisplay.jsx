@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { io } from 'socket.io-client';
 import api, { formatServerUrl } from '../services/api';
+import secureMobileStorage from '../utils/secureMobileStorage';
 import { getImageUrl } from '../utils/imageUtils';
 import { formatBs, isDollarOnlyCountry, isUsdOnlyMode, precisionRound } from '../utils/format';
 import {
@@ -63,7 +64,7 @@ export default function CustomerDisplay() {
                     cachedCountry = cachedCountry || parsed.country || '';
                 }
             }
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
         return {
             name: cachedName || 'Isaac POS',
             logo: cachedLogo || '',
@@ -92,7 +93,7 @@ export default function CustomerDisplay() {
     useEffect(() => {
         try {
             localStorage.setItem('customer_display_arch_theme', archTheme);
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplay] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
     }, [archTheme]);
 
     useEffect(() => {
@@ -110,7 +111,7 @@ export default function CustomerDisplay() {
             } else {
                 document.exitFullscreen?.();
             }
-        } catch (_) {}
+        } catch { /* Pantalla completa opcional no soportada por el navegador */ }
     };
 
     const [currentTime, setCurrentTime] = useState(() => new Date());
@@ -121,7 +122,7 @@ export default function CustomerDisplay() {
         try {
             const cached = localStorage.getItem('pos_customer_display_config');
             if (cached) return { ...DEFAULT_DISPLAY_CONFIG, ...JSON.parse(cached) };
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
         return DEFAULT_DISPLAY_CONFIG;
     });
     const [activePromotions, setActivePromotions] = useState([]);
@@ -145,7 +146,7 @@ export default function CustomerDisplay() {
                     return parsed;
                 }
             }
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
         return null;
     });
     const [binanceSettings, setBinanceSettings] = useState({ payId: '', email: '', rate: 0, qrImage: '', mode: 'AUTO', name: 'Binance Pay' });
@@ -394,7 +395,7 @@ export default function CustomerDisplay() {
                 });
         }
         return [];
-    }, [checkoutPayment, allPaymentMethods, displayRate, checkoutActiveMethod, binanceSettings]);
+    }, [checkoutPayment, allPaymentMethods, displayRate]);
 
     // ¿Es un cobro mixto activo?
     const isSplitActive = Boolean(
@@ -546,7 +547,7 @@ export default function CustomerDisplay() {
         try {
             const cachedPay = localStorage.getItem('pos_payment_methods');
             if (cachedPay) applyPaymentMethods(JSON.parse(cachedPay));
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
 
         try {
             const cachedCart = localStorage.getItem('isaac_pos_display_sync');
@@ -556,7 +557,7 @@ export default function CustomerDisplay() {
                     handleCartUpdate(parsed);
                 }
             }
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
 
         let bc = null;
         try {
@@ -594,21 +595,21 @@ export default function CustomerDisplay() {
                 };
                 bc.postMessage({ type: 'REQUEST_INITIAL_STATE' });
             }
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CustomerDisplay] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
         const handleStorage = (e) => {
             if (e.key === 'isaac_pos_display_sync' && e.newValue) {
-                try { handleCartUpdate(JSON.parse(e.newValue)); } catch (_) {}
+                try { handleCartUpdate(JSON.parse(e.newValue)); } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             } else if (e.key === 'isaac_pos_display_sync_sale_completed' && e.newValue) {
-                try { handleSaleCompleted(JSON.parse(e.newValue)); } catch (_) {}
+                try { handleSaleCompleted(JSON.parse(e.newValue)); } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             } else if (e.key === 'isaac_pos_display_payment_sync') {
                 if (!e.newValue) {
                     setCheckoutPayment(null);
                 } else {
-                    try { handlePaymentSelectionUpdate(JSON.parse(e.newValue)); } catch (_) {}
+                    try { handlePaymentSelectionUpdate(JSON.parse(e.newValue)); } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
                 }
             } else if (e.key === 'pos_payment_methods' && e.newValue) {
-                try { applyPaymentMethods(JSON.parse(e.newValue)); } catch (_) {}
+                try { applyPaymentMethods(JSON.parse(e.newValue)); } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             } else if (e.key === 'pos_customer_display_config' && e.newValue) {
                 try {
                     const cfg = JSON.parse(e.newValue);
@@ -618,7 +619,7 @@ export default function CustomerDisplay() {
                         ...cfg,
                         slides: Array.isArray(cfg.slides) ? cfg.slides.filter(s => s && s.enabled !== false) : []
                     }));
-                } catch (_) {}
+                } catch (caughtErr) { console.warn('[CustomerDisplay] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             } else if (e.key === 'app_theme' && e.newValue && VALID_ARCH_THEMES.includes(e.newValue)) {
                 if (!localStorage.getItem('customer_display_arch_theme')) {
                     setArchTheme(e.newValue);
@@ -654,7 +655,7 @@ export default function CustomerDisplay() {
         const initCompanyId = urlParamsInit.get('companyId') || hashParams.get('companyId') || localStorage.getItem('pos_company_id') || localStorage.getItem('companyId') || 'default';
         const initRegisterId = urlParamsInit.get('registerId') || urlParamsInit.get('caja') || hashParams.get('registerId') || hashParams.get('caja') || '1';
         const displayToken = urlParamsInit.get('dt') || hashParams.get('dt') || undefined;
-        const authToken = localStorage.getItem('auth_token') || undefined;
+        const authToken = secureMobileStorage.getToken() || undefined;
 
         const socket = io(socketUrl, {
             auth: {
@@ -715,7 +716,7 @@ export default function CustomerDisplay() {
         return () => {
             clearInterval(feedRefreshTimer);
             if (bc) {
-                try { bc.close(); } catch (_) {}
+                try { bc.close(); } catch { /* Canal o socket ya cerrado previamente */ }
             }
             window.removeEventListener('storage', handleStorage);
             window.removeEventListener('isaac_pos_display_local_update', handleLocalCustomEvent);

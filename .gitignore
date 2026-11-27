@@ -77,10 +77,23 @@ settings.json
 !**/settings.example.json
 db-config.json
 **/db-config.json
+secrets.vault.json
+**/secrets.vault.json
+*.vault.json
+.dbcfg.key.dpapi
+.secrets.key.dpapi
+.*.key.dpapi
 cloud_mirror_config.json
 **/cloud_mirror_config.json
+cloud_license_config.json
+**/cloud_license_config.json
+cloud_license_server/node-server/data/
 *.pfx
 *.p12
+*.jks
+*.keystore
+keystore.properties
+**/keystore.properties
 *.key
 *private*.pem
 

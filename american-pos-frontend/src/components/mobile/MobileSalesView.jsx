@@ -1,11 +1,27 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  ArrowLeft, FileText, Search, RefreshCw, Share2, 
-  Receipt, CheckCircle, Clock, AlertTriangle, Cloud, 
-  Smartphone, DollarSign, X, Printer, Eye, RotateCcw,
-  Check, User, Calendar, CreditCard, Package, ChevronRight,
-  ShieldAlert, Info, Tag, SlidersHorizontal, ChevronDown, ChevronUp,
-  Percent, Handshake, Utensils, MessageCircle, Send
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  ArrowLeft, 
+  FileText, 
+  Search, 
+  RefreshCw, 
+  Share2, 
+  Receipt, 
+  CheckCircle, 
+  Clock, 
+  X, 
+  Printer, 
+  Eye, 
+  RotateCcw, 
+  Calendar, 
+  Package, 
+  ShieldAlert, 
+  SlidersHorizontal, 
+  ChevronDown, 
+  ChevronUp, 
+  Percent, 
+  Handshake, 
+  Utensils, 
+  Send
 } from 'lucide-react';
 import api from '../../services/api';
 import localDb from '../../db/localDb';
@@ -20,7 +36,6 @@ export default function MobileSalesView({
   isSyncing = false,
   onSyncNow,
   onRefresh,
-  onViewTicket,
   onShareWhatsApp,
   onPrintTicket,
   onSaleCancelled,
@@ -45,7 +60,6 @@ export default function MobileSalesView({
 
   // Modales de detalle y anulación
   const [selectedSaleDetail, setSelectedSaleDetail] = useState(null);
-  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [saleToCancel, setSaleToCancel] = useState(null);
   const [cancelReason, setCancelReason] = useState('Error de cobro / digitación');
   const [cancelNotes, setCancelNotes] = useState('');
@@ -104,7 +118,7 @@ export default function MobileSalesView({
 
         return `${d.getDate()}/${d.getMonth() + 1}, ${timePart}`;
       }
-    } catch (_) {}
+    } catch { /* Timestamp inválido, manteniendo cadena vacía */ }
     return String(dateStr);
   }, []);
 
@@ -328,7 +342,6 @@ export default function MobileSalesView({
   const handleOpenDetail = async (sale) => {
     setSelectedSaleDetail(sale);
     if ((!sale.items || sale.items.length === 0) && (!sale.SaleItems || sale.SaleItems.length === 0) && sale.id) {
-      setIsLoadingDetails(true);
       try {
         const res = await api.get(`/sales/${sale.id}`, { timeout: 4000 });
         if (res.data) {
@@ -340,8 +353,6 @@ export default function MobileSalesView({
         }
       } catch (_err) {
         // Modo offline
-      } finally {
-        setIsLoadingDetails(false);
       }
     }
   };
@@ -408,7 +419,7 @@ export default function MobileSalesView({
           try {
             if (localDb && localDb.sales) await localDb.sales.put(updated);
             await primaryDb.put('sales', updated);
-          } catch (_) {}
+          } catch (caughtErr) { console.warn('[MobileSalesView] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
           onSaleCancelled?.(saleId, updated);
           showToast?.('✅ Venta anulada exitosamente en el servidor');
         } catch (apiErr) {
@@ -425,7 +436,7 @@ export default function MobileSalesView({
                 payload,
                 createdAt: new Date().toISOString()
               });
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[MobileSalesView] Error encolando operación en syncQueue:', caughtErr?.message || caughtErr); }
             onSaleCancelled?.(saleId, updated);
             showToast?.('⚡ Venta anulada offline (se sincronizará con la PC al reconectar)');
           } else {
@@ -572,7 +583,7 @@ export default function MobileSalesView({
             className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
               pendingSalesCount > 0
                 ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md animate-pulse'
-                : `${T.btnGhost} border ${T.border} ${T.textSecondary} hover:${T.textPrimary}`
+                : `${T.btnGhost} border ${T.border} ${T.textSecondary} hover:opacity-100`
             }`}
             title="Sincronizar ventas con el servidor"
           >
@@ -605,7 +616,7 @@ export default function MobileSalesView({
             className={`px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 transition-all cursor-pointer flex items-center gap-1 ${
               dateFilter === p.id
                 ? 'bg-blue-600 text-white shadow-2xs'
-                : `${T.btnGhost} border ${T.border} ${T.textSecondary} hover:${T.textPrimary}`
+                : `${T.btnGhost} border ${T.border} ${T.textSecondary} hover:opacity-100`
             }`}
           >
             {p.id === 'custom' && <Calendar size={12} />}
@@ -873,7 +884,6 @@ export default function MobileSalesView({
               );
 
               const itemsList = Array.isArray(sale.items) ? sale.items : Array.isArray(sale.SaleItems) ? sale.SaleItems : [];
-              const itemsCount = itemsList.length > 0 ? itemsList.length : (Number(sale.itemsCount) || 1);
 
               return (
                 <div 
@@ -1048,7 +1058,7 @@ export default function MobileSalesView({
       {/* 5. MODAL DETALLE COMPLETO DE VENTA */}
       {selectedSaleDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/70 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-md sm:max-w-lg rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[92vh] overflow-hidden`}>
+          <div className={`w-full max-w-md sm:max-w-lg rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden`}>
             
             {/* Cabecera del Detalle */}
             <div className={`p-4 border-b ${T.border} flex items-center justify-between shrink-0 ${T.subPanelBg}`}>
@@ -1224,7 +1234,7 @@ export default function MobileSalesView({
       {/* 6. MODAL REPORTE X DE CIERRE / TURNO */}
       {isReportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-xs animate-fadeIn">
-          <div className={`w-full max-w-md rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[90vh] overflow-hidden`}>
+          <div className={`w-full max-w-md rounded-2xl ${T.modalCard} border ${T.border} shadow-2xl flex flex-col max-h-[90dvh] overflow-hidden`}>
             <div className={`p-4 border-b ${T.border} flex items-center justify-between shrink-0 ${T.subPanelBg}`}>
               <div className="flex items-center gap-2">
                 <Receipt size={17} className="text-blue-500" />
@@ -1246,13 +1256,12 @@ export default function MobileSalesView({
             <div className={`p-3.5 border-t ${T.border} flex items-center gap-2 ${T.subPanelBg}`}>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   try {
-                    // Imprimir el texto formateado del reporte en la impresora térmica
-                    mobilePrinterService.printRawEscPosText?.(generateXReportText());
+                    await mobilePrinterService.printRawEscPosText(generateXReportText());
                     showToast?.('🖨️ Reporte enviado a la impresora');
                   } catch (e) {
-                    showToast?.('⚠️ Error al imprimir: ' + e.message);
+                    showToast?.('⚠️ Error al imprimir: ' + (e?.message || 'Verifica la impresora'));
                   }
                 }}
                 className="flex-1 h-10 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
@@ -1399,11 +1408,13 @@ export default function MobileSalesView({
           onClose={() => setIsSupervisorAuthOpen(false)}
           onAuthorized={(authData) => {
             setIsSupervisorAuthOpen(false);
-            executeCancelSale(authData?.supervisorId || authData?.id);
+            executeCancelSale(authData?.approvalId || authData?.id || authData?.supervisorId);
           }}
-          actionName="Anulación de Venta"
-          description={`Autorización requerida para anular venta #${saleToCancel?.invoiceNumber || saleToCancel?.id}`}
-          T={T}
+          title="Anulación de Venta"
+          reason={`Autorización requerida para anular venta #${saleToCancel?.invoiceNumber || saleToCancel?.id}`}
+          actionType="VOID_SALE"
+          referenceId={saleToCancel?.id ? String(saleToCancel.id) : null}
+          isLight={isLight}
         />
       )}
     </div>

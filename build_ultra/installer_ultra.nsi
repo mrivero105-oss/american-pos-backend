@@ -55,7 +55,6 @@ BrandingText "Isaac POS • Tecnología Ultra Windows 10/11"
 Section "Isaac POS Ultra" SecMain
     DetailPrint "Cerrando instancias previas de Isaac POS..."
     nsExec::Exec 'cmd.exe /c taskkill /F /IM "Isaac POS.exe" /T'
-    nsExec::Exec 'cmd.exe /c taskkill /F /IM "node.exe" /T'
     nsExec::Exec 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -LocalPort 3005,5005,8080 -ErrorAction SilentlyContinue | ForEach-Object { try { Stop-Process -Id $$_.OwningProcess -Force } catch {} }"'
     nsExec::Exec 'powershell.exe -NoProfile -Command "Get-Process | Where-Object { $$_.Path -like ''*Isaac POS Ultra*'' } | ForEach-Object { try { [System.Diagnostics.Process]::GetProcessById($$_.Id).Kill() } catch {} }"'
     Sleep 1500
@@ -75,7 +74,7 @@ Section "Isaac POS Ultra" SecMain
 
     SetOverwrite on
     SetOutPath "$INSTDIR"
-    File /r /x ".env" /x ".env.*" /x "settings.json" /x "db-config.json" /x "*.pfx" /x "*private*.pem" "${PROJECT_ROOT}\build_ultra\app_files\*.*"
+    File /r /x ".env" /x ".env.*" /x "settings.json" /x "db-config.json" /x "cloud_mirror_config.json" /x ".dbcfg.key.dpapi" /x ".secrets.key.dpapi" /x "secrets.vault.json" /x "*.vault.json" /x "*.pfx" /x "*.key" /x "*private*.pem" "${PROJECT_ROOT}\build_ultra\app_files\*.*"
 
     ; Crear desinstalador
     WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -94,10 +93,10 @@ Section "Isaac POS Ultra" SecMain
     ; Configurar Inicio Automático con Windows únicamente vía Registro Run
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Isaac POS Ultra" '"$INSTDIR\Isaac POS.exe"'
 
-    ; Configurar regla en el Firewall de Windows para admitir conexiones de cajas en red local (LAN)
-    DetailPrint "Configurando Firewall de Windows para red local (puerto 3005)..."
+    ; Configurar regla en el Firewall de Windows restringida a red privada local (puerto 3005)
+    DetailPrint "Configurando Firewall de Windows para red privada local (puerto 3005)..."
     nsExec::Exec 'netsh advfirewall firewall delete rule name="Isaac POS Backend"'
-    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 profile=private,public'
+    nsExec::Exec 'netsh advfirewall firewall add rule name="Isaac POS Backend" dir=in action=allow protocol=TCP localport=3005 remoteip=localsubnet profile=private'
 
     ; Registro de Windows para Panel de Control / Configuración de Aplicaciones
     WriteRegStr HKCU "Software\IsaacPOSUltra" "InstallDir" "$INSTDIR"

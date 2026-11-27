@@ -4,8 +4,7 @@ import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../hooks/AuthContext';
 import { useTheme } from '../hooks/ThemeContext';
-import { LogOut, Store, Menu, Banknote, ShoppingCart, Package, Users as UsersIcon, History, Settings, Bell, AlertTriangle, X, Shield, ShieldAlert, ShieldCheck, Truck, FileText, ShoppingBag, UserCog, Tag, Key, DollarSign, Lock, Clock, Calculator, PieChart, Palette, ChevronDown, ChevronUp, FileSpreadsheet, Warehouse, TrendingUp, Scale, Coins, Building2, Columns2, Grid2x2, Cpu, Search, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, BellOff, ChevronRight, ArrowRight, Smartphone, Check } from 'lucide-react';
-import { stopAI } from '../utils/tts';
+import { LogOut, Store, Menu, Banknote, ShoppingCart, Package, Users as UsersIcon, History, Settings, Bell, AlertTriangle, X, Shield, ShieldCheck, Truck, FileText, UserCog, Tag, Key, DollarSign, Lock, Clock, Calculator, PieChart, Palette, ChevronDown, FileSpreadsheet, Warehouse, TrendingUp, Scale, Coins, Building2, Columns2, Grid2x2, Cpu, Search, PanelLeftClose, PanelLeftOpen, BellOff, ChevronRight, ArrowRight, Check } from 'lucide-react';
 const CashRegisterModal = lazy(() => import('./CashRegisterModal'));
 const QuickSettingsFinder = lazy(() => import('./settings/QuickSettingsFinder'));
 import Logo from './Logo';
@@ -14,10 +13,18 @@ import api from '../services/api';
 import useHorizontalScroll from '../hooks/useHorizontalScroll';
 import useSidebarSmartScroll from '../hooks/useSidebarSmartScroll';
 import { usePos } from '../hooks/PosContext';
-import { formatStock, isDualCurrencyMode, isDollarOnlyCountry, isUsdOnlyMode } from '../utils/format';
+import {
+    formatStock,
+    isDualCurrencyMode,
+    isSingleCurrencyCountry,
+    isUsdOnlyMode,
+    fetchBusinessSettingsCached,
+    fetchCurrentShiftCached
+} from '../utils/format';
 import CloudSyncIndicator from './CloudSyncIndicator';
 import WhatsappBotIndicator from './WhatsappBotIndicator';
 import UpdateAlertBadge from './common/UpdateAlertBadge';
+import ErrorBoundary from './ErrorBoundary';
 
 // Performance: Lazy loaded secondary dialogs and modals
 const ProductModal = lazy(() => import('./ProductModal'));
@@ -30,59 +37,16 @@ const AppearanceModal = lazy(() => import('./AppearanceModal'));
 const FirstTimeSetupWizard = lazy(() => import('./FirstTimeSetupWizard'));
 
 // Helper to format user role label and color badge
-export const getRoleBadge = (role) => {
-    const r = (role || '').toLowerCase().trim();
-    if (r === 'superadmin' || r === 'owner' || r === 'master') {
-        return { label: 'Super Administrador', color: 'text-purple-400' };
-    }
-    if (r === 'admin') {
-        return { label: 'Administrador', color: 'text-blue-400' };
-    }
-    if (r === 'supervisor') {
-        return { label: 'Supervisor', color: 'text-amber-400' };
-    }
-    if (r === 'cashier') {
-        return { label: 'Cajero POS', color: 'text-emerald-400' };
-    }
-    if (r === 'inventory') {
-        return { label: 'Almacén', color: 'text-cyan-400' };
-    }
-    if (r === 'waiter') {
-        return { label: 'Mesero', color: 'text-rose-400' };
-    }
-    if (r === 'user') {
-        return { label: 'Operador', color: 'text-slate-400' };
-    }
-    return { label: role ? role.toUpperCase() : 'Cajero', color: 'text-primary-400' };
-};
 
 // Isolated Clock component to prevent full layout re-renders every second
-function LiveClock() {
-    const [currentTime, setCurrentTime] = useState(new Date());
-
-    useEffect(() => {
-        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-        return () => clearInterval(timer);
-    }, []);
-
-    return (
-        <div className="flex items-center gap-2 px-2 py-1 text-slate-700 dark:text-slate-300">
-            <Clock size={14} className="text-slate-400 shrink-0" />
-            <span className="text-xs font-semibold tabular-nums text-slate-800 dark:text-slate-200">
-                {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-        </div>
-    );
-}
 
 // Isolated Exchange Rate Monitor to prevent full layout re-renders on cart changes
 function ExchangeRateMonitor({ businessSettings }) {
-    const { exchangeRate, currencyMode, fetchExchangeRate, country } = usePos();
-    const location = useLocation();
+    const { exchangeRate, euroRate, currencyMode, fetchExchangeRate, country } = usePos();
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     const activeCountry = businessSettings?.country || country || localStorage.getItem('pos_country') || '';
-    if (isDollarOnlyCountry(activeCountry) || isUsdOnlyMode({ currencyMode, country: activeCountry, ...businessSettings })) return null;
+    if (isSingleCurrencyCountry(activeCountry) || isUsdOnlyMode({ currencyMode, country: activeCountry, ...businessSettings })) return null;
 
     const isVenezuela = (activeCountry && (activeCountry.toLowerCase() === 'venezuela' || activeCountry.toLowerCase() === 've')) || (!activeCountry && (!localStorage.getItem('pos_country') || localStorage.getItem('pos_country')?.toLowerCase() === 'venezuela'));
     const isDual = isDualCurrencyMode({ currencyMode, country: activeCountry, ...businessSettings });
@@ -93,7 +57,7 @@ function ExchangeRateMonitor({ businessSettings }) {
             <button
                 type="button"
                 onClick={() => setIsModalOpen(true)}
-                title="Clic para actualizar tasa de cambio BCV"
+                title={euroRate > 0 ? `Tasa BCV: 1 $ = ${exchangeRate} Bs · 1 € = ${euroRate} Bs (clic para actualizar)` : 'Clic para actualizar tasa de cambio BCV'}
                 className="hidden sm:flex items-center gap-2 h-9 px-3 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-xs hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 transition-all cursor-pointer group shrink-0 whitespace-nowrap"
             >
                 <div className="w-5 h-5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center font-bold shrink-0 border border-slate-200 dark:border-slate-700">
@@ -104,6 +68,15 @@ function ExchangeRateMonitor({ businessSettings }) {
                     <span className="text-xs sm:text-[13px] font-bold text-slate-900 dark:text-white tabular-nums tracking-tight">
                         {exchangeRate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs
                     </span>
+                    {euroRate > 0 && (
+                        <>
+                            <span className="hidden xl:inline text-slate-300 dark:text-slate-700 mx-0.5">|</span>
+                            <span className="hidden xl:inline text-[11px] font-medium text-indigo-500">1 € =</span>
+                            <span className="hidden xl:inline text-xs font-bold text-indigo-700 dark:text-indigo-300 tabular-nums tracking-tight">
+                                {euroRate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs
+                            </span>
+                        </>
+                    )}
                 </div>
             </button>
 
@@ -111,9 +84,10 @@ function ExchangeRateMonitor({ businessSettings }) {
                 isOpen={isModalOpen} 
                 onClose={() => setIsModalOpen(false)} 
                 currentRate={exchangeRate}
+                currentEuroRate={euroRate}
                 currencyMode={currencyMode}
                 onRateUpdated={() => {
-                    fetchExchangeRate();
+                    fetchExchangeRate(true);
                 }}
             />
         </>
@@ -121,17 +95,13 @@ function ExchangeRateMonitor({ businessSettings }) {
 }
 
 // Isolated Register Check to prevent re-renders in main layout
-function RegisterSetupTrigger() {
-    const { registerDisplayName } = usePos();
-    return <RegisterSetupModal isOpen={!registerDisplayName} />;
-}
 
 
 export default function DashboardLayout() {
-    const { user, logout, isLocked, appLock, hasPermission } = useAuth();
+    const { user, logout, appLock, hasPermission } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
-    const { registerId, registerDisplayName, currencyMode, exchangeRate, fetchExchangeRate, country, isUsdOnly } = usePos();
+    const { registerId, registerDisplayName, currencyMode, exchangeRate, euroRate, fetchExchangeRate, country, isUsdOnly } = usePos();
     const [isCashModalOpen, setIsCashModalOpen] = useState(false);
     const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
     const [lowStockItems, setLowStockItems] = useState([]);
@@ -156,7 +126,7 @@ export default function DashboardLayout() {
     const [isWhatsappModalOpen, setIsWhatsappModalOpen] = useState(false);
     const [showFirstTimeSetup, setShowFirstTimeSetup] = useState(() => !localStorage.getItem('initial_setup_completed'));
 
-    const { theme, setTheme, toggleTheme, layoutStyle, voiceEnabled, setVoiceEnabled } = useTheme();
+    const { theme, setTheme, layoutStyle } = useTheme();
     const navRef = useHorizontalScroll();
     const sidebarScroll = useSidebarSmartScroll();
     const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
@@ -234,29 +204,34 @@ export default function DashboardLayout() {
         };
     }, []);
 
+    const pathnameRef = useRef(location.pathname);
+    pathnameRef.current = location.pathname;
+
     useEffect(() => {
-        const checkRegisterStatus = async () => {
+        let mounted = true;
+        const checkRegisterStatus = async (forceRefresh = false) => {
             try {
-                const { data } = await api.get('/cash/current', { params: { registerId } });
+                const data = await fetchCurrentShiftCached(registerId, forceRefresh === true);
+                if (!mounted) return;
                 setIsShiftOpen(!!data);
                 setCurrentShiftData(data || null);
-                if (!data && location.pathname === '/pos') {
+                if (!data && pathnameRef.current === '/pos') {
                     setIsCashModalOpen(true);
                 }
             } catch (error) {
                 console.error('Error checking register status:', error);
             } finally {
-                setShiftStatusChecked(true);
+                if (mounted) setShiftStatusChecked(true);
             }
         };
-        checkRegisterStatus();
+        checkRegisterStatus(false);
 
         const handleShiftStatusChanged = (e) => {
             if (e && e.detail && typeof e.detail.isOpen === 'boolean') {
                 setIsShiftOpen(e.detail.isOpen);
                 setCurrentShiftData(e.detail.shift || null);
             } else {
-                checkRegisterStatus();
+                checkRegisterStatus(true);
             }
         };
         window.addEventListener('shift_status_changed', handleShiftStatusChanged);
@@ -264,7 +239,7 @@ export default function DashboardLayout() {
         const fetchLowStock = async () => {
             try {
                 const { data } = await api.get('/products/low-stock');
-                setLowStockItems(Array.isArray(data) ? data : []);
+                if (mounted) setLowStockItems(Array.isArray(data) ? data : []);
             } catch (error) {
                 console.error('Error fetching low stock items:', error);
             }
@@ -272,8 +247,9 @@ export default function DashboardLayout() {
 
         const fetchBusinessSettings = async () => {
             try {
-                const res = await api.get('/settings/business');
-                const bData = res.data || {};
+                const prevMode = localStorage.getItem('pos_business_mode') || '';
+                const bData = (await fetchBusinessSettingsCached()) || {};
+                if (!mounted) return;
                 setBusinessSettings(bData);
                 localStorage.setItem('pos_business_settings', JSON.stringify(bData));
                 if (bData.cashClosureMode) {
@@ -281,27 +257,43 @@ export default function DashboardLayout() {
                 }
                 if (bData.businessMode) {
                     localStorage.setItem('pos_business_mode', bData.businessMode);
-                    window.dispatchEvent(new Event('business_mode_changed'));
+                    if (bData.businessMode !== prevMode) {
+                        window.dispatchEvent(new Event('business_mode_changed'));
+                    }
                 }
-                if (res.data && res.data.initialSetupCompleted) {
+                if (bData.initialSetupCompleted) {
                     localStorage.setItem('initial_setup_completed', 'true');
                     setShowFirstTimeSetup(false);
                 } else if (!localStorage.getItem('initial_setup_completed')) {
                     setShowFirstTimeSetup(true);
                 }
             } catch (e) {
+                console.warn('[DashboardLayout] Error capturado en operación:', e?.message || e);
                 // Silently fallback to cached values
             }
         };
 
         fetchLowStock();
         fetchBusinessSettings();
-        const interval = setInterval(fetchLowStock, 30000); // Check every 30s
-        return () => {
-            clearInterval(interval);
-            window.removeEventListener('shift_status_changed', handleShiftStatusChanged);
+        const handleSaleLowStockRefresh = () => {
+            if (document.visibilityState === 'visible') fetchLowStock();
         };
-    }, [registerId, location.pathname]);
+        const handleOpenCashModal = () => setIsCashModalOpen(true);
+        window.addEventListener('pos-daily-ticket-updated', handleSaleLowStockRefresh);
+        window.addEventListener('open_cash_modal', handleOpenCashModal);
+        const interval = setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                fetchLowStock();
+            }
+        }, 180000); // Polling ligero cada 3 min + refresco reactivo tras cada venta
+        return () => {
+            mounted = false;
+            clearInterval(interval);
+            window.removeEventListener('pos-daily-ticket-updated', handleSaleLowStockRefresh);
+            window.removeEventListener('shift_status_changed', handleShiftStatusChanged);
+            window.removeEventListener('open_cash_modal', handleOpenCashModal);
+        };
+    }, [registerId]);
 
     // Re-check shift status only when modal transitions from open to closed
     useEffect(() => {
@@ -310,7 +302,7 @@ export default function DashboardLayout() {
         if (wasOpen && !isCashModalOpen) {
             const checkStatus = async () => {
                 try {
-                    const { data } = await api.get('/cash/current', { params: { registerId } });
+                    const data = await fetchCurrentShiftCached(registerId, true);
                     setIsShiftOpen(!!data);
                     setCurrentShiftData(data || null);
                 } catch (e) { console.error(e); }
@@ -318,30 +310,6 @@ export default function DashboardLayout() {
             checkStatus();
         }
     }, [isCashModalOpen, registerId]);
-
-    // Dedicated global event listener for instant sync
-    useEffect(() => {
-        const handleGlobalShiftSync = (e) => {
-            if (e && e.detail && typeof e.detail.isOpen === 'boolean') {
-                setIsShiftOpen(e.detail.isOpen);
-                setCurrentShiftData(e.detail.shift || null);
-            } else {
-                api.get('/cash/current', { params: { registerId } })
-                    .then(res => {
-                        setIsShiftOpen(!!res.data);
-                        setCurrentShiftData(res.data || null);
-                    })
-                    .catch(console.error);
-            }
-        };
-        window.addEventListener('shift_status_changed', handleGlobalShiftSync);
-        const handleOpenCashModal = () => setIsCashModalOpen(true);
-        window.addEventListener('open_cash_modal', handleOpenCashModal);
-        return () => {
-            window.removeEventListener('shift_status_changed', handleGlobalShiftSync);
-            window.removeEventListener('open_cash_modal', handleOpenCashModal);
-        };
-    }, [registerId]);
 
     useEffect(() => {
         // Electron "About" listener
@@ -398,8 +366,6 @@ export default function DashboardLayout() {
         const location = useLocation();
         const userRole = (user?.role || '').toLowerCase();
         const isSuperadmin = ['superadmin', 'owner', 'dueño', 'master'].includes(userRole);
-        const isAdmin = ['admin', 'superadmin', 'owner', 'dueño', 'master'].includes(userRole);
-        const isSupervisor = userRole === 'supervisor';
 
         const canManageInventory = hasPermission('canManageInventory');
         const canManageExpenses = hasPermission('canManageExpenses');
@@ -553,9 +519,6 @@ export default function DashboardLayout() {
                         {canAccessPOS && (
                             <NavItem to="/pos" label="POS (Venta)" section="Venta & Caja" icon={ShoppingCart} />
                         )}
-                        {canAccessPOS && (
-                            <NavItem to="/recharges" label="Recargas Telefónicas" section="Venta & Caja" icon={Smartphone} />
-                        )}
                         {canManageCashShift && (
                             <NavItem to="/cash-register" label="Control de Caja" section="Venta & Caja" icon={Banknote} />
                         )}
@@ -581,7 +544,7 @@ export default function DashboardLayout() {
                 )}
 
                 {/* 2. CATÁLOGO & ABASTECIMIENTO */}
-                {(canManageInventory || canManagePromotions || canManageSuppliers || canManagePurchases || canManagePayables || canImportCatalog) && (
+                {(canManageInventory || canManageWarehouses || canManagePromotions || canManageSuppliers || canManagePurchases || canManagePayables || canImportCatalog) && (
                     <>
                         <SectionTitle title="Catálogo & Stock" />
                         {canManageInventory && (
@@ -591,6 +554,14 @@ export default function DashboardLayout() {
                                 section="Catálogo & Stock" 
                                 icon={Package} 
                                 badge={lowStockItems.length > 0 && !isStockAlertDismissed} 
+                            />
+                        )}
+                        {canManageWarehouses && (
+                            <NavItem 
+                                to="/warehouses" 
+                                label="Almacenes" 
+                                section="Catálogo & Stock" 
+                                icon={Warehouse} 
                             />
                         )}
                         {canManageInventory && (
@@ -1304,7 +1275,9 @@ export default function DashboardLayout() {
                         : `overflow-y-auto custom-scrollbar overscroll-y-contain py-3 px-1 sm:py-6 sm:px-4 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-8 ${layoutStyle === 'floating-dock' ? 'md:pb-36 sm:pb-40' : ''}`
                 }`}>
                     <div className={`mx-auto w-full min-w-0 ${location.pathname === '/pos' ? 'h-full flex-1 flex flex-col min-h-0 overflow-hidden' : 'max-w-[1900px]'}`}>
-                        <Outlet />
+                        <ErrorBoundary inline resetKey={location.pathname} moduleName={location.pathname}>
+                            <Outlet />
+                        </ErrorBoundary>
                     </div>
                 </main>
             </div>
@@ -1450,7 +1423,7 @@ export default function DashboardLayout() {
 
                             {/* Compact Row: Exchange Rate + Theme Switch */}
                             <div className="flex items-center gap-2">
-                                {!isUsdOnly && !isDollarOnlyCountry(country) && exchangeRate > 1 && (
+                                {!isUsdOnly && !isSingleCurrencyCountry(country) && exchangeRate > 1 && (
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -1587,8 +1560,9 @@ export default function DashboardLayout() {
                         isOpen={isExchangeModalOpen}
                         onClose={() => setIsExchangeModalOpen(false)}
                         currentRate={exchangeRate}
+                        currentEuroRate={euroRate}
                         currencyMode={currencyMode}
-                        onRateUpdated={fetchExchangeRate}
+                        onRateUpdated={() => fetchExchangeRate(true)}
                     />
                 </Suspense>
             )}

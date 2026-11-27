@@ -10,9 +10,77 @@ const BANK_METHOD_KEYWORDS = [
 ];
 
 class AccountingEngineService {
+    static _seqReady = null;
+    static _seqInitPromise = null;
+
+    /**
+     * Inicializa y sincroniza la secuencia lock-free de correlativos de asientos en PostgreSQL 16.
+     * Se ejecuta fuera de transacciones de venta para jamás abortar un bloque ACID.
+     */
+    static async ensureJournalSequence() {
+        if (this._seqReady === true) return true;
+        if (this._seqInitPromise) return this._seqInitPromise;
+
+        this._seqInitPromise = (async () => {
+            if (typeof sequelize.getDialect !== 'function' || sequelize.getDialect() !== 'postgres') {
+                this._seqReady = false;
+                return false;
+            }
+            try {
+                await sequelize.query(`CREATE SEQUENCE IF NOT EXISTS public.seq_journal_entry_global START WITH 1 INCREMENT BY 1;`);
+                await sequelize.query(`
+                    DO $$
+                    DECLARE
+                        v_max BIGINT := 0;
+                        v_cur BIGINT := 0;
+                    BEGIN
+                        SELECT COALESCE(MAX(
+                            CASE
+                                WHEN "entryNumber" ~ '-[0-9]+$'
+                                THEN (regexp_replace("entryNumber", '^.*-', ''))::bigint
+                                ELSE 0
+                            END
+                        ), 0) INTO v_max FROM "JournalEntries";
+                        SELECT last_value INTO v_cur FROM public.seq_journal_entry_global;
+                        IF v_max > v_cur THEN
+                            PERFORM setval('public.seq_journal_entry_global', v_max, true);
+                        END IF;
+                        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'isaac_app') THEN
+                            GRANT USAGE, SELECT, UPDATE ON SEQUENCE public.seq_journal_entry_global TO isaac_app;
+                        END IF;
+                    END
+                    $$;
+                `).catch(() => {});
+                this._seqReady = true;
+                return true;
+            } catch (_) {
+                // Si el rol actual no puede hacer DDL pero la secuencia ya existe y tiene permiso USAGE
+                try {
+                    await sequelize.query(`SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'seq_journal_entry_global' AND c.relkind = 'S';`);
+                    const [existsRows] = await sequelize.query(`SELECT to_regclass('public.seq_journal_entry_global') AS reg;`);
+                    if (existsRows?.[0]?.reg) {
+                        this._seqReady = true;
+                        return true;
+                    }
+                } catch (_checkErr) {}
+                this._seqReady = false;
+                return false;
+            } finally {
+                this._seqInitPromise = null;
+            }
+        })();
+
+        return this._seqInitPromise;
+    }
+
     static _isBankMethod(methodStr) {
-        const mKey = String(methodStr || '').toLowerCase().trim();
-        if (!mKey || mKey === 'credit' || mKey === 'fiado' || mKey === 'credit_usd') return false;
+        const mKey = String(methodStr || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .trim()
+            .replace(/\s+/g, '_');
+        if (!mKey || mKey === 'credit' || mKey === 'credito' || mKey === 'fiado' || mKey === 'credit_usd') return false;
         if (mKey.includes('cash') || mKey.includes('efectivo')) return false;
         return BANK_METHOD_KEYWORDS.some(k => mKey.includes(k));
     }
@@ -195,27 +263,49 @@ class AccountingEngineService {
         }
 
         const executeOperations = async (t) => {
-            // Serializar correlativo del año por empresa evitando colisiones y huecos
-            if (typeof sequelize.getDialect === 'function' && sequelize.getDialect() === 'postgres') {
-                await sequelize.query('SELECT pg_advisory_xact_lock(hashtext(:lockKey))', {
-                    replacements: { lockKey: `je_seq_${companyId}_${year}` },
+            const isRealPostgresTx =
+                typeof sequelize.getDialect === 'function' &&
+                sequelize.getDialect() === 'postgres' &&
+                Boolean(t && typeof t.commit === 'function');
+
+            // Correlativo de asiento: vía secuencia nativa PostgreSQL lock-free (0 contención entre cajas)
+            // con fallback automático al advisory lock tradicional si la secuencia no está habilitada.
+            let entryNumber = null;
+            if (isRealPostgresTx && this._seqReady === null) {
+                await this.ensureJournalSequence();
+            }
+            if (isRealPostgresTx && this._seqReady === true) {
+                const seqRows = await sequelize.query(
+                    `SELECT nextval('public.seq_journal_entry_global') AS seq`,
+                    { type: sequelize.QueryTypes.SELECT, transaction: t }
+                );
+                const nextSeq = Number(seqRows?.[0]?.seq || 0);
+                if (nextSeq > 0) {
+                    entryNumber = `AS-${year}-${String(nextSeq).padStart(5, '0')}`;
+                }
+            }
+            if (!entryNumber) {
+                if (typeof sequelize.getDialect === 'function' && sequelize.getDialect() === 'postgres') {
+                    await sequelize.query('SELECT pg_advisory_xact_lock(hashtext(:lockKey))', {
+                        replacements: { lockKey: `je_seq_${companyId}_${year}` },
+                        transaction: t
+                    });
+                }
+
+                const lastEntry = await JournalEntry.findOne({
+                    where: {
+                        companyId,
+                        entryNumber: { [Op.like]: `AS-${year}-%` }
+                    },
+                    order: [['entryNumber', 'DESC']],
+                    attributes: ['entryNumber'],
                     transaction: t
                 });
+                const lastSeq = lastEntry?.entryNumber
+                    ? (parseInt(String(lastEntry.entryNumber).split('-').pop(), 10) || 0)
+                    : 0;
+                entryNumber = `AS-${year}-${String(lastSeq + 1).padStart(5, '0')}`;
             }
-
-            const lastEntry = await JournalEntry.findOne({
-                where: {
-                    companyId,
-                    entryNumber: { [Op.like]: `AS-${year}-%` }
-                },
-                order: [['entryNumber', 'DESC']],
-                attributes: ['entryNumber'],
-                transaction: t
-            });
-            const lastSeq = lastEntry?.entryNumber
-                ? (parseInt(String(lastEntry.entryNumber).split('-').pop(), 10) || 0)
-                : 0;
-            const entryNumber = `AS-${year}-${String(lastSeq + 1).padStart(5, '0')}`;
 
             const rate = precision.parseNumericInput(exchangeRate) > 0
                 ? precision.parseNumericInput(exchangeRate)
@@ -239,14 +329,121 @@ class AccountingEngineService {
                 userId
             }, { transaction: t });
 
-            // Crear líneas y actualizar saldos de cuenta (con LOCK.UPDATE en orden determinístico por accountId)
+            // Validar cuentas y consolidar deltas netos por cuenta
             const sortedLines = [...lines].map((l, idx) => ({ ...l, _origIdx: idx }))
                 .sort((a, b) => String(a.accountId || '').localeCompare(String(b.accountId || '')));
+            const uniqueAccountIds = [...new Set(sortedLines.map(l => l.accountId).filter(Boolean))];
 
+            if (isRealPostgresTx && typeof AccountCatalog.findAll === 'function' && uniqueAccountIds.length > 0) {
+                // Fast-Path PostgreSQL 16 (Alta Concurrencia Multicaja):
+                // 1) Lectura ligera de metadatos sin FOR UPDATE prolongado
+                // 2) Bulk insert de líneas del asiento
+                // 3) 1 único UPDATE atómico con CTE ORDER BY id ASC FOR UPDATE al final (ventana de lock < 1 ms, cero deadlocks)
+                const accountMetaRows = await AccountCatalog.findAll({
+                    where: { id: { [Op.in]: uniqueAccountIds } },
+                    attributes: ['id', 'code', 'name', 'nature', 'isSelectable'],
+                    raw: true,
+                    transaction: t
+                });
+                const metaMap = new Map((accountMetaRows || []).map(acc => [String(acc.id), acc]));
+
+                const linesToInsert = [];
+                const deltaMap = new Map();
+
+                for (const line of sortedLines) {
+                    const accIdStr = String(line.accountId);
+                    const account = metaMap.get(accIdStr);
+                    if (!account) {
+                        throw new Error(`Cuenta contable no encontrada: ${line.accountId}`);
+                    }
+                    if (account.isSelectable === false) {
+                        throw new Error(`La cuenta contable ${account.code} (${account.name}) es de agrupación y no admite cargos directos.`);
+                    }
+
+                    const debitVal = precision.round(line.debit || 0, 2);
+                    const creditVal = precision.round(line.credit || 0, 2);
+
+                    linesToInsert.push({
+                        id: generateRobustId(),
+                        journalEntryId: entryId,
+                        accountId: line.accountId,
+                        description: line.description || description || '',
+                        debit: debitVal,
+                        credit: creditVal,
+                        lineOrder: line._origIdx + 1
+                    });
+
+                    const deltaUSD = account.nature === 'DEBIT'
+                        ? precision.subtract(debitVal, creditVal)
+                        : precision.subtract(creditVal, debitVal);
+                    const deltaVES = precision.round(precision.multiply(deltaUSD, rate), 2);
+
+                    const existing = deltaMap.get(accIdStr);
+                    if (existing) {
+                        existing.delta_usd = precision.round(precision.add(existing.delta_usd, deltaUSD), 2);
+                        existing.delta_ves = precision.round(precision.add(existing.delta_ves, deltaVES), 2);
+                    } else {
+                        deltaMap.set(accIdStr, { id: accIdStr, delta_usd: deltaUSD, delta_ves: deltaVES });
+                    }
+                }
+
+                if (linesToInsert.length > 0) {
+                    await JournalEntryLine.bulkCreate(linesToInsert, { transaction: t });
+                }
+
+                const deltasList = Array.from(deltaMap.values())
+                    .filter(d => d.delta_usd !== 0 || d.delta_ves !== 0)
+                    .sort((a, b) => a.id.localeCompare(b.id));
+
+                if (deltasList.length > 0) {
+                    await sequelize.query(`
+                        WITH deltas(id, delta_usd, delta_ves) AS (
+                            SELECT id, delta_usd, delta_ves
+                            FROM jsonb_to_recordset(CAST(:deltasJson AS jsonb))
+                                AS x(id text, delta_usd numeric, delta_ves numeric)
+                        ),
+                        locked AS MATERIALIZED (
+                            SELECT ac."id"
+                            FROM "AccountCatalogs" ac
+                            INNER JOIN deltas d ON d.id = ac."id"
+                            ORDER BY ac."id" ASC
+                            FOR NO KEY UPDATE
+                        )
+                        UPDATE "AccountCatalogs" ac
+                        SET "balanceUSD" = ROUND((COALESCE(ac."balanceUSD", 0) + d.delta_usd)::numeric, 2),
+                            "balanceVES" = ROUND((COALESCE(ac."balanceVES", 0) + d.delta_ves)::numeric, 2),
+                            "updatedAt" = NOW()
+                        FROM deltas d
+                        INNER JOIN locked l ON l."id" = d.id
+                        WHERE ac."id" = d.id;
+                    `, {
+                        replacements: { deltasJson: JSON.stringify(deltasList) },
+                        transaction: t
+                    });
+                }
+
+                return entry;
+            }
+
+            // Fallback compatible con mocks / transacciones simuladas / dialectos no-Postgres
+            let accountMap = new Map();
+            if (typeof AccountCatalog.findAll === 'function' && uniqueAccountIds.length > 0) {
+                const lockedAccounts = await AccountCatalog.findAll({
+                    where: { id: { [Op.in]: uniqueAccountIds } },
+                    order: [['id', 'ASC']],
+                    lock: t?.LOCK?.UPDATE,
+                    transaction: t
+                });
+                if (Array.isArray(lockedAccounts)) {
+                    accountMap = new Map(lockedAccounts.map(acc => [String(acc.id), acc]));
+                }
+            }
+
+            const linesToInsert = [];
             for (const line of sortedLines) {
-                const account = await AccountCatalog.findOne({
+                const account = accountMap.get(String(line.accountId)) || await AccountCatalog.findOne({
                     where: { id: line.accountId },
-                    lock: t.LOCK.UPDATE,
+                    lock: t?.LOCK?.UPDATE,
                     transaction: t
                 });
                 if (!account) {
@@ -259,7 +456,7 @@ class AccountingEngineService {
                 const debitVal = precision.round(line.debit || 0, 2);
                 const creditVal = precision.round(line.credit || 0, 2);
 
-                await JournalEntryLine.create({
+                linesToInsert.push({
                     id: generateRobustId(),
                     journalEntryId: entryId,
                     accountId: line.accountId,
@@ -267,7 +464,7 @@ class AccountingEngineService {
                     debit: debitVal,
                     credit: creditVal,
                     lineOrder: line._origIdx + 1
-                }, { transaction: t });
+                });
 
                 // Actualizar saldos acumulados de la cuenta en USD y VES exactos
                 const deltaUSD = account.nature === 'DEBIT'
@@ -278,10 +475,22 @@ class AccountingEngineService {
                 const newBalanceUSD = precision.round(precision.add(account.balanceUSD || 0, deltaUSD), 2);
                 const newBalanceVES = precision.round(precision.add(account.balanceVES || 0, deltaVES), 2);
 
+                account.balanceUSD = newBalanceUSD;
+                account.balanceVES = newBalanceVES;
                 await account.update({
                     balanceUSD: newBalanceUSD,
                     balanceVES: newBalanceVES
                 }, { transaction: t });
+            }
+
+            if (linesToInsert.length > 0) {
+                if (typeof JournalEntryLine.bulkCreate === 'function') {
+                    await JournalEntryLine.bulkCreate(linesToInsert, { transaction: t });
+                } else {
+                    for (const linePayload of linesToInsert) {
+                        await JournalEntryLine.create(linePayload, { transaction: t });
+                    }
+                }
             }
 
             return entry;
@@ -325,16 +534,33 @@ class AccountingEngineService {
                 totalCost = round2(rawCostSum);
             }
 
-            // Resolver catálogo contable (sembrando cuentas PUC faltantes en la transacción si aplica)
-            let accCaja = await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
-            let accBanco = await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
-            let accCxC = await this.findAccountByCode('1.1.2.01.001', companyId, transaction);
-            let accVentas = await this.findAccountByCode('4.1.1.01.001', companyId, transaction);
-            let accIvaDebito = await this.findAccountByCode('2.1.2.01.001', companyId, transaction);
-            let accIgtf = await this.findAccountByCode('2.1.2.04.001', companyId, transaction);
-            let accDescuentos = await this.findAccountByCode('4.1.2.01.001', companyId, transaction);
-            let accCostoVenta = await this.findAccountByCode('5.1.1.01.001', companyId, transaction);
-            let accInventario = await this.findAccountByCode('1.1.3.01.001', companyId, transaction);
+            // Resolver catálogo contable en 1 sola consulta por lote (evita 9 SELECT secuenciales por venta)
+            const requiredCodes = [
+                '1.1.1.01.001', '1.1.1.02.001', '1.1.2.01.001', '4.1.1.01.001',
+                '2.1.2.01.001', '2.1.2.04.001', '4.1.2.01.001', '5.1.1.01.001', '1.1.3.01.001'
+            ];
+            let pucMap = new Map();
+            const isRealTxOrNoTx = !transaction || typeof transaction.commit === 'function';
+            const isDefaultFinder = this.findAccountByCode === AccountingEngineService._defaultFindAccountByCode;
+            if (typeof AccountCatalog.findAll === 'function' && isRealTxOrNoTx && isDefaultFinder) {
+                const batchAccounts = await AccountCatalog.findAll({
+                    where: { companyId, code: { [Op.in]: requiredCodes } },
+                    ...(transaction ? { transaction } : {})
+                });
+                if (Array.isArray(batchAccounts)) {
+                    pucMap = new Map(batchAccounts.map(a => [a.code, a]));
+                }
+            }
+
+            let accCaja = pucMap.get('1.1.1.01.001') || await this.findAccountByCode('1.1.1.01.001', companyId, transaction);
+            let accBanco = pucMap.get('1.1.1.02.001') || await this.findAccountByCode('1.1.1.02.001', companyId, transaction);
+            let accCxC = pucMap.get('1.1.2.01.001') || await this.findAccountByCode('1.1.2.01.001', companyId, transaction);
+            let accVentas = pucMap.get('4.1.1.01.001') || await this.findAccountByCode('4.1.1.01.001', companyId, transaction);
+            let accIvaDebito = pucMap.get('2.1.2.01.001') || (tax > 0 ? await this.findAccountByCode('2.1.2.01.001', companyId, transaction) : null);
+            let accIgtf = pucMap.get('2.1.2.04.001') || (igtf > 0 ? await this.findAccountByCode('2.1.2.04.001', companyId, transaction) : null);
+            let accDescuentos = pucMap.get('4.1.2.01.001') || (totalDiscount > 0 ? await this.findAccountByCode('4.1.2.01.001', companyId, transaction) : null);
+            let accCostoVenta = pucMap.get('5.1.1.01.001') || (totalCost > 0 ? await this.findAccountByCode('5.1.1.01.001', companyId, transaction) : null);
+            let accInventario = pucMap.get('1.1.3.01.001') || (totalCost > 0 ? await this.findAccountByCode('1.1.3.01.001', companyId, transaction) : null);
 
             const missingNeeded = !accCaja || !accVentas || !accBanco || !accCxC
                 || (totalDiscount > 0 && !accDescuentos)
@@ -713,11 +939,26 @@ class AccountingEngineService {
                     else cashUsd = precision.add(cashUsd, eqUsd);
                 }
                 const sumPms = precision.add([cashUsd, bankUsd, creditUsd]);
+                const hadCredit = creditUsd > 0;
+                const hadBank = bankUsd > 0;
                 if (sumPms > 0) {
                     const scale = precision.divide(totalRefund, sumPms);
                     cashUsd = round2(precision.multiply(cashUsd, scale));
                     bankUsd = round2(precision.multiply(bankUsd, scale));
-                    creditUsd = round2(precision.subtract(totalRefund, precision.add(cashUsd, bankUsd)));
+                    if (hadCredit) {
+                        creditUsd = Math.max(0, round2(precision.subtract(totalRefund, precision.add(cashUsd, bankUsd))));
+                    } else {
+                        creditUsd = 0;
+                        // Absorber cualquier centavo residual de redondeo en la cuenta efectivamente utilizada
+                        const residual = round2(precision.subtract(totalRefund, precision.add(cashUsd, bankUsd)));
+                        if (Math.abs(residual) > 0) {
+                            if (hadBank && bankUsd >= Math.abs(residual)) {
+                                bankUsd = round2(precision.add(bankUsd, residual));
+                            } else {
+                                cashUsd = round2(precision.add(cashUsd, residual));
+                            }
+                        }
+                    }
                 } else {
                     cashUsd = totalRefund;
                 }
@@ -1214,4 +1455,5 @@ class AccountingEngineService {
     }
 }
 
+AccountingEngineService._defaultFindAccountByCode = AccountingEngineService.findAccountByCode;
 module.exports = AccountingEngineService;

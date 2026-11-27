@@ -357,10 +357,14 @@ namespace IsaacPOS
                 psi.CreateNoWindow = true;
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
 
-                // Inyección explícita de variables de entorno seguras
+                // Pasar ruta persistente de datos de usuario para secretos por instalación y db-config
+                string appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                string defaultUserDataPath = !string.IsNullOrEmpty(appDataDir) ? Path.Combine(appDataDir, "isaac-pos") : "";
+                if (!string.IsNullOrEmpty(defaultUserDataPath) && string.IsNullOrEmpty(psi.EnvironmentVariables["USER_DATA_PATH"]))
+                {
+                    psi.EnvironmentVariables["USER_DATA_PATH"] = defaultUserDataPath;
+                }
                 psi.EnvironmentVariables["PORT"] = "3005,5005,8080";
-                psi.EnvironmentVariables["JWT_SECRET"] = "4d0e0ed5b2e25fb26c0ce829cd8135a9e04c4eefdc881a2bb258d4aa98747ffe";
-                psi.EnvironmentVariables["SYNC_SECRET_KEY"] = "AMERICAN_POS_SYNC_SECRET_KEY_2024";
 
                 Process.Start(psi);
             }

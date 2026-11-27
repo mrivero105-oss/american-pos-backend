@@ -35,11 +35,18 @@ const { io: ioClient } = frontendRequire('socket.io-client');
 
 let srvHandle = null;
 let validSocket = null;
+let e2eTenantToCleanup = null;
 
 test.after(async () => {
     try {
         if (validSocket) validSocket.disconnect();
     } catch (_) {}
+    if (e2eTenantToCleanup) {
+        try {
+            const { BusinessSetting } = require('../database/models');
+            await BusinessSetting.destroy({ where: { companyId: e2eTenantToCleanup } });
+        } catch (_) {}
+    }
     if (srvHandle && typeof srvHandle.stopServer === 'function') {
         await srvHandle.stopServer();
     }
@@ -81,10 +88,12 @@ test('E2E Backend Real (Express + PostgreSQL americanpos_test + Socket.IO JWT)',
         { where: { status: 'open' } }
     );
 
-    // 3. Crear usuario administrador temporal para la corrida E2E
+    // 3. Crear usuario administrador temporal con tenant aislado para la corrida E2E
     const tempPassword = 'E2E_' + crypto.randomBytes(10).toString('hex');
     const passwordHash = bcrypt.hashSync(tempPassword, 8);
     const e2eUsername = 'e2e_superadmin';
+    const e2eCompanyId = `e2e_comp_${Date.now()}`;
+    e2eTenantToCleanup = e2eCompanyId;
     let e2eUser = await User.findOne({ where: { username: e2eUsername } });
     if (!e2eUser) {
         e2eUser = await User.create({
@@ -95,7 +104,7 @@ test('E2E Backend Real (Express + PostgreSQL americanpos_test + Socket.IO JWT)',
             password: passwordHash,
             role: 'superadmin',
             status: 'active',
-            companyId: '2',
+            companyId: e2eCompanyId,
             defaultCurrency: 'BOTH',
             permissions: {}
         });
@@ -104,7 +113,7 @@ test('E2E Backend Real (Express + PostgreSQL americanpos_test + Socket.IO JWT)',
             password: passwordHash,
             role: 'superadmin',
             status: 'active',
-            companyId: '2',
+            companyId: e2eCompanyId,
             failedLoginAttempts: 0,
             lockUntil: null
         });
@@ -149,6 +158,19 @@ test('E2E Backend Real (Express + PostgreSQL americanpos_test + Socket.IO JWT)',
         'Content-Type': 'application/json',
         Authorization: `Bearer ${loginJson.token}`
     };
+
+    // Fijar configuración fiscal determinista para el tenant E2E (sin IGTF sobre $50.00 exento)
+    const taxCfgRes = await fetch(`${baseUrl}/settings/taxes`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+            ivaEnabled: true,
+            ivaRate: 16,
+            igtfEnabled: false,
+            igtfRate: 0
+        })
+    });
+    assert.equal(taxCfgRes.status, 200, `POST /settings/taxes falló: status=${taxCfgRes.status}`);
 
     // Verificar que el módulo de bancos eliminado ya no existe en las rutas (/api/banks y POST /banks -> 404)
     const banksApiRes = await fetch(`${baseUrl}/api/banks`, { headers: authHeaders });

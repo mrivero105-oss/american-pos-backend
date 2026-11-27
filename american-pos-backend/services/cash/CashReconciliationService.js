@@ -150,11 +150,10 @@ module.exports = {
         }
 
         const getRegisterSortRank = (reg) => {
-            const name = (reg.registerName || '').toLowerCase();
-            const user = (reg.userName || '').toLowerCase();
-            if (name.includes('caja 1') || name === '1' || user.includes('manuel')) return 1;
-            if (name.includes('caja 2') || name === '2' || user.includes('carmen')) return 2;
-            if (name.includes('caja 3') || name === '3' || user.includes('adrian')) return 3;
+            const name = (reg.registerName || '').toLowerCase().trim();
+            if (name.includes('caja 1') || name === '1' || name.includes('principal')) return 1;
+            if (name.includes('caja 2') || name === '2') return 2;
+            if (name.includes('caja 3') || name === '3') return 3;
             const match = name.match(/\d+/);
             if (match) return 10 + parseInt(match[0], 10);
             return 100;
@@ -384,9 +383,18 @@ module.exports = {
             limit: 30
         });
 
+        const allSettingsForAudit = readJson(SETTINGS_FILE) || {};
+        const auditUserSettings = getUserSettings(allSettingsForAudit, companyId) || {};
+        const auditRate = Number(auditUserSettings.exchangeRate) > 0 ? Number(auditUserSettings.exchangeRate) : 1;
         const totalWithdrawals = movements
             .filter(m => m.type === 'out' || m.type === 'expense')
-            .reduce((acc, m) => acc + (Number(m.amount) || 0), 0);
+            .reduce((acc, m) => {
+                const rawAmt = Number(m.amount) || 0;
+                const cur = String(m.currency || '').toUpperCase().trim();
+                const isVes = cur === 'VES' || cur === 'BS';
+                const amtUsd = (isVes && auditRate > 0) ? precision.divide(rawAmt, auditRate) : rawAmt;
+                return precision.add([acc, amtUsd]);
+            }, 0);
 
         // 7. Alertas asociadas
         const alerts = await Alert.findAll({
@@ -443,6 +451,18 @@ module.exports = {
      * Cierre Forzado Remoto de Turno (Acción Administrativa)
      */
     async forceCloseShift(adminUser, shiftId, reason = 'Cierre administrativo forzado') {
+        // Precalcular estadísticas fuera de la transacción con LOCK.UPDATE para evitar deadlock si getCurrentShift actualiza el turno
+        const preShift = await CashShift.findOne({
+            where: { id: shiftId, companyId: adminUser.companyId }
+        });
+        if (!preShift) {
+            throw new Error('Turno de caja no encontrado');
+        }
+        if (preShift.status === 'closed' || preShift.status === 'forced_closed') {
+            throw new Error('El turno ya se encuentra cerrado');
+        }
+        const currentShiftData = await this.getCurrentShift(preShift.userId, adminUser.companyId, preShift.registerId);
+
         const closedShift = await sequelize.transaction(async (t) => {
             const shift = await CashShift.findOne({
                 where: { id: shiftId, companyId: adminUser.companyId },
@@ -456,7 +476,6 @@ module.exports = {
                 throw new Error('El turno ya se encuentra cerrado');
             }
 
-            const currentShiftData = await this.getCurrentShift(shift.userId, adminUser.companyId, shift.registerId);
             const expectedAmount = currentShiftData?.expectedAmount || Number(shift.initialAmount) || 0;
 
             shift.status = 'forced_closed';
@@ -748,7 +767,7 @@ module.exports = {
             const rawTolerance = userSettings.cashDifferenceToleranceUsd;
             const tolerance = (rawTolerance !== undefined && rawTolerance !== null && !isNaN(Number(rawTolerance))) ? Number(rawTolerance) : 1.0;
 
-            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
+            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'master', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
 
             if (Math.abs(diff) > tolerance && !isUserAdminOrSupervisor) {
                 const approvalIdToVerify = closingData.supervisorApprovalId || closingData.supervisorAuthToken;
@@ -1245,17 +1264,20 @@ module.exports = {
             const rawTolerance = userSettings.cashDifferenceToleranceUsd;
             const tolerance = (rawTolerance !== undefined && rawTolerance !== null && !isNaN(Number(rawTolerance))) ? Number(rawTolerance) : 1.0;
 
-            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
+            const isUserAdminOrSupervisor = ['admin', 'superadmin', 'owner', 'master', 'supervisor'].includes(String(reqUser?.role || '').toLowerCase());
 
             // Normalizar todas las diferencias (efectivo y digitales) a USD para auditoría estricta
             const rateAtClosure = exchangeRate > 0 ? exchangeRate : 1.0;
+            const isCardInVes = !isSingleMode && isVesPaymentMethod('debit', pMethods);
             const diffVesInUsd = isSingleMode ? 0 : precision.normalizeToUsd(Math.abs(differenceVES), rateAtClosure);
             const diffMobileInUsd = isSingleMode ? 0 : precision.normalizeToUsd(Math.abs(diffMobile), rateAtClosure);
+            const diffCardAbsUsd = isCardInVes ? precision.normalizeToUsd(Math.abs(diffCard), rateAtClosure) : Math.abs(diffCard);
+            const diffCardSignedUsd = isCardInVes ? precision.divide(diffCard, rateAtClosure) : diffCard;
             const totalDifferenceUsdEquiv = precision.add([
                 Math.abs(differenceUSD),
                 diffVesInUsd,
                 Math.abs(diffZelle),
-                Math.abs(diffCard),
+                diffCardAbsUsd,
                 diffMobileInUsd
             ]);
             const netDifferenceUsd = isSingleMode
@@ -1264,7 +1286,7 @@ module.exports = {
                     differenceUSD,
                     precision.divide(differenceVES, rateAtClosure),
                     diffZelle,
-                    diffCard,
+                    diffCardSignedUsd,
                     precision.divide(diffMobile, rateAtClosure)
                 ]);
 
@@ -1630,7 +1652,7 @@ module.exports = {
             };
         }));
         
-        ranking.sort((a, b) => b.totalDiffUSD - a.totalDiffUSD); // Ordenar por quien "pierde" más
+        ranking.sort((a, b) => (Number(a.totalDiffUSD) || 0) - (Number(b.totalDiffUSD) || 0)); // Ordenar por quien "pierde" más (valores más negativos primero)
 
         // 3. Patrones y Insights
         const insights = this._detectAuditPatterns(alerts, ranking);

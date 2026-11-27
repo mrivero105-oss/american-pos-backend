@@ -2,6 +2,12 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const path = require('path');
 const { runWithTenantContext } = require('../database/tenantContext');
+const {
+    isPlatformSuperAdminRole,
+    isCompanyOwnerRole,
+    isCompanyAdminRole
+} = require('../constants/roles');
+const { isSessionValid } = require('../utils/sessionRegistry');
 
 // 🔒 SECURITY: Strict JWT_SECRET validation
 const FINAL_SECRET = process.env.JWT_SECRET;
@@ -17,11 +23,10 @@ const safeSecretEqual = (a, b) => {
 };
 
 const wrapTenantNext = (req, next) => {
-    const roleLower = String(req.user?.role || '').toLowerCase();
     return runWithTenantContext({
         companyId: req.user?.companyId || '',
         userId: req.user?.id || '',
-        isSuperAdmin: roleLower === 'superadmin'
+        isSuperAdmin: isPlatformSuperAdminRole(req.user?.role)
     }, () => next());
 };
 
@@ -111,14 +116,15 @@ const applyUserAuthContext = async (req, decoded) => {
         }
         const dbSession = cachedUser.currentSessionId ? String(cachedUser.currentSessionId) : '';
         const tokenSession = decoded.sessionId ? String(decoded.sessionId) : '';
-        if (dbSession) {
-            if (dbSession.startsWith('REVOKED_') || tokenSession !== dbSession) {
-                invalidateUserAuthCache(decoded.id);
-                return { ok: false, status: 401, error: 'Sesión revocada o expirada. Inicia sesión nuevamente.' };
-            }
-        } else if (tokenSession) {
+        if (!isSessionValid(dbSession, tokenSession)) {
             invalidateUserAuthCache(decoded.id);
-            return { ok: false, status: 401, error: 'Sesión inválida. Inicia sesión nuevamente.' };
+            return {
+                ok: false,
+                status: 401,
+                error: dbSession
+                    ? 'Sesión revocada o expirada. Inicia sesión nuevamente.'
+                    : 'Sesión inválida. Inicia sesión nuevamente.'
+            };
         }
         req.user.permissions = cachedUser.permissions;
         req.user.role = cachedUser.role;
@@ -130,6 +136,76 @@ const applyUserAuthContext = async (req, decoded) => {
         req.user.permissions = decoded.permissions || {};
     }
     return { ok: true };
+};
+
+const isExplicitPublicRoute = (req) => {
+    const reqPath = req.path || '';
+    const isStaticAsset = reqPath.startsWith('/assets/') && /\.(js|css|png|jpg|jpeg|svg|ico|woff|woff2|ttf|map|webp)$/i.test(reqPath);
+    return (
+        reqPath === '/dist.zip' ||
+        reqPath === '/version.json' ||
+        reqPath.startsWith('/api/app-update-info') ||
+        reqPath.endsWith('.apk') ||
+        reqPath === '/index.html' ||
+        reqPath === '/sw.js' ||
+        reqPath === '/manifest.json' ||
+        isStaticAsset ||
+        reqPath.startsWith('/js/') ||
+        reqPath.startsWith('/css/') ||
+        reqPath.startsWith('/fonts/') ||
+        reqPath.startsWith('/product_images/') ||
+        reqPath.startsWith('/supplier_logos/') ||
+        reqPath.startsWith('/img/') ||
+        reqPath === '/hello' ||
+        reqPath === '/auth/login' ||
+        reqPath === '/auth/me' ||
+        (req.method === 'GET' && (reqPath === '/settings/business' || reqPath === '/api/settings/business')) ||
+        (req.method === 'GET' && (reqPath === '/settings/rate' || reqPath === '/api/settings/rate')) ||
+        (req.method === 'GET' && (reqPath === '/settings/payment-methods' || reqPath === '/api/settings/payment-methods')) ||
+        (req.method === 'GET' && (reqPath === '/settings/pago-movil' || reqPath === '/api/settings/pago-movil')) ||
+        (req.method === 'GET' && (reqPath === '/settings/binance' || reqPath === '/api/settings/binance' || reqPath === '/settings/binance/rate' || reqPath === '/api/settings/binance/rate')) ||
+        (req.method === 'GET' && (reqPath === '/settings/is-setup' || reqPath === '/api/settings/is-setup')) ||
+        reqPath === '/license/status' ||
+        reqPath === '/license/activate' ||
+        reqPath === '/license/sync-online' ||
+        reqPath.startsWith('/reset-password') ||
+        reqPath.replace(/\/$/, '') === '/auth/login'
+    );
+};
+
+const isAllowedSyncKeyRequest = (method, rawPath) => {
+    const cleanMethod = String(method || 'GET').toUpperCase();
+    const normalizedPath = String(rawPath || '').toLowerCase().replace(/^\/api(?=\/|$)/, '') || '/';
+
+    if (cleanMethod === 'GET') {
+        return (
+            normalizedPath.startsWith('/sync/') ||
+            normalizedPath === '/sync' ||
+            normalizedPath === '/products' ||
+            normalizedPath.startsWith('/products/') ||
+            normalizedPath === '/customers' ||
+            normalizedPath.startsWith('/customers/') ||
+            normalizedPath === '/sales/remote-held-sales' ||
+            normalizedPath.startsWith('/cash/active-terminal') ||
+            normalizedPath.startsWith('/remote-scan') ||
+            normalizedPath === '/auth/me' ||
+            normalizedPath === '/branches'
+        );
+    }
+    if (cleanMethod === 'POST') {
+        return (
+            normalizedPath === '/sync/push' ||
+            normalizedPath === '/sync/offline-sales' ||
+            normalizedPath === '/sales/public-sync' ||
+            normalizedPath === '/sales/remote-held-sale' ||
+            normalizedPath === '/customers' ||
+            normalizedPath.startsWith('/remote-scan')
+        );
+    }
+    if (cleanMethod === 'DELETE') {
+        return normalizedPath === '/sales/remote-held-sale' || normalizedPath.startsWith('/sales/remote-held-sale/');
+    }
+    return false;
 };
 
 const verifyToken = async (req, res, next) => {
@@ -151,8 +227,12 @@ const verifyToken = async (req, res, next) => {
 
     // 0a. Priorizar Token de Sesión Real (Bearer) si está presente
     const authHeader = req.headers ? (req.headers['authorization'] || req.headers['Authorization']) : null;
-        const extractedToken = extractBearerToken(authHeader) || (req.cookies && req.cookies.authToken);
-    if (extractedToken) {
+    const bearerToken = extractBearerToken(authHeader);
+    const extractedToken = bearerToken || (req.cookies && req.cookies.authToken);
+    const isPublicEndpoint = isExplicitPublicRoute(req);
+    const isPublicSyncEndpoint = (req.path || '').endsWith('/public-sync');
+
+    if (extractedToken && !isPublicEndpoint && !isPublicSyncEndpoint) {
         try {
             const decoded = verifyJwtResilient(extractedToken);
             req.user = decoded;
@@ -161,7 +241,7 @@ const verifyToken = async (req, res, next) => {
             }
             const decodedRole = String(req.user.role || '').toLowerCase();
             const headerCompanyId = (req.headers && req.headers['x-company-id']) || (req.query && req.query.companyId);
-                    if (decodedRole === 'superadmin' && headerCompanyId) {
+            if (decodedRole === 'superadmin' && headerCompanyId) {
                 req.user.companyId = String(headerCompanyId);
             }
             const ctxRes = await applyUserAuthContext(req, decoded);
@@ -184,48 +264,21 @@ const verifyToken = async (req, res, next) => {
 
             return wrapTenantNext(req, next);
         } catch (tokenErr) {
-            // Si el token falló o expiró, continuar a los mecanismos de sincronización LAN o públicos
+            if (bearerToken) {
+                console.warn(`[AUTH] 401 Unauthorized: Bearer token invalid for path ${req.path}: ${tokenErr.message}`);
+                return res.status(401).json({ error: 'Token inválido o expirado' });
+            }
         }
     }
 
-    // 0b. Sincronización Segura LAN / Terminal Móvil mediante clave de sincronización (Principio de Mínimo Privilegio)
+    // 0b. Sincronización Segura LAN / Terminal Móvil mediante allowlist estricta (Principio de Mínimo Privilegio)
     const syncKey = req.headers && (req.headers['x-sync-key'] || req.headers['X-Sync-Key']);
     const expectedSyncKey = process.env.SYNC_SECRET_KEY;
     if (syncKey && expectedSyncKey && safeSecretEqual(syncKey, expectedSyncKey)) {
-        // DEFENSE-IN-DEPTH: Prohibir de raíz accesos a módulos administrativos o destructivos mediante clave LAN
         const fullPath = (req.baseUrl || '') + (req.path || '');
-        const pathLower = fullPath.toLowerCase();
-        const method = req.method.toUpperCase();
+        const method = String(req.method || 'GET').toUpperCase();
 
-        const forbiddenPrefixes = [
-            '/users', '/api/users',
-            '/backup', '/api/backup',
-            '/license', '/api/license',
-            '/audit', '/api/audit',
-            '/accounting', '/api/accounting',
-            '/executive-bi', '/api/executive-bi',
-            '/bi', '/api/bi',
-            '/fiscal', '/api/fiscal',
-            '/collections', '/api/collections',
-            '/payroll', '/api/payroll',
-            '/assets', '/api/assets',
-            '/expenses', '/api/expenses',
-            '/services', '/api/services',
-            '/recharges', '/api/recharges',
-            '/delivery-notes', '/api/delivery-notes',
-            '/quotations', '/api/quotations',
-            '/refunds', '/api/refunds',
-            '/system', '/api/system',
-            '/whatsapp', '/api/whatsapp',
-            '/messages', '/api/messages',
-            '/debug', '/api/debug'
-        ];
-
-        const isForbiddenRoute = forbiddenPrefixes.some(prefix => pathLower.startsWith(prefix) || pathLower.includes(prefix));
-        const isForbiddenSettingMutation = (pathLower.includes('/settings') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method));
-        const isDestructiveMutation = (method === 'DELETE' && !pathLower.includes('/held-sales'));
-
-        if (isForbiddenRoute || isForbiddenSettingMutation || isDestructiveMutation) {
+        if (!isPublicEndpoint && !isAllowedSyncKeyRequest(method, fullPath)) {
             console.warn(`[SECURITY] 403 Forbidden: Terminal móvil/LAN intentó acceder a ruta no autorizada: ${method} ${fullPath} (IP: ${req.ip})`);
             return res.status(403).json({
                 error: 'terminal_no_autorizada',
@@ -312,11 +365,12 @@ const verifyToken = async (req, res, next) => {
             /^(127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(cleanIp);
     };
     if (req.method === 'GET' && isLocalOrLanIp(req.ip) && req.path.startsWith('/auth/public-cashiers')) {
+        // Sin JWT autenticado, limitar estrictamente al tenant por defecto para evitar enumeración cross-tenant vía headers/query
         req.user = {
             id: 'lan-mobile-node',
             role: 'cashier',
             isUnauthenticatedLan: true,
-            companyId: req.headers['x-company-id'] || req.query.companyId || 'default'
+            companyId: process.env.DEFAULT_COMPANY_ID || '2'
         };
         return wrapTenantNext(req, next);
     }
@@ -327,14 +381,18 @@ const verifyToken = async (req, res, next) => {
         const timestamp = req.headers['x-sync-timestamp'];
         const signature = req.headers['x-sync-signature'];
 
-        const authHeader = req.headers['authorization'];
-        const extractedToken = extractBearerToken(authHeader);
+        const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+        const extractedToken = extractBearerToken(authHeader) || (req.cookies && req.cookies.authToken);
         if (extractedToken) {
             try {
-                const decoded = jwt.verify(extractedToken, FINAL_SECRET, { algorithms: ['HS256'] });
+                const decoded = verifyJwtResilient(extractedToken);
                 req.user = decoded;
-                if (!req.user.companyId) {
+                if (!req.user.companyId || req.user.companyId === 'admin') {
                     req.user.companyId = companyId || 'default';
+                }
+                const ctxRes = await applyUserAuthContext(req, decoded);
+                if (!ctxRes.ok) {
+                    return res.status(ctxRes.status).json({ error: ctxRes.error });
                 }
                 return wrapTenantNext(req, next);
             } catch (e) {
@@ -379,35 +437,10 @@ const verifyToken = async (req, res, next) => {
     }
 
     // RULE B: Public Assets & Explicit Public API Endpoints -> Skip Token but Set Identity
-    const isStaticAsset = req.path.startsWith('/assets/') && /\.(js|css|png|jpg|jpeg|svg|ico|woff|woff2|ttf|map|webp)$/i.test(req.path);
-    if (req.path === '/dist.zip' ||
-        req.path === '/version.json' ||
-        req.path.startsWith('/api/app-update-info') ||
-        req.path.endsWith('.apk') ||
-        req.path === '/index.html' ||
-        req.path === '/sw.js' ||
-        req.path === '/manifest.json' ||
-        isStaticAsset ||
-        req.path.startsWith('/js/') ||
-        req.path.startsWith('/css/') ||
-        req.path.startsWith('/fonts/') ||
-        req.path.startsWith('/product_images/') ||
-        req.path.startsWith('/supplier_logos/') ||
-        req.path.startsWith('/img/') ||
-        req.path === '/hello' ||
-        req.path === '/auth/login' ||
-        req.path === '/auth/me' ||
-        req.path === '/settings/business' ||
-        req.path === '/api/settings/business' ||
-        (req.method === 'GET' && (req.path === '/settings/rate' || req.path === '/api/settings/rate')) ||
-        (req.method === 'GET' && (req.path === '/settings/payment-methods' || req.path === '/api/settings/payment-methods')) ||
-        (req.method === 'GET' && (req.path === '/settings/pago-movil' || req.path === '/api/settings/pago-movil')) ||
-        (req.method === 'GET' && (req.path === '/settings/binance' || req.path === '/api/settings/binance' || req.path === '/settings/binance/rate' || req.path === '/api/settings/binance/rate')) ||
-        req.path === '/settings/is-setup' ||
-        req.path === '/license/status' ||
-        req.path === '/license/activate' ||
-        req.path.startsWith('/reset-password') ||
-        req.path.replace(/\/$/, '') === '/auth/login') { 
+    const isInitialBusinessSetupPost = req.method === 'POST' &&
+        (req.path === '/settings/business' || req.path === '/api/settings/business') &&
+        req.body?.initialSetupCompleted === true;
+    if (isExplicitPublicRoute(req) || isInitialBusinessSetupPost) { 
         
         // --- PUBLIC IDENTITY FAILSAFE ---
         // Even if the route is public, we try to identify the company/user context
@@ -508,8 +541,7 @@ const isAdmin = (req, res, next) => {
             message: 'Acceso denegado: Las terminales móviles y nodos de sincronización no tienen autorización para ejecutar acciones administrativas.' 
         });
     }
-    const role = req.user?.role?.toLowerCase();
-    if (req.user && (role === 'admin' || role === 'superadmin' || role === 'owner' || role === 'dueño')) {
+    if (req.user && isCompanyAdminRole(req.user.role)) {
         return next();
     }
     console.warn(`Access denied for user ${req.user?.email} with role: ${req.user?.role}`);
@@ -523,8 +555,7 @@ const isSuperAdmin = (req, res, next) => {
             message: 'Acceso denegado: Se requieren credenciales de Superadmin autenticadas en estación fija.' 
         });
     }
-    const role = req.user?.role?.toLowerCase();
-    if (req.user && (role === 'superadmin' || role === 'owner' || role === 'dueño')) {
+    if (req.user && isCompanyOwnerRole(req.user.role)) {
         return next();
     }
     console.warn(`SuperAdmin access denied for user ${req.user?.email} with role: ${req.user?.role}`);
@@ -538,8 +569,7 @@ const isMaster = (req, res, next) => {
             message: 'Acceso denegado: Se requieren credenciales de DUEÑO (Superadmin) autenticadas en estación fija.' 
         });
     }
-    const role = req.user?.role?.toLowerCase();
-    if (req.user && (role === 'superadmin' || role === 'owner' || role === 'dueño')) {
+    if (req.user && isCompanyOwnerRole(req.user.role)) {
         return next();
     }
     console.warn(`Master access denied for user ${req.user?.email} with role: ${req.user?.role}`);
@@ -567,7 +597,7 @@ const requirePermission = (permissionInput) => {
         }
         const role = String(req.user.role || '').toLowerCase();
         // Bypass absoluto para Dueño / Superadmin / Owner
-        if (role === 'superadmin' || role === 'owner' || role === 'dueño') {
+        if (isCompanyOwnerRole(role)) {
             return next();
         }
 
@@ -617,8 +647,6 @@ const requirePermission = (permissionInput) => {
                 case 'canManageSettings':
                     return (
                         act === 'RECONFIGURE_BUSINESS_RUBRO' ||
-                        act === 'APERTURA DE GAVETA (CONFIGURACIÓN)' ||
-                        act === 'APERTURA DE GAVETA (CONFIGURACION)' ||
                         act === 'MANAGE_SETTINGS'
                     );
                 case 'canOpenDrawer':
@@ -744,14 +772,14 @@ const verifySocketJwtUser = async (decoded) => {
     }
     const dbSession = cachedUser.currentSessionId ? String(cachedUser.currentSessionId) : '';
     const tokenSession = decoded.sessionId ? String(decoded.sessionId) : '';
-    if (dbSession) {
-        if (dbSession.startsWith('REVOKED_') || tokenSession !== dbSession) {
-            invalidateUserAuthCache(decoded.id);
-            return { ok: false, error: 'Sesión WebSocket revocada o expirada' };
-        }
-    } else if (tokenSession) {
+    if (!isSessionValid(dbSession, tokenSession)) {
         invalidateUserAuthCache(decoded.id);
-        return { ok: false, error: 'Sesión WebSocket inválida' };
+        return {
+            ok: false,
+            error: dbSession
+                ? 'Sesión WebSocket revocada o expirada'
+                : 'Sesión WebSocket inválida'
+        };
     }
     return {
         ok: true,
@@ -765,6 +793,7 @@ const verifySocketJwtUser = async (decoded) => {
 module.exports = {
     verifyToken,
     verifyJwtResilient,
+    extractBearerToken,
     safeSecretEqual,
     computeDisplayPairingToken,
     verifyDisplayPairingToken,

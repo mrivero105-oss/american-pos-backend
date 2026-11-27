@@ -1,7 +1,17 @@
 import { useState, useEffect } from 'react';
-import { 
-    X, Building2, MapPin, Phone, Mail, CheckCircle2, User, 
-    Hash, Palette, FileText, Star, RefreshCcw, Save, Shield
+import {
+    X, 
+    Building2, 
+    MapPin, 
+    Phone, 
+    Mail, 
+    User, 
+    Hash, 
+    Palette, 
+    FileText, 
+    Star, 
+    RefreshCcw, 
+    Save
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import BaseModal from './BaseModal';

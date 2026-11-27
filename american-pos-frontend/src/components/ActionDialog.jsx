@@ -219,7 +219,7 @@ const ActionDialog = memo(function ActionDialog({ isOpen, onClose, type, data, o
             const cashBs = parseFloat(String(tertiaryValue || '').replace(',', '.'));
             if (isNaN(cashBs) || cashBs <= 0) return toast.error('Ingresa el monto en Bs a entregar');
             const pct = Math.max(0, parseFloat(String(commissionPct || '0').replace(',', '.')) || 0);
-            try { localStorage.setItem('pos_cash_advance_pct', String(pct)); } catch {}
+            try { localStorage.setItem('pos_cash_advance_pct', String(pct)); } catch (caughtErr) { console.warn('[ActionDialog] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
             const commissionBs = cashBs * (pct / 100);
             const totalBs = cashBs + commissionBs;
             const rate = exchangeRate > 0 ? exchangeRate : 1;
@@ -407,7 +407,7 @@ const ActionDialog = memo(function ActionDialog({ isOpen, onClose, type, data, o
                 setLastEdited('USD');
             }
         }
-    }, [isOpen, type, data, exchangeRate, currencyMode]);
+    }, [isOpen, type, data, exchangeRate, currencyMode, packOptions]);
 
     useEffect(() => {
         if (isOpen) {
@@ -490,7 +490,6 @@ const ActionDialog = memo(function ActionDialog({ isOpen, onClose, type, data, o
                                 priceUsd: Number(prod.price) || 0
                             };
                             const packPriceUsd = Number(chosenPack.priceUsd) || 0;
-                            const packPriceBs = packPriceUsd * rate;
                             const qtyNum = Math.max(0, parseFloat(String(inputValue || '0').replace(',', '.')) || 0);
                             const subtotalUsd = qtyNum * packPriceUsd;
                             const subtotalBs = subtotalUsd * rate;

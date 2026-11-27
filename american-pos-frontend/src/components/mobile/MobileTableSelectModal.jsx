@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Utensils, Check, MessageSquare, Coffee } from 'lucide-react';
+import { X, Utensils, Check, MessageSquare } from 'lucide-react';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 const QUICK_NOTES = [
   'Sin cebolla',
@@ -35,6 +36,11 @@ export default function MobileTableSelectModal({
 }) {
   const [selectedTable, setSelectedTable] = useState(currentTable || '');
   const [notes, setNotes] = useState(currentNotes || '');
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture
+  } = useMobileKeyboardViewport({ enabled: isOpen });
 
   // Generar 24 mesas estándar
   const tables = Array.from({ length: 24 }, (_, i) => `Mesa ${i + 1}`);
@@ -69,13 +75,18 @@ export default function MobileTableSelectModal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 animate-fadeIn">
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 animate-fadeIn"
+          style={modalOverlayStyle}
+        >
           <motion.div
             initial={{ y: '100%', opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: '100%', opacity: 0 }}
             transition={{ type: 'spring', damping: 26, stiffness: 300 }}
             className={`w-full max-w-lg ${T.modalCard} rounded-t-2xl sm:rounded-2xl border ${T.border} shadow-2xl flex flex-col max-h-[88dvh] overflow-hidden`}
+            style={modalCardMaxHeightStyle}
+            onFocusCapture={handleFieldFocusCapture}
           >
             {/* Header */}
             <div className={`px-4 py-3 border-b ${T.border} flex items-center justify-between shrink-0`}>
@@ -196,7 +207,7 @@ export default function MobileTableSelectModal({
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="Instrucciones adicionales para la cocina o despacho..."
                   rows={2}
-                  className={`w-full p-2.5 rounded-xl border ${T.border} ${T.subPanelBg} ${T.textPrimary} text-xs outline-none focus:border-amber-500 transition-colors resize-none`}
+                  className={`w-full p-2.5 rounded-xl border ${T.border} ${T.subPanelBg} ${T.textPrimary} text-base sm:text-sm outline-none focus:border-amber-500 transition-colors resize-none`}
                 />
               </div>
             </div>

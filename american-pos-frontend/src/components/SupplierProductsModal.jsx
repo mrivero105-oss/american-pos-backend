@@ -1,12 +1,26 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-    X, Save, Search, Package, CheckCircle2, Circle, FileText, 
-    Upload, RefreshCw, ArrowUpRight, Plus, AlertCircle, 
-    CheckSquare, Square, FileUp, ArrowLeft, DollarSign, Database,
-    Link2, Filter, Layers, Check, MessageCircle
+import {
+    X, 
+    Save, 
+    Search, 
+    Package, 
+    CheckCircle2, 
+    Circle, 
+    FileText, 
+    Upload, 
+    ArrowUpRight, 
+    Plus, 
+    AlertCircle, 
+    CheckSquare, 
+    Square, 
+    FileUp, 
+    Database, 
+    Link2, 
+    Layers, 
+    Check, 
+    MessageCircle
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { formatUSD } from '../utils/format';
@@ -28,11 +42,8 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
     const [processing, setProcessing] = useState(false);
 
     // PDF Import state
-    const [pdfFile, setPdfFile] = useState(null);
     const [pdfLoading, setPdfLoading] = useState(false);
     const [pdfItems, setPdfItems] = useState([]);
-    const [pdfCurrency, setPdfCurrency] = useState('USD');
-    const [pdfRate, setPdfRate] = useState(1);
     const [pdfSaving, setPdfSaving] = useState(false);
     const [pdfSearchTerm, setPdfSearchTerm] = useState('');
     const [isDragging, setIsDragging] = useState(false);
@@ -44,21 +55,10 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
     const [manualLinkTargetItem, setManualLinkTargetItem] = useState(null);
     const [manualLinkSearch, setManualLinkSearch] = useState('');
 
-    useEffect(() => {
-        if (isOpen && supplier) {
-            fetchProducts();
-            // Reset PDF state on open
-            setPdfFile(null);
-            setPdfItems([]);
-            setActiveTab('manual');
-            setPdfFilterTab('matched');
-            setManualLinkTargetItem(null);
-        }
-    }, [isOpen, supplier]);
+    const supplierId = supplier?.id;
 
-    if (!isOpen || !supplier) return null;
-
-    const fetchProducts = async () => {
+    const fetchProducts = useCallback(async () => {
+        if (!supplierId) return;
         try {
             setLoading(true);
             const res = await api.get('/products');
@@ -67,7 +67,7 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
             
             // Initially select products that already belong to this supplier
             const initialSelected = allProducts
-                .filter(p => p.supplierId === supplier.id)
+                .filter(p => p.supplierId === supplierId)
                 .map(p => p.id);
             setSelectedIds(initialSelected);
         } catch (error) {
@@ -76,7 +76,20 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
         } finally {
             setLoading(false);
         }
-    };
+    }, [supplierId]);
+
+    useEffect(() => {
+        if (isOpen && supplier) {
+            fetchProducts();
+            // Reset PDF state on open
+            setPdfItems([]);
+            setActiveTab('manual');
+            setPdfFilterTab('matched');
+            setManualLinkTargetItem(null);
+        }
+    }, [isOpen, supplier, fetchProducts]);
+
+    if (!isOpen || !supplier) return null;
 
     const toggleProduct = (productId) => {
         setSelectedIds(prev => 
@@ -112,7 +125,6 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
             toast.error('Por favor selecciona un archivo PDF o imagen de catálogo');
             return;
         }
-        setPdfFile(selectedFile);
         processPdfFile(selectedFile);
     };
 
@@ -134,12 +146,6 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
                 : (Array.isArray(data?.items) 
                     ? data.items 
                     : (Array.isArray(data?.items?.items) ? data.items.items : (Array.isArray(data?.rawItems) ? data.rawItems : [])));
-            
-            const currency = (data?.currency || data?.items?.currency || 'USD').toUpperCase();
-            const rate = Number(data?.rate || 1);
-
-            setPdfCurrency(currency);
-            setPdfRate(rate);
 
             if (rawList.length === 0) {
                 toast.error('No se detectaron productos legibles en el documento', { id: toastId });
@@ -268,7 +274,6 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
             // Reload full product list and switch back to manual catalog view
             await fetchProducts();
             setActiveTab('manual');
-            setPdfFile(null);
             setPdfItems([]);
             if (onUpdate) onUpdate();
         } catch (error) {
@@ -839,7 +844,7 @@ export default function SupplierProductsModal({ isOpen, onClose, supplier, onUpd
                                 <div className="flex items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
                                     <button
                                         type="button"
-                                        onClick={() => { setPdfItems([]); setPdfFile(null); }}
+                                        onClick={() => setPdfItems([])}
                                         className="flex-1 sm:flex-none min-h-[44px] flex items-center justify-center px-4 py-2.5 rounded-xl font-bold text-[11px] text-slate-400 hover:text-slate-600 uppercase tracking-wider cursor-pointer"
                                     >
                                         Descartar

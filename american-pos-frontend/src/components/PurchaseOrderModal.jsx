@@ -1,12 +1,25 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-    X, Save, Plus, Minus, Check, Trash2, Search, Package, Printer, 
-    Camera, Upload, Eye, FileText, CheckCircle2, Loader2, Paperclip,
+import {
+    X, 
+    Save, 
+    Plus, 
+    Minus, 
+    Check, 
+    Trash2, 
+    Search, 
+    Package, 
+    Printer, 
+    Camera, 
+    Upload, 
+    Eye, 
+    FileText, 
+    CheckCircle2, 
+    Loader2, 
     MessageCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
-import { getImageUrl, getInvoiceUrl } from '../utils/imageUtils';
+import { getImageUrl } from '../utils/imageUtils';
 import BaseModal from './BaseModal';
 import PrinterScanModal from './PrinterScanModal';
 import CameraScanModal from './CameraScanModal';
@@ -827,6 +840,8 @@ export default function PurchaseOrderModal({ isOpen, onClose, onSave, processing
                                                                 <img
                                                                     src={getImageUrl(p.imageUrl || p.imageUri)}
                                                                     alt={p.name}
+                                                                    loading="lazy"
+                                                                    decoding="async"
                                                                     className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
                                                                 />
                                                             ) : (

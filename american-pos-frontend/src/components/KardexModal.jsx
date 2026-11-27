@@ -1,32 +1,33 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import { X, Clock, ArrowUpRight, ArrowDownLeft, RefreshCcw, AlertCircle } from 'lucide-react';
-import { motion } from 'framer-motion';
 import BaseModal from './BaseModal';
 
 export default function KardexModal({ isOpen, onClose, product }) {
     const [movements, setMovements] = useState([]);
     const [loading, setLoading] = useState(true);
+    const productId = product?.id;
 
-    useEffect(() => {
-        if (isOpen && product) {
-            fetchMovements();
-        }
-    }, [isOpen, product]);
-
-    if (!isOpen || !product) return null;
-
-    const fetchMovements = async () => {
+    const fetchMovements = useCallback(async () => {
+        if (!productId) return;
         try {
             setLoading(true);
-            const res = await api.get(`/reports/inventory/kardex/${product.id}`);
+            const res = await api.get(`/reports/inventory/kardex/${productId}`);
             setMovements(res.data);
         } catch (error) {
             console.error('Error fetching kardex:', error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [productId]);
+
+    useEffect(() => {
+        if (isOpen && productId) {
+            fetchMovements();
+        }
+    }, [isOpen, productId, fetchMovements]);
+
+    if (!isOpen || !product) return null;
 
     return (
         <BaseModal

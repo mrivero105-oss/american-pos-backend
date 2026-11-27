@@ -3,8 +3,14 @@ const fs = require('fs');
 const { ensureFetchPolyfill } = require('../utils/ensureFetchPolyfill');
 ensureFetchPolyfill();
 
-const AIService = require('./AIService');
 const precision = require('../utils/precision');
+let AIServiceRef = null;
+const getAIService = () => {
+    if (!AIServiceRef) {
+        AIServiceRef = require('./AIService');
+    }
+    return AIServiceRef;
+};
 
 /**
  * Servicio encargado de la extracción y procesamiento de datos desde PDFs e imágenes de proveedores.
@@ -50,47 +56,17 @@ class PDFService {
             return await this._fallbackToAI(dataBuffer);
         }
 
+        let parser = null;
         try {
-            const pdf = require('pdf-parse');
+            const { PDFParse } = require('pdf-parse');
+            parser = new PDFParse({ data: dataBuffer });
 
-            // Renderizador por coordenadas visuales agrupando ítems en filas por tolerancia de Y
-            function render_page_grouped(pageData) {
-                return pageData.getTextContent().then(textContent => {
-                    if (!textContent || !textContent.items || textContent.items.length === 0) return '';
-                    
-                    const rows = [];
-                    const yTolerance = 3.5;
-                    
-                    for (let item of textContent.items) {
-                        if (!item.str || !item.str.trim()) continue;
-                        const y = item.transform[5];
-                        const x = item.transform[4];
-                        
-                        let row = rows.find(r => Math.abs(r.y - y) <= yTolerance);
-                        if (!row) {
-                            row = { y: y, items: [] };
-                            rows.push(row);
-                        }
-                        row.items.push({ x: x, str: item.str });
-                    }
-                    
-                    rows.sort((a, b) => b.y - a.y);
-                    
-                    const lines = rows.map(row => {
-                        row.items.sort((a, b) => a.x - b.x);
-                        return row.items.map(it => it.str.trim()).filter(Boolean).join(' ');
-                    });
-                    
-                    return lines.join('\n');
-                });
-            }
-
-            // Si es una factura fiscal compleja y el motor de IA está disponible, preferimos IA para cuadrar cantidades, RIF y totales exactos
-            let result = await pdf(dataBuffer, { pagerender: render_page_grouped });
-            const groupedText = result ? result.text : '';
+            // Extracción estructurada con pdf-parse v2 (respeta saltos de línea visuales por página)
+            const result = await parser.getText();
+            const groupedText = result && typeof result.text === 'string' ? result.text : '';
             const looksLikeFiscalInvoice = /\b(FACTURA|SENIAT|BASE\s+IMPONIBLE|NRO\.?\s*CONTROL|NOTA\s+DE\s+ENTREGA)\b/i.test(groupedText);
 
-            if (looksLikeFiscalInvoice && AIService.initialized && dataBuffer.length <= 15 * 1024 * 1024) {
+            if (looksLikeFiscalInvoice && dataBuffer.length <= 15 * 1024 * 1024 && getAIService().initialized) {
                 try {
                     console.log('[PDFService] Documento fiscal detectado en PDF. Aplicando motor multimodal de alta precisión...');
                     const aiInvoice = await this._fallbackToAI(dataBuffer);
@@ -107,9 +83,9 @@ class PDFService {
             let extractedItems = extractedData.items || [];
 
             if (extractedItems.length < 2) {
-                console.log(`[PDF] Intento visual retornó ${extractedItems.length} items. Probando motor de lectura lineal...`);
-                const standardResult = await pdf(dataBuffer);
-                const standardData = this._extractFromTextLines(standardResult ? standardResult.text : '');
+                console.log(`[PDF] Intento estructurado retornó ${extractedItems.length} items. Probando lectura tabular/lineal...`);
+                const linearResult = await parser.getText({ lineEnforce: false });
+                const standardData = this._extractFromTextLines(linearResult && typeof linearResult.text === 'string' ? linearResult.text : '');
                 if (standardData.items && standardData.items.length > extractedItems.length) {
                     extractedData = standardData;
                     extractedItems = standardData.items;
@@ -140,6 +116,9 @@ class PDFService {
                 throw new Error(aiError.message || `Fallo técnico al leer el PDF: ${error.message}`);
             }
         } finally {
+            if (parser && typeof parser.destroy === 'function') {
+                await parser.destroy().catch(() => {});
+            }
             dataBuffer = null;
         }
     }
@@ -366,7 +345,7 @@ class PDFService {
      */
     static async _fallbackToAI(buffer) {
         try {
-            return await AIService.analyzeInvoicePDF(buffer);
+            return await getAIService().analyzeInvoicePDF(buffer);
         } catch (error) {
             console.error('[PDF] Fallo en fallback de IA:', error.message);
             throw error;

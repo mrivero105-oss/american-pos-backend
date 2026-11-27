@@ -1,23 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
-import { X, Printer, Download, MessageCircle, FileText, Calendar, DollarSign, ArrowUpRight, ArrowDownLeft, Building2, User, CreditCard } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { X, Printer, MessageCircle, FileText, Building2, User, CreditCard } from 'lucide-react';
 import BaseModal from './BaseModal';
 import api from '../services/api';
 import { formatMoney } from '../utils/format';
+import { escapeHtml } from '../utils/escapeHtml';
 
 export default function AccountStatementModal({ isOpen, onClose, customer, businessSettings = {}, exchangeRate = 1 }) {
     const [statement, setStatement] = useState(null);
     const [loading, setLoading] = useState(true);
     const printRef = useRef();
 
-    useEffect(() => {
-        if (isOpen && customer?.id) {
-            fetchStatement();
-        } else {
-            setStatement(null);
-        }
-    }, [isOpen, customer]);
-
-    const fetchStatement = async () => {
+    const fetchStatement = useCallback(async () => {
+        if (!customer?.id) return;
         try {
             setLoading(true);
             const res = await api.get(`/customers/${customer.id}/statement`);
@@ -27,24 +21,32 @@ export default function AccountStatementModal({ isOpen, onClose, customer, busin
         } finally {
             setLoading(false);
         }
-    };
+    }, [customer?.id]);
+
+    useEffect(() => {
+        if (isOpen && customer?.id) {
+            fetchStatement();
+        } else {
+            setStatement(null);
+        }
+    }, [isOpen, customer?.id, fetchStatement]);
 
     if (!isOpen || !customer) return null;
 
     const summary = statement?.summary || {};
     const history = statement?.history || [];
-    const recentSales = statement?.recentSales || [];
 
     const handlePrint = () => {
         const printContent = printRef.current;
         if (!printContent) return;
 
-        const printWindow = window.open('', '_blank');
+        const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+        if (!printWindow) return;
         printWindow.document.write(`
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Estado de Cuenta - ${customer.name}</title>
+                <title>Estado de Cuenta - ${escapeHtml(customer.name || '')}</title>
                 <meta charset="utf-8" />
                 <style>
                     body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 30px; color: #0f172a; line-height: 1.5; }
@@ -98,7 +100,7 @@ export default function AccountStatementModal({ isOpen, onClose, customer, busin
         msg += `¡Gracias por su preferencia!`;
 
         const phone = customer.phone.replace(/[^0-9]/g, '');
-        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
     };
 
     return (

@@ -1,15 +1,12 @@
 import { memo, forwardRef, useRef, useState, useEffect, useMemo } from 'react';
-import {  
-    ShoppingCart,
+import {
+    ShoppingCart, 
     Trash2, 
     PlusCircle, 
     Clock, 
     Printer, 
     Users, 
     ChevronDown, 
-    Search, 
-    UserPlus, 
-    CheckCircle2, 
     X, 
     Package, 
     Minus, 
@@ -17,24 +14,22 @@ import {
     Pause, 
     Tag, 
     CreditCard, 
-    ArrowRight,
-    RefreshCw,
-    FileText,
-    Scale,
-    Layers,
-    Volume2,
-    VolumeX,
-    Lock,
-    Tv,
-    Banknote,
-    Receipt,
-    Hash,
-    ShieldAlert
+    ArrowRight, 
+    RefreshCw, 
+    FileText, 
+    Scale, 
+    Layers, 
+    Volume2, 
+    VolumeX, 
+    Lock, 
+    Tv, 
+    Banknote, 
+    Receipt, 
+    Hash
 } from 'lucide-react';
 import { CachedImage } from './CachedImage';
-import { formatStock, formatBs, isDualCurrencyMode, isDollarOnlyCountry, isUsdOnlyMode } from '../utils/format';
+import { formatStock, formatBs, isDualCurrencyMode, isDollarOnlyCountry, isSingleCurrencyCountry, getTaxLabel } from '../utils/format';
 import { usePos } from '../hooks/PosContext';
-import { useTheme } from '../hooks/ThemeContext';
 import { useAuth } from '../hooks/AuthContext';
 import SupervisorPinModal from './SupervisorPinModal';
 import CustomerDisplayModal from './CustomerDisplayModal';
@@ -53,10 +48,8 @@ const CartItem = memo(forwardRef(({
     updateQuantity, 
     renderFormatMoney, 
     currencyMode, 
-    searchInputRef, 
     onEditWeight, 
-    onTogglePresentation, 
-    onApplyTierSuggestion 
+    onTogglePresentation
 }, ref) => {
     const isService = Boolean(item.isService || String(item.category || '').trim().toLowerCase() === 'servicios');
     const isCashAdvance = Boolean(item.isCashAdvance || (isService && /\bavance\b/i.test(String(item.originalName || item.name || ''))));
@@ -117,7 +110,7 @@ const CartItem = memo(forwardRef(({
 
             if (Math.abs(currentDrag) >= 65 && !thresholdVibratedRef.current) {
                 thresholdVibratedRef.current = true;
-                if (navigator.vibrate) try { navigator.vibrate(25); } catch (_) {}
+                if (navigator.vibrate) try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no disponible */ }
             } else if (Math.abs(currentDrag) < 65) {
                 thresholdVibratedRef.current = false;
             }
@@ -133,11 +126,11 @@ const CartItem = memo(forwardRef(({
 
         const ACTION_THRESHOLD = 65;
         if (dragX <= -ACTION_THRESHOLD) {
-            if (navigator.vibrate) try { navigator.vibrate(40); } catch (_) {}
+            if (navigator.vibrate) try { navigator.vibrate(40); } catch { /* Vibración háptica opcional no disponible */ }
             playDeleteSound();
             updateQuantity(item.id, 0);
         } else if (dragX >= ACTION_THRESHOLD) {
-            if (navigator.vibrate) try { navigator.vibrate(30); } catch (_) {}
+            if (navigator.vibrate) try { navigator.vibrate(30); } catch { /* Vibración háptica opcional no disponible */ }
             playScanSound();
             handleQtyChange(item.quantity + 1);
         }
@@ -359,41 +352,30 @@ const CartItem = memo(forwardRef(({
 /**
  * CartSidebar - Terminal de Venta y Liquidación de Élite
  */
-const CartSidebar = memo(({
+const CartSidebar = memo(function CartSidebar({
     localCart,
     handleClearCart,
-    onAddToCart,
     updateQuantity,
     onTogglePresentation,
     onEditWeight,
-    onApplyTierSuggestion,
     handleHoldSale,
     setIsCheckoutOpen,
     setIsHeldModalOpen,
     handlePrintLast,
     handleOpenDrawer,
     setActionDialog,
-    selectedCustomer,
-    setSelectedCustomer,
     activeCustomer,
-    customerSearch,
-    setCustomerSearch,
     isCustomerDropdownOpen,
     setIsCustomerDropdownOpen,
-    filteredCustomers,
-    setShowNewCustomerModal,
-    subtotal,
     taxableBase,
     exemptBase,
     ivaAmount,
     ivaRate,
     igtfAmount = 0,
-    igtfRate = 3,
     igtfEnabled = false,
     discountActive,
     discountAmount,
     totalPromoSavings = 0,
-    appliedPromotions = [],
     total,
     totalWithIgtf,
     currencyMode,
@@ -401,19 +383,17 @@ const CartSidebar = memo(({
     renderFormatMoney,
     processing,
     heldSalesCount,
-    searchInputRef,
     handleSaveQuotation,
     businessSettings,
     showCustomerSelector = false,
     onClose = null
-}) => {
+}) {
     const { isShiftOpen, promptOpenCashShift, country, isUsdOnly, registerId, registerDisplayName, clearPosState } = usePos();
-    const isDollar = isUsdOnly || isDollarOnlyCountry(country) || isDollarOnlyCountry(businessSettings?.country);
-    const displayCurrencyMode = isDollar ? 'SINGLE' : currencyMode;
-    const isDual = !isDollar && isDualCurrencyMode({ currencyMode, country, ...businessSettings });
-    const normCountry = String(country || businessSettings?.country || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const isEcuador = normCountry.includes('ecuador');
-    const { theme } = useTheme();
+    const effectiveCountry = country || businessSettings?.country || localStorage.getItem('pos_country') || '';
+    const isDollar = isUsdOnly || isDollarOnlyCountry(effectiveCountry);
+    const isSingle = isDollar || isSingleCurrencyCountry(effectiveCountry);
+    const isDual = !isSingle && isDualCurrencyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
+    const taxLabel = getTaxLabel(effectiveCountry);
 
     const { user } = useAuth();
     const userRole = String(user?.role || '').toLowerCase();
@@ -463,7 +443,7 @@ const CartSidebar = memo(({
                     return Number(parsed.count) + 1;
                 }
             }
-        } catch (_) {}
+        } catch (caughtErr) { console.warn('[CartSidebar] Error parseando JSON local:', caughtErr?.message || caughtErr); }
         return 1;
     });
 
@@ -502,7 +482,9 @@ const CartSidebar = memo(({
                     } else if (mounted) {
                         setNextTicketNumber(1);
                     }
-                } catch (_e) {}
+                } catch (err) {
+                    console.warn('[CartSidebar] Error leyendo contador diario de ticket:', err?.message);
+                }
             }
         };
 
@@ -517,7 +499,11 @@ const CartSidebar = memo(({
         };
 
         window.addEventListener('pos-daily-ticket-updated', handleTicketUpdated);
-        const dayCheckInterval = setInterval(syncDailyTicketCount, 30000);
+        const dayCheckInterval = setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                syncDailyTicketCount();
+            }
+        }, 180000); // Polling ligero cada 3 min (actualización inmediata por evento pos-daily-ticket-updated)
 
         return () => {
             mounted = false;
@@ -539,7 +525,7 @@ const CartSidebar = memo(({
     const handleToggleSound = () => {
         const nextMuted = toggleSoundMute();
         setSoundMutedState(nextMuted);
-        if (navigator.vibrate) try { navigator.vibrate(25); } catch (_) {}
+        if (navigator.vibrate) try { navigator.vibrate(25); } catch { /* Vibración háptica opcional no disponible */ }
         if (!nextMuted) {
             playScanSound();
         }
@@ -858,10 +844,8 @@ const CartSidebar = memo(({
                                 updateQuantity={updateQuantity}
                                 renderFormatMoney={renderFormatMoney}
                                 currencyMode={currencyMode}
-                                searchInputRef={searchInputRef}
                                 onEditWeight={onEditWeight}
                                 onTogglePresentation={onTogglePresentation}
-                                onApplyTierSuggestion={onApplyTierSuggestion}
                             />
                         ))}
 
@@ -902,7 +886,7 @@ const CartSidebar = memo(({
                             {ivaAmount > 0 && (
                                 <div className="flex justify-between items-center text-slate-400">
                                     <span className="flex items-center gap-1">
-                                        IVA ({ivaRate}%):
+                                        {taxLabel} ({ivaRate}%):
                                     </span>
                                     <span className="text-slate-200 font-semibold">{renderFormatMoney(ivaAmount, isDual ? 'VES' : null)}</span>
                                 </div>

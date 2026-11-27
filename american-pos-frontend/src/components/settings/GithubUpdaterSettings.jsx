@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Github, RefreshCw, Download, CheckCircle2, AlertCircle, ArrowUpRight, Loader2, GitBranch, ShieldCheck, Terminal } from 'lucide-react';
+import { RefreshCw, Download, CheckCircle2, ArrowUpRight, Loader2, GitBranch, ShieldCheck, Terminal } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 
@@ -8,9 +8,6 @@ export default function GithubUpdaterSettings() {
     const [checking, setChecking] = useState(false);
     const [triggering, setTriggering] = useState(false);
     const [statusData, setStatusData] = useState(null);
-    const [githubOwner, setGithubOwner] = useState('mrivero105-oss');
-    const [githubRepo, setGithubRepo] = useState('american-pos-backend');
-    const [savingConfig, setSavingConfig] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState(null);
     const [updaterEventStatus, setUpdaterEventStatus] = useState('');
 
@@ -46,13 +43,9 @@ export default function GithubUpdaterSettings() {
     const fetchStatus = async (isManual = false) => {
         setLoading(true);
         try {
-            const res = await api.get('/system/updater/status');
+            const res = await api.get('/system/updater/status', isManual ? { params: { force: 1 } } : undefined);
             if (res.data?.success) {
                 setStatusData(res.data);
-                if (res.data.config) {
-                    setGithubOwner(res.data.config.githubOwner || 'mrivero105-oss');
-                    setGithubRepo(res.data.config.githubRepo || 'american-pos-backend');
-                }
             }
         } catch (err) {
             console.warn('Error al obtener estado de actualizaciones GitHub:', err.message);
@@ -64,26 +57,6 @@ export default function GithubUpdaterSettings() {
         }
     };
 
-    const handleSaveConfig = async () => {
-        setSavingConfig(true);
-        try {
-            const res = await api.post('/system/updater/config', {
-                githubOwner: githubOwner.trim(),
-                githubRepo: githubRepo.trim(),
-                autoUpdateEnabled: true
-            });
-            if (res.data?.success) {
-                toast.success('Repositorio de GitHub actualizado correctamente');
-                fetchStatus();
-            } else {
-                toast.error(res.data?.error || 'Error al guardar configuración');
-            }
-        } catch (err) {
-            toast.error('Error de red al guardar configuración del repositorio');
-        } finally {
-            setSavingConfig(false);
-        }
-    };
 
     const handleCheckForUpdates = async () => {
         setChecking(true);
@@ -143,6 +116,7 @@ export default function GithubUpdaterSettings() {
                 toast.error('No hay un paquete de instalación o repositorio configurado');
             }
         } catch (err) {
+            console.warn('[GithubUpdaterSettings] Error capturado en operación:', err?.message || err);
             toast.dismiss();
             toast.error('Error durante la ejecución de la actualización');
         } finally {
@@ -164,7 +138,7 @@ export default function GithubUpdaterSettings() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div className="flex items-center gap-3.5">
                     <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 border border-purple-100 dark:border-purple-900/30">
-                        <Github size={20} />
+                        <GitBranch size={20} />
                     </div>
                     <div>
                         <div className="flex items-center gap-2">

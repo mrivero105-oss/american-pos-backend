@@ -1,85 +1,156 @@
-import React, { useState, useEffect, memo } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { Package } from 'lucide-react';
-import { getCachedImage, getMemoryCachedImage } from '../services/imageCache';
-import { getImageUrl } from '../utils/imageUtils';
+import {
+    getCachedImage,
+    getMemoryCachedImage,
+    queueBackgroundCacheImage
+} from '../services/imageCache';
+import { getImageCandidateUrls } from '../utils/imageUtils';
 
 /**
  * CachedImage React Component
- * Ultra-lightweight native hardware-accelerated image renderer:
- * - Zero main-thread / IndexedDB overhead during scroll when online (uses native browser HTTP/ServiceWorker cache).
- * - Instant synchronous L1 memory lookup or L2 CacheStorage fallback when offline or on network error.
+ * Renderizador offline-first de alta velocidad:
+ * - L1 síncrono (0 ms) desde memoria.
+ * - L2 Cache-First desde SQLite Nativo Android WAL / IndexedDB / CacheStorage (~1-3 ms),
+ *   evitando esperas por timeout TCP cuando la PC está apagada aunque el Wi-Fi siga conectado.
+ * - Cuando carga desde red online, persiste automáticamente la imagen en segundo plano
+ *   y soporta fallback entre URLs candidatas (Nube / Servidor PC LAN).
  */
-export const CachedImage = memo(({
+export const CachedImage = memo(function CachedImage({
     src,
     alt = '',
     className = '',
     fallback = null,
     loading = 'lazy',
     ...props
-}) => {
+}) {
+    const candidatesRef = useRef([]);
+    const candidateIdxRef = useRef(0);
+
     const [imageSrc, setImageSrc] = useState(() => {
-        if (!src) return null;
+        if (!src || typeof src !== 'string') return null;
         if (src.startsWith('data:') || src.startsWith('blob:')) return src;
         const mem = getMemoryCachedImage(src);
         if (mem) return mem;
-        return getImageUrl(src) || null;
+        return null;
     });
     const [hasError, setHasError] = useState(false);
 
     useEffect(() => {
+        let active = true;
         setHasError(false);
-        if (!src) {
+        candidatesRef.current = [];
+        candidateIdxRef.current = 0;
+
+        if (!src || typeof src !== 'string') {
             setImageSrc(null);
-            return;
+            return () => { active = false; };
         }
+
         if (src.startsWith('data:') || src.startsWith('blob:')) {
             setImageSrc(src);
-            return;
+            return () => { active = false; };
         }
+
         const mem = getMemoryCachedImage(src);
         if (mem) {
             setImageSrc(mem);
-            return;
-        }
-        const directUrl = getImageUrl(src);
-        // Si estamos sin conexión, consultar la caché local de inmediato
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-            let active = true;
-            getCachedImage(src).then((cached) => {
-                if (active) setImageSrc(cached || directUrl || null);
-            }).catch(() => {
-                if (active) setImageSrc(directUrl || null);
-            });
             return () => { active = false; };
         }
-        setImageSrc(directUrl || null);
-    }, [src]);
 
-    const handleError = () => {
-        if (!hasError && src && !src.startsWith('data:')) {
-            getCachedImage(src).then((cached) => {
-                if (cached && cached !== imageSrc) {
+        const candidates = getImageCandidateUrls(src);
+        candidatesRef.current = candidates;
+
+        // Consultar caché local persistente primero (SQLite WAL / CacheStorage)
+        // Garantiza visualización instantánea con PC apagada aunque navigator.onLine sea true
+        getCachedImage(src)
+            .then((cached) => {
+                if (!active) return;
+                if (cached) {
                     setImageSrc(cached);
+                    return;
+                }
+                const firstRemote = candidates[0] || null;
+                if (firstRemote) {
+                    candidateIdxRef.current = 0;
+                    setImageSrc(firstRemote);
+                    // Guardar automáticamente en SQLite / CacheStorage para futuros usos offline
+                    queueBackgroundCacheImage(src);
                 } else {
                     setHasError(true);
                     setImageSrc(null);
                 }
-            }).catch(() => {
-                setHasError(true);
-                setImageSrc(null);
+            })
+            .catch(() => {
+                if (!active) return;
+                const firstRemote = candidates[0] || null;
+                if (firstRemote) {
+                    candidateIdxRef.current = 0;
+                    setImageSrc(firstRemote);
+                } else {
+                    setHasError(true);
+                    setImageSrc(null);
+                }
             });
-        } else {
+
+        return () => {
+            active = false;
+        };
+    }, [src]);
+
+    const handleError = () => {
+        if (!src || typeof src !== 'string') {
             setHasError(true);
             setImageSrc(null);
+            return;
         }
+
+        // 1. Si hay otra URL candidata (ej. falló Supabase -> probar PC LAN o viceversa), intentarla
+        const nextIdx = candidateIdxRef.current + 1;
+        if (nextIdx < candidatesRef.current.length) {
+            candidateIdxRef.current = nextIdx;
+            const nextUrl = candidatesRef.current[nextIdx];
+            if (nextUrl && nextUrl !== imageSrc) {
+                setImageSrc(nextUrl);
+                return;
+            }
+        }
+
+        // 2. Último intento contra caché local si aún no se probó el recurso actual
+        if (!hasError && !src.startsWith('data:') && !String(imageSrc || '').startsWith('data:')) {
+            getCachedImage(src)
+                .then((cached) => {
+                    if (cached && cached !== imageSrc) {
+                        setImageSrc(cached);
+                    } else {
+                        setHasError(true);
+                        setImageSrc(null);
+                    }
+                })
+                .catch(() => {
+                    setHasError(true);
+                    setImageSrc(null);
+                });
+            return;
+        }
+
+        setHasError(true);
+        setImageSrc(null);
     };
 
-    if (!src || hasError || !imageSrc) {
+    if (!src || hasError) {
         if (fallback) return fallback;
         return (
             <div className={`flex items-center justify-center text-slate-300 dark:text-slate-600 ${className}`}>
                 <Package size={28} strokeWidth={1.5} className="opacity-40" />
             </div>
+        );
+    }
+
+    if (!imageSrc) {
+        // Estado breve mientras resuelve SQLite local (~1-2 ms): evitar renderizar fallback prematuro
+        return (
+            <div className={`flex items-center justify-center ${className}`} aria-hidden="true" />
         );
     }
 

@@ -84,16 +84,10 @@ export default function Login() {
 
     // Biometric authentication state
     const [enrolledBioUser, setEnrolledBioUser] = useState(() => biometricService.getEnrolledCredential());
-    const [hasBioHardware, setHasBioHardware] = useState(false);
     const [isBioScanning, setIsBioScanning] = useState(false);
 
     useEffect(() => {
-        let isMounted = true;
-        biometricService.checkSupport().then((supported) => {
-            if (isMounted) setHasBioHardware(supported);
-        }).catch(() => {});
         setEnrolledBioUser(biometricService.getEnrolledCredential());
-        return () => { isMounted = false; };
     }, []);
 
     const handleBiometricLogin = async () => {
@@ -104,7 +98,7 @@ export default function Login() {
             if (res && (res === true || res.success)) {
                 try {
                     localStorage.setItem('isaac_pos_initial_sync_done', 'true');
-                } catch (_) {}
+                } catch (caughtErr) { console.warn('[Login] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
                 const isMobileClient = (/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || (typeof window !== 'undefined' && window.innerWidth < 768));
                 if (isMobileClient) {
                     navigate('/mobile');
@@ -139,9 +133,10 @@ export default function Login() {
             }
         };
         window.addEventListener('keydown', handleTechShortcut);
+        const tapState = techTapRef.current;
         return () => {
             window.removeEventListener('keydown', handleTechShortcut);
-            clearTimeout(techTapRef.current.timer);
+            clearTimeout(tapState.timer);
         };
     }, []);
 
@@ -157,6 +152,11 @@ export default function Login() {
             techTapRef.current.count = 0;
         }, 2200);
     };
+
+    const isConnectedRef = useRef(isConnected);
+    useEffect(() => {
+        isConnectedRef.current = isConnected;
+    }, [isConnected]);
 
     // Resilient Auto-Reconnect Engine, Native Electron Role Sync & Heartbeat Loop
     useEffect(() => {
@@ -187,7 +187,7 @@ export default function Login() {
                             setServerIp('');
                         }
                     }
-                } catch (_err) {}
+                } catch (caughtErr) { console.warn('[Login] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
             }
         };
 
@@ -236,7 +236,7 @@ export default function Login() {
                             pollTimer = setTimeout(checkConn, 20000);
                             return;
                         }
-                    } catch (_discErr) {}
+                    } catch (caughtErr) { console.warn('[Login] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
                 }
 
                 if (isClientWithoutRemoteIp || consecutiveFailures >= 3) {
@@ -257,7 +257,7 @@ export default function Login() {
             }
         };
         const handleFocus = () => {
-            if (isMounted && isConnected !== true) {
+            if (isMounted && isConnectedRef.current !== true) {
                 checkConn();
             }
         };
@@ -282,6 +282,7 @@ export default function Login() {
         };
     }, [isDesktopPC]);
 
+    const initialUsernameRef = useRef(username);
     // Purgar residuos de listas antiguas y enfocar inteligentemente usuario o contraseña
     useEffect(() => {
         try {
@@ -289,9 +290,9 @@ export default function Login() {
             localStorage.removeItem('isaac_pos_saved_users');
             localStorage.removeItem('american_pos_saved_user');
             localStorage.removeItem('american_pos_saved_users');
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[Login] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 
-        if (username) {
+        if (initialUsernameRef.current) {
             passwordInputRef.current?.focus();
         } else {
             usernameInputRef.current?.focus();
@@ -306,7 +307,7 @@ export default function Login() {
             } else if (username.trim()) {
                 localStorage.setItem(REMEMBERED_USER_KEY, username.trim());
             }
-        } catch (_e) {}
+        } catch (caughtErr) { console.warn('[Login] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
     };
 
     // Handle standard credentials login (solo persiste el usuario si el operador marcó la opción)
@@ -341,7 +342,7 @@ export default function Login() {
                     } else {
                         localStorage.removeItem(REMEMBERED_USER_KEY);
                     }
-                } catch (_e) {}
+                } catch (caughtErr) { console.warn('[Login] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 
                 if (!res.isOffline) {
                     syncService.autoSyncOnLogin().catch((_syncErr) => {
@@ -374,19 +375,23 @@ export default function Login() {
     const displaySeconds = String(currentTime.getSeconds()).padStart(2, '0');
     const dayPeriod = rawHours >= 12 ? 'PM' : 'AM';
 
+    const dateDay = currentTime.getDate();
+    const dateMonth = currentTime.getMonth();
+    const dateYear = currentTime.getFullYear();
     const formattedDate = useMemo(() => {
+        const displayDate = new Date(dateYear, dateMonth, dateDay);
         try {
             const raw = new Intl.DateTimeFormat('es-ES', {
                 weekday: 'long',
                 day: 'numeric',
                 month: 'long',
                 year: 'numeric'
-            }).format(currentTime);
+            }).format(displayDate);
             return raw.charAt(0).toUpperCase() + raw.slice(1);
         } catch {
-            return currentTime.toLocaleDateString();
+            return displayDate.toLocaleDateString();
         }
-    }, [currentTime.getDate(), currentTime.getMonth(), currentTime.getFullYear()]);
+    }, [dateDay, dateMonth, dateYear]);
 
     const shortStationId = machineId ? machineId.substring(0, 14) : 'ESTACIÓN LOCAL';
     const roleLabel = nodeRole === 'client' ? 'Terminal en Red' : 'Servidor Principal';
@@ -672,11 +677,18 @@ export default function Login() {
                                 <input
                                     ref={usernameInputRef}
                                     type="text"
+                                    enterKeyHint="next"
                                     name="pos_terminal_cashier"
                                     id="pos_terminal_cashier"
                                     value={username}
                                     onChange={(e) => setUsername(e.target.value)}
-                                    className="w-full h-12 pl-10 pr-3.5 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.keyCode === 13) {
+                                            e.preventDefault();
+                                            passwordInputRef.current?.focus();
+                                        }
+                                    }}
+                                    className="w-full h-12 pl-10 pr-3.5 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-base sm:text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all"
                                     placeholder="Nombre de usuario"
                                     autoComplete="one-time-code"
                                     autoCorrect="off"
@@ -704,11 +716,12 @@ export default function Login() {
                                 <input
                                     ref={passwordInputRef}
                                     type={showPassword ? 'text' : 'password'}
+                                    enterKeyHint="go"
                                     name="pos_terminal_credential"
                                     id="pos_terminal_credential"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
-                                    className="w-full h-12 pl-10 pr-11 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all [&::-ms-reveal]:hidden [&::-ms-clear]:hidden"
+                                    className="w-full h-12 pl-10 pr-11 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 text-base sm:text-sm font-medium shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:outline-none focus:border-[#0284C7] focus:ring-4 focus:ring-[#0284C7]/12 transition-all [&::-ms-reveal]:hidden [&::-ms-clear]:hidden"
                                     placeholder="••••••••"
                                     autoComplete="new-password"
                                     autoCorrect="off"

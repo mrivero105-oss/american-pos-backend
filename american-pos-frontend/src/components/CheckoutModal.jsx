@@ -1,13 +1,14 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { X, CreditCard, CheckCircle2, Zap, Coins, Layers, ChevronDown, Maximize2, Minimize2, Tag, User } from 'lucide-react';
+import { X, CreditCard, CheckCircle2, Zap, Coins, Layers, ChevronDown, Maximize2, Minimize2, Tag, User, Lock, Unlock, ShieldAlert } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { db } from '../services/db';
 import VortexMathEngine from '../utils/VortexMathEngine';
-import { formatMoney as utilFormatMoney, formatBs, formatUSD, precisionRound, isUsdOnlyMode, isVesOnlyMode, isDollarOnlyCountry } from '../utils/format';
+import { formatMoney as utilFormatMoney, formatBs, precisionRound, isUsdOnlyMode, isVesOnlyMode, isDollarOnlyCountry, isSingleCurrencyCountry, getTaxLabel, getRegionConfig } from '../utils/format';
 import { playSuccessSound } from '../utils/sounds';
 import BaseModal from './BaseModal';
+import SupervisorPinModal from './SupervisorPinModal';
 import { useAuth } from '../hooks/AuthContext';
 import { usePos } from '../hooks/PosContext';
 import { useSocket } from '../hooks/SocketContext';
@@ -27,8 +28,6 @@ import CheckoutSplitView from './checkout/CheckoutSplitView';
 import CheckoutSuccessOverlay from './checkout/CheckoutSuccessOverlay';
 import CheckoutPaymentQrModal from './checkout/CheckoutPaymentQrModal';
 
-export { cleanMethodName };
-
 export default function CheckoutModal({
     isOpen,
     onClose,
@@ -39,7 +38,6 @@ export default function CheckoutModal({
     taxableBase = 0,
     exemptBase = 0,
     discountAmount = 0,
-    discountPercent = 0,
     taxInfo = { exemptBase: 0, taxableBase: 0 },
     ivaRate = 16,
     igtfRate = 3,
@@ -58,12 +56,15 @@ export default function CheckoutModal({
 }) {
     const { user } = useAuth();
     const effectiveCountry = businessSettings?.country || localStorage.getItem('pos_country') || '';
+    const regionCfg = getRegionConfig(effectiveCountry);
+    const primaryCurrency = regionCfg.currencyCode || 'USD';
     const isDollarCountry = isDollarOnlyCountry(effectiveCountry);
+    const isSingleCountry = isSingleCurrencyCountry(effectiveCountry);
     const isUsdOnly = isDollarCountry || isUsdOnlyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
-    const isVesOnly = !isUsdOnly && isVesOnlyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
-    const isDual = !isUsdOnly && !isVesOnly;
-    const isSingle = isUsdOnly;
-    const effectiveCurrencyMode = isUsdOnly ? 'SINGLE' : (isVesOnly ? 'VES' : 'BOTH');
+    const isVesOnly = !isSingleCountry && !isUsdOnly && isVesOnlyMode({ currencyMode, country: effectiveCountry, ...businessSettings });
+    const isDual = !isSingleCountry && !isUsdOnly && !isVesOnly;
+    const isSingle = isSingleCountry || isUsdOnly;
+    const taxLabel = getTaxLabel(effectiveCountry);
     
     // Modo de Interfaz: 'express' (1-clic ultra rápido) o 'split' (pago mixto / multi-método)
     const [viewMode, setViewMode] = useState('express');
@@ -73,11 +74,8 @@ export default function CheckoutModal({
     const [paymentReferences, setPaymentReferences] = useState({});
     const [customers, setCustomers] = useState([]);
     const [selectedCustomerId, setSelectedCustomerId] = useState('');
-    const [customerSearch, setCustomerSearch] = useState('');
     const [documentType, setDocumentType] = useState('factura');
-    const [loadingCustomers, setLoadingCustomers] = useState(false);
     const [methods, setMethods] = useState([]);
-    const [loadingMethods, setLoadingMethods] = useState(false);
     const [showSuccess, setShowSuccess] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [transactionId, setTransactionId] = useState(null);
@@ -91,18 +89,42 @@ export default function CheckoutModal({
     const [copiedField, setCopiedField] = useState(null);
     const [focusedExpressMethodId, setFocusedExpressMethodId] = useState('');
 
+    // Estados para desbloqueo de clientes con deuda vencida / morosidad directamente en caja
+    const [creditBlockPrompt, setCreditBlockPrompt] = useState(null);
+    const [creditUnlockBusy, setCreditUnlockBusy] = useState(false);
+    const [creditSupervisorModal, setCreditSupervisorModal] = useState({ isOpen: false, mode: 'once' });
+
+    const canDirectUnlockCredit = useMemo(() => {
+        const role = String(user?.role || '').toLowerCase();
+        return ['superadmin', 'admin', 'owner', 'dueño', 'dueno', 'supervisor', 'gerente'].includes(role)
+            || Boolean(user?.permissions?.canAccessCollections)
+            || Boolean(user?.permissions?.canManageCustomers);
+    }, [user]);
+
     const { socket } = useSocket();
 
-    const activeExchangeRate = isUsdOnly ? 1 : (lockedExchangeRate || exchangeRate || 1);
+    const activeExchangeRate = isSingle ? 1 : (lockedExchangeRate || exchangeRate || 1);
     const liveExchangeRateRef = useRef(activeExchangeRate);
     liveExchangeRateRef.current = activeExchangeRate;
 
     // Promociones y Ofertas activas en tiempo real
     const posContext = usePos() || {};
-    const effectivePromotions = posContext?.activePromotions || [];
-    const effectiveCart = (Array.isArray(cartItems) && cartItems.length > 0) 
-        ? cartItems 
-        : (posContext?.cart || posContext?.posState?.cart || []);
+    const activeEuroRate = isSingle
+        ? (primaryCurrency === 'EUR' ? 1 : 0)
+        : (Number(posContext?.euroRate || businessSettings?.euroRate || localStorage.getItem('pos_euro_rate') || 0));
+    const formatPrimary = useCallback((val) => utilFormatMoney(val, isSingle ? primaryCurrency : 'USD', {
+        rate: activeExchangeRate,
+        currencyMode: isSingle ? 'SINGLE' : 'USD',
+        country: effectiveCountry
+    }), [isSingle, primaryCurrency, activeExchangeRate, effectiveCountry]);
+    const effectivePromotions = useMemo(
+        () => posContext?.activePromotions || [],
+        [posContext?.activePromotions]
+    );
+    const effectiveCart = useMemo(() => {
+        if (Array.isArray(cartItems) && cartItems.length > 0) return cartItems;
+        return posContext?.cart || posContext?.posState?.cart || [];
+    }, [cartItems, posContext?.cart, posContext?.posState?.cart]);
     
     // Oferta por método de pago seleccionada para la venta
     const [activePaymentPromo, setActivePaymentPromo] = useState(null);
@@ -124,45 +146,14 @@ export default function CheckoutModal({
         return null;
     }, [paymentMethodDiscounts]);
 
-    const wasOpenRef = useRef(false);
-    useEffect(() => {
-        if (isOpen && !wasOpenRef.current) {
-            wasOpenRef.current = true;
-            setLockedExchangeRate(exchangeRate || 1);
-            fetchCustomers();
-            fetchMethods();
-            setPayments({});
-            setPaymentReferences({});
-            setSelectedCustomerId(initialCustomerId || '');
-            setCustomerSearch('');
-            setDocumentType('factura');
-            setSelectedIndex(0);
-            setViewMode('express');
-            setTransactionId(null);
-            setQrModalMethod(null);
-            setQrModalUrl('');
-            setQrModalReference('');
-            setCopiedField(null);
-            setActivePaymentPromo(null);
-            setFocusedExpressMethodId('');
-        } else if (!isOpen && wasOpenRef.current) {
-            wasOpenRef.current = false;
-            setLockedExchangeRate(null);
-            setQrModalMethod(null);
-            setActivePaymentPromo(null);
-            setFocusedExpressMethodId('');
-        }
-    }, [isOpen, exchangeRate, initialCustomerId]);
-
-    const fetchCustomers = async () => {
+    const fetchCustomers = useCallback(async () => {
         try {
-            setLoadingCustomers(true);
             let custs = [];
             try {
                 const { data } = await api.get('/customers?limit=1000', { timeout: 3000 });
                 custs = Array.isArray(data) ? data : (data?.customers || []);
                 if (custs.length > 0) {
-                    try { await db.putAll('customers', custs); } catch {}
+                    try { await db.putAll('customers', custs); } catch (caughtErr) { console.warn('[CheckoutModal] Error en almacenamiento local IndexedDB:', caughtErr?.message || caughtErr); }
                 }
             } catch (netErr) {
                 console.warn('CheckoutModal: error de red al obtener clientes, cargando de IndexedDB:', netErr.message);
@@ -182,20 +173,17 @@ export default function CheckoutModal({
             setCustomers(custs || []);
         } catch (error) { 
             console.error('Error fetching customers:', error); 
-        } finally { 
-            setLoadingCustomers(false); 
         }
-    };
+    }, []);
 
-    const fetchMethods = async () => {
+    const fetchMethods = useCallback(async () => {
         try {
-            setLoadingMethods(true);
             let meths = [];
             try {
                 const { data } = await api.get('/settings/payment-methods', { timeout: 3000 });
                 meths = Array.isArray(data) ? data : [];
                 if (meths.length > 0) {
-                    try { localStorage.setItem('pos_payment_methods', JSON.stringify(meths)); } catch {}
+                    try { localStorage.setItem('pos_payment_methods', JSON.stringify(meths)); } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
                 }
             } catch (netErr) {
                 console.warn('CheckoutModal: error de red al obtener métodos de pago, usando caché/valores por defecto:', netErr.message);
@@ -207,14 +195,14 @@ export default function CheckoutModal({
                     if (Array.isArray(cached) && cached.length > 0) {
                         meths = cached;
                     }
-                } catch {}
+                } catch (caughtErr) { console.warn('[CheckoutModal] Error parseando JSON local:', caughtErr?.message || caughtErr); }
             }
 
             if (!meths || meths.length === 0) {
                 meths = DEFAULT_PAYMENT_METHODS;
             }
 
-            if (isUsdOnly) {
+            if (isSingle) {
                 meths = meths.filter(m => {
                     const idLower = (m.id || '').toLowerCase();
                     const nameLower = (m.name || '').toLowerCase();
@@ -222,14 +210,15 @@ export default function CheckoutModal({
                     if (curr === 'VES' || curr === 'BS') return false;
                     if (['cash_bs', 'efectivo_bs', 'pago_movil', 'biopago'].includes(idLower)) return false;
                     if (nameLower.includes(' bs') || nameLower.includes('ves') || nameLower.includes('pago móvil') || nameLower.includes('pago movil') || nameLower.includes('biopago')) return false;
+                    if (primaryCurrency !== 'EUR' && (idLower === 'cash_eur' || curr === 'EUR')) return false;
                     return true;
                 });
                 if (meths.length === 0) {
                     meths = [
-                        { id: 'cash', name: 'Efectivo', currency: 'USD', isCash: true, active: true },
-                        { id: 'card', name: 'Tarjeta / Débito', currency: 'USD', isCash: false, active: true },
-                        { id: 'transfer', name: 'Transferencia', currency: 'USD', isCash: false, active: true },
-                        { id: 'fiado', name: 'Crédito', currency: 'USD', type: 'CREDIT', active: true }
+                        { id: 'cash', name: primaryCurrency === 'EUR' ? 'Efectivo €' : 'Efectivo', currency: primaryCurrency, isCash: true, active: true },
+                        { id: 'card', name: primaryCurrency === 'EUR' ? 'Tarjeta / TPV' : 'Tarjeta / Débito', currency: primaryCurrency, isCash: false, active: true },
+                        { id: 'transfer', name: primaryCurrency === 'EUR' ? 'Transferencia SEPA' : 'Transferencia', currency: primaryCurrency, isCash: false, active: true },
+                        { id: 'fiado', name: 'Crédito', currency: primaryCurrency, type: 'CREDIT', active: true }
                     ];
                 }
             }
@@ -238,29 +227,65 @@ export default function CheckoutModal({
         } catch (error) { 
             console.error('Error fetching methods:', error); 
             setMethods(DEFAULT_PAYMENT_METHODS.map(m => ({ ...m, name: cleanMethodName(m.name) })));
-        } finally { 
-            setLoadingMethods(false); 
         }
-    };
+    }, [isSingle, primaryCurrency]);
+
+    const wasOpenRef = useRef(false);
+    useEffect(() => {
+        if (isOpen && !wasOpenRef.current) {
+            wasOpenRef.current = true;
+            setLockedExchangeRate(exchangeRate || 1);
+            fetchCustomers();
+            fetchMethods();
+            setPayments({});
+            setPaymentReferences({});
+            setSelectedCustomerId(initialCustomerId || '');
+            setDocumentType('factura');
+            setSelectedIndex(0);
+            setViewMode('express');
+            setTransactionId(null);
+            setQrModalMethod(null);
+            setQrModalUrl('');
+            setQrModalReference('');
+            setCopiedField(null);
+            setActivePaymentPromo(null);
+            setFocusedExpressMethodId('');
+            setCreditBlockPrompt(null);
+            setCreditUnlockBusy(false);
+            setCreditSupervisorModal({ isOpen: false, mode: 'once' });
+        } else if (!isOpen && wasOpenRef.current) {
+            wasOpenRef.current = false;
+            setLockedExchangeRate(null);
+            setQrModalMethod(null);
+            setActivePaymentPromo(null);
+            setFocusedExpressMethodId('');
+            setCreditBlockPrompt(null);
+            setCreditUnlockBusy(false);
+            setCreditSupervisorModal({ isOpen: false, mode: 'once' });
+        }
+    }, [isOpen, exchangeRate, initialCustomerId, fetchCustomers, fetchMethods]);
 
     // Helper para mapear y encontrar el método de pago por categoría (Blindado para Modo Offline)
     const findMethodKey = useCallback((typeKey) => {
         const pool = (Array.isArray(methods) && methods.length > 0) ? methods : DEFAULT_PAYMENT_METHODS;
         const tk = typeKey.toLowerCase();
         if (tk === 'cash_usd') {
-            return pool.find(m => m.id === 'cash' || m.id === 'cash_usd' || m.id === 'efectivo_usd' || (!m.id.includes('bs') && !m.id.includes('ves') && (m.id.includes('cash') || m.id.includes('efectivo')))) || pool[0];
+            return pool.find(m => m.id === 'cash' || m.id === 'cash_usd' || m.id === 'efectivo_usd' || (!m.id.includes('bs') && !m.id.includes('ves') && !m.id.includes('eur') && (m.id.includes('cash') || m.id.includes('efectivo')))) || pool[0];
+        }
+        if (tk === 'cash_eur' || tk === 'eur') {
+            return pool.find(m => m.id === 'cash_eur' || (m.currency || '').toUpperCase() === 'EUR' || m.id.includes('eur') || m.name.toLowerCase().includes('euro') || m.name.includes('€')) || null;
         }
         if (tk === 'cash_bs') {
             return pool.find(m => m.id === 'cash_bs' || m.id === 'efectivo_bs' || m.id.includes('cash_bs') || m.id.includes('bs') || m.id.includes('ves')) || pool.find(m => m.name.toLowerCase().includes('bs')) || pool[0];
         }
         if (tk === 'debit') {
-            return pool.find(m => m.id === 'debit' || m.id === 'card' || m.id === 'tarjeta' || m.id === 'punto_de_venta' || m.id.includes('debito') || m.id.includes('punto')) || pool.find(m => m.name.toLowerCase().includes('tarjeta') || m.name.toLowerCase().includes('punto')) || pool[0];
+            return pool.find(m => m.id === 'debit' || m.id === 'card' || m.id === 'tarjeta' || m.id === 'punto_de_venta' || m.id.includes('debito') || m.id.includes('punto')) || pool.find(m => m.name.toLowerCase().includes('tarjeta') || m.name.toLowerCase().includes('punto') || m.name.toLowerCase().includes('tpv')) || pool[0];
         }
         if (tk === 'transfer') {
-            return pool.find(m => m.id === 'zelle' || m.id === 'transfer' || m.id.includes('zelle') || m.id.includes('transfer')) || pool.find(m => m.name.toLowerCase().includes('zelle') || m.name.toLowerCase().includes('transferencia')) || pool[0];
+            return pool.find(m => m.id === 'bizum' || m.id === 'nequi' || m.id === 'zelle' || m.id === 'transfer' || m.id.includes('zelle') || m.id.includes('transfer')) || pool.find(m => m.name.toLowerCase().includes('bizum') || m.name.toLowerCase().includes('zelle') || m.name.toLowerCase().includes('transferencia')) || pool[0];
         }
         if (tk === 'credit') {
-            return pool.find(m => m.id === 'credit' || m.id === 'credito' || m.id.includes('credit')) || pool.find(m => m.name.toLowerCase().includes('crédito') || m.name.toLowerCase().includes('credito') || m.name.toLowerCase().includes('fiado')) || pool[0];
+            return pool.find(m => m.id === 'credit' || m.id === 'credito' || m.id.includes('credit') || m.id === 'fiado') || pool.find(m => m.name.toLowerCase().includes('crédito') || m.name.toLowerCase().includes('credito') || m.name.toLowerCase().includes('fiado')) || pool[0];
         }
         if (tk === 'movil') {
             return pool.find(m => m.id === 'pago_movil' || m.id.includes('movil') || m.id.includes('transfer')) || pool.find(m => m.name.toLowerCase().includes('móvil') || m.name.toLowerCase().includes('movil')) || pool[0];
@@ -278,14 +303,25 @@ export default function CheckoutModal({
     const toInt = (val) => Number(VortexMathEngine.toBigInt(val));
     const fromInt = (val) => VortexMathEngine.fromBigInt(BigInt(Math.round(val)));
 
-    // Helper unificado para Binance Pay (USDT): paridad 1:1 con USD (1 USDT = $1.00 USD = activeExchangeRate Bs)
-    const getEffectiveBinanceRate = useCallback(() => {
+    // Helper unificado para Binance Pay (USDT): respeta tasa P2P pactada si existe, o paridad 1:1 con BCV por defecto
+    const getEffectiveBinanceRate = useCallback((methodId = null, explicitCryptoRate = null) => {
+        const exp = Number(explicitCryptoRate);
+        if (exp > 0) return exp;
+        const targetMethod = methodId
+            ? methods.find(m => m.id === methodId || m.id === 'binance_usdt' || m.id === 'binance' || (m.currency || '').toUpperCase() === 'USDT')
+            : methods.find(m => m.id === 'binance_usdt' || m.id === 'binance' || (m.currency || '').toUpperCase() === 'USDT');
+        const methodBinRate = Number(targetMethod?.binanceRate);
+        if (methodBinRate > 0) return methodBinRate;
+        const settingsBinRate = Number(businessSettings?.binanceRate);
+        if (settingsBinRate > 0) return settingsBinRate;
         return activeExchangeRate > 0 ? activeExchangeRate : 1;
-    }, [activeExchangeRate]);
+    }, [methods, businessSettings?.binanceRate, activeExchangeRate]);
 
     const stats = useMemo(() => {
-        const totalUsdInt = toInt(total);
-        const totalVesInt = toInt(precisionRound(total * activeExchangeRate, 2));
+        const promoSavingsUsd = Number(activePaymentPromo?.savings) || 0;
+        const effectiveTotalUsd = Math.max(0, (Number(total) || 0) - promoSavingsUsd);
+        const totalUsdInt = toInt(effectiveTotalUsd);
+        const totalVesInt = toInt(precisionRound(effectiveTotalUsd * activeExchangeRate, 2));
 
         let usableUsdInt = 0;
         let usableVesInt = 0;
@@ -296,11 +332,13 @@ export default function CheckoutModal({
             const amountInt = toInt(data.amount);
             if (amountInt === 0) return;
 
-            const isBinance = data.currency === 'USDT' || methodId === 'binance_usdt' || methodId.includes('binance');
+            const isBinance = !isSingle && (data.currency === 'USDT' || methodId === 'binance_usdt' || methodId.includes('binance'));
+            const isForeignEur = !isSingle && (data.currency === 'EUR' || methodId === 'cash_eur');
             if (isBinance) {
-                activeBinanceRateUsed = activeExchangeRate;
-                const amountUsdInt = amountInt;
-                const amountVesInt = Math.round(amountInt * activeExchangeRate);
+                const binRate = getEffectiveBinanceRate(methodId, data.cryptoRate);
+                activeBinanceRateUsed = binRate;
+                const amountVesInt = toInt(precisionRound(fromInt(amountInt) * binRate, 2));
+                const amountUsdInt = activeExchangeRate > 0 ? Math.round(amountVesInt / activeExchangeRate) : amountInt;
 
                 const isCryptoIgtfApplicable = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
                 if (isCryptoIgtfApplicable) {
@@ -312,13 +350,32 @@ export default function CheckoutModal({
 
                     igtfUsdInt += tax;
                     usableUsdInt += usable;
-                    usableVesInt += Math.round(usable * activeExchangeRate);
+                    usableVesInt += toInt(precisionRound(fromInt(usable) * activeExchangeRate, 2));
                 } else {
                     usableUsdInt += amountUsdInt;
                     usableVesInt += amountVesInt;
                 }
-            } else if (data.currency === 'USD') {
-                const isIgtfApplicable = igtfEnabled && data.currency === 'USD' && methodId !== 'zelle' && methodId !== 'fiado';
+            } else if (isForeignEur) {
+                const effEurRate = Number(data.eurRate || activeEuroRate || activeExchangeRate || 1);
+                const amountVesInt = toInt(precisionRound(fromInt(amountInt) * effEurRate, 2));
+                const amountUsdInt = activeExchangeRate > 0 ? Math.round(amountVesInt / activeExchangeRate) : amountInt;
+
+                if (igtfEnabled) {
+                    const requiredPrincipal = Math.max(0, totalUsdInt - usableUsdInt);
+                    const maxUsableFromBill = Math.round(amountUsdInt / (1 + (igtfRate / 100)));
+                    const appliedPrincipal = Math.min(requiredPrincipal, maxUsableFromBill);
+                    const tax = Math.round(appliedPrincipal * (igtfRate / 100));
+                    const usable = amountUsdInt - tax;
+
+                    igtfUsdInt += tax;
+                    usableUsdInt += usable;
+                    usableVesInt += toInt(precisionRound(fromInt(usable) * activeExchangeRate, 2));
+                } else {
+                    usableUsdInt += amountUsdInt;
+                    usableVesInt += amountVesInt;
+                }
+            } else if (isSingle || data.currency === 'USD') {
+                const isIgtfApplicable = !isSingle && igtfEnabled && data.currency === 'USD' && methodId !== 'zelle' && methodId !== 'fiado';
                 if (isIgtfApplicable) {
                     const requiredPrincipal = Math.max(0, totalUsdInt - usableUsdInt);
                     const maxUsableFromBill = Math.round(amountInt / (1 + (igtfRate / 100)));
@@ -328,10 +385,10 @@ export default function CheckoutModal({
                     
                     igtfUsdInt += tax;
                     usableUsdInt += usable;
-                    usableVesInt += Math.round(usable * activeExchangeRate);
+                    usableVesInt += toInt(precisionRound(fromInt(usable) * activeExchangeRate, 2));
                 } else {
                     usableUsdInt += amountInt;
-                    usableVesInt += Math.round(amountInt * activeExchangeRate);
+                    usableVesInt += toInt(precisionRound(fromInt(amountInt) * activeExchangeRate, 2));
                 }
             } else {
                 usableVesInt += amountInt;
@@ -339,21 +396,27 @@ export default function CheckoutModal({
             }
         });
 
-        const hasBinancePayment = Object.entries(payments).some(([k, v]) => (v.currency === 'USDT' || k.includes('binance')) && toInt(v.amount) > 0);
-        // Tolerancia proporcional al redondeo de 2 decimales de USDT (±0.006 USDT) para evitar residuos fantasma como "$0.00 / Bs 0,57"
+        const hasBinancePayment = !isSingle && Object.entries(payments).some(([k, v]) => (v.currency === 'USDT' || k.includes('binance')) && toInt(v.amount) > 0);
+        const hasForeignEurPayment = !isSingle && Object.entries(payments).some(([k, v]) => (v.currency === 'EUR' || k === 'cash_eur') && toInt(v.amount) > 0);
+        // Tolerancia proporcional al redondeo de 2 decimales de USDT/EUR (±0.006) para evitar residuos fantasma
         const baseBinanceTolBs = Number(businessSettings?.binanceRoundingToleranceBs ?? 0.50);
         const effBinRate = activeBinanceRateUsed > 0 ? activeBinanceRateUsed : getEffectiveBinanceRate();
         const dynamicBinanceTolBs = Math.max(baseBinanceTolBs, effBinRate * 0.006, activeExchangeRate * 0.006);
-        const roundingToleranceBs = hasBinancePayment ? dynamicBinanceTolBs : 0.0005;
+        const dynamicEurTolBs = Math.max(0.50, activeEuroRate * 0.006, activeExchangeRate * 0.006);
+        // En cobros estándar, tolerar hasta 0.01 Bs (1 céntimo) evita bloqueos por discrepancias de redondeo USD<->VES a tasas altas
+        const roundingToleranceBs = hasBinancePayment
+            ? dynamicBinanceTolBs
+            : (hasForeignEurPayment ? dynamicEurTolBs : 0.01);
         const toleranceInt = toInt(roundingToleranceBs);
 
         const isInsufficient = (totalVesInt - usableVesInt) > toleranceInt;
         const rawChangeBsInt = !isInsufficient ? Math.max(0, usableVesInt - totalVesInt) : 0;
         const rawChangeUsdInt = !isInsufficient ? Math.max(0, usableUsdInt - totalUsdInt) : 0;
 
-        // Si el excedente es meramente por redondeo de medio centavo de USDT, no generar vuelto artificial
-        const changeBsInt = (hasBinancePayment && rawChangeBsInt <= toleranceInt) ? 0 : rawChangeBsInt;
-        const changeUsdInt = (hasBinancePayment && rawChangeBsInt <= toleranceInt) ? 0 : rawChangeUsdInt;
+        // Si el excedente es meramente por redondeo de medio centavo de USDT/EUR, no generar vuelto artificial
+        const hasFxRounding = hasBinancePayment || hasForeignEurPayment;
+        const changeBsInt = (hasFxRounding && rawChangeBsInt <= toleranceInt) ? 0 : rawChangeBsInt;
+        const changeUsdInt = (hasFxRounding && rawChangeBsInt <= toleranceInt) ? 0 : rawChangeUsdInt;
 
         const remainingBsInt = isInsufficient ? Math.max(0, totalVesInt - usableVesInt) : 0;
         const remainingUsdInt = isInsufficient ? Math.max(0, totalUsdInt - usableUsdInt) : 0;
@@ -370,7 +433,7 @@ export default function CheckoutModal({
             remainingBs: fromInt(remainingBsInt),
             remainingUsd: fromInt(remainingUsdInt)
         };
-    }, [payments, total, activeExchangeRate, igtfEnabled, igtfRate, businessSettings, getEffectiveBinanceRate]);
+    }, [payments, total, activePaymentPromo?.savings, activeExchangeRate, activeEuroRate, isSingle, igtfEnabled, igtfRate, businessSettings, getEffectiveBinanceRate]);
 
     const {
         isInsufficient,
@@ -383,208 +446,8 @@ export default function CheckoutModal({
         remainingUsd
     } = stats;
 
-    const handleAmountChange = (methodId, value, currency) => {
-        const normalizedValue = value.toString().replace(',', '.');
-        const isBinance = currency === 'USDT' || methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance');
-        setPayments(prev => ({
-            ...prev,
-            [methodId]: {
-                amount: normalizedValue,
-                currency: isBinance ? 'USDT' : currency,
-                cryptoRate: isBinance ? getEffectiveBinanceRate(methodId, prev[methodId]?.cryptoRate) : undefined
-            }
-        }));
-    };
-
-    const handleFlashFill = useCallback((methodId, methodType, remBs, remUsd) => {
-        if (remBs <= 0) return;
-        const method = methods.find(m => m.id === methodId);
-        const isBinance = methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance') || (method?.currency || '').toUpperCase() === 'USDT';
-
-        if (isBinance) {
-            const methodAppliesIgtf = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
-            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
-            const existingUsdt = parseFloat(payments[methodId]?.amount) || 0;
-            let exactUsdt = precisionRound(existingUsdt + (remUsd * igtfFactor), methodAppliesIgtf ? 4 : 2);
-            if (methodAppliesIgtf && remUsd > 0 && Math.round(toInt(exactUsdt) / igtfFactor) < toInt((existingUsdt / igtfFactor) + remUsd)) {
-                exactUsdt = precisionRound(exactUsdt + 0.0001, 4);
-            }
-            const targetBs = precisionRound(exactUsdt * activeExchangeRate, 2);
-
-            setPayments(prev => ({
-                ...prev,
-                [methodId]: {
-                    amount: methodAppliesIgtf
-                        ? exactUsdt.toFixed(4).replace(/(\.\d{2})00$/, '$1')
-                        : exactUsdt.toFixed(2),
-                    currency: 'USDT',
-                    cryptoRate: activeExchangeRate,
-                    coveredBs: targetBs
-                }
-            }));
-            return;
-        }
-
-        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(methodId.toLowerCase()) || methodId.toLowerCase().includes('bs') || methodId.toLowerCase().includes('ves') || methodId.toLowerCase().includes('movil'));
-        const currency = isSingle ? 'USD' : (method?.currency || method?.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-        const existingVal = parseFloat(payments[methodId]?.amount) || 0;
-
-        if (currency === 'USD') {
-            const methodAppliesIgtf = igtfEnabled && methodId !== 'zelle' && methodId !== 'fiado';
-            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
-            let exactAmount = precisionRound(existingVal + (remUsd * igtfFactor), 4);
-            if (methodAppliesIgtf && remUsd > 0) {
-                const targetTotalUsable = toInt((existingVal / igtfFactor) + remUsd);
-                if (Math.round(toInt(exactAmount) / igtfFactor) < targetTotalUsable) {
-                    exactAmount = precisionRound(exactAmount + 0.0001, 4);
-                }
-            }
-            setPayments(prev => ({
-                ...prev,
-                [methodId]: {
-                    amount: exactAmount.toFixed(4).replace(/(\.\d{2})00$/, '$1'),
-                    currency
-                }
-            }));
-            return;
-        }
-
-        const amountVes = precisionRound(remBs + existingVal, 2);
-        setPayments(prev => ({
-            ...prev,
-            [methodId]: {
-                amount: amountVes.toFixed(2),
-                currency
-            }
-        }));
-    }, [methods, isSingle, payments, activeExchangeRate, igtfEnabled, igtfRate, businessSettings]);
-
-    // Bandera determinista para auto-enviar cuando React confirme stats.isInsufficient === false
-    const pendingAutoSubmitRef = useRef(false);
-
-    // Ejecutar Pago Exprés en 1-Clic
-    const executeExpressPayment = useCallback((typeKey, autoSubmit = true) => {
-        const targetMethod = findMethodKey(typeKey);
-        if (typeKey === 'binance' || typeKey === 'binance_usdt' || targetMethod?.currency === 'USDT') {
-            openBinanceQr(targetMethod || { id: 'binance_usdt', name: 'Binance Pay', currency: 'USDT' });
-            return;
-        }
-        if (typeKey === 'movil' || typeKey === 'pago_movil' || (targetMethod?.id || '').toLowerCase().includes('movil')) {
-            openPagoMovilQr(targetMethod || { id: 'pago_movil', name: 'Pago Móvil', currency: 'VES' });
-            return;
-        }
-        if (!targetMethod) return;
-
-        // Comprobar si este método de pago goza de una promoción/descuento activo
-        const promo = getMethodPromo(targetMethod.id, targetMethod.name);
-        const promoSavings = promo ? promo.savings : 0;
-        setActivePaymentPromo(promo || null);
-
-        // Calcular siempre sobre la base imponible neta del carrito (sin IGTF residual previo)
-        const netUsd = Math.max(0, precisionRound((Number(total) || 0) - promoSavings, 4));
-        const netVes = precisionRound(netUsd * activeExchangeRate, 2);
-
-        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
-        const currency = isSingle ? 'USD' : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-
-        const methodAppliesIgtf = igtfEnabled && currency === 'USD' && targetMethod.id !== 'zelle' && targetMethod.id !== 'fiado';
-        const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
-        let exactAmount = currency === 'USD'
-            ? precisionRound(netUsd * igtfFactor, 4)
-            : netVes;
-
-        if (methodAppliesIgtf && netUsd > 0) {
-            const principalInt = toInt(netUsd);
-            if (Math.round(toInt(exactAmount) / igtfFactor) < principalInt) {
-                exactAmount = precisionRound(exactAmount + 0.0001, 4);
-            }
-        }
-
-        if (autoSubmit) {
-            pendingAutoSubmitRef.current = true;
-        }
-
-        // Limpiar otros métodos y dejar 100% en el seleccionado
-        setPayments({
-            [targetMethod.id]: {
-                amount: currency === 'USD' ? exactAmount.toFixed(4) : exactAmount.toFixed(2),
-                currency
-            }
-        });
-    }, [findMethodKey, isSingle, total, activeExchangeRate, getMethodPromo, igtfEnabled, igtfRate]);
-
-    const [updatingBinanceRate, setUpdatingBinanceRate] = useState(false);
-
-    const handleUpdateBinanceRate = async (newRate = null, targetMethodId = null) => {
-        try {
-            setUpdatingBinanceRate(true);
-            let rateToApply = newRate;
-            if (rateToApply === null || rateToApply === undefined) {
-                const res = await api.get('/settings/binance/rate');
-                if (res.data && res.data.rate) {
-                    rateToApply = Number(res.data.rate);
-                } else {
-                    throw new Error('No se pudo obtener la tasa P2P');
-                }
-            }
-
-            const validRate = Number(rateToApply);
-            if (!validRate || validRate <= 0) {
-                if (newRate === 0) return;
-                toast.error('Tasa inválida');
-                return;
-            }
-
-            // 1. Actualizar en la lista local de métodos de pago
-            setMethods(prev => prev.map(m => {
-                if (m.id === 'binance_usdt' || m.id === 'binance' || (m.currency || '').toUpperCase() === 'USDT' || m.id === targetMethodId) {
-                    return { ...m, binanceRate: validRate };
-                }
-                return m;
-            }));
-
-            // 2. Si el modal QR de Binance está abierto, recalcular monto y regenerar QR
-            if (qrModalMethod && qrModalMethod.isBinance) {
-                const amountBs = Number(qrModalMethod.amountBs || (remainingBs > 0 ? remainingBs : totalToPayVes));
-                const newAmountUsdt = precisionRound(amountBs / validRate, 2);
-                const updated = {
-                    ...qrModalMethod,
-                    binanceRate: validRate,
-                    amountUsdt: newAmountUsdt
-                };
-                setQrModalMethod(updated);
-
-                if (updated.binanceQrMode !== 'IMAGE') {
-                    setGeneratingQrModal(true);
-                    generateBinanceQR({
-                        payId: updated.binancePayId,
-                        email: updated.binanceEmail,
-                        amountUsdt: newAmountUsdt,
-                        customImage: updated.binanceQrImage,
-                        mode: updated.binanceQrMode
-                    }).then(url => {
-                        setQrModalUrl(url || updated.binanceQrImage || '');
-                        setGeneratingQrModal(false);
-                    }).catch(() => setGeneratingQrModal(false));
-                }
-            }
-
-            // 3. Sincronizar en segundo plano con el backend
-            api.post('/settings/binance/rate', { rate: validRate }).catch(() => {});
-
-            if (newRate === null || newRate === undefined) {
-                toast.success(`Tasa P2P actualizada: ${validRate.toFixed(2)} Bs/USDT`);
-            }
-        } catch (err) {
-            console.error('Error actualizando tasa Binance:', err);
-            toast.error('Error al consultar tasa P2P');
-        } finally {
-            setUpdatingBinanceRate(false);
-        }
-    };
-
     // Apertura y control del Modal Visual de Pago Móvil & Código QR
-    const openBinanceQr = (targetMethod) => {
+    const openBinanceQr = useCallback((targetMethod) => {
         if (!targetMethod) return;
         setFocusedExpressMethodId(targetMethod.id || 'binance_usdt');
         const payId = targetMethod.binancePayId || businessSettings?.binancePayId || '';
@@ -592,13 +455,13 @@ export default function CheckoutModal({
         const customImage = targetMethod.binanceQrImage || businessSettings?.binanceQrImage || '';
         const mode = targetMethod.binanceQrMode || (customImage ? 'IMAGE' : 'AUTO');
 
-        // Paridad 1:1 con USD (1 USDT = $1.00 USD)
-        let amountUsdt = precisionRound(remainingUsd > 0 ? remainingUsd : totalToPayUsd, 2);
+        const effectiveRate = getEffectiveBinanceRate(targetMethod.id, payments[targetMethod.id]?.cryptoRate || targetMethod.binanceRate);
+        let amountBs = precisionRound(remainingBs > 0 ? remainingBs : totalToPayVes, 2);
+        let amountUsdt = effectiveRate > 0 ? precisionRound(amountBs / effectiveRate, 2) : precisionRound(remainingUsd > 0 ? remainingUsd : totalToPayUsd, 2);
         if (viewMode === 'split' && parseFloat(payments[targetMethod.id]?.amount) > 0) {
             amountUsdt = precisionRound(parseFloat(payments[targetMethod.id].amount), 2);
+            amountBs = precisionRound(amountUsdt * effectiveRate, 2);
         }
-        const effectiveRate = activeExchangeRate > 0 ? activeExchangeRate : 1;
-        const amountBs = precisionRound(amountUsdt * effectiveRate, 2);
 
         const methodWithData = {
             ...targetMethod,
@@ -633,9 +496,9 @@ export default function CheckoutModal({
                 setGeneratingQrModal(false);
             });
         }
-    };
+    }, [businessSettings?.binancePayId, businessSettings?.binanceEmail, businessSettings?.binanceQrImage, getEffectiveBinanceRate, payments, remainingBs, totalToPayVes, remainingUsd, totalToPayUsd, viewMode, paymentReferences]);
 
-    const openPagoMovilQr = (targetMethod) => {
+    const openPagoMovilQr = useCallback((targetMethod) => {
         if (!targetMethod) return;
         setFocusedExpressMethodId(targetMethod.id || 'pago_movil');
         const qmBank = targetMethod.pagoMovilBank || businessSettings?.pagoMovilBank || '';
@@ -690,7 +553,198 @@ export default function CheckoutModal({
                 setGeneratingQrModal(false);
             });
         }
+    }, [businessSettings?.pagoMovilBank, businessSettings?.pagoMovilPhone, businessSettings?.phone, businessSettings?.pagoMovilId, businessSettings?.rif, viewMode, payments, activeExchangeRate, remainingBs, totalToPayVes, paymentReferences]);
+
+    const handleAmountChange = (methodId, value, currency) => {
+        const normalizedValue = value.toString().replace(',', '.');
+        const isBinance = !isSingle && (currency === 'USDT' || methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance'));
+        const isForeignEur = !isSingle && (currency === 'EUR' || methodId === 'cash_eur');
+        setPayments(prev => ({
+            ...prev,
+            [methodId]: {
+                amount: normalizedValue,
+                currency: isBinance ? 'USDT' : (isSingle ? primaryCurrency : currency),
+                cryptoRate: isBinance ? getEffectiveBinanceRate(methodId, prev[methodId]?.cryptoRate) : undefined,
+                eurRate: isForeignEur ? (activeEuroRate > 0 ? activeEuroRate : prev[methodId]?.eurRate) : undefined
+            }
+        }));
     };
+
+    const handleFlashFill = useCallback((methodId, methodType, remBs, remUsd) => {
+        if (remBs <= 0) return;
+        const method = methods.find(m => m.id === methodId);
+        const isBinance = !isSingle && (methodId === 'binance_usdt' || methodId.toLowerCase().includes('binance') || (method?.currency || '').toUpperCase() === 'USDT');
+        const isForeignEur = !isSingle && (methodId === 'cash_eur' || (method?.currency || '').toUpperCase() === 'EUR');
+
+        if (isBinance) {
+            const binRate = getEffectiveBinanceRate(methodId, payments[methodId]?.cryptoRate);
+            const methodAppliesIgtf = igtfEnabled && businessSettings?.binanceIgtfEnabled === true;
+            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+            const existingUsdt = parseFloat(payments[methodId]?.amount) || 0;
+            const remainingUsdtEquiv = binRate > 0 ? (remBs / binRate) : remUsd;
+            let exactUsdt = precisionRound(existingUsdt + (remainingUsdtEquiv * igtfFactor), methodAppliesIgtf ? 4 : 2);
+            if (methodAppliesIgtf && remainingUsdtEquiv > 0 && Math.round(toInt(exactUsdt) / igtfFactor) < toInt((existingUsdt / igtfFactor) + remainingUsdtEquiv)) {
+                exactUsdt = precisionRound(exactUsdt + 0.0001, 4);
+            }
+            const targetBs = precisionRound(exactUsdt * binRate, 2);
+
+            setPayments(prev => ({
+                ...prev,
+                [methodId]: {
+                    amount: methodAppliesIgtf
+                        ? exactUsdt.toFixed(4).replace(/(\.\d{2})00$/, '$1')
+                        : exactUsdt.toFixed(2),
+                    currency: 'USDT',
+                    cryptoRate: binRate,
+                    coveredBs: targetBs
+                }
+            }));
+            return;
+        }
+
+        if (isForeignEur) {
+            const effEurRate = activeEuroRate > 0 ? activeEuroRate : activeExchangeRate;
+            if (!effEurRate || effEurRate <= 0) {
+                toast.error('Configura primero la tasa oficial del Euro BCV en Configuración > Divisa.');
+                return;
+            }
+            const methodAppliesIgtf = igtfEnabled;
+            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+            const existingEur = parseFloat(payments[methodId]?.amount) || 0;
+            const remainingEurEquiv = remBs / effEurRate;
+            let exactEur = precisionRound(existingEur + (remainingEurEquiv * igtfFactor), methodAppliesIgtf ? 4 : 2);
+            if (methodAppliesIgtf && remainingEurEquiv > 0 && Math.round(toInt(exactEur) / igtfFactor) < toInt((existingEur / igtfFactor) + remainingEurEquiv)) {
+                exactEur = precisionRound(exactEur + 0.0001, 4);
+            }
+            setPayments(prev => ({
+                ...prev,
+                [methodId]: {
+                    amount: exactEur.toFixed(2),
+                    currency: 'EUR',
+                    eurRate: effEurRate
+                }
+            }));
+            return;
+        }
+
+        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(methodId.toLowerCase()) || methodId.toLowerCase().includes('bs') || methodId.toLowerCase().includes('ves') || methodId.toLowerCase().includes('movil'));
+        const currency = isSingle ? primaryCurrency : (method?.currency || method?.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
+        const existingVal = parseFloat(payments[methodId]?.amount) || 0;
+
+        if (isSingle || currency === 'USD') {
+            const methodAppliesIgtf = !isSingle && igtfEnabled && methodId !== 'zelle' && methodId !== 'fiado';
+            const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+            const effectiveRemUsd = activeExchangeRate > 0 ? Math.max(remUsd, remBs / activeExchangeRate) : remUsd;
+            let exactAmount = precisionRound(existingVal + (effectiveRemUsd * igtfFactor), 6);
+            if (methodAppliesIgtf && effectiveRemUsd > 0) {
+                const targetTotalUsable = toInt((existingVal / igtfFactor) + effectiveRemUsd);
+                if (Math.round(toInt(exactAmount) / igtfFactor) < targetTotalUsable) {
+                    exactAmount = precisionRound(exactAmount + 0.0001, 6);
+                }
+            }
+            setPayments(prev => ({
+                ...prev,
+                [methodId]: {
+                    amount: exactAmount.toFixed(6).replace(/(\.\d{2})0+$/, '$1').replace(/(\.\d{2,}?)0+$/, '$1'),
+                    currency
+                }
+            }));
+            return;
+        }
+
+        const amountVes = precisionRound(remBs + existingVal, 2);
+        setPayments(prev => ({
+            ...prev,
+            [methodId]: {
+                amount: amountVes.toFixed(2),
+                currency
+            }
+        }));
+    }, [methods, isSingle, primaryCurrency, payments, igtfEnabled, igtfRate, activeExchangeRate, activeEuroRate, businessSettings, getEffectiveBinanceRate]);
+
+    // Bandera determinista para auto-enviar cuando React confirme stats.isInsufficient === false
+    const pendingAutoSubmitRef = useRef(false);
+
+    // Ejecutar Pago Exprés en 1-Clic
+    const executeExpressPayment = useCallback((typeKey, autoSubmit = true) => {
+        const targetMethod = findMethodKey(typeKey);
+        if (!isSingle && (typeKey === 'binance' || typeKey === 'binance_usdt' || targetMethod?.currency === 'USDT')) {
+            openBinanceQr(targetMethod || { id: 'binance_usdt', name: 'Binance Pay', currency: 'USDT' });
+            return;
+        }
+        if (!isSingle && (typeKey === 'movil' || typeKey === 'pago_movil' || (targetMethod?.id || '').toLowerCase().includes('movil'))) {
+            openPagoMovilQr(targetMethod || { id: 'pago_movil', name: 'Pago Móvil', currency: 'VES' });
+            return;
+        }
+        if (!targetMethod) return;
+
+        // Comprobar si este método de pago goza de una promoción/descuento activo
+        const promo = getMethodPromo(targetMethod.id, targetMethod.name);
+        const promoSavings = promo ? promo.savings : 0;
+        setActivePaymentPromo(promo || null);
+
+        // Calcular siempre sobre el total exacto sin truncar antes de convertir a VES (evita faltantes de 0.01 Bs a tasas altas)
+        const rawNetUsd = Math.max(0, (Number(total) || 0) - promoSavings);
+        const netVes = precisionRound(rawNetUsd * activeExchangeRate, 2);
+
+        const isForeignEur = !isSingle && (typeKey === 'cash_eur' || targetMethod.id === 'cash_eur' || (targetMethod.currency || '').toUpperCase() === 'EUR');
+        if (isForeignEur) {
+            const effEurRate = activeEuroRate > 0 ? activeEuroRate : activeExchangeRate;
+            if (!effEurRate || effEurRate <= 0) {
+                toast.error('Configura la tasa oficial Euro BCV antes de cobrar en Euros.');
+                return;
+            }
+            const igtfFactor = igtfEnabled ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+            const exactEur = precisionRound((netVes / effEurRate) * igtfFactor, 2);
+            if (autoSubmit) pendingAutoSubmitRef.current = true;
+            setPayments({
+                [targetMethod.id]: {
+                    amount: exactEur.toFixed(2),
+                    currency: 'EUR',
+                    eurRate: effEurRate
+                }
+            });
+            return;
+        }
+
+        const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
+        const currency = isSingle ? primaryCurrency : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
+
+        const methodAppliesIgtf = !isSingle && igtfEnabled && currency === 'USD' && targetMethod.id !== 'zelle' && targetMethod.id !== 'fiado';
+        const igtfFactor = methodAppliesIgtf ? (1 + ((Number(igtfRate) || 3) / 100)) : 1;
+        let exactAmount = (isSingle || currency === 'USD')
+            ? precisionRound(rawNetUsd * igtfFactor, 6)
+            : netVes;
+
+        if ((isSingle || currency === 'USD') && rawNetUsd > 0) {
+            if (methodAppliesIgtf) {
+                const principalInt = toInt(rawNetUsd);
+                if (Math.round(toInt(exactAmount) / igtfFactor) < principalInt) {
+                    exactAmount = precisionRound(exactAmount + 0.0001, 6);
+                }
+            }
+            const usableUsdForVes = methodAppliesIgtf ? (exactAmount / igtfFactor) : exactAmount;
+            if (!isSingle && precisionRound(usableUsdForVes * activeExchangeRate, 2) < netVes) {
+                exactAmount = precisionRound(exactAmount + 0.0001, 6);
+            }
+        }
+
+        if (autoSubmit) {
+            pendingAutoSubmitRef.current = true;
+        }
+
+        // Limpiar otros métodos y dejar 100% en el seleccionado
+        setPayments({
+            [targetMethod.id]: {
+                amount: (isSingle || currency === 'USD')
+                    ? exactAmount.toFixed(6).replace(/(\.\d{2})0+$/, '$1').replace(/(\.\d{2,}?)0+$/, '$1')
+                    : exactAmount.toFixed(2),
+                currency
+            }
+        });
+    }, [findMethodKey, isSingle, primaryCurrency, total, activeExchangeRate, activeEuroRate, getMethodPromo, igtfEnabled, igtfRate, openBinanceQr, openPagoMovilQr]);
+
+
 
     const handleCopyText = (text, fieldKey) => {
         if (!text) return;
@@ -773,13 +827,14 @@ export default function CheckoutModal({
         if (viewMode === 'express') {
             const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(targetMethod.id.toLowerCase()) || targetMethod.id.toLowerCase().includes('bs') || targetMethod.id.toLowerCase().includes('ves') || targetMethod.id.toLowerCase().includes('movil'));
             const currency = isSingle ? 'USD' : (targetMethod.currency || targetMethod.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
-            const netUsd = Math.max(0, totalToPayUsd - promoSavings);
+            const netUsd = Math.max(0, (Number(total) || 0) - promoSavings);
             const netVes = precisionRound(netUsd * activeExchangeRate, 2);
-            const exactAmount = currency === 'USD' ? netUsd : netVes;
+            const exactAmount = currency === 'USD' ? precisionRound(netUsd, 6) : netVes;
 
+            pendingAutoSubmitRef.current = true;
             setPayments({
                 [targetMethod.id]: {
-                    amount: currency === 'USD' ? exactAmount.toFixed(4) : exactAmount.toFixed(2),
+                    amount: currency === 'USD' ? exactAmount.toFixed(6).replace(/(\.\d{2})0+$/, '$1').replace(/(\.\d{2,}?)0+$/, '$1') : exactAmount.toFixed(2),
                     currency,
                     reference: cleanRef
                 }
@@ -788,10 +843,6 @@ export default function CheckoutModal({
             setPaymentReferences(prev => ({ ...prev, [targetMethod.id]: cleanRef }));
 
             setQrModalMethod(null);
-            setTimeout(() => {
-                const form = document.getElementById('checkout-form');
-                if (form) form.requestSubmit();
-            }, 60);
         } else {
             // Modo Split
             const currency = targetMethod.currency || 'VES';
@@ -812,12 +863,14 @@ export default function CheckoutModal({
     };
 
     const handleQuickAmount = (amountInUsd) => {
-        const method = methods[selectedIndex] || findMethodKey('cash_usd');
+        const method = viewMode === 'express'
+            ? (findMethodKey('cash_usd') || methods[selectedIndex])
+            : (methods[selectedIndex] || findMethodKey('cash_usd'));
         if (!method) return;
         const isVesKey = !isSingle && (['debit', 'debito', 'tarjeta_debito', 'punto_de_venta', 'pago_movil', 'cash_bs', 'transfer', 'transferencia', 'transfer_bs', 'biopago'].includes(method.id.toLowerCase()) || method.id.toLowerCase().includes('bs') || method.id.toLowerCase().includes('ves') || method.id.toLowerCase().includes('movil'));
-        const currency = isSingle ? 'USD' : (method.currency || method.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
+        const currency = isSingle ? primaryCurrency : (method.currency || method.defaultCurrency || (isVesKey ? 'VES' : 'USD'));
         
-        const valueToSet = currency === 'VES' ? precisionRound(amountInUsd * activeExchangeRate, 2) : amountInUsd;
+        const valueToSet = (!isSingle && currency === 'VES') ? precisionRound(amountInUsd * activeExchangeRate, 2) : amountInUsd;
         
         setPayments({
             [method.id]: { amount: valueToSet.toString(), currency }
@@ -825,7 +878,7 @@ export default function CheckoutModal({
     };
 
     const handleKeyDown = useCallback((e) => {
-        if (!isOpen) return;
+        if (!isOpen || creditBlockPrompt || creditSupervisorModal.isOpen) return;
 
         // Teclas Rápidas de Cobro Directo 1-Clic (F1 deshabilitado a petición del usuario)
         if (e.key === 'F1') {
@@ -905,7 +958,7 @@ export default function CheckoutModal({
                 if (form) form.requestSubmit();
             }
         }
-    }, [isOpen, viewMode, methods, selectedIndex, executeExpressPayment]);
+    }, [isOpen, creditBlockPrompt, creditSupervisorModal.isOpen, viewMode, methods, selectedIndex, executeExpressPayment, findMethodKey, openBinanceQr]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -949,14 +1002,22 @@ export default function CheckoutModal({
                         .map(([mId, p]) => {
                             const m = (methods || []).find(x => x.id === mId) || findMethodKey(mId);
                             const amountNum = Number(p.amount) || 0;
-                            const curr = (p.currency || m?.currency || 'USD').toUpperCase();
+                            const curr = (p.currency || m?.currency || primaryCurrency || 'USD').toUpperCase();
                             const isUsd = curr === 'USD';
                             const isVes = curr === 'VES' || curr === 'BS';
                             const isUsdt = curr === 'USDT' || mId.includes('binance');
+                            const isEur = curr === 'EUR' || mId === 'cash_eur';
 
                             let equivBs = 0;
                             let equivUsd = 0;
-                            if (isUsd) {
+                            if (isSingle) {
+                                equivUsd = amountNum;
+                                equivBs = amountNum;
+                            } else if (isEur) {
+                                const eurR = Number(p.eurRate || activeEuroRate || activeExchangeRate || 1);
+                                equivBs = precisionRound(amountNum * eurR, 2);
+                                equivUsd = activeExchangeRate > 0 ? precisionRound(equivBs / activeExchangeRate, 2) : amountNum;
+                            } else if (isUsd) {
                                 equivUsd = amountNum;
                                 equivBs = precisionRound(amountNum * activeExchangeRate, 2);
                             } else if (isVes) {
@@ -1074,7 +1135,7 @@ export default function CheckoutModal({
             // 1. LocalStorage para lectura instantánea en la misma estación
             try {
                 localStorage.setItem('isaac_pos_display_payment_sync', JSON.stringify(payload));
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 
             // 2. BroadcastChannel para sincronización inter-procesos/doble monitor (0ms)
             try {
@@ -1083,7 +1144,7 @@ export default function CheckoutModal({
                     bc.postMessage({ type: 'PAYMENT_SELECTION_UPDATE', payload });
                     bc.close();
                 }
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
 
             // 3. Socket.io para pantallas en red Wi-Fi / IP LAN
             if (socket && socket.connected) {
@@ -1093,9 +1154,9 @@ export default function CheckoutModal({
             // 4. CustomEvent local en ventana
             try {
                 window.dispatchEvent(new CustomEvent('isaac_pos_display_payment_local_update', { detail: payload }));
-            } catch (_) {}
-        } catch (_) {}
-    }, [isOpen, qrModalMethod, qrModalUrl, viewMode, methods, selectedIndex, focusedExpressMethodId, payments, paymentReferences, stats, activePaymentPromo, total, activeExchangeRate, user, registerId, socket, findMethodKey, isUsdOnly, businessSettings, getEffectiveBinanceRate, selectedCustomerId, customers, initialCustomerId, customerName]);
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error propagando evento de sincronización:', caughtErr?.message || caughtErr); }
+        } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
+    }, [isOpen, qrModalMethod, qrModalUrl, viewMode, methods, selectedIndex, focusedExpressMethodId, payments, paymentReferences, stats, activePaymentPromo, total, activeExchangeRate, activeEuroRate, isSingle, primaryCurrency, user, registerId, socket, findMethodKey, isUsdOnly, selectedCustomerId, customers, initialCustomerId, customerName]);
 
     useEffect(() => {
         broadcastPaymentSelection();
@@ -1114,9 +1175,15 @@ export default function CheckoutModal({
 
     const [isLocalSubmitting, setIsLocalSubmitting] = useState(false);
 
-    const handleSubmit = async (e) => {
+    const handleSubmit = async (e, overrideOptions = {}) => {
         if (e) e.preventDefault();
         if (processing || isLocalSubmitting || isInsufficient) return;
+
+        const {
+            skipCreditCheck = false,
+            supervisorApprovalId = null,
+            customerOverride = null
+        } = (overrideOptions && typeof overrideOptions === 'object') ? overrideOptions : {};
 
         const isOfflineExplicit = typeof window !== 'undefined' && (localStorage.getItem('isaac_pos_is_offline_mode') === 'true' || !navigator.onLine);
         if (!isOfflineExplicit) {
@@ -1175,26 +1242,10 @@ export default function CheckoutModal({
         }
 
         setIsLocalSubmitting(true);
-        const customer = Array.isArray(customers) ? customers.find(c => String(c.id) === String(selectedCustomerId)) : null;
+        const foundCustomer = Array.isArray(customers) ? customers.find(c => String(c.id) === String(selectedCustomerId)) : null;
+        const customer = customerOverride ? { ...(foundCustomer || {}), ...customerOverride } : foundCustomer;
 
-        if (hasFiado && customer) {
-            if (customer.isCreditBlocked) {
-                toast.error('🚫 ¡VENTA A CRÉDITO BLOQUEADA! El cliente tiene el crédito suspendido por morosidad.');
-                setIsLocalSubmitting(false);
-                return;
-            }
-
-            try {
-                const { data: profData } = await api.get(`/collections/customer-profile/${customer.id}`, { timeout: 1500 });
-                if (profData?.success && profData.profile?.trafficLight === 'RED' && !profData.profile?.canSellCredit) {
-                    toast.error(`🚫 ¡CRÉDITO DENEGADO! ${profData.profile.blockReason || 'Cliente en semáforo rojo.'}`);
-                    setIsLocalSubmitting(false);
-                    return;
-                }
-            } catch (err) {
-                console.warn('Error al verificar perfil de cobranza en CheckoutModal:', err);
-            }
-
+        if (hasFiado && customer && !skipCreditCheck) {
             const fiadoAmountUsd = Object.entries(payments).reduce((sum, [id, p]) => {
                 const method = methods.find(m => m.id === id);
                 if (method?.type === 'CREDIT' || method?.id === 'fiado') {
@@ -1204,15 +1255,75 @@ export default function CheckoutModal({
                 return sum;
             }, 0);
 
-            const availableCredit = (customer.creditLimit || 0) - (customer.creditBalance || 0);
+            const availableCredit = (Number(customer.creditLimit) || 0) - (Number(customer.creditBalance) || 0);
 
-            if ((customer.creditLimit || 0) <= 0 && fiadoAmountUsd > 0) {
-                toast.error('¡El cliente seleccionado no tiene límite de crédito habilitado!');
+            if (customer.isCreditBlocked) {
+                const reason = 'El cliente tiene el crédito suspendido administrativamente.';
+                toast.error(`🚫 ${reason}`);
+                setCreditBlockPrompt({
+                    customer,
+                    reason,
+                    blockType: 'MANUAL_BLOCK',
+                    fiadoAmountUsd,
+                    availableCredit,
+                    canUnlockPersistently: true
+                });
+                setIsLocalSubmitting(false);
+                return;
+            }
+
+            try {
+                const { data: profData } = await api.get(`/collections/customer-profile/${customer.id}`, { timeout: 1500 });
+                if (profData?.success && profData.profile?.trafficLight === 'RED' && !profData.profile?.canSellCredit) {
+                    const blockType = profData.profile.blockType || 'OVERDUE_DEBT';
+                    const reason = profData.profile.blockReason || 'Cliente bloqueado por deudas vencidas en semáforo rojo.';
+                    toast.error(`🚫 ¡CRÉDITO DENEGADO! ${reason}`);
+                    setCreditBlockPrompt({
+                        customer: {
+                            ...customer,
+                            creditLimit: profData.profile.creditLimit ?? customer.creditLimit,
+                            creditBalance: profData.profile.creditBalance ?? customer.creditBalance
+                        },
+                        reason,
+                        blockType,
+                        maxDaysOverdue: profData.profile.maxDaysOverdue || 0,
+                        overdueAmount: profData.profile.overdueAmount || 0,
+                        fiadoAmountUsd,
+                        availableCredit: profData.profile.availableCredit ?? availableCredit,
+                        canUnlockPersistently: blockType !== 'CREDIT_LIMIT_EXCEEDED'
+                    });
+                    setIsLocalSubmitting(false);
+                    return;
+                }
+            } catch (err) {
+                console.warn('Error al verificar perfil de cobranza en CheckoutModal:', err);
+            }
+
+            if ((Number(customer.creditLimit) || 0) <= 0 && fiadoAmountUsd > 0) {
+                const reason = 'El cliente seleccionado no tiene límite de crédito habilitado.';
+                toast.error(`🚫 ${reason}`);
+                setCreditBlockPrompt({
+                    customer,
+                    reason,
+                    blockType: 'NO_CREDIT_LIMIT',
+                    fiadoAmountUsd,
+                    availableCredit: 0,
+                    canUnlockPersistently: false
+                });
                 setIsLocalSubmitting(false);
                 return;
             }
             if (fiadoAmountUsd > availableCredit) {
-                toast.error(`¡Crédito insuficiente! Límite disponible: ${renderFormatMoney(availableCredit, 'USD')}`);
+                const reason = `Crédito insuficiente. Disponible: ${formatPrimary(Math.max(0, availableCredit))}.`;
+                toast.error(`🚫 ${reason}`);
+                setCreditBlockPrompt({
+                    customer,
+                    reason,
+                    blockType: 'CREDIT_LIMIT_EXCEEDED',
+                    fiadoAmountUsd,
+                    availableCredit,
+                    canUnlockPersistently: false
+                });
                 setIsLocalSubmitting(false);
                 return;
             }
@@ -1227,20 +1338,29 @@ export default function CheckoutModal({
         const finalPaymentMethods = Object.entries(payments)
             .filter(([_, p]) => parseFloat(p.amount) > 0)
             .map(([id, p]) => {
-                const isBin = p.currency === 'USDT' || id === 'binance_usdt' || id.includes('binance');
+                const isBin = !isSingle && (p.currency === 'USDT' || id === 'binance_usdt' || id.includes('binance'));
+                const isForeignEur = !isSingle && (p.currency === 'EUR' || id === 'cash_eur');
                 const binRate = isBin ? getEffectiveBinanceRate(id, p.cryptoRate) : undefined;
+                const eurRateVal = isForeignEur ? Number(p.eurRate || activeEuroRate || activeExchangeRate || 0) : undefined;
                 const amt = parseFloat(p.amount);
-                const covBs = isBin
-                    ? ((p.coveredBs && Math.abs(amt - precisionRound(Number(p.coveredBs) / binRate, 2)) < 0.001)
+                let covBs = undefined;
+                let covUsd = undefined;
+                if (isBin) {
+                    covBs = (p.coveredBs && Math.abs(amt - precisionRound(Number(p.coveredBs) / binRate, 2)) < 0.001)
                         ? Number(p.coveredBs)
-                        : precisionRound(amt * binRate, 2))
-                    : undefined;
+                        : precisionRound(amt * binRate, 2);
+                } else if (isForeignEur && eurRateVal > 0) {
+                    covBs = precisionRound(amt * eurRateVal, 2);
+                    covUsd = activeExchangeRate > 0 ? precisionRound(covBs / activeExchangeRate, 2) : amt;
+                }
                 return {
                     method: id,
                     amount: amt,
-                    currency: isBin ? 'USDT' : p.currency,
+                    currency: isBin ? 'USDT' : (isSingle ? primaryCurrency : p.currency),
                     cryptoRate: binRate,
+                    eurRate: eurRateVal > 0 ? eurRateVal : undefined,
                     convertedAmountBs: covBs,
+                    convertedAmountUsd: covUsd,
                     reference: (paymentReferences[id] || p.reference || '').trim()
                 };
             });
@@ -1300,7 +1420,8 @@ export default function CheckoutModal({
                 documentType: documentType,
                 registerId: registerId,
                 registerName: registerDisplayName || 'Caja 1',
-                cashierName: user?.name || user?.username || 'Cajero'
+                cashierName: user?.name || user?.username || 'Cajero',
+                ...(supervisorApprovalId ? { supervisorApprovalId } : {})
             });
 
             playSuccessSound();
@@ -1327,7 +1448,7 @@ export default function CheckoutModal({
                 if (socket && socket.connected) {
                     socket.emit('customer_display_sale_completed', saleSuccessPayload);
                 }
-            } catch (_) {}
+            } catch (caughtErr) { console.warn('[CheckoutModal] Error accediendo almacenamiento web local:', caughtErr?.message || caughtErr); }
 
             setShowSuccess(true);
             setTransactionId(null);
@@ -1341,8 +1462,77 @@ export default function CheckoutModal({
             // Preservar transactionId ante fallos para garantizar idempotencia en reintentos del mismo cobro
             console.error('Checkout error:', err);
             const errMsg = err?.response?.data?.error || err?.message || 'Error al procesar el cobro.';
+            if (hasFiado && customer && /CREDIT_ERROR|vencimiento|bloquead|mora|crédito insuficiente|límite de crédito/i.test(errMsg)) {
+                const isLimitOnly = /insuficiente|no tiene límite/i.test(errMsg);
+                setCreditBlockPrompt({
+                    customer,
+                    reason: errMsg.replace(/^CREDIT_ERROR:\s*/i, ''),
+                    blockType: isLimitOnly ? 'CREDIT_LIMIT_EXCEEDED' : 'OVERDUE_DEBT',
+                    fiadoAmountUsd: calculatedFinalTotal,
+                    availableCredit: (Number(customer.creditLimit) || 0) - (Number(customer.creditBalance) || 0),
+                    canUnlockPersistently: !isLimitOnly
+                });
+            }
             toast.error(errMsg, { id: 'checkout-submit-error', duration: 4000 });
         }
+    };
+
+    const executePersistentCustomerUnlock = async (targetCustomer, approvalId = null) => {
+        if (!targetCustomer?.id) return;
+        try {
+            setCreditUnlockBusy(true);
+            const res = await api.post(`/collections/toggle-block/${targetCustomer.id}`, {
+                isBlocked: false,
+                allowOverdueCredit: true,
+                ...(approvalId ? { supervisorApprovalId: approvalId } : {}),
+                notes: 'Desbloqueado desde caja para continuar facturando con deudas anteriores'
+            });
+            if (res.data?.success || res.data?.ok) {
+                const updatedCustomer = {
+                    ...targetCustomer,
+                    isCreditBlocked: false,
+                    allowOverdueCredit: true
+                };
+                setCustomers(prev => prev.map(c => (
+                    String(c.id) === String(targetCustomer.id) ? { ...c, isCreditBlocked: false, allowOverdueCredit: true } : c
+                )));
+                try {
+                    await db.put('customers', updatedCustomer);
+                } catch { /* ignore idb update error */ }
+                toast.success(`🔓 Cliente "${targetCustomer.name}" desbloqueado. Continuando con la factura...`);
+                setCreditBlockPrompt(null);
+                setTimeout(() => {
+                    handleSubmit(null, { skipCreditCheck: false, customerOverride: updatedCustomer });
+                }, 60);
+            }
+        } catch (err) {
+            toast.error(err?.response?.data?.error || 'No se pudo desbloquear el crédito del cliente');
+        } finally {
+            setCreditUnlockBusy(false);
+        }
+    };
+
+    const handleRequestPersistentUnlock = () => {
+        if (!creditBlockPrompt?.customer) return;
+        if (canDirectUnlockCredit) {
+            executePersistentCustomerUnlock(creditBlockPrompt.customer, null);
+        } else {
+            setCreditSupervisorModal({ isOpen: true, mode: 'unlock' });
+        }
+    };
+
+    const handleSupervisorCreditApproved = (approvalId) => {
+        const mode = creditSupervisorModal.mode;
+        const targetCustomer = creditBlockPrompt?.customer;
+        setCreditSupervisorModal({ isOpen: false, mode: 'once' });
+        if (mode === 'unlock' && targetCustomer) {
+            executePersistentCustomerUnlock(targetCustomer, approvalId);
+            return;
+        }
+        setCreditBlockPrompt(null);
+        setTimeout(() => {
+            handleSubmit(null, { skipCreditCheck: true, supervisorApprovalId: approvalId });
+        }, 60);
     };
 
     useEffect(() => {
@@ -1358,14 +1548,9 @@ export default function CheckoutModal({
         }
     }, [isOpen, payments, isInsufficient, processing, isLocalSubmitting]);
 
-    const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, mode, { rate: activeExchangeRate, currencyMode });
+    const renderFormatMoney = (val, mode = null) => utilFormatMoney(val, isSingle ? primaryCurrency : mode, { rate: activeExchangeRate, currencyMode: isSingle ? 'SINGLE' : currencyMode, country: effectiveCountry });
+    const hasEuroMethod = !isSingle && Array.isArray(methods) && methods.some(m => m.id === 'cash_eur' || (m.currency || '').toUpperCase() === 'EUR');
 
-    const activeCustomer = useMemo(() => {
-        if (selectedCustomerId && Array.isArray(customers)) {
-            return customers.find(c => String(c.id) === String(selectedCustomerId));
-        }
-        return null;
-    }, [selectedCustomerId, customers]);
 
     const handleResetPayment = useCallback(() => {
         setPayments({});
@@ -1473,19 +1658,22 @@ export default function CheckoutModal({
                                 <span>TOTAL A COBRAR (VENTA)</span>
                             </span>
                             {isDual && (
-                                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700">
+                                <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700">
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                                    <span className="text-slate-700 dark:text-slate-300 font-mono font-bold text-[10px]">Tasa: {formatBs(activeExchangeRate)}/$</span>
+                                    <span className="text-slate-700 dark:text-slate-300 font-mono font-bold text-[10px]">
+                                        {formatBs(activeExchangeRate)}/$
+                                        {activeEuroRate > 0 ? ` · ${formatBs(activeEuroRate)}/€` : ''}
+                                    </span>
                                 </div>
                             )}
                         </div>
                         <div className="flex items-baseline justify-between gap-3">
                             {!isVesOnly && (
                                 <h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight tabular-nums font-mono">
-                                    {formatUSD(totalToPayUsd)}
+                                    {formatPrimary(totalToPayUsd)}
                                 </h3>
                             )}
-                            {!isUsdOnly && (
+                            {!isSingle && (
                                 <span className={`${isVesOnly ? 'text-2xl sm:text-3xl text-slate-900 dark:text-white font-black' : 'text-base sm:text-xl font-bold text-slate-600 dark:text-slate-300'} tracking-tight tabular-nums font-mono`}>
                                     {formatBs(totalToPayVes)}
                                 </span>
@@ -1495,9 +1683,9 @@ export default function CheckoutModal({
                         {/* Renglones Fiscales Contables */}
                         <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800/80 text-[10px] font-medium text-slate-500 dark:text-slate-400">
                             {taxableBase > 0 && <span>Base: <strong className="text-slate-700 dark:text-slate-300 tabular-nums">{renderFormatMoney(taxableBase)}</strong></span>}
-                            {taxAmount > 0 && <span>IVA ({ivaRate}%): <strong className="text-slate-700 dark:text-slate-300 tabular-nums">{renderFormatMoney(taxAmount)}</strong></span>}
+                            {taxAmount > 0 && <span>{taxLabel} ({ivaRate}%): <strong className="text-slate-700 dark:text-slate-300 tabular-nums">{renderFormatMoney(taxAmount)}</strong></span>}
                             {exemptBase > 0 && <span>Exento: <strong className="text-slate-700 dark:text-slate-300 tabular-nums">{renderFormatMoney(exemptBase)}</strong></span>}
-                            {currentIgtfUsd > 0 && !isVesOnly && <span className="text-amber-700 dark:text-amber-400 font-bold">IGTF: {formatUSD(currentIgtfUsd)}</span>}
+                            {currentIgtfUsd > 0 && !isVesOnly && !isSingle && <span className="text-amber-700 dark:text-amber-400 font-bold">IGTF: {formatPrimary(currentIgtfUsd)}</span>}
                         </div>
 
                         {/* Indicador de Oferta por Método de Pago */}
@@ -1507,7 +1695,7 @@ export default function CheckoutModal({
                                     <Tag size={11} className="text-amber-600 dark:text-amber-400" />
                                     <span>Descuento ({activePaymentPromo.promoName}):</span>
                                 </span>
-                                <span className="font-mono font-black">-${activePaymentPromo.savings.toFixed(2)}</span>
+                                <span className="font-mono font-black">-{formatPrimary(activePaymentPromo.savings)}</span>
                             </div>
                         )}
                     </div>
@@ -1521,11 +1709,11 @@ export default function CheckoutModal({
                                     <CheckCircle2 size={13} className="text-white" />
                                     <span>VUELTO A ENTREGAR</span>
                                 </span>
-                                {suggestedChange && !isVesOnly && (
+                                {suggestedChange && !isVesOnly && primaryCurrency !== 'COP' && (
                                     <div className="flex gap-1 flex-wrap">
                                         {suggestedChange.map(({ bill, count }) => (
                                             <span key={bill} className="bg-white/20 backdrop-blur-xs text-white text-[10px] font-mono font-bold px-1.5 py-0.2 rounded border border-white/20">
-                                                {count}x ${bill}
+                                                {count}x {regionCfg.currencySymbol}{bill}
                                             </span>
                                         ))}
                                     </div>
@@ -1534,10 +1722,10 @@ export default function CheckoutModal({
                             <div className="flex items-baseline justify-between gap-3 mt-0.5">
                                 {!isVesOnly && (
                                     <h3 className="text-2xl sm:text-3xl font-black text-white tracking-tight tabular-nums font-mono drop-shadow-sm">
-                                        +{formatUSD(changeUsd)}
+                                        +{formatPrimary(changeUsd)}
                                     </h3>
                                 )}
-                                {!isUsdOnly && (
+                                {!isSingle && (
                                     <span className={`${isVesOnly ? 'text-2xl sm:text-3xl text-white font-black' : 'text-base sm:text-xl font-bold text-emerald-100'} tabular-nums font-mono`}>
                                         +{formatBs(changeBs)}
                                     </span>
@@ -1570,7 +1758,9 @@ export default function CheckoutModal({
                             </div>
                             <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-1.5 border-t border-slate-800">
                                 <span>Saldo pendiente:</span>
-                                <span className="font-black text-emerald-400 tabular-nums">{formatUSD(totalToPayUsd)} / {formatBs(totalToPayVes)}</span>
+                                <span className="font-black text-emerald-400 tabular-nums">
+                                    {isSingle ? formatPrimary(totalToPayUsd) : `${formatPrimary(totalToPayUsd)} / ${formatBs(totalToPayVes)}`}
+                                </span>
                             </div>
                         </div>
                     ) : (
@@ -1583,10 +1773,10 @@ export default function CheckoutModal({
                             <div className="flex items-baseline justify-between gap-3">
                                 {!isVesOnly && (
                                     <h3 className="text-2xl sm:text-3xl font-extrabold text-amber-700 dark:text-amber-400 tracking-tight tabular-nums font-mono">
-                                        {formatUSD(remainingUsd)}
+                                        {formatPrimary(remainingUsd)}
                                     </h3>
                                 )}
-                                {!isUsdOnly && (
+                                {!isSingle && (
                                     <span className={`${isVesOnly ? 'text-2xl sm:text-3xl text-amber-700 dark:text-amber-400 font-extrabold' : 'text-base sm:text-xl font-bold text-amber-700 dark:text-amber-300'} tabular-nums font-mono`}>
                                         {formatBs(remainingBs)}
                                     </span>
@@ -1646,11 +1836,16 @@ export default function CheckoutModal({
                             getMethodPromo={getMethodPromo}
                             total={total}
                             activeExchangeRate={activeExchangeRate}
+                            activeEuroRate={activeEuroRate}
                             findMethodKey={findMethodKey}
                             igtfEnabled={igtfEnabled}
                             isSingle={isSingle}
                             igtfRate={igtfRate}
                             isUsdOnly={isUsdOnly}
+                            primaryCurrency={primaryCurrency}
+                            currencySymbol={regionCfg.currencySymbol}
+                            formatPrimary={formatPrimary}
+                            hasEuroMethod={hasEuroMethod}
                             setFocusedExpressMethodId={setFocusedExpressMethodId}
                             executeExpressPayment={executeExpressPayment}
                             totalToPayUsd={totalToPayUsd}
@@ -1668,6 +1863,9 @@ export default function CheckoutModal({
                             methods={methods}
                             isUsdOnly={isUsdOnly}
                             isSingle={isSingle}
+                            primaryCurrency={primaryCurrency}
+                            activeExchangeRate={activeExchangeRate}
+                            activeEuroRate={activeEuroRate}
                             payments={payments}
                             getMethodPromo={getMethodPromo}
                             getEffectiveBinanceRate={getEffectiveBinanceRate}
@@ -1716,9 +1914,9 @@ export default function CheckoutModal({
                             <CheckCircle2 size={18} className="shrink-0" />
                             <span className="truncate">
                                 {!isInsufficient && changeUsd > 0 ? (
-                                    <span>✓ COBRAR Y ENTREGAR VUELTO (+{formatUSD(changeUsd)})</span>
+                                    <span>✓ COBRAR Y ENTREGAR VUELTO (+{formatPrimary(changeUsd)})</span>
                                 ) : (
-                                    <span>✓ COBRAR Y EMITIR COMPROBANTE ({formatUSD(totalToPayUsd)})</span>
+                                    <span>✓ COBRAR Y EMITIR COMPROBANTE ({formatPrimary(totalToPayUsd)})</span>
                                 )}
                             </span>
                             <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono font-bold bg-black/25 text-white rounded border border-white/20">
@@ -1743,6 +1941,114 @@ export default function CheckoutModal({
                 setQrModalReference={setQrModalReference}
                 handleConfirmQrPayment={handleConfirmQrPayment}
             />
+
+            {/* Diálogo de Desbloqueo de Cliente con Deuda Vencida / Bloqueo de Crédito */}
+            {creditBlockPrompt && (
+                <div className="fixed inset-0 z-[1000] bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div className="bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800/70 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+                        <div className="px-5 py-4 bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-800/60 flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                                    <ShieldAlert size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-extrabold text-rose-900 dark:text-rose-200">
+                                        Crédito Bloqueado por Deuda / Mora
+                                    </h3>
+                                    <p className="text-xs font-semibold text-rose-700 dark:text-rose-300 truncate max-w-[260px]">
+                                        {creditBlockPrompt.customer?.name}
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setCreditBlockPrompt(null)}
+                                className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-900/50 cursor-pointer"
+                                aria-label="Cerrar aviso de bloqueo"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 space-y-4">
+                            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
+                                <p className="font-semibold text-slate-900 dark:text-white mb-1">Motivo del bloqueo:</p>
+                                <p>{creditBlockPrompt.reason}</p>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                                    <span className="block text-[10px] font-bold uppercase text-slate-400">Deuda Actual</span>
+                                    <span className="block text-xs font-mono font-bold text-rose-600 dark:text-rose-400 mt-0.5">
+                                        {formatPrimary(Number(creditBlockPrompt.customer?.creditBalance) || 0)}
+                                    </span>
+                                </div>
+                                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                                    <span className="block text-[10px] font-bold uppercase text-slate-400">Disponible</span>
+                                    <span className="block text-xs font-mono font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                                        {formatPrimary(Math.max(0, Number(creditBlockPrompt.availableCredit) || 0))}
+                                    </span>
+                                </div>
+                                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                                    <span className="block text-[10px] font-bold uppercase text-slate-400">Esta Factura</span>
+                                    <span className="block text-xs font-mono font-bold text-primary-600 dark:text-primary-400 mt-0.5">
+                                        {formatPrimary(Number(creditBlockPrompt.fiadoAmountUsd) || 0)}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div className="space-y-2 pt-1">
+                                {creditBlockPrompt.canUnlockPersistently && (
+                                    <button
+                                        type="button"
+                                        disabled={creditUnlockBusy}
+                                        onClick={handleRequestPersistentUnlock}
+                                        className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                                    >
+                                        <Unlock size={15} />
+                                        <span>
+                                            {creditUnlockBusy
+                                                ? 'Desbloqueando cliente...'
+                                                : (canDirectUnlockCredit
+                                                    ? 'Desbloquear cliente y seguir facturando'
+                                                    : 'Desbloquear cliente (requiere PIN Supervisor)')}
+                                        </span>
+                                    </button>
+                                )}
+
+                                <button
+                                    type="button"
+                                    disabled={creditUnlockBusy}
+                                    onClick={() => setCreditSupervisorModal({ isOpen: true, mode: 'once' })}
+                                    className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                                >
+                                    <Lock size={15} />
+                                    <span>Autorizar solo esta factura (PIN Supervisor)</span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    disabled={creditUnlockBusy}
+                                    onClick={() => setCreditBlockPrompt(null)}
+                                    className="w-full py-2 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors cursor-pointer"
+                                >
+                                    Cancelar y elegir otro método de pago
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {creditSupervisorModal.isOpen && (
+                <SupervisorPinModal
+                    isOpen={creditSupervisorModal.isOpen}
+                    onClose={() => setCreditSupervisorModal({ isOpen: false, mode: 'once' })}
+                    onApprove={handleSupervisorCreditApproved}
+                    actionType="CREDIT_LIMIT_OVERRIDE"
+                    referenceId={creditBlockPrompt?.customer?.id || selectedCustomerId || undefined}
+                />
+            )}
         </BaseModal>
     );
 }

@@ -1,10 +1,21 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { 
-    Warehouse as WarehouseIcon, Truck, ClipboardList, Tags, Plus, Search, 
-    RefreshCw, CheckCircle2, AlertTriangle, Clock, ArrowRight, 
-    ArrowUpRight, ArrowDownRight, Edit2, Trash2, X, ChevronRight,
-    Building2, Package, Layers, ShieldCheck, MapPin, Calculator, FileText, Check
+import {
+    Warehouse as WarehouseIcon, 
+    Truck, 
+    ClipboardList, 
+    Tags, 
+    Plus, 
+    Search, 
+    RefreshCw, 
+    Edit2, 
+    Trash2, 
+    X, 
+    Building2, 
+    Package, 
+    MapPin, 
+    Calculator, 
+    Check
 } from 'lucide-react';
 import api from '../services/api';
 import { formatMoney } from '../utils/format';
@@ -12,7 +23,6 @@ import ConfirmModal from '../components/ConfirmModal';
 
 export default function WarehousesManager() {
     const [activeTab, setActiveTab] = useState('almacenes'); // 'almacenes', 'traslados', 'conteo', 'precios'
-    const [loading, setLoading] = useState(false);
 
     // Data lists
     const [warehouses, setWarehouses] = useState([]);
@@ -99,13 +109,24 @@ export default function WarehousesManager() {
     const [simQuantity, setSimQuantity] = useState(1);
     const [simResult, setSimResult] = useState(null);
 
-    // Initial Load
-    useEffect(() => {
-        fetchInitialData();
+    const selectedWarehouseRef = useRef(selectedWarehouse);
+    selectedWarehouseRef.current = selectedWarehouse;
+
+    const handleSelectWarehouse = useCallback(async (wh) => {
+        setSelectedWarehouse(wh);
+        setStockLoading(true);
+        try {
+            const res = await api.get(`/warehouses/${wh.id}/stock`);
+            setWarehouseStocks(res.data || []);
+        } catch (error) {
+            console.error('Error loading warehouse stock:', error);
+            toast.error('Error al cargar existencias del almacén');
+        } finally {
+            setStockLoading(false);
+        }
     }, []);
 
-    const fetchInitialData = async () => {
-        setLoading(true);
+    const fetchInitialData = useCallback(async () => {
         try {
             const [whRes, trfRes, cntRes, plRes, prodRes] = await Promise.all([
                 api.get('/warehouses').catch(() => ({ data: [] })),
@@ -121,31 +142,20 @@ export default function WarehousesManager() {
             setPriceLists(plRes.data || []);
             setProducts(Array.isArray(prodRes.data) ? prodRes.data : prodRes.data?.products || []);
 
-            if (whRes.data?.length > 0 && !selectedWarehouse) {
+            if (whRes.data?.length > 0 && !selectedWarehouseRef.current) {
                 const def = whRes.data.find(w => w.isDefaultSaleWarehouse) || whRes.data[0];
                 handleSelectWarehouse(def);
             }
         } catch (error) {
             console.error('Error fetching initial data:', error);
             toast.error('Error al sincronizar datos logísticos');
-        } finally {
-            setLoading(false);
         }
-    };
+    }, [handleSelectWarehouse]);
 
-    const handleSelectWarehouse = async (wh) => {
-        setSelectedWarehouse(wh);
-        setStockLoading(true);
-        try {
-            const res = await api.get(`/warehouses/${wh.id}/stock`);
-            setWarehouseStocks(res.data || []);
-        } catch (error) {
-            console.error('Error loading warehouse stock:', error);
-            toast.error('Error al cargar existencias del almacén');
-        } finally {
-            setStockLoading(false);
-        }
-    };
+    // Initial Load
+    useEffect(() => {
+        fetchInitialData();
+    }, [fetchInitialData]);
 
     // Filtered stocks
     const filteredStocks = useMemo(() => {
@@ -562,6 +572,7 @@ export default function WarehousesManager() {
                 savings: (p?.price || 0) - res.data.finalPrice
             });
         } catch (error) {
+            console.warn('[WarehousesManager] Error capturado en operación:', error?.message || error);
             toast.error('Error al simular precio');
         }
     };

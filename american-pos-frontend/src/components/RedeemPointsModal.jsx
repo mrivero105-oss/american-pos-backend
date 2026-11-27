@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Zap, DollarSign, CheckCircle2, AlertCircle, ArrowRight, ShieldCheck } from 'lucide-react';
+import { X, Zap } from 'lucide-react';
 import BaseModal from './BaseModal';
 import toast from 'react-hot-toast';
 import api from '../services/api';

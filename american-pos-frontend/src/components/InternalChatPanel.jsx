@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSocket } from '../hooks/SocketContext';
 import { useAuth } from '../hooks/AuthContext';
@@ -25,25 +25,22 @@ const InternalChatPanel = ({ isOpen, onClose }) => {
 
     const EMOJIS = ['😀','😂','😅','😉','😊','😍','🥰','😎','🤔','🙄','😴','😷','🤯','🥳','🤓','😟','😲','🥺','😢','😭','😤','😡','👍','👎','👏','🙏','💪','🎉','🔥','❤️'];
 
-    // Fetch message history when panel opens
-    useEffect(() => {
-        if (isOpen) {
-            fetchUsersList();
-            fetchMessages();
-            markAsRead();
-        }
-    }, [isOpen]);
+    const scrollToBottom = useCallback(() => {
+        setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 100);
+    }, []);
 
-    const fetchUsersList = async () => {
+    const fetchUsersList = useCallback(async () => {
         try {
             const { data } = await api.get('/users');
             setUsersList(data);
         } catch (error) {
             console.error('Error fetching users:', error);
         }
-    };
+    }, []);
 
-    const fetchMessages = async () => {
+    const fetchMessages = useCallback(async () => {
         try {
             setIsLoading(true);
             const { data } = await api.get('/messages');
@@ -55,9 +52,9 @@ const InternalChatPanel = ({ isOpen, onClose }) => {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [scrollToBottom]);
 
-    const markAsRead = async () => {
+    const markAsRead = useCallback(async () => {
         if (!user?.id) return;
         try {
             await api.put('/messages/read', { targetRole: user.role, userId: user.id });
@@ -65,7 +62,16 @@ const InternalChatPanel = ({ isOpen, onClose }) => {
         } catch (error) {
             console.error('Error marking as read:', error);
         }
-    };
+    }, [user?.id, user?.role]);
+
+    // Fetch message history when panel opens
+    useEffect(() => {
+        if (isOpen) {
+            fetchUsersList();
+            fetchMessages();
+            markAsRead();
+        }
+    }, [isOpen, fetchUsersList, fetchMessages, markAsRead]);
 
     // Listen to realtime messages
     useEffect(() => {
@@ -151,13 +157,7 @@ const InternalChatPanel = ({ isOpen, onClose }) => {
             socket.off('internal_chat_read_update', handleReadUpdate);
             socket.off('internal_chat_cleared', handleClear);
         };
-    }, [socket, isOpen]);
-
-    const scrollToBottom = () => {
-        setTimeout(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }, 100);
-    };
+    }, [socket, isOpen, user?.id, user?.role, fetchMessages, markAsRead, scrollToBottom]);
 
     const handleTyping = (e) => {
         setNewMessage(e.target.value);

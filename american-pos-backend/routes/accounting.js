@@ -4,6 +4,8 @@ const AccountingEngineService = require('../services/AccountingEngineService');
 const { AccountCatalog } = require('../database/models');
 const { generateRobustId } = require('../utils/helpers');
 const { requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const { createAccountSchema, createEntrySchema } = require('../schemas/accountingSchema');
 
 // Todas las rutas contables requieren permiso financiero o rango administrativo
 router.use(requirePermission('canAccessFinance'));
@@ -44,7 +46,7 @@ router.post('/seed-catalog', async (req, res) => {
 });
 
 // Crear nueva cuenta contable
-router.post('/accounts', async (req, res) => {
+router.post('/accounts', validate(createAccountSchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const { code, name, accountType, nature, parentId, isSelectable, description } = req.body;
@@ -96,7 +98,7 @@ router.get('/entries', async (req, res) => {
 });
 
 // Crear asiento contable manual
-router.post('/entries', async (req, res) => {
+router.post('/entries', validate(createEntrySchema), async (req, res) => {
     try {
         const companyId = req.user?.companyId || 'default';
         const userId = req.user?.id || null;

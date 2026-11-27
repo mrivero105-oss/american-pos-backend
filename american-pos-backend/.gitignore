@@ -34,8 +34,16 @@ scratch/
 settings.json
 !settings.example.json
 db-config.json
+secrets.vault.json
+*.vault.json
+.*.key.dpapi
+cloud_mirror_config.json
+cloud_license_config.json
 *.pfx
 *.p12
+*.jks
+*.keystore
+keystore.properties
 *.key
 *private*.pem
 test-results/

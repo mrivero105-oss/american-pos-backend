@@ -200,8 +200,11 @@ test('4E. Verificación estática de resiliencia en frontend (db.js, localDb.js,
         'utf8'
     );
     assert.ok(
-        localDbSrc.includes('unifiedDb.replaceAllAtomic(snap.storeName, snap.items)'),
-        'localDb.transaction debe restaurar snapshots atómicamente en caso de error (rollback)'
+        localDbSrc.includes('activeUndoLog') &&
+        localDbSrc.includes('unifiedDb.replaceAllAtomic(entry.storeName, entry.prevItems)') &&
+        localDbSrc.includes('unifiedDb.put(entry.storeName, entry.prevItem)') &&
+        localDbSrc.includes('unifiedDb.delete(entry.storeName, entry.key)'),
+        'localDb.transaction debe revertir deltas/snapshots atómicamente vía undo-log en caso de error (rollback)'
     );
 
     const usePosDataSrc = fs.readFileSync(

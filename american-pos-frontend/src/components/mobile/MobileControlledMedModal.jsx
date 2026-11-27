@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { X, ShieldAlert, FileText, CheckCircle, User, Calendar, Hash } from 'lucide-react';
+import { useState } from 'react';
+import { X, ShieldAlert, CheckCircle, User } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
 
 export default function MobileControlledMedModal({
   product,
@@ -13,15 +14,23 @@ export default function MobileControlledMedModal({
   const [patientDoc, setPatientDoc] = useState('');
   const [recipeNumber, setRecipeNumber] = useState('');
   const [recipeDate, setRecipeDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [validationError, setValidationError] = useState('');
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: Boolean(isOpen && product) });
 
   if (!isOpen || !product) return null;
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!doctorName.trim() || !patientDoc.trim() || !recipeNumber.trim()) {
-      alert('Por favor complete todos los datos requeridos del récipe médico');
+      setValidationError('Por favor complete todos los datos requeridos del récipe médico.');
       return;
     }
+    setValidationError('');
 
     onConfirm({
       doctorName: doctorName.trim(),
@@ -33,7 +42,10 @@ export default function MobileControlledMedModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      style={modalOverlayStyle}
+    >
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -48,7 +60,8 @@ export default function MobileControlledMedModal({
         exit={{ y: '100%' }}
         transition={{ type: 'spring', damping: 28, stiffness: 320 }}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-md ${T?.modalCard || 'bg-slate-900'} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-2xl relative z-10 border-t sm:border border-amber-500/40 max-h-[90vh] overflow-y-auto space-y-4`}
+        className={`w-full max-w-md ${T?.modalCard || 'bg-slate-900'} rounded-t-xl sm:rounded-xl p-4 sm:p-5 shadow-2xl relative z-10 border-t sm:border border-amber-500/40 max-h-[90dvh] overflow-y-auto space-y-4`}
+        style={modalCardMaxHeightStyle}
       >
         <div className="w-full flex justify-center pb-1 sm:hidden">
           <div className="w-12 h-1 rounded-full bg-slate-600" />
@@ -90,7 +103,17 @@ export default function MobileControlledMedModal({
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={handleFormKeyDown}
+          onFocusCapture={handleFieldFocusCapture}
+          className="space-y-3"
+        >
+          {validationError && (
+            <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-300 text-xs font-bold">
+              {validationError}
+            </div>
+          )}
           <div>
             <label className="text-[10px] font-bold uppercase tracking-wider text-slate-300 block mb-1">
               Médico Tratante / Especialista *
@@ -99,11 +122,12 @@ export default function MobileControlledMedModal({
               <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
+                enterKeyHint="next"
                 required
                 value={doctorName}
                 onChange={(e) => setDoctorName(e.target.value)}
                 placeholder="Ej: Dr. Roberto Gómez (MPPS: 45892)"
-                className="w-full bg-slate-800/90 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs font-semibold text-white outline-none focus:border-amber-500"
+                className="w-full min-h-[44px] bg-slate-800/90 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-base sm:text-sm font-semibold text-white outline-none focus:border-amber-500"
               />
             </div>
           </div>
@@ -115,11 +139,12 @@ export default function MobileControlledMedModal({
               </label>
               <input
                 type="text"
+                enterKeyHint="next"
                 required
                 value={patientDoc}
                 onChange={(e) => setPatientDoc(e.target.value)}
                 placeholder="V-12345678"
-                className="w-full bg-slate-800/90 border border-slate-700 rounded-lg px-3 py-2 text-xs font-semibold text-white outline-none focus:border-amber-500"
+                className="w-full min-h-[44px] bg-slate-800/90 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm font-semibold text-white outline-none focus:border-amber-500"
               />
             </div>
             <div>
@@ -128,11 +153,12 @@ export default function MobileControlledMedModal({
               </label>
               <input
                 type="text"
+                enterKeyHint="next"
                 required
                 value={recipeNumber}
                 onChange={(e) => setRecipeNumber(e.target.value)}
                 placeholder="R-98431"
-                className="w-full bg-slate-800/90 border border-slate-700 rounded-lg px-3 py-2 text-xs font-semibold text-white outline-none focus:border-amber-500"
+                className="w-full min-h-[44px] bg-slate-800/90 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm font-semibold text-white outline-none focus:border-amber-500"
               />
             </div>
           </div>
@@ -143,10 +169,11 @@ export default function MobileControlledMedModal({
             </label>
             <input
               type="date"
+              enterKeyHint="done"
               required
               value={recipeDate}
               onChange={(e) => setRecipeDate(e.target.value)}
-              className="w-full bg-slate-800/90 border border-slate-700 rounded-lg px-3 py-2 text-xs font-semibold text-white outline-none focus:border-amber-500"
+              className="w-full min-h-[44px] bg-slate-800/90 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm font-semibold text-white outline-none focus:border-amber-500"
             />
           </div>
 

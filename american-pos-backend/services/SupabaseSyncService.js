@@ -3,15 +3,78 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const SyncOutbox = require('../database/models/SyncOutbox');
 const { sequelize } = require('../database/connection');
+const { runWithTenantContext } = require('../database/tenantContext');
+const { readJson, getUserSettings, normalizeCompanyId } = require('../utils/helpers');
 
 class SupabaseSyncService {
     constructor() {
-        const isIsolated = this._isIsolatedEnv();
-        this.supabaseUrl = isIsolated ? '' : (process.env.SUPABASE_URL || '');
-        this.serviceKey = isIsolated ? '' : (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY);
+        this.supabaseUrl = '';
+        this.serviceKey = '';
         this.branchId = process.env.POS_BRANCH_ID || 'principal';
         this.isSyncing = false;
         this.timer = null;
+        this.refreshCredentials();
+    }
+
+    refreshCredentials() {
+        const isIsolated = this._isIsolatedEnv();
+        if (isIsolated) {
+            if (!this.supabaseUrl) this.supabaseUrl = '';
+            if (!this.serviceKey) this.serviceKey = '';
+            return;
+        }
+
+        if (!this.supabaseUrl) {
+            this.supabaseUrl = process.env.SUPABASE_URL || '';
+        }
+        if (!this.serviceKey) {
+            this.serviceKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || '';
+        }
+
+        if (!this.supabaseUrl || !this.serviceKey) {
+            try {
+                const SecretVault = require('../config/secretVault');
+                if (!this.serviceKey) {
+                    this.serviceKey =
+                        SecretVault.getSecret('SUPABASE_SERVICE_KEY') ||
+                        SecretVault.getSecret('SUPABASE_KEY') ||
+                        '';
+                }
+                if (!this.supabaseUrl) {
+                    this.supabaseUrl = SecretVault.getSecret('SUPABASE_URL') || '';
+                }
+            } catch (_) {}
+        }
+
+        if (!this.supabaseUrl || !this.serviceKey) {
+            try {
+                const fs = require('fs');
+                const envPaths = [
+                    path.join(process.env.USER_DATA_PATH || '', '.env'),
+                    path.join(process.env.APPDATA || '', 'isaac-pos', '.env'),
+                    path.join(__dirname, '..', '.env')
+                ];
+                for (const p of envPaths) {
+                    if (p && fs.existsSync(p)) {
+                        const content = fs.readFileSync(p, 'utf8');
+                        if (!this.supabaseUrl) {
+                            const urlMatch = content.match(/^SUPABASE_URL=([^\r\n]+)/m);
+                            if (urlMatch && urlMatch[1]?.trim()) {
+                                this.supabaseUrl = urlMatch[1].trim().replace(/^["']|["']$/g, '');
+                                process.env.SUPABASE_URL = this.supabaseUrl;
+                            }
+                        }
+                        if (!this.serviceKey) {
+                            const keyMatch = content.match(/^(?:SUPABASE_SERVICE_KEY|SUPABASE_KEY)=([^\r\n]+)/m);
+                            if (keyMatch && keyMatch[1]?.trim()) {
+                                this.serviceKey = keyMatch[1].trim().replace(/^["']|["']$/g, '');
+                                process.env.SUPABASE_SERVICE_KEY = this.serviceKey;
+                            }
+                        }
+                    }
+                }
+            } catch (_) {}
+        }
     }
 
     _isIsolatedEnv() {
@@ -86,6 +149,9 @@ class SupabaseSyncService {
      * Procesa un lote de registros pendientes y los envía a Supabase
      */
     async processBatch(limit = 50) {
+        if (!this._isIsolatedEnv()) {
+            this.refreshCredentials();
+        }
         if (this._isRealCloudTargetInIsolatedEnv()) {
             return { success: false, skipped: true, message: 'Desactivado en entorno aislado/test' };
         }
@@ -96,17 +162,18 @@ class SupabaseSyncService {
         if (this.isSyncing) return { success: false, message: 'Sincronización en curso' };
         this.isSyncing = true;
 
-        let pending = [];
-        const t = await sequelize.transaction();
+        return await runWithTenantContext({ companyId: '', userId: 'system-supabase-sync', isSuperAdmin: true }, async () => {
+            let pending = [];
+            const t = await sequelize.transaction();
         try {
             // PostgreSQL 16: Selección atómica no bloqueante con SKIP LOCKED
             // Incluye rescate de registros que quedaron en PROCESSING por más de 5 minutos (p.ej. corte eléctrico)
             const [rows] = await sequelize.query(`
-                SELECT id, entity_name, entity_id, operation, payload, retry_count
+                SELECT id, entity_name, entity_id, operation, payload, retry_count, created_at
                 FROM sync_outbox
                 WHERE status = 'PENDING'
                    OR (status = 'PROCESSING' AND created_at < NOW() - INTERVAL '5 minutes')
-                ORDER BY created_at ASC
+                ORDER BY created_at ASC, ctid ASC
                 LIMIT :limit
                 FOR UPDATE SKIP LOCKED;
             `, {
@@ -140,21 +207,46 @@ class SupabaseSyncService {
         }
 
         try {
-            // Agrupar por tabla de destino
+            // Agrupar por tabla de destino; enviar a FAILED/cuarentena entidades desconocidas para evitar bucles en PROCESSING
             const grouped = {};
+            const unknownEntityIds = [];
             for (const item of pending) {
                 const table = this._getCloudTable(item.entity_name);
-                if (!table) continue;
+                if (!table) {
+                    unknownEntityIds.push(item.id);
+                    continue;
+                }
                 if (!grouped[table]) grouped[table] = [];
                 grouped[table].push(item);
             }
 
+            if (unknownEntityIds.length > 0) {
+                await sequelize.query(`
+                    UPDATE sync_outbox
+                    SET status = 'FAILED', last_error = 'Entidad sin mapeo de tabla en nube', updated_at = NOW()
+                    WHERE id IN (:unknownIds);
+                `, { replacements: { unknownIds: unknownEntityIds } }).catch(() => {});
+            }
+
             for (const [table, items] of Object.entries(grouped)) {
-                const payloads = items.map(i => {
+                // Consolidar múltiples mutaciones de una misma fila en el lote para evitar error PostgreSQL 21000
+                // ("ON CONFLICT DO UPDATE command cannot affect row a second time")
+                const dedupByEntity = new Map();
+                const orderedWithoutId = [];
+                for (const i of items) {
                     const data = { ...i.payload };
                     if (!data.sucursal_id) data.sucursal_id = this.branchId;
-                    return data;
-                });
+                    const entityKey = data.id !== undefined && data.id !== null
+                        ? String(data.id)
+                        : (i.entity_id !== undefined && i.entity_id !== null ? String(i.entity_id) : null);
+                    if (entityKey) {
+                        dedupByEntity.set(entityKey, { outboxItem: i, payload: data });
+                    } else {
+                        orderedWithoutId.push({ outboxItem: i, payload: data });
+                    }
+                }
+                const uniqueEntries = [...dedupByEntity.values(), ...orderedWithoutId];
+                const payloads = uniqueEntries.map(e => e.payload);
 
                 try {
                     // PostgREST UPSERT directo en Supabase usando headers
@@ -172,7 +264,7 @@ class SupabaseSyncService {
                         }
                     );
 
-                    // Marcar registros como sincronizados en PostgreSQL
+                    // Marcar todos los registros originales del lote (incluidos los consolidados) como sincronizados
                     const syncedIds = items.map(i => i.id);
                     await sequelize.query(`
                         UPDATE sync_outbox
@@ -186,10 +278,18 @@ class SupabaseSyncService {
 
                 } catch (tableError) {
                     console.error(`[SYNC ERROR TABLE ${table}]:`, tableError.response?.data || tableError.message);
-                    // Fallback fila por fila para que un registro defectuoso no bloquee el resto del lote
-                    for (const fItem of items) {
-                        const singlePayload = { ...fItem.payload };
-                        if (!singlePayload.sucursal_id) singlePayload.sucursal_id = this.branchId;
+                    // Fallback fila por fila usando payloads consolidados (y marcando todos los outbox items del grupo)
+                    const outboxIdsByEntity = new Map();
+                    for (const i of items) {
+                        const k = String(i.payload?.id ?? i.entity_id ?? i.id);
+                        if (!outboxIdsByEntity.has(k)) outboxIdsByEntity.set(k, []);
+                        outboxIdsByEntity.get(k).push(i);
+                    }
+                    for (const entry of uniqueEntries) {
+                        const fItem = entry.outboxItem;
+                        const singlePayload = entry.payload;
+                        const groupKey = String(fItem.payload?.id ?? fItem.entity_id ?? fItem.id);
+                        const matchingItems = outboxIdsByEntity.get(groupKey) || [fItem];
                         try {
                             await axios.post(
                                 `${this.supabaseUrl}/rest/v1/${table}`,
@@ -204,26 +304,30 @@ class SupabaseSyncService {
                                     timeout: 10000
                                 }
                             );
-                            await sequelize.query(`
-                                UPDATE sync_outbox
-                                SET status = 'SYNCED',
-                                    synced_at = NOW(),
-                                    last_error = NULL
-                                WHERE id = :itemId;
-                            `, { replacements: { itemId: fItem.id } });
+                            for (const m of matchingItems) {
+                                await sequelize.query(`
+                                    UPDATE sync_outbox
+                                    SET status = 'SYNCED',
+                                        synced_at = NOW(),
+                                        last_error = NULL
+                                    WHERE id = :itemId;
+                                `, { replacements: { itemId: m.id } });
+                            }
                         } catch (singleErr) {
                             const errMsg = String(singleErr.response?.data?.message || singleErr.message || 'Error desconocido').slice(0, 1000);
-                            const newRetry = Number(fItem.retry_count || 0) + 1;
-                            const newStatus = newRetry >= 5 ? 'FAILED' : 'PENDING';
-                            await sequelize.query(`
-                                UPDATE sync_outbox
-                                SET status = :newStatus,
-                                    retry_count = :newRetry,
-                                    last_error = :errMsg
-                                WHERE id = :itemId;
-                            `, {
-                                replacements: { newStatus, newRetry, errMsg, itemId: fItem.id }
-                            });
+                            for (const m of matchingItems) {
+                                const newRetry = Number(m.retry_count || 0) + 1;
+                                const newStatus = newRetry >= 5 ? 'FAILED' : 'PENDING';
+                                await sequelize.query(`
+                                    UPDATE sync_outbox
+                                    SET status = :newStatus,
+                                        retry_count = :newRetry,
+                                        last_error = :errMsg
+                                    WHERE id = :itemId;
+                                `, {
+                                    replacements: { newStatus, newRetry, errMsg, itemId: m.id }
+                                });
+                            }
                         }
                     }
                 }
@@ -236,6 +340,7 @@ class SupabaseSyncService {
             console.error('[SYNC WORKER ERROR]:', error.message);
             return { success: false, error: error.message };
         }
+        });
     }
 
     /**
@@ -255,24 +360,22 @@ class SupabaseSyncService {
             return;
         }
         try {
-            const fs = require('fs');
             const paths = require('../config/paths');
-            const settingsFile = paths.SETTINGS_FILE;
-            if (!fs.existsSync(settingsFile)) return;
-            const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-            const comp = settings['2'] || settings['default'] || {};
-            const rate = Number(comp.exchangeRate || 1000);
+            const settings = readJson(paths.SETTINGS_FILE) || {};
+            const companyKey = normalizeCompanyId(process.env.COMPANY_ID || '2');
+            const comp = getUserSettings(settings, companyKey) || {};
+            const rate = Number(comp.exchangeRate) > 0 ? Number(comp.exchangeRate) : 1.0;
 
             const payload = {
                 id: 'general',
                 tasa_cambio: rate,
                 ultima_actualizacion_tasa: comp.lastRateSyncAt || new Date().toISOString(),
-                nombre_negocio: comp.businessInfo?.name || comp.businessName || 'Bodega Sigfrido',
-                rif_cedula: comp.businessInfo?.taxId || 'R-123456789-0',
-                direccion: comp.businessInfo?.address || 'Boca de Uchire, Anzoategui',
+                nombre_negocio: comp.businessInfo?.name || comp.businessName || 'Comercio POS',
+                rif_cedula: comp.businessInfo?.taxId || comp.businessInfo?.rif || '',
+                direccion: comp.businessInfo?.address || '',
                 modo_moneda: comp.currencyMode || 'BOTH',
-                iva_porcentaje: Number(comp.taxConfig?.ivaRate || 16.0),
-                igtf_porcentaje: Number(comp.taxConfig?.igtfRate || 3.0),
+                iva_porcentaje: Number(comp.taxConfig?.ivaRate ?? 16.0),
+                igtf_porcentaje: Number(comp.taxConfig?.igtfRate ?? 3.0),
                 actualizado_el: new Date().toISOString()
             };
 
@@ -286,7 +389,8 @@ class SupabaseSyncService {
                 payload.igtf_porcentaje
             ]);
 
-            if (!force && this._lastConfigSignature === configSignature && (now - (this._lastConfigSync || 0)) < 300000) {
+            // Si no hubo cambios en tasa ni datos del negocio, solo reenviar 1 vez por hora (heartbeat)
+            if (!force && this._lastConfigSignature === configSignature && (now - (this._lastConfigSync || 0)) < 3600000) {
                 return;
             }
 
@@ -368,21 +472,23 @@ class SupabaseSyncService {
      * Purga registros viejos ya sincronizados para mantener la BD local limpia
      */
     async purgeOldSyncedRecords(days = 30) {
-        try {
-            const { Op } = require('sequelize');
-            const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-            const deletedCount = await SyncOutbox.destroy({
-                where: {
-                    status: 'SYNCED',
-                    synced_at: { [Op.lt]: cutoff }
+        return await runWithTenantContext({ companyId: '', userId: 'system-supabase-purge', isSuperAdmin: true }, async () => {
+            try {
+                const { Op } = require('sequelize');
+                const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+                const deletedCount = await SyncOutbox.destroy({
+                    where: {
+                        status: 'SYNCED',
+                        synced_at: { [Op.lt]: cutoff }
+                    }
+                });
+                if (deletedCount > 0) {
+                    console.log(`[SUPABASE PURGE] 🧹 Purgados ${deletedCount} registros antiguos (> ${days} días) de sync_outbox.`);
                 }
-            });
-            if (deletedCount > 0) {
-                console.log(`[SUPABASE PURGE] 🧹 Purgados ${deletedCount} registros antiguos (> ${days} días) de sync_outbox.`);
+            } catch (purgeErr) {
+                console.warn('[SUPABASE PURGE] Error en purga:', purgeErr.message);
             }
-        } catch (purgeErr) {
-            console.warn('[SUPABASE PURGE] Error en purga:', purgeErr.message);
-        }
+        });
     }
 
     start(intervalMs = 15000) {
@@ -396,11 +502,13 @@ class SupabaseSyncService {
             await this.processBatch(); 
             await this.syncConfig(); 
         }, intervalMs);
+        if (typeof this.timer.unref === 'function') this.timer.unref();
 
         // Purga periódica cada 24 horas
         this.purgeTimer = setInterval(async () => {
             await this.purgeOldSyncedRecords(30);
         }, 24 * 60 * 60 * 1000);
+        if (typeof this.purgeTimer.unref === 'function') this.purgeTimer.unref();
         // Purga inicial al arrancar
         this.purgeOldSyncedRecords(30).catch(() => {});
     }

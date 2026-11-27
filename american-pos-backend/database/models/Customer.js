@@ -14,6 +14,7 @@ const Customer = sequelize.define('Customer', {
     creditBalance: { type: DataTypes.DECIMAL(20, 6), defaultValue: 0 },
     creditLimitDays: { type: DataTypes.INTEGER, defaultValue: 30 },
     isCreditBlocked: { type: DataTypes.BOOLEAN, defaultValue: false },
+    allowOverdueCredit: { type: DataTypes.BOOLEAN, defaultValue: false },
     loyaltyPoints: { type: DataTypes.DECIMAL(20, 6), defaultValue: 0 },
     isVIP: { type: DataTypes.BOOLEAN, defaultValue: false },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true }

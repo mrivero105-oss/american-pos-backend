@@ -2,36 +2,48 @@ const express = require('express');
 const router = express.Router();
 const cashService = require('../services/CashService');
 const { isAdmin, requirePermission } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const {
+    openShiftSchema,
+    closeShiftSchema,
+    cashMovementSchema,
+    forceCloseShiftSchema,
+    registerNameSchema,
+    stationCategoriesSchema,
+    drawerOpenEventSchema,
+    alertStatusUpdateSchema
+} = require('../schemas/cashSchema');
 const { CashShift, User } = require('../database/models');
 const { Op } = require('sequelize');
+
+const applyBlindClosureFilter = (req, shiftData) => {
+    if (!shiftData) return shiftData;
+    const { readJson, getUserSettings } = require('../utils/helpers');
+    const { SETTINGS_FILE } = require('../config/paths');
+    const allSettings = readJson(SETTINGS_FILE);
+    const userSettings = getUserSettings(allSettings, req.user.companyId);
+    const isBlindClosureMode = userSettings?.cashClosureMode === 'BLIND';
+    const isSupervisorOrAdmin = ['admin', 'superadmin', 'owner', 'dueño', 'supervisor'].includes(String(req.user.role || '').toLowerCase());
+
+    if (isBlindClosureMode && !isSupervisorOrAdmin) {
+        shiftData.expectedAmount = null;
+        shiftData.theoreticalTotalUsd = null;
+        shiftData.expectedCashUsd = null;
+        shiftData.expectedCashBs = null;
+        shiftData.expectedBreakdown = null;
+        shiftData.isBlindClose = true;
+    } else {
+        shiftData.isBlindClose = false;
+    }
+    return shiftData;
+};
 
 // GET /current - Get current open shift with stats
 router.get('/current', async (req, res) => {
     try {
         const registerId = req.query.registerId || '1';
         const shiftData = await cashService.getCurrentShift(req.user.id, req.user.companyId, registerId);
-        
-        // REGLA DE AUDITORÍA: ARQUEO CIEGO (BLIND CLOSE)
-        // Solo si la empresa tiene configurado explícitamente el modo BLIND y el usuario no es supervisor/admin,
-        // se oculta el saldo teórico esperado para forzar el arqueo a ciegas.
-        const { readJson, getUserSettings } = require('../utils/helpers');
-        const { SETTINGS_FILE } = require('../config/paths');
-        const allSettings = readJson(SETTINGS_FILE);
-        const userSettings = getUserSettings(allSettings, req.user.companyId);
-        const isBlindClosureMode = userSettings?.cashClosureMode === 'BLIND';
-        const isSupervisorOrAdmin = ['admin', 'superadmin', 'owner', 'supervisor'].includes(String(req.user.role || '').toLowerCase());
-
-        if (isBlindClosureMode && !isSupervisorOrAdmin && shiftData) {
-            shiftData.expectedAmount = null;
-            shiftData.theoreticalTotalUsd = null;
-            shiftData.expectedCashUsd = null;
-            shiftData.expectedCashBs = null;
-            shiftData.expectedBreakdown = null;
-            shiftData.isBlindClose = true;
-        } else if (shiftData) {
-            shiftData.isBlindClose = false;
-        }
-
+        applyBlindClosureFilter(req, shiftData);
         res.json(shiftData);
     } catch (error) {
         console.error('Error in GET /cash/current:', error);
@@ -74,7 +86,7 @@ router.get('/admin/cashier-audit/:userId', isAdmin, async (req, res) => {
 });
 
 // POST /admin/force-close/:shiftId - Remote force close of shift (Admin only)
-router.post('/admin/force-close/:shiftId', isAdmin, async (req, res) => {
+router.post('/admin/force-close/:shiftId', isAdmin, validate(forceCloseShiftSchema), async (req, res) => {
     try {
         const closedShift = await cashService.forceCloseShift(req.user, req.params.shiftId, req.body.reason);
         
@@ -101,7 +113,7 @@ router.post('/admin/force-close/:shiftId', isAdmin, async (req, res) => {
 });
 
 // PUT /admin/register-name/:shiftId - Rename register on the fly (Admin only)
-router.put('/admin/register-name/:shiftId', isAdmin, async (req, res) => {
+router.put('/admin/register-name/:shiftId', isAdmin, validate(registerNameSchema), async (req, res) => {
     try {
         const { shiftId } = req.params;
         const { registerName } = req.body;
@@ -136,7 +148,7 @@ router.put('/admin/register-name/:shiftId', isAdmin, async (req, res) => {
 
 // GET /active-shifts - Get all active open shifts for the company (Admin monitoring)
 // PUT /station-categories - Update station categories and products for active shift in real-time
-router.put('/station-categories', async (req, res) => {
+router.put('/station-categories', requirePermission('canManageSettings'), validate(stationCategoriesSchema), async (req, res) => {
     try {
         const { shiftId, registerId, allowedCategories, allowedProducts } = req.body;
         const { CashShift } = require('../database/models');
@@ -182,7 +194,7 @@ router.get('/active-shifts', isAdmin, async (req, res) => {
 });
 
 // POST /open - Open a new shift
-router.post('/open', async (req, res) => {
+router.post('/open', requirePermission('canManageCashShift'), validate(openShiftSchema), async (req, res) => {
     try {
         const newShift = await cashService.openShift(req.user, req.body);
         
@@ -208,7 +220,7 @@ router.post('/open', async (req, res) => {
 });
 
 // POST /close - Close the current shift
-router.post('/close', async (req, res) => {
+router.post('/close', requirePermission('canManageCashShift'), validate(closeShiftSchema), async (req, res) => {
     try {
         const closedShift = await cashService.closeShift(req.user, req.body);
         
@@ -241,7 +253,7 @@ router.post('/close', async (req, res) => {
 });
 
 // POST /close-blind - Cierre Ciego de Turno (Auditoría Antifraude)
-router.post('/close-blind', async (req, res) => {
+router.post('/close-blind', requirePermission('canManageCashShift'), validate(closeShiftSchema), async (req, res) => {
     try {
         const result = await cashService.closeShiftBlind(req.user, req.body);
         
@@ -328,7 +340,7 @@ router.get('/alerts', async (req, res) => {
 });
 
 // PUT /alerts/:id - Update alert status/resolution
-router.put('/alerts/:id', async (req, res) => {
+router.put('/alerts/:id', validate(alertStatusUpdateSchema), async (req, res) => {
     try {
         if (!isAuditAuthorized(req.user)) {
             return res.status(403).json({ message: 'No autorizado' });
@@ -376,7 +388,7 @@ router.get('/audit-daily-report', async (req, res) => {
 });
 
 // POST /movement - Add a cash movement (in/out/expense)
-router.post('/movement', async (req, res) => {
+router.post('/movement', requirePermission('canManageCashShift'), validate(cashMovementSchema), async (req, res) => {
     try {
         const movement = await cashService.addMovement(req.user, req.body);
         
@@ -404,7 +416,7 @@ router.post('/movement', async (req, res) => {
 });
 
 // GET /history - Get closed shifts history
-router.get('/history', async (req, res) => {
+router.get('/history', requirePermission(['canManageCashShift', 'canViewReports', 'canAccessAudit']), async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
         let whereClause = {
@@ -436,12 +448,12 @@ router.get('/history', async (req, res) => {
 });
 
 // GET /x-report - Quick X Report for current shift
-router.get('/x-report', async (req, res) => {
+router.get('/x-report', requirePermission(['canManageCashShift', 'canViewReports', 'canAccessAudit']), async (req, res) => {
     try {
         const registerId = req.query.registerId || '1';
         const shiftData = await cashService.getCurrentShift(req.user.id, req.user.companyId, registerId);
         if (!shiftData) return res.status(200).json(null);
-        
+        applyBlindClosureFilter(req, shiftData);
         res.json(shiftData);
     } catch (error) {
         console.error('X-Report error:', error);
@@ -450,7 +462,7 @@ router.get('/x-report', async (req, res) => {
 });
 
 // POST /drawer-open-event - Log and notify manual cash drawer opening without sale
-router.post('/drawer-open-event', async (req, res) => {
+router.post('/drawer-open-event', validate(drawerOpenEventSchema), async (req, res) => {
     try {
         const { reason = 'Apertura manual de gaveta', registerId = '1' } = req.body || {};
         const { AuditLog } = require('../database/models');
@@ -482,7 +494,7 @@ router.post('/drawer-open-event', async (req, res) => {
 });
 
 // GET /shift-products-summary/:shiftId - Resumen de mercancía vendida y stock remanente
-router.get('/shift-products-summary/:shiftId', async (req, res) => {
+router.get('/shift-products-summary/:shiftId', requirePermission(['canManageCashShift', 'canViewReports', 'canAccessAudit']), async (req, res) => {
     try {
         const { shiftId } = req.params;
         const items = await cashService.getShiftProductsSummary(shiftId, req.user.companyId);

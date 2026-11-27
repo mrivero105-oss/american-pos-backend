@@ -3,7 +3,7 @@ const router = express.Router();
 const customerService = require('../services/CustomerService');
 const SupabaseSyncService = require('../services/SupabaseSyncService');
 const { Sale, CreditHistory } = require('../database/models');
-const { customerSchema } = require('../schemas/customerSchema');
+const { customerSchema, customerUpdateSchema } = require('../schemas/customerSchema');
 const validate = require('../middleware/validate');
 const { isAdmin, requirePermission } = require('../middleware/auth');
 
@@ -141,11 +141,8 @@ router.get('/', async (req, res) => {
         const result = await customerService.getAllCustomers(req.user, req.query);
         res.json(result);
     } catch (error) {
-        console.error('Error in GET /customers:', error);
-        try {
-            require('fs').appendFileSync(require('path').join(require('os').homedir(), 'Desktop', 'customer_error.txt'), `\n[${new Date().toISOString()}] SEARCH ERROR: ${error.message}\n${error.stack}\n`);
-        } catch(e){}
-        res.status(500).json({ error: 'Error al cargar clientes: ' + error.message, stack: error.stack });
+        console.error('Error in GET /customers:', error.message);
+        res.status(500).json({ error: 'Error al cargar clientes' });
     }
 });
 
@@ -203,7 +200,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST / - Create customer
-router.post('/', async (req, res) => {
+router.post('/', validate(customerSchema), async (req, res) => {
     try {
         const newCustomer = await customerService.createCustomer(req.user, req.body);
         emitCustomersChanged(req, { action: 'created', customer: newCustomer });
@@ -216,7 +213,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /:id - Update customer
-router.put('/:id', async (req, res) => {
+router.put('/:id', validate(customerUpdateSchema), async (req, res) => {
     try {
         const updatedCustomer = await customerService.updateCustomer(req.user, req.params.id, req.body);
         if (updatedCustomer) {

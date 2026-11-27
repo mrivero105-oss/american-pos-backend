@@ -37,16 +37,21 @@ jobs:
 
       - name: Run ESLint strict checks
         run: |
-          npx eslint src --quiet
+          npx eslint . --max-warnings=0
           npx eslint src -c eslint.undef-check.config.js
 
-      - name: Run frontend UnifiedDB local tests
+      - name: Run frontend Vitest unit & component suite
+        run: npm run test:unit
+
+      - name: Run frontend UnifiedDB functional verification
         run: node tests/test_unified_db.cjs
 
-      - name: Build production web & mobile bundles (Chromium 108+)
-        run: npm run build
+      - name: Build production Desktop (Chrome 130+) & Mobile (Android WebView) bundles
+        run: |
+          npm run build
+          npm run build:mobile
 
-      - name: Verify built entry chunk budget (< 350 KB)
+      - name: Verify built entry chunk budgets (< 350 KB desktop, < 400 KB mobile)
         run: |
           node -e "
             const fs = require('fs');
@@ -55,8 +60,15 @@ jobs:
             const entry = fs.readdirSync(assetsDir).find(f => /^index-.*\.js$/.test(f));
             if (!entry) throw new Error('Missing built index entry bundle');
             const sizeKb = fs.statSync(path.join(assetsDir, entry)).size / 1024;
-            console.log('Entry chunk:', entry, sizeKb.toFixed(2), 'KB');
-            if (sizeKb >= 350) throw new Error('Entry chunk exceeded 350 KB limit: ' + sizeKb.toFixed(2));
+            console.log('Desktop entry chunk:', entry, sizeKb.toFixed(2), 'KB');
+            if (sizeKb >= 350) throw new Error('Desktop entry chunk exceeded 350 KB limit: ' + sizeKb.toFixed(2));
+
+            const mobileAssets = path.resolve('dist-mobile/assets');
+            const mobileEntry = fs.readdirSync(mobileAssets).find(f => /^index-.*\.js$/.test(f));
+            if (!mobileEntry) throw new Error('Missing built mobile index entry bundle');
+            const mobileKb = fs.statSync(path.join(mobileAssets, mobileEntry)).size / 1024;
+            console.log('Mobile entry chunk:', mobileEntry, mobileKb.toFixed(2), 'KB');
+            if (mobileKb >= 400) throw new Error('Mobile entry chunk exceeded 400 KB limit: ' + mobileKb.toFixed(2));
           "
 
       - name: Upload built frontend dist artifact
@@ -138,12 +150,20 @@ jobs:
             tests/test_block4_offline_sync_and_resilience.test.mjs \
             tests/pos-integrity.test.mjs
 
-      - name: Run Real Express + PG16 + Socket.IO & Block 2 Security Hardening E2E
+      - name: Run Real Express + PG16 + Socket.IO, Security Hardening, Regressions & Online Licensing E2E
         working-directory: american-pos-backend
         run: |
+          node --check ../cloud_license_server/node-server/server.js
+          node --check ../cloud_license_server/node-server/licenseStore.js
           node --test \
             tests/test_e2e_api_and_socket.test.mjs \
-            tests/test_block2_security_hardening.test.mjs
+            tests/test_block2_security_hardening.test.mjs \
+            tests/test_audit_remediation_regressions.test.mjs \
+            tests/test_phase1_security_and_integrity.test.mjs \
+            tests/test_performance_999_pillars.test.mjs \
+            tests/test_online_licensing.test.mjs \
+            tests/test_hardening_10_of_10.test.mjs \
+            tests/test_phase3_modern_stack.test.mjs
 
   e2e-playwright:
     name: Full-Stack Real Browser E2E (Playwright + PG16)
@@ -220,8 +240,8 @@ jobs:
           path: american-pos-frontend/test-results
           retention-days: 3
 
-  windows-dual-packaging-check:
-    name: Windows Dual Electron (22 Legacy + 31 Modern) & Scripts Verification
+  windows-modern-packaging-check:
+    name: Windows Modern Electron 45 (7/7 Fuses + mobile-ota) & Scripts Verification
     runs-on: windows-latest
     needs: [frontend-lint-and-build, backend-tests-postgres]
     env:
@@ -269,17 +289,41 @@ jobs:
         working-directory: american-pos-backend
         run: npm ci
 
-      - name: Verify Electron 22 (Win7/8.1) & Electron 31 (Win10/11) unpacked builds
+      - name: Verify Electron 45 Modern (Win10/11 + 7/7 Fuses + mobile-ota) unpacked build
         working-directory: american-pos-backend
         run: |
-          npm run pack:legacy
           npm run pack:modern
           node -e "
             const fs = require('fs');
-            for (const dir of ['dist_final_installer/win-unpacked', 'dist_modern/win-unpacked']) {
-              const res = fs.readdirSync(dir + '/resources');
-              if (!res.includes('app.asar')) throw new Error('Missing app.asar in ' + dir);
-              if (res.some(f => f.startsWith('.env'))) throw new Error('Secret leak .env in ' + dir);
-              console.log('Verified clean unpacked build:', dir);
+            const path = require('path');
+            const { pathToFileURL } = require('url');
+            const dir = 'dist_modern/win-unpacked';
+            const res = fs.readdirSync(dir + '/resources');
+            if (!res.includes('app.asar')) throw new Error('Missing app.asar in ' + dir);
+            if (res.some(f => f.startsWith('.env'))) throw new Error('Secret leak .env in ' + dir);
+            const otaDir = path.join(dir, 'resources', 'mobile-ota');
+            if (!fs.existsSync(path.join(otaDir, 'dist.zip')) || !fs.existsSync(path.join(otaDir, 'version.json'))) {
+              throw new Error('Missing mobile-ota extraResources (dist.zip / version.json) in ' + otaDir);
             }
+            console.log('Verified clean unpacked Modern build + mobile-ota:', dir);
+            (async () => {
+              const fusesMod = await import(pathToFileURL(path.resolve('node_modules/@electron/fuses/dist/index.js')).href);
+              const wire = await fusesMod.getCurrentFuseWire(path.resolve('dist_modern/win-unpacked/Isaac POS.exe'));
+              const { FuseV1Options, FuseState } = fusesMod;
+              const checks = [
+                ['RunAsNode', FuseState.DISABLE],
+                ['EnableCookieEncryption', FuseState.ENABLE],
+                ['EnableNodeOptionsEnvironmentVariable', FuseState.DISABLE],
+                ['EnableNodeCliInspectArguments', FuseState.DISABLE],
+                ['EnableEmbeddedAsarIntegrityValidation', FuseState.ENABLE],
+                ['OnlyLoadAppFromAsar', FuseState.ENABLE],
+                ['GrantFileProtocolExtraPrivileges', FuseState.DISABLE]
+              ];
+              for (const [name, expected] of checks) {
+                if (wire[FuseV1Options[name]] !== expected) {
+                  throw new Error('Unexpected Electron fuse state for ' + name);
+                }
+              }
+              console.log('Verified Electron 45 Modern 7/7 security fuses.');
+            })().catch((e) => { console.error(e); process.exit(1); });
           "

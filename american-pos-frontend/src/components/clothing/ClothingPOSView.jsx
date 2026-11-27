@@ -12,74 +12,13 @@ import HeldSalesModal from '../HeldSalesModal';
 import { useFuzzySearch } from '../../hooks/useFuzzySearch';
 import { isUsdOnlyMode } from '../../utils/format';
 
-const MOCK_BOUTIQUE_PRODUCTS = [
-  {
-    id: 201,
-    nombre: 'Blusa de Seda Estampada',
-    precio: 35.00,
-    codigo_barras: 'BOU-BLU-001',
-    categoria: 'Damas',
-    Variantes: [
-      { id: 2011, talla: 'S', color: 'Rosa', stock: 5, precio_adicional: 0, sku_variante: 'BOU-BLU-001-S-PNK' },
-      { id: 2012, talla: 'M', color: 'Rosa', stock: 8, precio_adicional: 0, sku_variante: 'BOU-BLU-001-M-PNK' },
-      { id: 2013, talla: 'L', color: 'Blanco', stock: 3, precio_adicional: 2.50, sku_variante: 'BOU-BLU-001-L-WHT' }
-    ]
-  },
-  {
-    id: 202,
-    nombre: 'Pantalón Jean Slim Fit',
-    precio: 48.50,
-    codigo_barras: 'BOU-JEA-002',
-    categoria: 'Caballeros',
-    Variantes: [
-      { id: 2021, talla: '30', color: 'Azul', stock: 10, precio_adicional: 0, sku_variante: 'BOU-JEA-002-30-BLU' },
-      { id: 2022, talla: '32', color: 'Azul', stock: 14, precio_adicional: 0, sku_variante: 'BOU-JEA-002-32-BLU' },
-      { id: 2023, talla: '34', color: 'Negro', stock: 6, precio_adicional: 1.50, sku_variante: 'BOU-JEA-002-34-BLK' }
-    ]
-  },
-  {
-    id: 203,
-    nombre: 'Vestido de Noche Gala',
-    precio: 120.00,
-    codigo_barras: 'BOU-VES-003',
-    categoria: 'Damas',
-    Variantes: [
-      { id: 2031, talla: 'S', color: 'Negro', stock: 4, precio_adicional: 0, sku_variante: 'BOU-VES-003-S-BLK' },
-      { id: 2032, talla: 'M', color: 'Rojo', stock: 2, precio_adicional: 10.00, sku_variante: 'BOU-VES-003-M-RED' }
-    ]
-  },
-  {
-    id: 204,
-    nombre: 'Chaqueta Cuero Premium',
-    precio: 85.00,
-    codigo_barras: 'BOU-CHA-004',
-    categoria: 'Unisex',
-    Variantes: [
-      { id: 2041, talla: 'M', color: 'Marron', stock: 5, precio_adicional: 0, sku_variante: 'BOU-CHA-004-M-BRN' },
-      { id: 2042, talla: 'L', color: 'Negro', stock: 7, precio_adicional: 5.00, sku_variante: 'BOU-CHA-004-L-BLK' }
-    ]
-  },
-  {
-    id: 205,
-    nombre: 'Zapatillas Urbanas',
-    precio: 65.00,
-    codigo_barras: 'BOU-ZAP-005',
-    categoria: 'Calzado',
-    Variantes: [
-      { id: 2051, talla: '38', color: 'Blanco', stock: 9, precio_adicional: 0, sku_variante: 'BOU-ZAP-005-38-WHT' },
-      { id: 2052, talla: '40', color: 'Blanco', stock: 12, precio_adicional: 0, sku_variante: 'BOU-ZAP-005-40-WHT' },
-      { id: 2053, talla: '42', color: 'Negro', stock: 4, precio_adicional: 0, sku_variante: 'BOU-ZAP-005-42-BLK' }
-    ]
-  }
-];
-
 export default function ClothingPOSView() {
   const posContext = usePos() || {};
   const exchangeRate = posContext.exchangeRate || 650;
   const currencyMode = posContext.currencyMode || 'BOTH';
   const showDual = !isUsdOnlyMode({ currencyMode }) && (currencyMode === 'BOTH' || currencyMode === 'DUAL' || currencyMode === 'VES');
 
-  const [products, setProducts] = useState(MOCK_BOUTIQUE_PRODUCTS);
+  const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todos');
   const [cart, setCart] = useState([]);

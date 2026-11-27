@@ -69,7 +69,18 @@ async function createPostgresBackup() {
 
         logMsg(`Iniciando respaldo en ${backupDir}`);
 
-        const dumpArgs = ['-h', String(host), '-p', String(port), '-U', String(user), '-d', String(dbName), '-F', 'p', '-f', sqlFileName];
+        const dumpArgs = [
+            '-h', String(host),
+            '-p', String(port),
+            '-U', String(user),
+            '-d', String(dbName),
+            '--clean',
+            '--if-exists',
+            '--no-owner',
+            '--no-privileges',
+            '-F', 'p',
+            '-f', sqlFileName
+        ];
         const childEnv = { ...process.env, PGPASSWORD: password };
 
         execFile(PG_DUMP_PATH, dumpArgs, { cwd: backupDir, env: childEnv }, (error, stdout, stderr) => {
@@ -103,25 +114,22 @@ async function createPostgresBackup() {
                 console.warn('[Backup System] Aviso copiando settings al respaldo:', copyErr.message);
             }
 
-            // Use tar available in Windows 10+ via parameterized execFile
-            const tarArgs = ['-ac', '-f', zipFileName, sqlFileName];
+            // Empaquetar sin prefijos "../" usando -C para compatibilidad total con extractZipArchive anti Zip-Slip
+            const tarArgs = ['-ac', '-f', zipPath, '-C', backupDir, sqlFileName];
             if (hasSettings) {
                 tarArgs.push('settings.json');
             }
             if (hasPayments) {
                 tarArgs.push('payment_methods.json');
             }
-            if (fs.existsSync(path.join(baseDir, 'product_images'))) {
-                tarArgs.push('../product_images');
-            }
-            if (fs.existsSync(path.join(baseDir, 'supplier_logos'))) {
-                tarArgs.push('../supplier_logos');
-            }
-            if (fs.existsSync(path.join(baseDir, 'invoices'))) {
-                tarArgs.push('../invoices');
+            const mediaFolders = ['product_images', 'supplier_logos', 'invoices'].filter(
+                (folder) => fs.existsSync(path.join(baseDir, folder))
+            );
+            if (mediaFolders.length > 0) {
+                tarArgs.push('-C', baseDir, ...mediaFolders);
             }
 
-            execFile('tar', tarArgs, { cwd: backupDir }, (zipError) => {
+            execFile('tar', tarArgs, { cwd: baseDir }, (zipError) => {
                 // Cleanup temporary uncompressed SQL file and config copies
                 try { if (fs.existsSync(sqlPath)) fs.unlinkSync(sqlPath); } catch (e) {}
                 try { if (hasSettings && fs.existsSync(tempSettingsInBackup)) fs.unlinkSync(tempSettingsInBackup); } catch (e) {}

@@ -1,12 +1,27 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { useAuth } from '../hooks/AuthContext';
-import { 
-    Users as UsersIcon, Plus, Edit2, Trash2, Shield, User as UserIcon, 
-    Search, Key, Phone, Building, CheckCircle2, XCircle, LayoutGrid, 
-    Table as TableIcon, Copy, Share2, BarChart3, Clock, DollarSign,
-    Lock, RefreshCcw, ShieldCheck, ShieldAlert, Award
+import {
+    Users as UsersIcon, 
+    Plus, 
+    Edit2, 
+    Trash2, 
+    Shield, 
+    User as UserIcon, 
+    Search, 
+    Key, 
+    Building, 
+    XCircle, 
+    LayoutGrid, 
+    Table as TableIcon, 
+    Copy, 
+    Share2, 
+    BarChart3, 
+    DollarSign, 
+    RefreshCcw, 
+    ShieldCheck, 
+    Award
 } from 'lucide-react';
 import UserModal from '../components/UserModal';
 import ConfirmModal from '../components/ConfirmModal';
@@ -65,15 +80,7 @@ export default function Users() {
         return role === 'superadmin' || role === 'owner' || role === 'dueño';
     }, [currentUser?.role]);
 
-    useEffect(() => {
-        fetchUsers(isMasterRevealActive);
-    }, [isMasterRevealActive]);
-
-    useEffect(() => {
-        fetchBranches();
-    }, []);
-
-    const fetchUsers = async (revealMaster = false) => {
+    const fetchUsers = useCallback(async (revealMaster = false) => {
         try {
             setLoading(true);
             const shouldReveal = revealMaster || String(currentUser?.role || '').toLowerCase() === 'superadmin';
@@ -85,16 +92,24 @@ export default function Users() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [currentUser?.role]);
 
-    const fetchBranches = async () => {
+    const fetchBranches = useCallback(async () => {
         try {
             const { data } = await api.get('/branches');
             setBranches(data || []);
         } catch (e) {
             console.error('Error fetching branches', e);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        fetchUsers(isMasterRevealActive);
+    }, [isMasterRevealActive, fetchUsers]);
+
+    useEffect(() => {
+        fetchBranches();
+    }, [fetchBranches]);
 
     const fetchUserStats = async (user) => {
         setStatsUser(user);
@@ -545,9 +560,63 @@ export default function Users() {
                     })}
                 </div>
             ) : (
-                /* ==================== TACTICAL TABLE VIEW ==================== */
-                <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xs">
-                    <div className="overflow-x-auto">
+                /* ==================== TACTICAL TABLE VIEW (Desktop) + TARJETAS TÁCTILES (Móvil) ==================== */
+                <div className="space-y-2.5">
+                    {/* Tarjetas táctiles móviles (sin desborde horizontal < 768px) */}
+                    <div className="md:hidden space-y-2.5">
+                        {filteredUsers.map(u => {
+                            const roleInfo = ROLE_BADGES[u.role] || ROLE_BADGES['user'];
+                            const RoleIcon = roleInfo.icon;
+                            const isSelf = u.id === currentUser?.id;
+                            return (
+                                <div key={u.id} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 shadow-2xs space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                            <div className="w-9 h-9 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 flex items-center justify-center font-bold text-xs border border-slate-200 dark:border-slate-700 shrink-0 font-mono">
+                                                {(u.name || u.username || 'U').charAt(0).toUpperCase()}
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="font-bold text-sm text-slate-900 dark:text-white truncate">{u.name || u.username}</p>
+                                                <p className="text-[11px] text-slate-400 font-mono truncate">@{u.username}</p>
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleToggleStatus(u)}
+                                            disabled={isSelf}
+                                            className={`px-2.5 py-1 min-h-[32px] rounded-lg text-[10px] font-semibold border inline-flex items-center gap-1.5 shrink-0 ${u.status === 'active' ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' : 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'} ${isSelf ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                                        >
+                                            <span className={`w-1.5 h-1.5 rounded-full ${u.status === 'active' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                            {u.status === 'active' ? 'Activo' : 'Inactivo'}
+                                        </button>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                        <span className={`px-2 py-0.5 rounded font-semibold border inline-flex items-center gap-1 ${roleInfo.bg}`}>
+                                            <RoleIcon size={11} /> {roleInfo.label}
+                                        </span>
+                                        <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium">
+                                            {getBranchName(u.activeBranchId)}
+                                        </span>
+                                        {(u.supervisorPin || u.hasPin || u.hasSupervisorPin) && (
+                                            <span className="px-2 py-0.5 rounded font-semibold bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40 inline-flex items-center gap-1">
+                                                <Key size={10} /> PIN
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="grid grid-cols-5 gap-1 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                        <button type="button" onClick={() => fetchUserStats(u)} className="min-h-[40px] rounded-lg bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 flex items-center justify-center cursor-pointer" title="Métricas"><BarChart3 size={15} /></button>
+                                        <button type="button" onClick={() => setShareUser(u)} className="min-h-[40px] rounded-lg bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 flex items-center justify-center cursor-pointer" title="Ficha"><Share2 size={15} /></button>
+                                        <button type="button" onClick={() => { setPinUser(u); setIsPinModalOpen(true); }} className="min-h-[40px] rounded-lg bg-slate-50 dark:bg-slate-800/70 text-amber-600 dark:text-amber-400 flex items-center justify-center cursor-pointer" title="PIN"><Key size={15} /></button>
+                                        <button type="button" onClick={() => handleEditUser(u)} className="min-h-[40px] rounded-lg bg-slate-50 dark:bg-slate-800/70 text-primary-600 dark:text-primary-400 flex items-center justify-center cursor-pointer" title="Editar"><Edit2 size={15} /></button>
+                                        <button type="button" onClick={() => handleDeleteUser(u.id)} disabled={isSelf} className={`min-h-[40px] rounded-lg flex items-center justify-center ${isSelf ? 'opacity-30 cursor-not-allowed bg-slate-100 dark:bg-slate-800 text-slate-400' : 'bg-rose-50 dark:bg-rose-950/30 text-rose-600 cursor-pointer'}`} title="Eliminar"><Trash2 size={15} /></button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    <div className="hidden md:block bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xs">
+                        <div className="overflow-x-auto">
                         <table className="w-full text-left border-collapse">
                             <thead>
                                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
@@ -656,6 +725,7 @@ export default function Users() {
                                 })}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </div>
             )}

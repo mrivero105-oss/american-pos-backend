@@ -1,25 +1,60 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  Printer, Bluetooth, CheckCircle2, AlertCircle, RefreshCw, 
-  Settings2, FileText, X, ShieldCheck, Smartphone, Zap
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Printer, 
+  Bluetooth, 
+  Wifi,
+  CheckCircle2, 
+  AlertCircle, 
+  RefreshCw, 
+  Settings2, 
+  X, 
+  Zap
 } from 'lucide-react';
 import mobilePrinterService from '../../services/mobilePrinterService';
-import { cleanAscii, formatCenter, formatLine, ESC_INIT, ESC_BOLD_ON, ESC_BOLD_OFF, ESC_ALIGN_CENTER, GS_CUT } from '../../utils/escposFormatter';
+import {
+  formatCenter,
+  formatLine,
+  ESC_INIT_CP858,
+  ESC_BOLD_ON,
+  ESC_BOLD_OFF,
+  ESC_ALIGN_CENTER,
+  GS_CUT,
+  encodeEscPosCp858
+} from '../../utils/escposFormatter';
+import { useMobileKeyboardViewport } from '../../hooks/useMobileKeyboardViewport';
+
+const readSavedPrinterConfig = () => {
+  try {
+    const raw = localStorage.getItem('pos_printer_config');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+};
 
 export default function MobileThermalPrinterModal({
   isOpen,
   onClose,
   T,
-  isLight,
   showToast,
   businessInfo = {}
 }) {
+  const initialCfg = readSavedPrinterConfig();
+  const [printerMode, setPrinterMode] = useState(() => (
+    initialCfg.type === 'network' ? 'network' : 'bluetooth'
+  ));
+  const [networkIp, setNetworkIp] = useState(() => initialCfg.ip || '');
+  const [networkPort, setNetworkPort] = useState(() => String(initialCfg.port || 9100));
+
   const [pairedPrinters, setPairedPrinters] = useState([]);
   const [selectedAddress, setSelectedAddress] = useState(() => {
-    return localStorage.getItem('pos_mobile_bt_printer_last') || localStorage.getItem('pos_mobile_bt_printer') || '';
+    return initialCfg.btAddress || localStorage.getItem('pos_mobile_bt_printer_last') || localStorage.getItem('pos_mobile_bt_printer') || '';
   });
   const [selectedName, setSelectedName] = useState(() => {
-    return localStorage.getItem('pos_mobile_bt_printer_name') || '';
+    return initialCfg.btName || localStorage.getItem('pos_mobile_bt_printer_name') || '';
+  });
+  const [selectedTransport, setSelectedTransport] = useState(() => {
+    return initialCfg.btTransport || localStorage.getItem('pos_mobile_bt_transport') || 'auto';
   });
   const [paperWidth, setPaperWidth] = useState(() => {
     return localStorage.getItem('pos_mobile_paper_width') || '58mm';
@@ -28,8 +63,35 @@ export default function MobileThermalPrinterModal({
     return localStorage.getItem('pos_mobile_auto_print') === 'true';
   });
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [isScanningNearby, setIsScanningNearby] = useState(false);
   const [isPrintingTest, setIsPrintingTest] = useState(false);
   const [testResult, setTestResult] = useState(null);
+
+  const {
+    modalOverlayStyle,
+    modalCardMaxHeightStyle,
+    handleFieldFocusCapture,
+    handleFormKeyDown
+  } = useMobileKeyboardViewport({ enabled: isOpen });
+
+  const persistPrinterConfig = useCallback((patch = {}) => {
+    const current = readSavedPrinterConfig();
+    const next = {
+      ...current,
+      type: patch.type ?? printerMode,
+      ip: String(patch.ip ?? networkIp).trim(),
+      port: Number(patch.port ?? networkPort) || 9100,
+      btAddress: patch.btAddress ?? selectedAddress,
+      btName: patch.btName ?? selectedName,
+      btTransport: patch.btTransport ?? selectedTransport
+    };
+    try {
+      localStorage.setItem('pos_printer_config', JSON.stringify(next));
+    } catch {
+      // Almacenamiento opcional
+    }
+    return next;
+  }, [printerMode, networkIp, networkPort, selectedAddress, selectedName, selectedTransport]);
 
   // Cargar lista de impresoras emparejadas en el sistema Android
   const loadPairedDevices = useCallback(async () => {
@@ -39,14 +101,12 @@ export default function MobileThermalPrinterModal({
       if (mobilePrinterService.isNativePlatform()) {
         const devices = await mobilePrinterService.getPairedPrinters();
         setPairedPrinters(devices || []);
-        
-        // Si no hay seleccionada pero hay disponibles, sugerir la primera
+
         if (!selectedAddress && devices && devices.length > 0) {
           setSelectedAddress(devices[0].address);
           setSelectedName(devices[0].name);
         }
       } else {
-        // En entorno Web, verificar si soporta Web Bluetooth
         setPairedPrinters([]);
       }
     } catch (err) {
@@ -57,21 +117,26 @@ export default function MobileThermalPrinterModal({
   }, [selectedAddress]);
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && printerMode === 'bluetooth') {
       loadPairedDevices();
     }
-  }, [isOpen, loadPairedDevices]);
+  }, [isOpen, printerMode, loadPairedDevices]);
 
   if (!isOpen) return null;
 
-  // Cambiar tamaño de papel
+  const handleSwitchMode = (nextMode) => {
+    setPrinterMode(nextMode);
+    setTestResult(null);
+    persistPrinterConfig({ type: nextMode });
+    showToast?.(nextMode === 'network' ? 'Modo Wi-Fi / Red LAN (TCP 9100) activo' : 'Modo Bluetooth térmico activo');
+  };
+
   const handleSetPaperWidth = (width) => {
     setPaperWidth(width);
     localStorage.setItem('pos_mobile_paper_width', width);
     showToast?.(`Ancho de papel configurado en ${width}`);
   };
 
-  // Alternar impresión automática
   const handleToggleAutoPrint = () => {
     const nextVal = !autoPrint;
     setAutoPrint(nextVal);
@@ -79,17 +144,39 @@ export default function MobileThermalPrinterModal({
     showToast?.(nextVal ? 'Impresión automática activada' : 'Impresión automática desactivada');
   };
 
-  // Seleccionar impresora
   const handleSelectPrinter = (device) => {
+    const devTransport = String(device.transport || 'auto').toUpperCase() === 'BLE' ? 'ble' : 'auto';
     setSelectedAddress(device.address);
     setSelectedName(device.name);
+    setSelectedTransport(devTransport);
     localStorage.setItem('pos_mobile_bt_printer_last', device.address);
     localStorage.setItem('pos_mobile_bt_printer', device.address);
     localStorage.setItem('pos_mobile_bt_printer_name', device.name);
-    showToast?.(`Impresora seleccionada: ${device.name}`);
+    localStorage.setItem('pos_mobile_bt_transport', devTransport);
+    persistPrinterConfig({ type: 'bluetooth', btAddress: device.address, btName: device.name, btTransport: devTransport });
+    showToast?.(`Impresora seleccionada: ${device.name}${devTransport === 'ble' ? ' (BLE)' : ''}`);
   };
 
-  // Conectar vía Web Bluetooth (si corre en navegador o dispositivo no emparejado previamente)
+  const handleDiscoverNearbyBluetooth = async () => {
+    setIsScanningNearby(true);
+    setTestResult(null);
+    try {
+      const devices = await mobilePrinterService.discoverBluetoothPrinters({ durationMs: 4500 });
+      setPairedPrinters(devices || []);
+      if (devices && devices.length > 0) {
+        showToast?.(`📡 ${devices.length} dispositivo(s) Bluetooth/BLE detectados`);
+      } else {
+        showToast?.('No se detectaron impresoras Bluetooth cercanas encendidas');
+      }
+    } catch (err) {
+      const msg = err?.message || 'Error buscando dispositivos Bluetooth cercanos';
+      setTestResult({ success: false, message: msg });
+      showToast?.(`⚠️ ${msg}`);
+    } finally {
+      setIsScanningNearby(false);
+    }
+  };
+
   const handlePairWebBluetooth = async () => {
     setIsLoadingDevices(true);
     try {
@@ -98,80 +185,120 @@ export default function MobileThermalPrinterModal({
         setSelectedAddress(dev.id);
         setSelectedName(dev.name);
         localStorage.setItem('pos_mobile_bt_printer_name', dev.name);
+        persistPrinterConfig({ type: 'bluetooth', btAddress: dev.id, btName: dev.name });
         showToast?.(`Impresora vinculada: ${dev.name}`);
       }
     } catch (err) {
-      alert(`No se pudo conectar: ${err.message}`);
+      const msg = err?.message || 'Error desconocido al conectar impresora Bluetooth';
+      setTestResult({ success: false, message: `No se pudo conectar: ${msg}` });
+      showToast?.(`⚠️ No se pudo conectar: ${msg}`);
     } finally {
       setIsLoadingDevices(false);
     }
   };
 
-  // Imprimir Ticket de Prueba Profesional ESC/POS
+  const handleSaveAndClose = () => {
+    persistPrinterConfig();
+    onClose();
+  };
+
+  // Imprimir Ticket de Prueba Profesional ESC/POS con codificación CP858 real (tildes y ñ limpias)
   const handlePrintTestTicket = async () => {
     setIsPrintingTest(true);
     setTestResult(null);
+    persistPrinterConfig();
 
     const cols = paperWidth === '80mm' ? 48 : 32;
     const company = businessInfo?.name || localStorage.getItem('company_name') || 'Isaac POS';
     const now = new Date();
     const dateStr = now.toLocaleDateString('es-VE');
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const cleanIp = String(networkIp || '').trim();
+    const cleanPort = Number(networkPort) || 9100;
 
-    let ticket = ESC_INIT;
+    const cp858Opt = { preserveCp858: true };
+    let ticket = ESC_INIT_CP858;
     ticket += ESC_ALIGN_CENTER;
     ticket += ESC_BOLD_ON;
-    ticket += formatCenter(company.toUpperCase(), cols) + '\n';
+    ticket += formatCenter(company.toUpperCase(), cols, cp858Opt) + '\n';
     ticket += ESC_BOLD_OFF;
-    ticket += formatCenter('PRUEBA DE IMPRESION TERMICA', cols) + '\n';
-    ticket += formatCenter('--------------------------------', cols) + '\n';
-    ticket += formatLine('Fecha:', dateStr, cols) + '\n';
-    ticket += formatLine('Hora:', timeStr, cols) + '\n';
-    ticket += formatLine('Formato Papel:', paperWidth, cols) + '\n';
-    ticket += formatLine('Columnas:', `${cols} car.`, cols) + '\n';
-    ticket += formatLine('Dispositivo:', (selectedName || 'Generica').substring(0, 15), cols) + '\n';
-    ticket += formatCenter('--------------------------------', cols) + '\n';
+    ticket += formatCenter('PRUEBA DE IMPRESIÓN TÉRMICA', cols, cp858Opt) + '\n';
+    ticket += formatCenter('--------------------------------', cols, cp858Opt) + '\n';
+    ticket += formatLine('Fecha:', dateStr, cols, cp858Opt) + '\n';
+    ticket += formatLine('Hora:', timeStr, cols, cp858Opt) + '\n';
+    ticket += formatLine('Modo:', printerMode === 'network' ? 'Wi-Fi / LAN TCP' : 'Bluetooth SPP', cols, cp858Opt) + '\n';
+    ticket += formatLine('Papel:', `${paperWidth} (${cols} col.)`, cols, cp858Opt) + '\n';
+    ticket += formatLine(
+      printerMode === 'network' ? 'IP:Puerto:' : 'Equipo:',
+      printerMode === 'network' ? `${cleanIp}:${cleanPort}` : (selectedName || 'Genérica').substring(0, 16),
+      cols,
+      cp858Opt
+    ) + '\n';
+    ticket += formatCenter('CP858: ÁÉÍÓÚ Ññ ¡Éxito!', cols, cp858Opt) + '\n';
+    ticket += formatCenter('--------------------------------', cols, cp858Opt) + '\n';
     ticket += ESC_BOLD_ON;
-    ticket += formatCenter('ESTADO: CONEXION EXITOSA', cols) + '\n';
+    ticket += formatCenter('ESTADO: CONEXIÓN EXITOSA', cols, cp858Opt) + '\n';
     ticket += ESC_BOLD_OFF;
-    ticket += formatCenter('Isaac POS Mobile - 100% Operativo', cols) + '\n';
+    ticket += formatCenter('Isaac POS Mobile - 100% Operativo', cols, cp858Opt) + '\n';
     ticket += '\n\n\n\n' + GS_CUT;
 
+    const cp858Bytes = encodeEscPosCp858(ticket);
+
     try {
-      if (mobilePrinterService.isNativePlatform()) {
-        const base64Data = mobilePrinterService.toBase64(ticket);
+      if (printerMode === 'network') {
+        if (!cleanIp) {
+          throw new Error('Ingresa la dirección IP de tu impresora térmica Wi-Fi/LAN (ej. 192.168.1.200).');
+        }
+        await mobilePrinterService.printNetwork(cleanIp, cleanPort, cp858Bytes);
+        setTestResult({ success: true, message: `Ticket CP858 enviado por red a ${cleanIp}:${cleanPort}.` });
+        showToast?.('✅ Ticket de prueba enviado a impresora Wi-Fi/Red');
+      } else if (mobilePrinterService.isNativePlatform()) {
+        const base64Data = mobilePrinterService.toBase64(cp858Bytes);
         const { registerPlugin } = await import('@capacitor/core');
         const PosNativeHardware = registerPlugin('PosNativeHardware');
         const res = await PosNativeHardware.printBluetooth({
           address: selectedAddress || '',
-          data: base64Data
+          data: base64Data,
+          transport: selectedTransport || 'auto'
         });
 
         if (res?.success) {
-          setTestResult({ success: true, message: 'Ticket de prueba impreso correctamente.' });
-          showToast?.('✅ Ticket de prueba enviado a la impresora');
+          const via = res.transport === 'BLE_GATT' ? 'BLE GATT nativo' : 'Bluetooth SPP';
+          setTestResult({ success: true, message: `Ticket de prueba CP858 impreso por ${via}.` });
+          showToast?.(`✅ Ticket de prueba enviado (${via})`);
         } else {
           setTestResult({ success: false, message: 'La impresora no respondió. Verifica que esté encendida.' });
         }
       } else {
-        await mobilePrinterService.printBluetooth(ticket);
-        setTestResult({ success: true, message: 'Ticket de prueba impreso correctamente vía Web Bluetooth.' });
+        await mobilePrinterService.printBluetooth(cp858Bytes);
+        setTestResult({ success: true, message: 'Ticket de prueba CP858 impreso vía Web Bluetooth.' });
         showToast?.('✅ Ticket de prueba enviado a la impresora');
       }
     } catch (err) {
       console.error('[PrinterTest] Error:', err);
+      const defaultHint = printerMode === 'network'
+        ? 'Verifica que la impresora esté encendida, en la misma red Wi-Fi/LAN y acepte puerto TCP 9100.'
+        : 'Verifica que la impresora esté encendida y emparejada en los ajustes de Bluetooth de Android.';
       setTestResult({ 
         success: false, 
-        message: `Error de comunicación: ${err.message || 'Verifica que la impresora esté encendida y emparejada en los ajustes de Bluetooth de Android.'}` 
+        message: `Error de comunicación: ${err.message || defaultHint}` 
       });
     } finally {
       setIsPrintingTest(false);
     }
   };
 
+  const isConfigured = printerMode === 'network' ? Boolean(String(networkIp || '').trim()) : Boolean(selectedAddress);
+
   return (
-    <div className="fixed inset-0 bg-black/85 z-[9999] flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
-      <div className={`w-full max-w-md ${T?.cardBg || 'bg-slate-900'} rounded-xl border ${T?.border || 'border-slate-800'} shadow-2xl overflow-hidden flex flex-col max-h-[90vh]`}>
+    <div
+      className="fixed inset-0 bg-black/85 z-[9999] flex items-end sm:items-center justify-center p-2 sm:p-4 animate-fadeIn overflow-y-auto"
+      style={modalOverlayStyle}
+    >
+      <div
+        className={`w-full max-w-md ${T?.cardBg || 'bg-slate-900'} rounded-2xl sm:rounded-xl border ${T?.border || 'border-slate-800'} shadow-2xl overflow-hidden flex flex-col max-h-[90dvh] my-auto`}
+        style={modalCardMaxHeightStyle}
+      >
         
         {/* Cabecera */}
         <div className={`p-4 border-b ${T?.border || 'border-slate-800'} flex items-center justify-between shrink-0 bg-slate-950/40`}>
@@ -181,38 +308,76 @@ export default function MobileThermalPrinterModal({
             </div>
             <div>
               <h3 className={`font-bold text-sm sm:text-base ${T?.textPrimary || 'text-white'}`}>
-                Impresora Térmica Bluetooth
+                Impresora Térmica ESC/POS
               </h3>
               <p className={`text-[10px] ${T?.textMuted || 'text-slate-400'}`}>
-                Configuración de tickets y recibos ESC/POS
+                Bluetooth portátil o Wi-Fi / Red LAN (TCP 9100 • CP858)
               </p>
             </div>
           </div>
           <button 
-            onClick={onClose}
+            type="button"
+            onClick={handleSaveAndClose}
             className={`p-2 rounded-lg ${T?.btnGhost || 'text-slate-400 hover:text-white'} cursor-pointer active:scale-95`}
           >
             <X size={18} />
           </button>
         </div>
 
+        {/* Selector de Modo: Bluetooth vs Wi-Fi / Red LAN */}
+        <div className={`px-4 pt-3 pb-1 shrink-0`}>
+          <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-950/60 border border-slate-800">
+            <button
+              type="button"
+              onClick={() => handleSwitchMode('bluetooth')}
+              className={`min-h-[40px] py-2 px-2 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                printerMode === 'bluetooth'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Bluetooth size={14} />
+              <span>Bluetooth</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchMode('network')}
+              className={`min-h-[40px] py-2 px-2 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                printerMode === 'network'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Wifi size={14} />
+              <span>Wi-Fi / Red LAN</span>
+            </button>
+          </div>
+        </div>
+
         {/* Contenido con scroll */}
-        <div className="p-4 overflow-y-auto space-y-4 flex-1 text-xs">
-          
+        <div
+          className="p-4 overflow-y-auto space-y-4 flex-1 text-xs"
+          onKeyDown={handleFormKeyDown}
+          onFocusCapture={handleFieldFocusCapture}
+        >
           {/* Tarjeta de Estado Activo */}
-          <div className={`p-3.5 rounded-xl border ${selectedAddress ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-amber-500/30 bg-amber-500/10'} flex items-center justify-between gap-3`}>
+          <div className={`p-3.5 rounded-xl border ${isConfigured ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-amber-500/30 bg-amber-500/10'} flex items-center justify-between gap-3`}>
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className={`p-2 rounded-lg ${selectedAddress ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'} shrink-0`}>
-                <Bluetooth size={18} />
+              <div className={`p-2 rounded-lg ${isConfigured ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'} shrink-0`}>
+                {printerMode === 'network' ? <Wifi size={18} /> : <Bluetooth size={18} />}
               </div>
               <div className="min-w-0">
-                <p className={`text-[10px] uppercase font-bold tracking-wider ${selectedAddress ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {selectedAddress ? 'Impresora Vinculada' : 'Sin Impresora Seleccionada'}
+                <p className={`text-[10px] uppercase font-bold tracking-wider ${isConfigured ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {printerMode === 'network'
+                    ? (isConfigured ? 'Impresora Wi-Fi / LAN Lista' : 'Sin IP Configurada')
+                    : (isConfigured ? 'Impresora Bluetooth Vinculada' : 'Sin Impresora Seleccionada')}
                 </p>
                 <p className={`font-bold text-xs truncate ${T?.textPrimary || 'text-white'}`}>
-                  {selectedName || 'Ningún dispositivo asignado'}
+                  {printerMode === 'network'
+                    ? (networkIp ? `${networkIp}:${networkPort || 9100}` : 'Ingresa la IP de la impresora')
+                    : (selectedName || 'Ningún dispositivo asignado')}
                 </p>
-                {selectedAddress && (
+                {printerMode === 'bluetooth' && selectedAddress && (
                   <p className="text-[10px] font-mono text-slate-400 truncate">
                     MAC: {selectedAddress}
                   </p>
@@ -220,15 +385,177 @@ export default function MobileThermalPrinterModal({
               </div>
             </div>
 
-            <button
-              onClick={loadPairedDevices}
-              disabled={isLoadingDevices}
-              className={`p-2 rounded-lg ${T?.btnGhost || 'text-slate-400'} shrink-0 hover:text-blue-400 cursor-pointer`}
-              title="Actualizar lista de dispositivos"
-            >
-              <RefreshCw size={15} className={isLoadingDevices ? 'animate-spin' : ''} />
-            </button>
+            {printerMode === 'bluetooth' && (
+              <button
+                type="button"
+                onClick={loadPairedDevices}
+                disabled={isLoadingDevices}
+                className={`p-2 rounded-lg ${T?.btnGhost || 'text-slate-400'} shrink-0 hover:text-blue-400 cursor-pointer`}
+                title="Actualizar lista de dispositivos"
+              >
+                <RefreshCw size={15} className={isLoadingDevices ? 'animate-spin' : ''} />
+              </button>
+            )}
           </div>
+
+          {/* Configuración específica según modo */}
+          {printerMode === 'network' ? (
+            <div className={`p-3.5 rounded-xl border ${T?.border || 'border-slate-800'} ${T?.ticketItemBg || 'bg-slate-800/40'} space-y-3`}>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2">
+                  <label className={`text-[11px] font-bold ${T?.textSecondary || 'text-slate-300'} block mb-1`}>
+                    Dirección IP de Impresora *
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    enterKeyHint="next"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    value={networkIp}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNetworkIp(val);
+                      persistPrinterConfig({ type: 'network', ip: val });
+                    }}
+                    placeholder="192.168.1.200"
+                    className={`w-full min-h-[44px] ${T?.inputBg || 'bg-slate-950 text-white border-slate-700'} border rounded-xl px-3 py-2 text-base sm:text-sm font-mono font-bold outline-none focus:border-emerald-500`}
+                  />
+                </div>
+                <div>
+                  <label className={`text-[11px] font-bold ${T?.textSecondary || 'text-slate-300'} block mb-1`}>
+                    Puerto TCP
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    enterKeyHint="done"
+                    data-enter-submit="true"
+                    value={networkPort}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNetworkPort(val);
+                      persistPrinterConfig({ type: 'network', port: val });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !isPrintingTest && String(networkIp || '').trim()) {
+                        e.preventDefault();
+                        handlePrintTestTicket();
+                      }
+                    }}
+                    placeholder="9100"
+                    className={`w-full min-h-[44px] ${T?.inputBg || 'bg-slate-950 text-white border-slate-700'} border rounded-xl px-3 py-2 text-base sm:text-sm font-mono font-bold outline-none focus:border-emerald-500`}
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Los tickets se envían en crudo ESC/POS (CP858) vía tu servidor PC hacia la impresora térmica de red (puerto estándar <b>9100</b>).
+              </p>
+            </div>
+          ) : (
+            /* Lista de Dispositivos Bluetooth (Emparejados + Descubrimiento Classic/BLE) */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className={`text-[11px] font-bold ${T?.textSecondary || 'text-slate-300'}`}>
+                  Impresoras Bluetooth / BLE ({pairedPrinters.length})
+                </label>
+                {mobilePrinterService.isNativePlatform() && (
+                  <button
+                    type="button"
+                    onClick={handleDiscoverNearbyBluetooth}
+                    disabled={isScanningNearby || isLoadingDevices}
+                    className="px-2.5 py-1.5 min-h-[34px] rounded-lg bg-blue-600/20 text-blue-300 border border-blue-500/30 text-[11px] font-bold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={isScanningNearby ? 'animate-spin' : ''} />
+                    {isScanningNearby ? 'Buscando (4.5s)...' : 'Buscar Cercanas (BT/BLE)'}
+                  </button>
+                )}
+              </div>
+
+              {pairedPrinters.length === 0 ? (
+                <div className={`p-4 rounded-xl border border-dashed ${T?.border || 'border-slate-800'} text-center space-y-2`}>
+                  <p className={`text-[11px] ${T?.textMuted || 'text-slate-400'}`}>
+                    No hay impresoras Bluetooth detectadas aún.
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    Enciende tu impresora térmica y pulsa <b>Buscar Cercanas</b> (soporta Bluetooth Classic y BLE nativo sin pedir GPS).
+                  </p>
+                  {mobilePrinterService.isNativePlatform() ? (
+                    <button
+                      type="button"
+                      onClick={handleDiscoverNearbyBluetooth}
+                      disabled={isScanningNearby}
+                      className="px-3.5 py-2 min-h-[40px] rounded-lg bg-blue-600/20 text-blue-300 border border-blue-500/30 text-xs font-semibold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <Bluetooth size={14} />
+                      {isScanningNearby ? 'Escaneando impresoras...' : 'Buscar Impresoras BT / BLE'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handlePairWebBluetooth}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-semibold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <Bluetooth size={13} />
+                      Buscar con Web Bluetooth
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                  {pairedPrinters.map((dev, idx) => {
+                    const isSelected = selectedAddress === dev.address;
+                    const transportTag = String(dev.transport || 'CLASSIC').toUpperCase();
+                    return (
+                      <button
+                        key={dev.address || idx}
+                        type="button"
+                        onClick={() => handleSelectPrinter(dev)}
+                        className={`w-full p-2.5 rounded-lg border flex items-center justify-between text-left transition-colors cursor-pointer ${
+                          isSelected 
+                            ? 'border-blue-500 bg-blue-600/15 text-blue-400 shadow-sm' 
+                            : `${T?.ticketItemBg || 'bg-slate-800/40'} ${T?.border || 'border-slate-800'} hover:border-slate-700 text-slate-300`
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-bold text-xs truncate">
+                              {dev.name || 'Impresora Bluetooth'}
+                            </p>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
+                              transportTag === 'BLE'
+                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                : transportTag === 'DUAL'
+                                  ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                                  : 'bg-slate-700/70 text-slate-300'
+                            }`}>
+                              {transportTag}
+                            </span>
+                            {dev.bonded === false && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                Cercana
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[9px] font-mono opacity-70">
+                            {dev.address}{typeof dev.rssi === 'number' ? ` • ${dev.rssi} dBm` : ''}
+                          </p>
+                        </div>
+                        {isSelected ? (
+                          <CheckCircle2 size={16} className="text-blue-400 shrink-0" />
+                        ) : (
+                          <span className="text-[10px] text-slate-500 uppercase font-bold shrink-0">
+                            Elegir
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Selector de Ancho de Papel */}
           <div className="space-y-1.5">
@@ -288,71 +615,6 @@ export default function MobileThermalPrinterModal({
             </button>
           </div>
 
-          {/* Lista de Dispositivos Emparejados en Android */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className={`text-[11px] font-bold ${T?.textSecondary || 'text-slate-300'}`}>
-                Dispositivos Bluetooth Disponibles
-              </label>
-              <span className="text-[10px] text-slate-500">
-                {pairedPrinters.length} detectados
-              </span>
-            </div>
-
-            {pairedPrinters.length === 0 ? (
-              <div className={`p-4 rounded-xl border border-dashed ${T?.border || 'border-slate-800'} text-center space-y-2`}>
-                <p className={`text-[11px] ${T?.textMuted || 'text-slate-400'}`}>
-                  No hay impresoras emparejadas en Android.
-                </p>
-                <p className="text-[10px] text-slate-500">
-                  Enciende tu impresora térmica, ve a <b>Ajustes de Android &gt; Bluetooth</b> y vincúlala con el PIN 0000 o 1234.
-                </p>
-                <button
-                  type="button"
-                  onClick={handlePairWebBluetooth}
-                  className="px-3 py-1.5 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-semibold hover:bg-blue-600/30 transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                >
-                  <Bluetooth size={13} />
-                  Buscar con Web Bluetooth
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                {pairedPrinters.map((dev, idx) => {
-                  const isSelected = selectedAddress === dev.address;
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleSelectPrinter(dev)}
-                      className={`w-full p-2.5 rounded-lg border flex items-center justify-between text-left transition-colors cursor-pointer ${
-                        isSelected 
-                          ? 'border-blue-500 bg-blue-600/15 text-blue-400 shadow-sm' 
-                          : `${T?.ticketItemBg || 'bg-slate-800/40'} ${T?.border || 'border-slate-800'} hover:border-slate-700 text-slate-300`
-                      }`}
-                    >
-                      <div className="min-w-0 pr-2">
-                        <p className="font-bold text-xs truncate">
-                          {dev.name || 'Impresora Bluetooth'}
-                        </p>
-                        <p className="text-[9px] font-mono opacity-70">
-                          {dev.address}
-                        </p>
-                      </div>
-                      {isSelected ? (
-                        <CheckCircle2 size={16} className="text-blue-400 shrink-0" />
-                      ) : (
-                        <span className="text-[10px] text-slate-500 uppercase font-bold shrink-0">
-                          Elegir
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
           {/* Resultado de la Prueba */}
           {testResult && (
             <div className={`p-3 rounded-lg border flex items-start gap-2.5 text-[11px] ${
@@ -379,20 +641,26 @@ export default function MobileThermalPrinterModal({
             type="button"
             onClick={handlePrintTestTicket}
             disabled={isPrintingTest}
-            className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-colors disabled:opacity-50"
+            className="w-full min-h-[44px] py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-colors disabled:opacity-50"
           >
             {isPrintingTest ? (
               <RefreshCw size={15} className="animate-spin" />
             ) : (
               <Zap size={15} />
             )}
-            <span>{isPrintingTest ? 'Enviando Datos a la Impresora...' : 'Imprimir Ticket de Prueba'}</span>
+            <span>
+              {isPrintingTest
+                ? 'Enviando Datos a la Impresora...'
+                : printerMode === 'network'
+                  ? 'Imprimir Ticket de Prueba (Wi-Fi / CP858)'
+                  : 'Imprimir Ticket de Prueba (Bluetooth / CP858)'}
+            </span>
           </button>
 
           <button
             type="button"
-            onClick={onClose}
-            className={`w-full py-2 rounded-lg border ${T?.border || 'border-slate-800'} ${T?.btnGhost || 'text-slate-400'} text-xs font-semibold hover:text-white transition-colors cursor-pointer`}
+            onClick={handleSaveAndClose}
+            className={`w-full min-h-[40px] py-2 rounded-lg border ${T?.border || 'border-slate-800'} ${T?.btnGhost || 'text-slate-400'} text-xs font-semibold hover:text-white transition-colors cursor-pointer`}
           >
             Cerrar y Guardar
           </button>

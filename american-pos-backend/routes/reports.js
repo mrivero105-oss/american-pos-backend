@@ -7,7 +7,12 @@ const { isAdmin, requirePermission } = require('../middleware/auth');
 // GET /audit-logs
 router.get('/audit-logs', requirePermission('canAccessAudit'), async (req, res) => {
     try {
-        const logs = await reportService.getAuditLogs(req.user.companyId);
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 500);
+        const page = parseInt(req.query.page, 10);
+        const offset = Number.isFinite(page) && page > 0
+            ? (page - 1) * limit
+            : Math.max(parseInt(req.query.offset, 10) || 0, 0);
+        const logs = await reportService.getAuditLogs(req.user.companyId, limit, offset);
         res.json(logs);
     } catch (error) {
         console.error('Audit logs error:', error);

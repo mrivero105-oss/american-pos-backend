@@ -14,6 +14,9 @@ const dotenv = require('../american-pos-backend/node_modules/dotenv');
 
 dotenv.config({ path: path.join(__dirname, '../american-pos-backend/.env') });
 
+const DbConfigManager = require('../american-pos-backend/config/dbConfigManager');
+const { SETTINGS_FILE } = require('../american-pos-backend/config/paths');
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
 if (!SUPABASE_URL || !SERVICE_KEY) {
@@ -21,7 +24,15 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
     process.exit(1);
 }
 
-const pgClient = new Client({ connectionString: 'postgresql://postgres:postgres@127.0.0.1:5432/americanpos' });
+const activeDbCfg = DbConfigManager.getConfig();
+const pgClient = new Client({
+    host: activeDbCfg.host || '127.0.0.1',
+    port: Number(activeDbCfg.port) || 5432,
+    database: activeDbCfg.database || 'americanpos',
+    user: activeDbCfg.user || 'postgres',
+    password: activeDbCfg.password || process.env.DB_PASSWORD || 'postgres'
+});
+const TARGET_COMPANY_ID = process.env.DEFAULT_COMPANY_ID || '2';
 
 async function fetchAllFromCloud(table) {
     let all = [];
@@ -55,7 +66,7 @@ async function runDisasterRecovery() {
         const configRows = await fetchAllFromCloud('cloud_configuracion');
         if (configRows.length > 0) {
             const cfg = configRows[0];
-            const settingsPath = 'C:\\Users\\mrive\\AppData\\Roaming\\isaac-pos\\settings.json';
+            const settingsPath = SETTINGS_FILE;
             let currentSettings = {};
             if (fs.existsSync(settingsPath)) {
                 try { currentSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch (_) {}
@@ -118,17 +129,21 @@ async function runDisasterRecovery() {
         console.log(`  -> ${cloudProducts.length} productos encontrados en la nube.`);
         let prodRestored = 0;
         for (const p of cloudProducts) {
+            const stockVal = Number(p.stock_actual ?? p.stockQuantity ?? 0) || 0;
+            const compId = String(p.company_id || p.companyId || TARGET_COMPANY_ID);
             await pgClient.query(`
-                INSERT INTO "Products" (id, barcode, name, category, price, stock, "createdAt", "updatedAt")
-                VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+                INSERT INTO "Products" (id, barcode, name, category, price, stock, "stockQuantity", "companyId", "createdAt", "updatedAt")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
                 ON CONFLICT (id) DO UPDATE SET
                     barcode = EXCLUDED.barcode,
                     name = EXCLUDED.name,
                     category = EXCLUDED.category,
                     price = EXCLUDED.price,
                     stock = EXCLUDED.stock,
+                    "stockQuantity" = EXCLUDED."stockQuantity",
+                    "companyId" = EXCLUDED."companyId",
                     "updatedAt" = NOW()
-            `, [p.id, p.codigo_barra, p.nombre, p.categoria, p.precio_venta, p.stock_actual]);
+            `, [p.id, p.codigo_barra, p.nombre, p.categoria, p.precio_venta, stockVal, stockVal, compId]);
             prodRestored++;
         }
         console.log(`  ✅ ${prodRestored} productos restaurados/conciliados en PostgreSQL local.`);
@@ -168,13 +183,43 @@ async function runDisasterRecovery() {
         let salesRestored = 0;
         for (const v of cloudSales) {
             const saleDate = v.fecha_hora ? new Date(v.fecha_hora).toISOString() : new Date().toISOString();
+            const subtotalVal = Number(v.subtotal ?? v.monto_subtotal ?? 0) || 0;
+            const taxVal = Number(v.impuesto ?? v.monto_impuesto ?? 0) || 0;
+            const totalVal = Number(v.total ?? v.monto_total ?? 0) || 0;
+            const compId = String(v.company_id || v.companyId || TARGET_COMPANY_ID);
+            const branchId = String(v.sucursal_id || 'principal');
             await pgClient.query(`
-                INSERT INTO "Sales" (id, "customerName", "subtotal", "tax", "total", "paymentMethod", status, "date", "createdAt", "updatedAt")
-                VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7::timestamptz, $8::timestamptz, $9::timestamptz)
+                INSERT INTO "Sales" (id, "customerName", "subtotal", "tax", "total", "paymentMethod", "companyId", "branchId", status, "date", "createdAt", "updatedAt")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'completed', $9::timestamptz, $10::timestamptz, $11::timestamptz)
                 ON CONFLICT (id) DO UPDATE SET
+                    "subtotal" = EXCLUDED."subtotal",
+                    "tax" = EXCLUDED."tax",
                     "total" = EXCLUDED."total",
-                    "customerName" = EXCLUDED."customerName"
-            `, [v.id, v.cliente_nombre, v.monto_subtotal, v.monto_impuesto, v.monto_total, v.metodo_pago, saleDate, saleDate, saleDate]);
+                    "customerName" = EXCLUDED."customerName",
+                    "companyId" = EXCLUDED."companyId"
+            `, [v.id, v.cliente_nombre, subtotalVal, taxVal, totalVal, v.metodo_pago || 'cash', compId, branchId, saleDate, saleDate, saleDate]);
+
+            // Restaurar ítems de la venta si vienen en items_detalle y la venta aún no tiene SaleItems locales
+            let parsedItems = v.items_detalle;
+            if (typeof parsedItems === 'string') {
+                try { parsedItems = JSON.parse(parsedItems); } catch (_) { parsedItems = []; }
+            }
+            if (Array.isArray(parsedItems) && parsedItems.length > 0) {
+                const existingCountRes = await pgClient.query('SELECT COUNT(*)::int AS cnt FROM "SaleItems" WHERE "saleId" = $1', [v.id]);
+                if ((existingCountRes.rows[0]?.cnt || 0) === 0) {
+                    for (const it of parsedItems) {
+                        const prodId = String(it.id || it.productId || 'unknown');
+                        const itemName = String(it.nombre || it.name || 'Producto').slice(0, 250);
+                        const qty = Number(it.cantidad ?? it.quantity ?? 1) || 1;
+                        const price = Number(it.precio ?? it.price ?? 0) || 0;
+                        const lineSub = Number(it.total ?? it.subtotal ?? (price * qty)) || 0;
+                        await pgClient.query(`
+                            INSERT INTO "SaleItems" ("saleId", "productId", name, quantity, price, subtotal, "companyId", "createdAt", "updatedAt")
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::timestamptz)
+                        `, [v.id, prodId, itemName, qty, price, lineSub, compId, saleDate, saleDate]);
+                    }
+                }
+            }
             salesRestored++;
         }
         console.log(`  ✅ ${salesRestored} ventas conciliadas en PostgreSQL local.`);

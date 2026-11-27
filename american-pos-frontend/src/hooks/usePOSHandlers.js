@@ -18,7 +18,6 @@ export const usePOSHandlers = ({
     activeCustomer,
     discountActive,
     setDiscountActive,
-    heldSales,
     setHeldSales,
     activeQuotationId,
     setActiveQuotationId,
@@ -101,7 +100,9 @@ export const usePOSHandlers = ({
                         localDailyCount = Number(parsedTracker.count);
                     }
                 }
-            } catch (_) {}
+            } catch (err) {
+                console.warn('[usePOSHandlers] Error leyendo contador diario local:', err?.message);
+            }
             const optimisticTicketNumber = localDailyCount + 1;
 
             const payload = {
@@ -172,7 +173,9 @@ export const usePOSHandlers = ({
                     try {
                         sessionStorage.setItem('last_local_printed_sale_id', String(deterministicId));
                         lanSyncService.markSalePrintedLocally(deterministicId);
-                    } catch (_) {}
+                    } catch (err) {
+                        console.warn('[usePOSHandlers] Error marcando ID impreso:', err?.message);
+                    }
                     const response = await api.post('/sales', payload, { timeout: timeoutMs });
                     const resolvedTicketNum = Number(response.data?.dailyTicketNumber || response.data?.taxInfo?.dailyTicketNumber || optimisticTicketNumber);
                     completedSale = {
@@ -189,9 +192,11 @@ export const usePOSHandlers = ({
                         localStorage.setItem(registerTrackerKey, trackerPayload);
                         localStorage.setItem('pos_daily_ticket_tracker', trackerPayload);
                         window.dispatchEvent(new CustomEvent('pos-daily-ticket-updated', { detail: { date: todayKey, count: resolvedTicketNum, nextTicketNumber: resolvedTicketNum + 1 } }));
-                    } catch (_) {}
+                    } catch (err) {
+                        console.warn('[usePOSHandlers] Error actualizando contador diario de ticket:', err?.message);
+                    }
                     if (completedSale.id) {
-                        try { sessionStorage.setItem('last_local_printed_sale_id', String(completedSale.id)); } catch (_) {}
+                        try { sessionStorage.setItem('last_local_printed_sale_id', String(completedSale.id)); } catch { /* sessionStorage no disponible */ }
                     }
                     setLastSale(completedSale);
                     playSuccessSound();
@@ -268,27 +273,16 @@ export const usePOSHandlers = ({
                                 return pObj.stockUnits;
                             };
 
-                            // A. Primary db store
-                            const prod = await db.getById('products', cleanProdId);
+                            // Actualizar stock en almacenamiento unificado (localDb delega a db, evitar doble descuento 2x)
+                            let prod = await db.getById('products', cleanProdId);
+                            if (!prod && !isNaN(Number(cleanProdId)) && Number(cleanProdId) > 0) {
+                                prod = await db.getById('products', Number(cleanProdId));
+                            }
                             if (prod) {
                                 const currentStock = Number(prod.stockQuantity) || 0;
                                 const newStock = Math.max(0, currentStock - unitsToDeduct);
                                 const newUnits = computeNextUnits(prod, currentStock, newStock);
                                 await db.put('products', { ...prod, stockQuantity: newStock, stockUnits: newUnits });
-                            }
-
-                            // B. Dexie localDb store
-                            if (localDb && localDb.products) {
-                                let dexProd = await localDb.products.get(cleanProdId);
-                                if (!dexProd && !isNaN(Number(cleanProdId)) && Number(cleanProdId) > 0) {
-                                    dexProd = await localDb.products.get(Number(cleanProdId));
-                                }
-                                if (dexProd) {
-                                    const curDexStock = Number(dexProd.stockQuantity) || 0;
-                                    const newDexStock = Math.max(0, curDexStock - unitsToDeduct);
-                                    const newDexUnits = computeNextUnits(dexProd, curDexStock, newDexStock);
-                                    await localDb.products.update(dexProd.id, { stockQuantity: newDexStock, stockUnits: newDexUnits });
-                                }
                             }
                         }
                     }
@@ -302,9 +296,11 @@ export const usePOSHandlers = ({
                     localStorage.setItem(registerTrackerKey, trackerPayload);
                     localStorage.setItem('pos_daily_ticket_tracker', trackerPayload);
                     window.dispatchEvent(new CustomEvent('pos-daily-ticket-updated', { detail: { date: todayKey, count: optimisticTicketNumber, nextTicketNumber: optimisticTicketNumber + 1 } }));
-                } catch (_) {}
+                } catch (err) {
+                    console.warn('[usePOSHandlers] Error actualizando contador diario offline:', err?.message);
+                }
                 if (completedSale.id) {
-                    try { sessionStorage.setItem('last_local_printed_sale_id', String(completedSale.id)); } catch (_) {}
+                    try { sessionStorage.setItem('last_local_printed_sale_id', String(completedSale.id)); } catch { /* sessionStorage no disponible */ }
                 }
                 setLastSale(offlineSale);
                 showNotification('⚡ Venta registrada en MODO OFFLINE y guardada localmente', 'warning');
@@ -316,7 +312,9 @@ export const usePOSHandlers = ({
             if (completedSale) {
                 try {
                     lanSyncService.broadcastSale(completedSale);
-                } catch (_p2pErr) {}
+                } catch (p2pErr) {
+                    console.warn('[usePOSHandlers] Aviso propagando venta P2P:', p2pErr?.message);
+                }
             }
 
             setIsReceiptOpen(true);
@@ -325,7 +323,9 @@ export const usePOSHandlers = ({
                 try {
                     await api.put(`/quotations/${activeQuotationId}`, { status: 'converted' });
                     setActiveQuotationId(null);
-                } catch (_qError) {}
+                } catch (qError) {
+                    console.warn('[usePOSHandlers] Error marcando cotización convertida:', qError?.message);
+                }
             }
 
             clearPosState();
@@ -420,7 +420,9 @@ export const usePOSHandlers = ({
                         tempLocalId: tempId,
                         timestamp: Date.now()
                     });
-                } catch {}
+                } catch (sqErr) {
+                    console.warn('[usePOSHandlers] Error encolando creación de cliente en syncQueue:', sqErr?.message);
+                }
 
                 toast.success('⚡ Cliente creado localmente (Modo Offline)');
             }
@@ -496,7 +498,9 @@ export const usePOSHandlers = ({
                         tempId: id,
                         timestamp: Date.now()
                     });
-                } catch {}
+                } catch (sqErr) {
+                    console.warn('[usePOSHandlers] Error encolando actualización de cliente en syncQueue:', sqErr?.message);
+                }
 
                 toast.success('⚡ Cliente actualizado localmente (Modo Offline)');
             }

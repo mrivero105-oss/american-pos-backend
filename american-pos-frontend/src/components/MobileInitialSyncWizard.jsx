@@ -1,19 +1,34 @@
-import React, { useState, useEffect } from 'react';
-import { 
-    Wifi, RefreshCw, CheckCircle2, AlertCircle, Smartphone, Database, 
-    Image, Layers, ArrowRight, ShieldCheck, Server, Zap, Check, Lock, Users
+import { useState, useEffect } from 'react';
+import {
+    Wifi, 
+    RefreshCw, 
+    CheckCircle2, 
+    AlertCircle, 
+    Smartphone, 
+    Database, 
+    Image, 
+    ArrowRight, 
+    ShieldCheck, 
+    Server, 
+    Zap, 
+    Check, 
+    Lock, 
+    Users
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import api, { updateApiBaseUrl, checkServerHealth, autoDiscoverServer, formatServerUrl } from '../services/api';
+import { motion } from 'framer-motion';
+import { updateApiBaseUrl, checkServerHealth, autoDiscoverServer, formatServerUrl } from '../services/api';
 import { syncService } from '../services/syncService';
+import { getTerminalId } from '../utils/terminalIdentity';
 import IsaacWebLogo from './IsaacWebLogo';
+import { useMobileKeyboardViewport } from '../hooks/useMobileKeyboardViewport';
 
 export default function MobileInitialSyncWizard({ onComplete }) {
+    const { imeExtraBottomPx, handleFieldFocusCapture } = useMobileKeyboardViewport({ enabled: true });
     const [step, setStep] = useState(1); // 1: Connection, 2: Syncing, 3: Completed
     const [serverIp, setServerIp] = useState(() => 
         localStorage.getItem('isaac_pos_server_ip') || 
         localStorage.getItem('american_pos_server_ip') || 
-        '192.168.1.30:3005'
+        ''
     );
     const [isTesting, setIsTesting] = useState(false);
     const [isAutoDetecting, setIsAutoDetecting] = useState(false);
@@ -21,7 +36,6 @@ export default function MobileInitialSyncWizard({ onComplete }) {
     const [pingLatency, setPingLatency] = useState(null);
 
     // Sync execution state
-    const [isSyncing, setIsSyncing] = useState(false);
     const [syncProgress, setSyncProgress] = useState({
         percent: 0,
         message: 'Preparando sincronización inicial...',
@@ -102,7 +116,6 @@ export default function MobileInitialSyncWizard({ onComplete }) {
     const startDeepSync = async () => {
         updateApiBaseUrl(serverIp);
         setStep(2);
-        setIsSyncing(true);
         setSyncError(null);
         setSyncProgress({
             percent: 5,
@@ -135,12 +148,10 @@ export default function MobileInitialSyncWizard({ onComplete }) {
                     cashiers: result.results.cashiers?.count || 0,
                     images: result.results.images || { total: 0, cached: 0, alreadyCached: 0 }
                 });
-                setIsSyncing(false);
                 setStep(3);
             }
         } catch (err) {
             console.error('Error in deep initial sync:', err);
-            setIsSyncing(false);
             setSyncError(err.message || 'Error de conexión durante la descarga. Verifica que la PC esté encendida y en la misma red WiFi.');
         }
     };
@@ -154,7 +165,14 @@ export default function MobileInitialSyncWizard({ onComplete }) {
     };
 
     return (
-        <div className="fixed inset-0 z-[99999] bg-slate-950 text-white flex flex-col justify-between p-4 sm:p-6 overflow-y-auto font-sans">
+        <div
+            className="fixed inset-0 z-[99999] bg-slate-950 text-white flex flex-col justify-between p-4 sm:p-6 overflow-y-auto font-sans"
+            style={{
+                paddingTop: 'max(1rem, env(safe-area-inset-top, 0px))',
+                paddingBottom: `calc(max(1rem, env(safe-area-inset-bottom, 0px)) + ${imeExtraBottomPx}px)`
+            }}
+            onFocusCapture={handleFieldFocusCapture}
+        >
             {/* Header */}
             <header className="relative z-10 w-full max-w-xl mx-auto flex items-center justify-between py-2">
                 <IsaacWebLogo isLight={false} height="h-7 sm:h-8" />
@@ -207,13 +225,23 @@ export default function MobileInitialSyncWizard({ onComplete }) {
                                         </div>
                                         <input
                                             type="text"
+                                            enterKeyHint="go"
+                                            autoCapitalize="none"
+                                            autoCorrect="off"
+                                            spellCheck={false}
                                             value={serverIp}
                                             onChange={(e) => {
                                                 setServerIp(e.target.value);
                                                 setConnectionStatus(null);
                                             }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && serverIp.trim() && !isTesting) {
+                                                    e.preventDefault();
+                                                    handleTestConnection();
+                                                }
+                                            }}
                                             placeholder="192.168.1.100"
-                                            className="w-full h-10 pl-9 pr-3 bg-slate-900 border border-slate-700 rounded-lg text-white font-mono text-xs sm:text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
+                                            className="w-full min-h-[44px] pl-9 pr-3 bg-slate-900 border border-slate-700 rounded-lg text-white font-mono text-base sm:text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
                                         />
                                     </div>
                                 </div>
@@ -278,8 +306,12 @@ export default function MobileInitialSyncWizard({ onComplete }) {
                                 <button
                                     type="button"
                                     onClick={() => {
+                                        const termId = getTerminalId();
                                         localStorage.setItem('isaac_pos_initial_sync_done', 'true');
                                         localStorage.setItem('isaac_pos_license_activated', 'true');
+                                        if (termId) {
+                                            localStorage.setItem('isaac_pos_license_machine_id', termId);
+                                        }
                                         localStorage.setItem('isaac_pos_is_offline_mode', 'true');
                                         if (onComplete) onComplete();
                                     }}

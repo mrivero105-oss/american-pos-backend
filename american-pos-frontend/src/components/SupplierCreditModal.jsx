@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
-import { X, History, CreditCard, DollarSign, Calendar, Info, ArrowUpCircle, ArrowDownCircle, Eye, FileText, FilePlus, TrendingUp, Banknote, CheckCircle2, RefreshCw, Edit2, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { X, History, CreditCard, DollarSign, Calendar, Info, ArrowDownCircle, Eye, FilePlus, TrendingUp, Banknote, CheckCircle2, RefreshCw, Edit2, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { formatMoney, fetchGlobalSettings, isDollarOnlyCountry } from '../utils/format';
+import { fetchGlobalSettings, isDollarOnlyCountry } from '../utils/format';
 import BaseModal from './BaseModal';
 import InvoiceViewerModal from './InvoiceViewerModal';
 import RegisterSupplierInvoiceModal from './RegisterSupplierInvoiceModal';
@@ -15,7 +15,6 @@ export default function SupplierCreditModal({ isOpen, onClose, supplier, onUpdat
     const [supplierData, setSupplierData] = useState(supplier);
     const [history, setHistory] = useState([]);
     const [pendingInvoices, setPendingInvoices] = useState([]);
-    const [paidInvoices, setPaidInvoices] = useState([]);
     const [viewFilter, setViewFilter] = useState('PENDING'); // 'PENDING' | 'ALL'
     const [loading, setLoading] = useState(false);
     const [settings, setSettings] = useState({ currencyMode: 'BOTH', rate: 1 });
@@ -27,40 +26,33 @@ export default function SupplierCreditModal({ isOpen, onClose, supplier, onUpdat
     const [isEditingRate, setIsEditingRate] = useState(false);
     const [bcvLoading, setBcvLoading] = useState(false);
     const [bcvVerified, setBcvVerified] = useState(false);
-    const [bcvSource, setBcvSource] = useState('');
-    const [bcvDate, setBcvDate] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [viewerInvoice, setViewerInvoice] = useState({ isOpen: false, url: '', details: {} });
     const [isRegisterInvoiceOpen, setIsRegisterInvoiceOpen] = useState(false);
     const [mobileTab, setMobileTab] = useState('invoices'); // 'invoices' | 'payment'
 
+    const settingsRateRef = useRef(settings.rate);
+    useEffect(() => {
+        settingsRateRef.current = settings.rate;
+    }, [settings.rate]);
+
+    const paymentDateRef = useRef(paymentDate);
+    useEffect(() => {
+        paymentDateRef.current = paymentDate;
+    }, [paymentDate]);
+
     useEffect(() => {
         fetchGlobalSettings().then(s => {
             setSettings(s);
-            if (s.rate && !customRate) setCustomRate(s.rate);
+            if (s.rate) setCustomRate(prev => prev || s.rate);
         });
     }, []);
 
-    useEffect(() => {
-        if (isOpen && supplier) {
-            setSupplierData(supplier);
-            setMobileTab('invoices');
-            fetchHistory();
-            if (!isDollarCountry) {
-                verifyBCVRate(paymentDate);
-            }
-        }
-    }, [isOpen, supplier?.id, isDollarCountry]);
-
-    if (!isOpen || !supplier) return null;
-
-    const activeRate = Number(customRate) > 0 ? Number(customRate) : Number(settings.rate || 1);
-
-    const verifyBCVRate = async (targetDate) => {
+    const verifyBCVRate = useCallback(async (targetDate) => {
         if (isDollarCountry) return;
         try {
             setBcvLoading(true);
-            const dateToQuery = targetDate || paymentDate || new Date().toISOString().substring(0, 10);
+            const dateToQuery = targetDate || paymentDateRef.current || new Date().toISOString().substring(0, 10);
             const res = await api.get('/suppliers/bcv-rate', {
                 params: { date: dateToQuery }
             });
@@ -68,38 +60,52 @@ export default function SupplierCreditModal({ isOpen, onClose, supplier, onUpdat
                 const officialRate = Number(res.data.rate);
                 setCustomRate(officialRate);
                 setBcvVerified(true);
-                setBcvSource(res.data.source || 'BCV Oficial');
-                setBcvDate(res.data.date || dateToQuery);
                 toast.success(`Tasa BCV oficial verificada para ${res.data.date || dateToQuery}: ${officialRate.toFixed(4)} Bs/$`, { id: 'bcv-sync' });
             }
         } catch (error) {
             console.error('Error verificando tasa BCV:', error);
-            if (settings.rate) {
-                setCustomRate(settings.rate);
+            if (settingsRateRef.current) {
+                setCustomRate(settingsRateRef.current);
             }
             toast.error('No se pudo conectar en vivo con el BCV, usando tasa configurada');
         } finally {
             setBcvLoading(false);
         }
-    };
+    }, [isDollarCountry]);
 
-    const fetchHistory = async () => {
+    const supplierId = supplier?.id;
+    const fetchHistory = useCallback(async () => {
+        if (!supplierId) return;
         try {
             setLoading(true);
-            const res = await api.get(`/suppliers/${supplier.id}/credit-history`);
+            const res = await api.get(`/suppliers/${supplierId}/credit-history`);
             if (res.data.supplier) {
                 setSupplierData(res.data.supplier);
             }
             setHistory(res.data.history || []);
             setPendingInvoices(res.data.pendingInvoices || []);
-            setPaidInvoices(res.data.paidInvoices || []);
         } catch (error) {
             console.error('Error fetching supplier history:', error);
             toast.error('Error al cargar historial');
         } finally {
             setLoading(false);
         }
-    };
+    }, [supplierId]);
+
+    useEffect(() => {
+        if (isOpen && supplier) {
+            setSupplierData(supplier);
+            setMobileTab('invoices');
+            fetchHistory();
+            if (!isDollarCountry) {
+                verifyBCVRate(paymentDateRef.current);
+            }
+        }
+    }, [isOpen, supplier, isDollarCountry, fetchHistory, verifyBCVRate]);
+
+    if (!isOpen || !supplier) return null;
+
+    const activeRate = Number(customRate) > 0 ? Number(customRate) : Number(settings.rate || 1);
 
     const handleFillTotal = () => {
         const debtUsd = Number(supplierData?.creditBalance || 0);
