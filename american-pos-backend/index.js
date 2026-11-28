@@ -215,6 +215,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
 const { verifyToken, isSuperAdmin } = require('./middleware/auth');
 const { verifyLicense } = require('./middleware/licenseMiddleware');
 const cookieParser = require('cookie-parser');
@@ -464,8 +465,51 @@ const startServer = (ports, userDataPath = null) => {
                 return callback(null, false);
             };
 
-            const corsOptions = {
-                origin: isOriginAllowed,
+            const isLoopbackIp = (ip) => {
+                if (!ip) return false;
+                const cleanIp = String(ip).replace(/^::ffff:/, '').trim();
+                return cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost' || cleanIp.startsWith('127.');
+            };
+
+            // Solo confiar en X-Forwarded-For / X-Forwarded-Host cuando el socket TCP real viene del proxy local (Tailscale Funnel)
+            const extractLoopbackForwardedIp = (req) => {
+                const socketIp = String(req?.socket?.remoteAddress || req?.connection?.remoteAddress || '').replace(/^::ffff:/, '').trim();
+                if (!isLoopbackIp(socketIp)) return '';
+                const rawFwd = String(req?.headers?.['x-forwarded-for'] || '').trim();
+                if (!rawFwd) return '';
+                const firstHop = rawFwd.split(',')[0].trim().replace(/^::ffff:/, '');
+                return firstHop || '';
+            };
+
+            const resolveRateLimitClientIp = (req) => {
+                const fwdIp = extractLoopbackForwardedIp(req);
+                if (fwdIp) return fwdIp;
+                return String(req?.ip || req?.socket?.remoteAddress || '0.0.0.0').replace(/^::ffff:/, '').trim();
+            };
+
+            const isDirectLoopbackRequest = (req) => {
+                if (extractLoopbackForwardedIp(req)) return false;
+                return isLoopbackIp(req?.ip || req?.socket?.remoteAddress || '');
+            };
+
+            const isSameTailscaleFunnelOrigin = (origin, req) => {
+                if (!origin || !req) return false;
+                const socketIp = String(req?.socket?.remoteAddress || req?.connection?.remoteAddress || '').replace(/^::ffff:/, '').trim();
+                if (!isLoopbackIp(socketIp)) return false;
+                try {
+                    const parsedOrigin = new URL(origin);
+                    if (parsedOrigin.protocol !== 'https:') return false;
+                    const originHost = parsedOrigin.hostname.toLowerCase();
+                    if (!originHost.endsWith('.ts.net')) return false;
+                    const rawForwardedHost = String(req.headers?.['x-forwarded-host'] || req.headers?.host || '').split(',')[0].trim().toLowerCase();
+                    const reqHost = rawForwardedHost.split(':')[0];
+                    return Boolean(reqHost && reqHost === originHost);
+                } catch {
+                    return false;
+                }
+            };
+
+            const corsBaseOptions = {
                 credentials: true,
                 methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
                 allowedHeaders: [
@@ -481,8 +525,21 @@ const startServer = (ports, userDataPath = null) => {
                 optionsSuccessStatus: 200
             };
 
-            app.use(cors(corsOptions));
-            app.options('/{*splat}', cors(corsOptions));
+            const corsOptions = {
+                ...corsBaseOptions,
+                origin: isOriginAllowed
+            };
+
+            const corsOptionsDelegate = (req, callback) => {
+                const origin = req.headers?.origin;
+                if (origin && isSameTailscaleFunnelOrigin(origin, req)) {
+                    return callback(null, { ...corsBaseOptions, origin: true });
+                }
+                return callback(null, corsOptions);
+            };
+
+            app.use(cors(corsOptionsDelegate));
+            app.options('/{*splat}', cors(corsOptionsDelegate));
             app.use(cookieParser());
             const { createCompressionOptions } = require('./utils/httpCompression');
             app.use(compression(createCompressionOptions()));
@@ -494,45 +551,16 @@ const startServer = (ports, userDataPath = null) => {
                     /^(127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(cleanIp);
             };
 
-            const isLoopbackIp = (ip) => {
-                if (!ip) return false;
-                const cleanIp = ip.replace('::ffff:', '');
-                return cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost' || cleanIp.startsWith('127.');
-            };
-
-            // 🛡️ SEGURIDAD: Rate Limiting para Autenticación (/auth/login y /auth/register)
-            // Loopback local (Electron en el POS maestro) está exento.
-            // Nodos en la red LAN (tablets, teléfonos móviles) tienen una cuota protectora de 100 intentos / 15 min
-            // para bloquear ataques de fuerza bruta y rociado de contraseñas (Password Spraying).
-            const authLimiter = rateLimit({
-                windowMs: 15 * 60 * 1000, // 15 minutes
-                max: 100, // Techo seguro para operación de cajas móviles en LAN
-                message: {
-                    error: 'Demasiados intentos de autenticación desde esta dirección IP. Por favor, espere 15 minutos.'
-                },
-                standardHeaders: true,
-                legacyHeaders: false,
-                skip: (req) => isLoopbackIp(req.ip)
-            });
-
-            // Apply rate limiting to auth routes
-            app.use('/auth/login', authLimiter);
-            app.use('/auth/register', authLimiter);
-            app.use('/auth/quick-unlock', authLimiter);
-            app.use('/auth/biometrics/challenge', authLimiter);
-            app.use('/auth/biometrics/login', authLimiter);
-            app.use('/auth/supervisor-authorize', authLimiter);
-            app.use('/auth/supervisor_authorize', authLimiter);
-
-            // Global Rate Limiter
+            // Global Rate Limiter (se monta antes de authLimiter para que authLimiter reporte su límite estricto de 100)
             const globalLimiter = rateLimit({
                 windowMs: 15 * 60 * 1000,
                 max: 50000, // High ceiling for high-speed batch image downloads
                 message: { error: 'Demasiadas peticiones desde esta IP. Por favor, espere 15 minutos.' },
                 standardHeaders: true,
                 legacyHeaders: false,
+                keyGenerator: (req) => ipKeyGenerator(resolveRateLimitClientIp(req)),
                 skip: (req) => {
-                    if (isLoopbackIp(req.ip)) return true;
+                    if (isDirectLoopbackRequest(req)) return true;
                     if (req.path.startsWith('/product_images') || 
                         req.path.startsWith('/uploads') || 
                         req.path.startsWith('/supplier_logos') || 
@@ -551,6 +579,30 @@ const startServer = (ports, userDataPath = null) => {
                 }
             });
             app.use(globalLimiter);
+
+            // 🛡️ SEGURIDAD: Rate Limiting para Autenticación (/auth/login y /auth/register)
+            // Loopback local directo (Electron en el POS maestro) está exento.
+            // Tráfico externo llegando por Tailscale Funnel (loopback + X-Forwarded-For) SIEMPRE se limita por IP real.
+            const authLimiter = rateLimit({
+                windowMs: 15 * 60 * 1000, // 15 minutes
+                max: 100, // Techo seguro para operación de cajas móviles en LAN / Funnel
+                message: {
+                    error: 'Demasiados intentos de autenticación desde esta dirección IP. Por favor, espere 15 minutos.'
+                },
+                standardHeaders: true,
+                legacyHeaders: false,
+                keyGenerator: (req) => ipKeyGenerator(resolveRateLimitClientIp(req)),
+                skip: (req) => isDirectLoopbackRequest(req)
+            });
+
+            // Apply rate limiting to auth routes
+            app.use('/auth/login', authLimiter);
+            app.use('/auth/register', authLimiter);
+            app.use('/auth/quick-unlock', authLimiter);
+            app.use('/auth/biometrics/challenge', authLimiter);
+            app.use('/auth/biometrics/login', authLimiter);
+            app.use('/auth/supervisor-authorize', authLimiter);
+            app.use('/auth/supervisor_authorize', authLimiter);
 
             // Excepciones paginadas para rutas de sincronización y envío de facturas por WhatsApp (Mitigación DoS RAM)
             app.use('/whatsapp', express.json({ limit: '15mb' }));
@@ -1486,10 +1538,16 @@ const startServer = (ports, userDataPath = null) => {
                         : http.createServer(app);
                     
                     const io = new Server(httpServer, {
-                        cors: corsOptions,
+                        cors: {
+                            ...corsBaseOptions,
+                            origin: (origin, callback) => callback(null, true)
+                        },
                         allowRequest: (req, callback) => {
                             const origin = req.headers?.origin;
                             if (!origin) return callback(null, true);
+                            if (isSameTailscaleFunnelOrigin(origin, req)) {
+                                return callback(null, true);
+                            }
                             isOriginAllowed(origin, (err, allowed) => {
                                 if (err || !allowed) {
                                     return callback('Origin not allowed', false);

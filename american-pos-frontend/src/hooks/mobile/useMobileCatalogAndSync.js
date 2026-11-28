@@ -1,5 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import api, { updateApiBaseUrl, checkServerHealth, formatServerUrl, autoDiscoverServer } from '../../services/api';
+import api, {
+  updateApiBaseUrl,
+  checkServerHealth,
+  formatServerUrl,
+  autoDiscoverServer,
+  getRemoteServerUrl,
+  setRemoteServerUrl,
+  getSavedLanServerIp
+} from '../../services/api';
 import localDb from '../../db/localDb';
 import { db as primaryDb } from '../../services/db';
 import lanSyncService from '../../services/lanSyncService';
@@ -65,12 +73,14 @@ export function useMobileCatalogAndSync({
   const [isSyncingSales, setIsSyncingSales] = useState(false);
   const [salesHistory, setSalesHistory] = useState([]);
 
-  // Configuración de servidor PC
+  // Configuración de servidor PC (LAN + acceso remoto Tailscale Funnel HTTPS)
   const [mobileServerIp, setMobileServerIp] = useState(() =>
+    getSavedLanServerIp() ||
     localStorage.getItem('isaac_pos_server_ip') ||
     localStorage.getItem('american_pos_server_ip') ||
     ''
   );
+  const [mobileRemoteServerUrl, setMobileRemoteServerUrl] = useState(() => getRemoteServerUrl());
   const [serverHealth, setServerHealth] = useState(null);
   const [isTestingServer, setIsTestingServer] = useState(false);
   const [serverFeedback, setServerFeedback] = useState(null);
@@ -128,30 +138,69 @@ export function useMobileCatalogAndSync({
     return () => { isMounted = false; };
   }, []);
 
-  const handleTestAndSaveServer = useCallback(async (ipToTest) => {
-    const target = ipToTest || mobileServerIp;
+  const handleTestAndSaveServer = useCallback(async (ipToTest, remoteUrlToSave = undefined) => {
+    const targetLan = String(ipToTest !== undefined ? ipToTest : mobileServerIp || '').trim();
+    const rawRemote = remoteUrlToSave !== undefined ? remoteUrlToSave : mobileRemoteServerUrl;
+    const targetRemote = String(rawRemote || '').trim();
     setIsTestingServer(true);
     setServerFeedback(null);
     try {
-      const formatted = formatServerUrl(target);
-      const ok = await checkServerHealth(formatted);
-      if (ok) {
-        updateApiBaseUrl(target);
-        setMobileServerIp(target);
-        setServerHealth(true);
-        setServerFeedback({ ok: true, msg: '¡Conectado exitosamente al servidor PC!' });
-        setTimeout(() => setShowServerModal(false), 1200);
+      let savedRemoteUrl = '';
+      if (targetRemote) {
+        savedRemoteUrl = setRemoteServerUrl(targetRemote);
+        setMobileRemoteServerUrl(savedRemoteUrl);
       } else {
-        setServerHealth(false);
-        setServerFeedback({ ok: false, msg: 'No se pudo conectar. Verifica que la PC esté en la misma red Wi-Fi.' });
+        setRemoteServerUrl('');
+        setMobileRemoteServerUrl('');
       }
-    } catch {
+
+      if (targetLan) {
+        const formattedLan = formatServerUrl(targetLan);
+        const lanOk = await checkServerHealth(formattedLan);
+        if (lanOk) {
+          updateApiBaseUrl(targetLan);
+          setMobileServerIp(targetLan);
+          setServerHealth(true);
+          setServerFeedback({
+            ok: true,
+            msg: savedRemoteUrl
+              ? '¡Conectado por LAN! Acceso remoto Tailscale Funnel guardado.'
+              : '¡Conectado exitosamente al servidor PC!'
+          });
+          setTimeout(() => setShowServerModal(false), 1200);
+          return;
+        }
+      }
+
+      if (savedRemoteUrl) {
+        const remoteOk = await checkServerHealth(savedRemoteUrl, { timeoutMs: 6000 });
+        if (remoteOk) {
+          if (targetLan) {
+            try { localStorage.setItem('isaac_pos_lan_server_ip', targetLan); } catch { /* noop */ }
+            setMobileServerIp(targetLan);
+          }
+          updateApiBaseUrl(savedRemoteUrl, { preserveLanIp: Boolean(targetLan) });
+          setServerHealth(true);
+          setServerFeedback({ ok: true, msg: '¡Conectado vía Tailscale Funnel (HTTPS remoto)!' });
+          setTimeout(() => setShowServerModal(false), 1200);
+          return;
+        }
+      }
+
       setServerHealth(false);
-      setServerFeedback({ ok: false, msg: 'Error de red al conectar.' });
+      setServerFeedback({
+        ok: false,
+        msg: savedRemoteUrl
+          ? 'No se pudo conectar ni por Wi-Fi LAN ni por Tailscale Funnel. Verifica que la PC esté encendida.'
+          : 'No se pudo conectar. Verifica que la PC esté en la misma red Wi-Fi.'
+      });
+    } catch (err) {
+      setServerHealth(false);
+      setServerFeedback({ ok: false, msg: err?.message || 'Error de red al conectar.' });
     } finally {
       setIsTestingServer(false);
     }
-  }, [mobileServerIp, setShowServerModal]);
+  }, [mobileServerIp, mobileRemoteServerUrl, setShowServerModal]);
 
   const handleAutoDiscoverServer = useCallback(async () => {
     setIsTestingServer(true);
@@ -876,6 +925,8 @@ export function useMobileCatalogAndSync({
     setSalesHistory,
     mobileServerIp,
     setMobileServerIp,
+    mobileRemoteServerUrl,
+    setMobileRemoteServerUrl,
     serverHealth,
     isTestingServer,
     serverFeedback,

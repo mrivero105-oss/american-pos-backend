@@ -268,6 +268,8 @@ export default function MobileSimulatorModals(props) {
     // Navegación / Biometría / Alertas / Mesas / Clientes / Servidor PC
     mobileServerIp = '',
     setMobileServerIp = () => {},
+    mobileRemoteServerUrl = '',
+    setMobileRemoteServerUrl = () => {},
     serverFeedback = null,
     isTestingServer = false,
     handleAutoDiscoverServer = () => {},
@@ -920,24 +922,50 @@ export default function MobileSimulatorModals(props) {
             </p>
 
             <div>
-              <label className={`text-[10px] font-bold uppercase tracking-wider ${T.textMuted} block mb-1`}>IP / Puerto</label>
+              <label className={`text-[10px] font-bold uppercase tracking-wider ${T.textMuted} block mb-1`}>IP Local (Wi-Fi del negocio)</label>
               <input
                 type="text"
-                enterKeyHint="go"
+                enterKeyHint="next"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
                 value={mobileServerIp}
                 onChange={(e) => setMobileServerIp(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !isTestingServer && String(mobileServerIp || '').trim()) {
+                  if (e.key === 'Enter' && !isTestingServer && (String(mobileServerIp || '').trim() || String(mobileRemoteServerUrl || '').trim())) {
                     e.preventDefault();
-                    handleTestAndSaveServer(mobileServerIp);
+                    handleTestAndSaveServer(mobileServerIp, mobileRemoteServerUrl);
                   }
                 }}
                 placeholder="192.168.1.30:3005"
                 className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2.5 text-base sm:text-sm font-mono font-bold outline-none focus:border-blue-500`}
               />
+            </div>
+
+            <div>
+              <label className={`text-[10px] font-bold uppercase tracking-wider ${T.textMuted} block mb-1`}>
+                Tailscale Funnel HTTPS (4G fuera del negocio • opcional)
+              </label>
+              <input
+                type="url"
+                enterKeyHint="go"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={mobileRemoteServerUrl}
+                onChange={(e) => setMobileRemoteServerUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !isTestingServer && (String(mobileServerIp || '').trim() || String(mobileRemoteServerUrl || '').trim())) {
+                    e.preventDefault();
+                    handleTestAndSaveServer(mobileServerIp, mobileRemoteServerUrl);
+                  }
+                }}
+                placeholder="https://mi-tienda.tailxxxx.ts.net"
+                className={`w-full min-h-[44px] ${T.inputBg} border rounded-xl px-3 py-2.5 text-xs font-mono font-bold outline-none focus:border-blue-500`}
+              />
+              <p className={`text-[10px] ${T.textMuted} mt-1 leading-snug`}>
+                En el negocio usa Wi-Fi local y al salir a 4G cambia automáticamente a tu URL Tailscale Funnel.
+              </p>
             </div>
 
             {serverFeedback && (
@@ -964,7 +992,7 @@ export default function MobileSimulatorModals(props) {
               <button
                 type="button"
                 disabled={isTestingServer}
-                onClick={() => handleTestAndSaveServer(mobileServerIp)}
+                onClick={() => handleTestAndSaveServer(mobileServerIp, mobileRemoteServerUrl)}
                 className="flex-1 min-h-[44px] py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase flex items-center justify-center gap-1 shadow-md shadow-blue-600/30 cursor-pointer"
               >
                 {isTestingServer ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}

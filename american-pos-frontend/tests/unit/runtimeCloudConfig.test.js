@@ -12,6 +12,14 @@ import {
     subscribeCloudConfigChange
 } from '../../src/config/supabaseConfig';
 import { getImageCandidateUrls } from '../../src/utils/imageUtils';
+import api, {
+    getRemoteServerUrl,
+    setRemoteServerUrl,
+    getLoginTimeoutMs,
+    updateApiBaseUrl,
+    autoDiscoverServer
+} from '../../src/services/api';
+import axios from 'axios';
 
 describe('Nivel 2A — Aislamiento Multi-Cliente de Supabase en Runtime', () => {
     beforeEach(() => {
@@ -126,5 +134,56 @@ describe('Nivel 2A — Aislamiento Multi-Cliente de Supabase en Runtime', () => 
         const imgUrls = getImageCandidateUrls('product_images/agua.webp');
         expect(imgUrls.some((u) => u.includes('cliente-b.supabase.co'))).toBe(true);
         expect(imgUrls.some((u) => u.includes('cliente-a.supabase.co'))).toBe(false);
+    });
+});
+
+describe('Tailscale Funnel — Timeout 4G y Failover Automático Dual (LAN ↔ HTTPS)', () => {
+    beforeEach(() => {
+        localStorage.clear();
+        vi.restoreAllMocks();
+        updateApiBaseUrl('');
+        localStorage.removeItem('isaac_pos_server_ip_explicitly_cleared');
+        localStorage.setItem('isaac_pos_node_role', 'client');
+    });
+
+    it('exige HTTPS público en setRemoteServerUrl y adapta timeout de login (6000ms remoto vs 1800ms LAN)', () => {
+        expect(() => setRemoteServerUrl('http://192.168.1.30:3005')).toThrow(/Tailscale Funnel/);
+
+        const saved = setRemoteServerUrl('mi-tienda.tail1234.ts.net');
+        expect(saved).toBe('https://mi-tienda.tail1234.ts.net');
+        expect(getRemoteServerUrl()).toBe('https://mi-tienda.tail1234.ts.net');
+
+        expect(getLoginTimeoutMs('http://192.168.1.30:3005')).toBe(1800);
+        expect(getLoginTimeoutMs('https://mi-tienda.tail1234.ts.net')).toBe(6000);
+    });
+
+    it('conmuta automáticamente de IP LAN a Tailscale Funnel HTTPS en 4G y regresa a LAN al volver al local', async () => {
+        updateApiBaseUrl('192.168.1.30:3005');
+        setRemoteServerUrl('https://mi-tienda.tail1234.ts.net');
+
+        // 1. Fuera del negocio (4G): todas las IPs LAN fallan, solo responde Tailscale Funnel HTTPS
+        const getSpy = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+            if (String(url).startsWith('https://mi-tienda.tail1234.ts.net/hello')) {
+                return { status: 200, data: { dbReady: true, role: 'MASTER_CLOUD_HUB', serverFingerprint: 'fp-tienda-1' } };
+            }
+            throw new Error('Network Error');
+        });
+
+        const failoverUrl = await autoDiscoverServer();
+        expect(failoverUrl).toBe('https://mi-tienda.tail1234.ts.net');
+        expect(api.defaults.baseURL).toBe('https://mi-tienda.tail1234.ts.net');
+        expect(localStorage.getItem('isaac_pos_lan_server_ip')).toBe('192.168.1.30:3005');
+
+        // 2. De vuelta en el Wi-Fi de la tienda: la IP LAN vuelve a responder -> regresa a LAN automáticamente
+        getSpy.mockImplementation(async (url) => {
+            if (String(url).startsWith('http://192.168.1.30:3005/hello')) {
+                return { status: 200, data: { dbReady: true, role: 'MASTER_CLOUD_HUB', serverFingerprint: 'fp-tienda-1' } };
+            }
+            return { status: 200, data: { dbReady: true, role: 'MASTER_CLOUD_HUB', serverFingerprint: 'fp-tienda-1' } };
+        });
+
+        const returnedLanUrl = await autoDiscoverServer();
+        expect(returnedLanUrl).toBe('http://192.168.1.30:3005');
+        expect(api.defaults.baseURL).toBe('http://192.168.1.30:3005');
     });
 });

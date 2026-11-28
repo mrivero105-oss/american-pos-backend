@@ -3,7 +3,7 @@
  * Strategy: Cache-First for App Shell & Static Assets, Network-First for APIs
  */
 
-const CACHE_NAME = 'isaac-pos-24.4.1.1795798053';
+const CACHE_NAME = 'isaac-pos-24.4.1.1795846042';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AuthContext } from '../hooks/AuthContext';
-import api, { getBaseUrl } from '../services/api';
+import api, { getBaseUrl, getLoginTimeoutMs } from '../services/api';
 import syncService from '../services/syncService';
 import biometricService from '../services/biometricService';
 import secureMobileStorage from '../utils/secureMobileStorage';
@@ -1038,8 +1038,8 @@ export const AuthProvider = ({ children }) => {
         }
 
         try {
-            // Intento con timeout ultra-eficiente de 1200ms (en LAN responde en < 40ms)
-            const response = await api.post('/auth/login', { username, password }, { timeout: 1200 });
+            // Timeout adaptativo: 1800ms en LAN local, 6000ms sobre Tailscale Funnel / HTTPS en 4G
+            const response = await api.post('/auth/login', { username, password }, { timeout: getLoginTimeoutMs() });
 
             const { user: userData, token } = response.data;
             if (token) {

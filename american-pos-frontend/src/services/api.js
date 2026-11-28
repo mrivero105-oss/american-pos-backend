@@ -128,6 +128,71 @@ const api = axios.create({
 });
 
 const PAIRED_SERVER_FP_KEY = 'isaac_pos_paired_server_fingerprint';
+const REMOTE_SERVER_URL_KEY = 'isaac_pos_remote_server_url';
+const LAN_SERVER_IP_KEY = 'isaac_pos_lan_server_ip';
+
+export const isRemotePublicUrl = (rawUrl) => {
+    const clean = String(rawUrl || '').trim();
+    if (!clean) return false;
+    try {
+        const formatted = formatServerUrl(clean);
+        const parsed = new URL(formatted);
+        return !isPrivateLanOrLocalHost(parsed.hostname);
+    } catch {
+        return false;
+    }
+};
+
+export const getRemoteServerUrl = () => {
+    try {
+        if (typeof localStorage === 'undefined') return '';
+        const saved = String(localStorage.getItem(REMOTE_SERVER_URL_KEY) || '').trim();
+        return saved ? formatServerUrl(saved) : '';
+    } catch {
+        return '';
+    }
+};
+
+export const setRemoteServerUrl = (rawUrl) => {
+    try {
+        if (typeof localStorage === 'undefined') return '';
+        const clean = String(rawUrl || '').trim();
+        if (!clean) {
+            localStorage.removeItem(REMOTE_SERVER_URL_KEY);
+            return '';
+        }
+        const formatted = formatServerUrl(clean);
+        const parsed = new URL(formatted);
+        if (parsed.protocol !== 'https:' || isPrivateLanOrLocalHost(parsed.hostname)) {
+            throw new Error('La URL remota (Tailscale Funnel) debe ser un dominio HTTPS público (ej. https://mi-tienda.tailxxxx.ts.net).');
+        }
+        localStorage.setItem(REMOTE_SERVER_URL_KEY, formatted);
+        return formatted;
+    } catch (err) {
+        if (err instanceof Error && err.message.includes('Tailscale Funnel')) {
+            throw err;
+        }
+        throw new Error('URL remota HTTPS inválida.');
+    }
+};
+
+export const getSavedLanServerIp = () => {
+    try {
+        if (typeof localStorage === 'undefined') return '';
+        const directLan = String(localStorage.getItem(LAN_SERVER_IP_KEY) || '').trim();
+        if (directLan && !isRemotePublicUrl(directLan)) return directLan;
+        const primary = String(localStorage.getItem('isaac_pos_server_ip') || localStorage.getItem('american_pos_server_ip') || '').trim();
+        if (primary && !isRemotePublicUrl(primary)) return primary;
+        return '';
+    } catch {
+        return '';
+    }
+};
+
+export const getLoginTimeoutMs = (targetUrl = null) => {
+    const candidate = targetUrl || api.defaults.baseURL || getBaseUrl();
+    return isRemotePublicUrl(candidate) ? 6000 : 1800;
+};
 
 export const getPairedServerFingerprint = () => {
     try {
@@ -153,6 +218,11 @@ export const updateApiBaseUrl = (newIp, options = {}) => {
         api.defaults.baseURL = finalUrl;
         localStorage.setItem('isaac_pos_server_ip', newIp.trim());
         localStorage.removeItem('isaac_pos_server_ip_explicitly_cleared');
+        if (!isRemotePublicUrl(finalUrl)) {
+            localStorage.setItem(LAN_SERVER_IP_KEY, newIp.trim());
+        } else if (!options.preserveLanIp && !localStorage.getItem(REMOTE_SERVER_URL_KEY)) {
+            localStorage.setItem(REMOTE_SERVER_URL_KEY, finalUrl);
+        }
         if (options.serverFingerprint) {
             setPairedServerFingerprint(options.serverFingerprint);
         } else if (options.manualChange) {
@@ -164,6 +234,7 @@ export const updateApiBaseUrl = (newIp, options = {}) => {
     } else {
         localStorage.removeItem('isaac_pos_server_ip');
         localStorage.removeItem('american_pos_server_ip');
+        localStorage.removeItem(LAN_SERVER_IP_KEY);
         localStorage.setItem('isaac_pos_server_ip_explicitly_cleared', 'true');
         setPairedServerFingerprint('');
         clearRuntimeCloudConfig();
@@ -179,9 +250,10 @@ export const updateApiBaseUrl = (newIp, options = {}) => {
 // Check server health quickly via /hello endpoint (instant latency + real DB readiness + anti-rogue server fingerprint)
 export const checkServerHealth = async (customUrl = null, options = {}) => {
     const targetUrl = customUrl ? formatServerUrl(customUrl) : (api.defaults.baseURL || getBaseUrl() || 'http://127.0.0.1:3005');
+    const defaultTimeoutMs = isRemotePublicUrl(targetUrl) ? 6000 : 3500;
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
-        const res = await axios.get(`${targetUrl}/hello`, { timeout: options.timeoutMs || 3500 });
+        const res = await axios.get(`${targetUrl}/hello`, { timeout: options.timeoutMs || defaultTimeoutMs });
         if (res.status === 200) {
             const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
             recordNetworkLatency(elapsed);
@@ -449,8 +521,26 @@ export const autoDiscoverServer = async () => {
     isDiscovering = true;
 
     try {
-        // 1. Check if current baseURL is already reachable (and is a true master server when in client mode)
+        // 0. Si estamos apuntando a la URL remota (Tailscale Funnel) pero la IP LAN local del negocio vuelve a estar disponible,
+        //    volver automáticamente a LAN (0 ms, funciona aunque caiga Internet del local).
         const currentUrl = api.defaults.baseURL || getBaseUrl();
+        const savedLanRaw = getSavedLanServerIp();
+        const savedLanUrl = savedLanRaw ? formatServerUrl(savedLanRaw) : '';
+        if (savedLanUrl && currentUrl && isRemotePublicUrl(currentUrl) && savedLanUrl !== currentUrl) {
+            const lanBackOnline = await checkServerHealth(savedLanUrl, {
+                requireMasterHost: currentRole === 'client',
+                verifyPairedFingerprint: true,
+                timeoutMs: 900
+            });
+            if (lanBackOnline) {
+                updateApiBaseUrl(savedLanUrl, { preserveLanIp: true });
+                window.dispatchEvent(new CustomEvent('server-discovered', { detail: { url: savedLanUrl, via: 'lan_return' } }));
+                isDiscovering = false;
+                return savedLanUrl;
+            }
+        }
+
+        // 1. Check if current baseURL is already reachable (and is a true master server when in client mode)
         const isCurrentLoopback = currentUrl && (currentUrl.includes('127.0.0.1') || currentUrl.includes('localhost'));
         if (currentUrl && !(currentRole === 'client' && isCurrentLoopback)) {
             const isHealthy = await checkServerHealth(currentUrl, { requireMasterHost: currentRole === 'client' });
@@ -518,9 +608,10 @@ export const autoDiscoverServer = async () => {
             hostCandidates.add('http://localhost');
         }
 
-        // Si hay una IP previamente guardada, probarla como prioridad
-        if (savedIp) {
-            const cleanIp = savedIp.startsWith('http') ? savedIp : `http://${savedIp}`;
+        // Si hay una IP LAN previamente guardada, probarla como prioridad (evita mezclar URL remota HTTPS en el scan LAN)
+        const lanToProbe = savedLanRaw || (savedIp && !isRemotePublicUrl(savedIp) ? savedIp : '');
+        if (lanToProbe) {
+            const cleanIp = lanToProbe.startsWith('http') ? lanToProbe : `http://${lanToProbe}`;
             hostCandidates.add(cleanIp.replace(/:[0-9]+$/, ''));
         }
 
@@ -599,6 +690,22 @@ export const autoDiscoverServer = async () => {
                 window.dispatchEvent(new CustomEvent('server-discovered', { detail: { url: found } }));
                 isDiscovering = false;
                 return found;
+            }
+        }
+
+        // Fallback automático fuera del negocio (4G/5G): probar URL remota HTTPS (Tailscale Funnel)
+        const remoteUrl = getRemoteServerUrl();
+        if (remoteUrl && remoteUrl !== currentUrl) {
+            const remoteHealthy = await checkServerHealth(remoteUrl, {
+                requireMasterHost: currentRole === 'client',
+                verifyPairedFingerprint: true,
+                timeoutMs: 6000
+            });
+            if (remoteHealthy) {
+                updateApiBaseUrl(remoteUrl, { preserveLanIp: true });
+                window.dispatchEvent(new CustomEvent('server-discovered', { detail: { url: remoteUrl, via: 'remote_funnel' } }));
+                isDiscovering = false;
+                return remoteUrl;
             }
         }
     } catch {

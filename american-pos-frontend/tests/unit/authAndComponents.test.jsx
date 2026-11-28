@@ -28,7 +28,9 @@ vi.mock('../../src/services/api', () => ({
         post: (...args) => mockApiPost(...args),
         put: vi.fn().mockResolvedValue({ data: {} }),
         delete: vi.fn().mockResolvedValue({ data: {} })
-    }
+    },
+    getBaseUrl: () => 'http://127.0.0.1:3005',
+    getLoginTimeoutMs: () => 1800
 }));
 
 vi.mock('axios', () => ({

@@ -251,4 +251,42 @@ test('Nivel 2A: Nube independiente por cliente en runtime (RBAC, anti-SSRF, Secr
     assert.equal(pubAfterDel.supabaseUrl, '');
     assert.equal(pubAfterDel.anonKey, '');
     assert.equal(CloudStorageService.getActiveCloudStorageConfig().supabaseUrl, '');
+
+    // 7. Tailscale Funnel: CORS permite same-origin https://*.ts.net y rechaza otro dominio .ts.net
+    const tsOwnOrigin = 'https://tienda-clienta.tail1234.ts.net';
+    const tsOwnRes = await fetch(`${baseUrl}/hello`, {
+        headers: {
+            Origin: tsOwnOrigin,
+            'X-Forwarded-Host': 'tienda-clienta.tail1234.ts.net'
+        }
+    });
+    assert.equal(tsOwnRes.status, 200);
+    assert.equal(tsOwnRes.headers.get('access-control-allow-origin'), tsOwnOrigin);
+
+    const tsForeignRes = await fetch(`${baseUrl}/hello`, {
+        headers: {
+            Origin: 'https://otro-atacante.tail9999.ts.net',
+            'X-Forwarded-Host': 'tienda-clienta.tail1234.ts.net'
+        }
+    });
+    assert.equal(tsForeignRes.headers.get('access-control-allow-origin'), null, 'CORS no debe abrir otros dominios .ts.net');
+
+    // 8. Tailscale Funnel: authLimiter aplica encabezados RateLimit al tráfico con X-Forwarded-For desde loopback
+    //    y NO los aplica al loopback directo de Electron sin X-Forwarded-For
+    const directLoginRes = await fetch(`${baseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'no_existe_direct', password: 'bad' })
+    });
+    assert.equal(directLoginRes.headers.get('ratelimit-limit'), null, 'Loopback directo sin proxy sigue exento');
+
+    const funnelLoginRes = await fetch(`${baseUrl}/auth/login`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Forwarded-For': '198.51.100.42'
+        },
+        body: JSON.stringify({ username: 'no_existe_funnel', password: 'bad' })
+    });
+    assert.equal(funnelLoginRes.headers.get('ratelimit-limit'), '100', 'Tráfico Tailscale Funnel debe aplicar authLimiter por IP real');
 });

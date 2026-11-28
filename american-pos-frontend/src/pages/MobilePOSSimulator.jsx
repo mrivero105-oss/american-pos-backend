@@ -877,6 +877,8 @@ export default function MobilePOSSimulator() {
         isOledMode={isOledMode}
         mobileServerIp={syncDomain.mobileServerIp}
         setMobileServerIp={syncDomain.setMobileServerIp}
+        mobileRemoteServerUrl={syncDomain.mobileRemoteServerUrl}
+        setMobileRemoteServerUrl={syncDomain.setMobileRemoteServerUrl}
         serverFeedback={syncDomain.serverFeedback}
         isTestingServer={syncDomain.isTestingServer}
         handleAutoDiscoverServer={syncDomain.handleAutoDiscoverServer}
